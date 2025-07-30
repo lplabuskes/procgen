@@ -33,11 +33,17 @@ class MeshViewer(QOpenGLWidget):
         GL.glLoadIdentity()
         GL.glTranslatef(0.0, 0.0, -5.0)
         GL.glRotatef(self.angle, 1.0, 1.0, 0.0)
+        
+        GL.glEnable(GL.GL_BLEND)
+        GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
 
         GL.glBegin(GL.GL_TRIANGLES)
-        for face in self.mesh.faces:
-            for idx in face:
-                GL.glVertex3fv(self.mesh.vertices[idx])
+        for idx, face in enumerate(self.mesh.faces):
+            color = [0.0, 0.0, 0.0, 0.5]
+            color[idx%3] = 1.0
+            GL.glColor4f(*color)
+            for v in face:
+                GL.glVertex3fv(self.mesh.vertices[v])
         GL.glEnd()
 
         self.angle += 0.5
