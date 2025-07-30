@@ -1,4 +1,5 @@
-import meshlib.mrmeshpy as mrmeshpy
+from mymesh import Mesh
+
 import OpenGL.GL as GL
 import OpenGL.GLU as GLU
 
@@ -8,13 +9,10 @@ from PySide6.QtGui import QSurfaceFormat
 from PySide6.QtCore import QTimer
 
 
-def repack_tripoint(point: mrmeshpy.Vector3f):
-    return (point.x, point.y, point.z)
-
 class MeshViewer(QOpenGLWidget):
-    def __init__(self, parent=None, mesh: mrmeshpy.Mesh=None):
+    def __init__(self, parent=None, mesh: Mesh=None):
         super(MeshViewer, self).__init__(parent)
-        self.mesh: mrmeshpy.Mesh = mesh
+        self.mesh: Mesh = mesh
         self.angle = 0
 
     def initializeGL(self):
@@ -37,19 +35,16 @@ class MeshViewer(QOpenGLWidget):
         GL.glRotatef(self.angle, 1.0, 1.0, 0.0)
 
         GL.glBegin(GL.GL_TRIANGLES)
-        # for face in self.mesh.topology.getValidFaces():
-        #     for point in self.mesh.getTriPoints(face):
-        #         GL.glVertex3fv(repack_tripoint(point))
-        GL.glVertex3f(-1.0, -1.0, 0.0)
-        GL.glVertex3f(1.0, -1.0, 0.0)
-        GL.glVertex3f(0.0, 1.0, 0.0)
+        for face in self.mesh.faces:
+            for idx in face:
+                GL.glVertex3fv(self.mesh.vertices[idx])
         GL.glEnd()
 
         self.angle += 0.5
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, mesh: mrmeshpy.Mesh=None):
+    def __init__(self, mesh: Mesh=None):
         super(MainWindow, self).__init__()
         self.setWindowTitle("Mesh Viewer")
         self.resize(800, 600)
@@ -68,5 +63,5 @@ class MainWindow(QMainWindow):
         self.timer.timeout.connect(self.viewer.update)
         self.timer.start(16)  # ~60 FPS
 
-    def set_mesh(self, mesh: mrmeshpy.Mesh):
+    def set_mesh(self, mesh: Mesh):
         self.viewer.mesh = mesh

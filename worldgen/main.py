@@ -1,4 +1,4 @@
-from meshmaker import generate_mesh
+from mymesh import generate_mesh
 from gui import MainWindow
 
 from PySide6.QtWidgets import QApplication
