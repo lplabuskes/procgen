@@ -7,7 +7,7 @@ import sys
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    mesh = Mesh.icosphere(2)
+    mesh = Mesh.icosphere(3)
     window = MainWindow(mesh=mesh)
     window.show()
     sys.exit(app.exec())

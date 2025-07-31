@@ -93,6 +93,9 @@ class Mesh:
             faces = new_faces
             vertices = np.vstack([vertices] + new_vertices)
 
+        # We have a subdivided icosahedron, normalize vertices to get icosphere
+        vertices /= np.linalg.norm(vertices, axis=1)[..., np.newaxis]
+
         return Mesh(vertices, faces)
 
     @staticmethod
