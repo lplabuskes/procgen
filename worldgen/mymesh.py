@@ -7,11 +7,11 @@ class Mesh:
         self.vertices = vertices  # the coordinates of each vertex
         self.faces = faces  # a tuple of the indices of vertices that make each triangle
 
-    # Based on https://github.com/lazysquirrellabs/sphere_generator/blob/main/Assets/Lazy%20Squirrel%20Labs/SphereGenerator/Runtime/Generators/IcosphereGenerator.cs
+    # Took vertices from https://github.com/lazysquirrellabs/sphere_generator/blob/main/Assets/Lazy%20Squirrel%20Labs/SphereGenerator/Runtime/Generators/IcosphereGenerator.cs
     @staticmethod
-    def icosphere(order: int = 3):
+    def icosphere(depth: int = 0):
         phi = (1 + np.sqrt(5)) / 2
-        primary_vertices = np.array([
+        vertices = np.array([
             [phi, 1, 0],
             [0, phi, -1],
             [0, phi, 1],
@@ -25,7 +25,7 @@ class Mesh:
             [0, -phi, 1],
             [-phi, -1, 0]
         ])
-        primary_faces = [
+        faces = [
             (0, 1, 2),
             (0, 3, 1),
             (0, 2, 4),
@@ -47,7 +47,53 @@ class Mesh:
             (8, 11, 10),
             (10, 11, 9)
         ]
-        return Mesh(primary_vertices, primary_faces)
+
+        for _ in range(depth):
+            # Subdivide each triangle into 4 smaller triangles
+            new_faces = []
+            new_vertices = []  # temporary cache of added vertices to cut down on numpy appends
+            edge_indices = {}  # given two vertices, what's the index of their midpoint
+
+            for face in faces:
+                e0 = (face[0], face[1]) if face[0]<face[1] else (face[1], face[0])
+                e1 = (face[0], face[2]) if face[0]<face[2] else (face[2], face[0])
+                e2 = (face[1], face[2]) if face[1]<face[2] else (face[2], face[1])
+
+                if e0 in edge_indices:
+                    v3 = edge_indices[e0]
+                else:
+                    pt3 = (vertices[face[0]] + vertices[face[1]])/2
+                    v3 = vertices.shape[0] + len(new_vertices)
+                    edge_indices[e0] = v3
+                    new_vertices.append(pt3)
+
+                if e1 in edge_indices:
+                    v4 = edge_indices[e1]
+                else:
+                    pt4 = (vertices[face[0]] + vertices[face[2]])/2
+                    v4 = vertices.shape[0] + len(new_vertices)
+                    edge_indices[e1] = v4
+                    new_vertices.append(pt4)
+
+                if e2 in edge_indices:
+                    v5 = edge_indices[e2]
+                else:
+                    pt5 = (vertices[face[1]] + vertices[face[2]])/2
+                    v5 = vertices.shape[0] + len(new_vertices)
+                    edge_indices[e2] = v5
+                    new_vertices.append(pt5)
+
+                # at this point, any new vertices have been added to the new vertices list
+                # the indices of interest are face[0], face[1], face[2], v3, v4, v5
+                new_faces.append((face[0], v3, v4))
+                new_faces.append((v3, face[1], v5))
+                new_faces.append((v3, v5, v4))
+                new_faces.append((v4, v5, face[2]))
+
+            faces = new_faces
+            vertices = np.vstack([vertices] + new_vertices)
+
+        return Mesh(vertices, faces)
 
     @staticmethod
     def triangle():
