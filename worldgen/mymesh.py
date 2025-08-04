@@ -4,8 +4,10 @@ from typing import List, Tuple
 
 class Mesh:
     def __init__(self, vertices: np.ndarray, faces: List[Tuple[int]]):
-        self.vertices = vertices  # the coordinates of each vertex
-        self.faces = faces  # a tuple of the indices of vertices that make each triangle
+        tmp = np.argsort(vertices[:,2])  # Sort along z axis
+        mapping = np.argsort(tmp)
+        self.vertices = vertices[tmp]  # the coordinates of each vertex
+        self.faces = sorted([(mapping[x], mapping[y], mapping[z]) for x, y, z in faces])  # a face is a tuple of the indices of vertices that make the triangle
 
     # Took vertices from https://github.com/lazysquirrellabs/sphere_generator/blob/main/Assets/Lazy%20Squirrel%20Labs/SphereGenerator/Runtime/Generators/IcosphereGenerator.cs
     @staticmethod
