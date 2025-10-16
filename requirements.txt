@@ -2,3 +2,4 @@ meshlib
 numpy
 plotly
 PyOpenGL
+pyside6
