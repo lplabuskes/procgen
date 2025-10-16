@@ -1,5 +1,5 @@
 import numpy as np
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 
 
 class Mesh:
@@ -107,3 +107,45 @@ class Mesh:
                     [0.0, 1.0, 0.0]])
         f = [(0, 1, 2)]
         return Mesh(v, f)
+
+
+# A general polytope that can have non-trriangular sides. Mainly used for representing the dual of a mesh
+class Polytope:
+    def __init__(self, vertices: np.ndarray, faces: List[Tuple[int]]):
+        self.vertices = vertices
+        self.faces = faces
+
+    @staticmethod
+    def mesh_dual(mesh: Mesh):
+        # First compute the centroids of each face
+        dual_vertices = []
+        for face in mesh.faces:
+            pts = mesh.vertices[np.array(face)]
+            centroid = np.mean(pts, axis=0)
+            centroid /= np.linalg.norm(centroid)
+            dual_vertices.append(centroid)
+        dual_vertices = np.array(dual_vertices)
+
+        # Now, for each vertex in the original mesh, find all faces that include it
+        dual_faces_dict: Dict[int, list[int]] = {}
+        for face_idx, face in enumerate(mesh.faces):
+            for v in face:
+                if v not in dual_faces_dict:
+                    dual_faces_dict[v] = [face_idx]
+                else:
+                    dual_faces_dict[v].append(face_idx)
+
+        # Reorder the face indices in each dual face to be clockwise
+        dual_faces = []
+        def angle_from_center(face_idx, center):
+            face_centroid = dual_vertices[face_idx]
+            vec = face_centroid - center
+            vec /= np.linalg.norm(vec)
+            angle = np.arctan2(vec[1], vec[0])
+            return angle
+        for v_idx, face_indices in dual_faces_dict.items():
+            v = mesh.vertices[v_idx]
+            face_indices.sort(key=lambda fi: angle_from_center(fi, v))
+            dual_faces.append(tuple(face_indices))
+
+        return Polytope(dual_vertices, dual_faces)

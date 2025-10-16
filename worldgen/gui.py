@@ -1,4 +1,4 @@
-from mymesh import Mesh
+from mymesh import Mesh, Polytope
 
 import OpenGL.GL as GL
 import OpenGL.GLU as GLU
@@ -8,11 +8,13 @@ from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtGui import QSurfaceFormat
 from PySide6.QtCore import QTimer
 
+from typing import Union
+
 
 class MeshViewer(QOpenGLWidget):
     def __init__(self, parent=None, mesh: Mesh=None):
         super(MeshViewer, self).__init__(parent)
-        self.mesh: Mesh = mesh
+        self.mesh: Union[Mesh, Polytope] = mesh
         self.angle = 0
 
     def initializeGL(self):
@@ -69,5 +71,5 @@ class MainWindow(QMainWindow):
         self.timer.timeout.connect(self.viewer.update)
         self.timer.start(16)  # ~60 FPS
 
-    def set_mesh(self, mesh: Mesh):
+    def set_mesh(self, mesh: Union[Mesh, Polytope]):
         self.viewer.mesh = mesh
