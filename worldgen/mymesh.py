@@ -1,6 +1,6 @@
-import numpy as np
 from typing import List, Tuple, Dict
 
+import numpy as np
 
 class Mesh:
     def __init__(self, vertices: np.ndarray, faces: List[Tuple[int]]):
