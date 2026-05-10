@@ -160,17 +160,25 @@ class Polytope:
                 else:
                     dual_faces_dict[v].append(face_idx)
 
-        # Reorder the face indices in each dual face to be clockwise
+        # Reorder the face indices in each dual face to be CCW when viewed from outside.
+        # We project each face centroid onto the tangent plane at the vertex and
+        # sort by angle in that local 2D frame. Using the global XY projection
+        # (arctan2 of the raw x/y components) fails for equatorial vertices because
+        # it ignores the z-component of the displacement vectors.
         dual_faces = []
-        def angle_from_center(face_idx, center):
-            face_centroid = dual_vertices[face_idx]
-            vec = face_centroid - center
-            vec /= np.linalg.norm(vec)
-            angle = np.arctan2(vec[1], vec[0])
-            return angle
         for v_idx, face_indices in dual_faces_dict.items():
             v = mesh.vertices[v_idx]
-            face_indices.sort(key=lambda fi: angle_from_center(fi, v))
+            n = v  # unit outward normal (v is already on the unit sphere)
+            ref = np.array([0.0, 0.0, 1.0]) if abs(n[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
+            u_axis = np.cross(ref, n)
+            u_axis /= np.linalg.norm(u_axis)
+            w_axis = np.cross(n, u_axis)  # u_axis × w_axis = n (right-hand frame)
+
+            def angle_from_center(face_idx, u=u_axis, w=w_axis, center=v):
+                vec = dual_vertices[face_idx] - center
+                return np.arctan2(np.dot(vec, w), np.dot(vec, u))
+
+            face_indices.sort(key=angle_from_center)
             dual_faces.append(tuple(face_indices))
 
         return Polytope(dual_vertices, dual_faces)

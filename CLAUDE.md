@@ -9,7 +9,13 @@ pip install -r requirements.txt
 python3 worldgen/main.py
 ```
 
-No build step, test suite, or linter is configured.
+No build step or linter is configured. Run the test suite with:
+
+```bash
+cd worldgen && python3 -m pytest test_mymesh.py -v
+```
+
+Tests live in `worldgen/test_mymesh.py` and cover `Mesh` (icosphere topology, unit-sphere property, outward face normals) and `Polytope.mesh_dual` (dual topology counts, face sizes, and correct CCW winding of all fan triangles).
 
 ## Architecture
 
