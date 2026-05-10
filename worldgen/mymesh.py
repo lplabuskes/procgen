@@ -3,11 +3,19 @@ from typing import List, Tuple, Dict
 import numpy as np
 
 class Mesh:
-    def __init__(self, vertices: np.ndarray, faces: List[Tuple[int]]):
+    def __init__(self, vertices: np.ndarray, faces: List[Tuple[int, int, int]]):
         tmp = np.argsort(vertices[:,2])  # Sort along z axis
         mapping = np.argsort(tmp)
-        self.vertices = vertices[tmp]  # the coordinates of each vertex
-        self.faces = sorted([(mapping[x], mapping[y], mapping[z]) for x, y, z in faces])  # a face is a tuple of the indices of vertices that make the triangle
+        self.vertices = vertices[tmp].astype(np.float32)  # the coordinates of each vertex
+        self.faces = sorted([(mapping[x], mapping[y], mapping[z]) for x, y, z in faces])
+        self.index_array = np.array(self.faces, dtype=np.uint32)  # all faces are 3-tuples so just directly convert to numpy array
+
+        n_faces = len(self.faces)
+        face_colors = np.random.rand(n_faces, 4).astype(np.float32)
+        face_colors[:, 3] = 1.0
+        flat_indices = self.index_array.flatten()
+        self.render_vertices = self.vertices[flat_indices]
+        self.render_colors = np.repeat(face_colors, 3, axis=0)
 
     # Took vertices from https://github.com/lazysquirrellabs/sphere_generator/blob/main/Assets/Lazy%20Squirrel%20Labs/SphereGenerator/Runtime/Generators/IcosphereGenerator.cs
     @staticmethod
@@ -112,8 +120,25 @@ class Mesh:
 # A general polytope that can have non-trriangular sides. Mainly used for representing the dual of a mesh
 class Polytope:
     def __init__(self, vertices: np.ndarray, faces: List[Tuple[int]]):
-        self.vertices = vertices
+        self.vertices = vertices.astype(np.float32)
         self.faces = faces
+
+        n_faces = len(faces)
+        face_colors = np.random.rand(n_faces, 4).astype(np.float32)
+        face_colors[:, 3] = 1.0
+
+        triangles = []
+        triangle_face_indices = []
+        for face_idx, face in enumerate(faces):
+            for i in range(1, len(face)-1):
+                triangles.append((face[0], face[i], face[i+1]))
+                triangle_face_indices.append(face_idx)
+        self.index_array = np.array(triangles, dtype=np.uint32)
+
+        flat_indices = self.index_array.flatten()
+        self.render_vertices = self.vertices[flat_indices]
+        triangle_colors = face_colors[np.array(triangle_face_indices)]
+        self.render_colors = np.repeat(triangle_colors, 3, axis=0)
 
     @staticmethod
     def mesh_dual(mesh: Mesh):
