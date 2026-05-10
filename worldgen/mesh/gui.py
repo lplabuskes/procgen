@@ -58,6 +58,16 @@ class MeshViewer(QOpenGLWidget):
 
         self.angle += 0.5
 
+    def cleanup(self):
+        self.makeCurrent()
+        if self.vertex_buffer is not None:
+            self.vertex_buffer.delete()
+            self.vertex_buffer = None
+        if self.color_buffer is not None:
+            self.color_buffer.delete()
+            self.color_buffer = None
+        self.doneCurrent()
+
 
 class MainWindow(QMainWindow):
     def __init__(self, mesh: Optional[Union[Mesh, Polytope]]=None):
@@ -78,6 +88,11 @@ class MainWindow(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.viewer.update)
         self.timer.start(16)  # ~60 FPS
+
+    def closeEvent(self, event):
+        self.timer.stop()
+        self.viewer.cleanup()
+        super().closeEvent(event)
 
     def set_mesh(self, mesh: Union[Mesh, Polytope]):
         self.viewer.mesh = mesh
