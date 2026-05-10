@@ -1,5 +1,5 @@
 import random
-from typing import List, Tuple, Dict, FrozenSet
+from typing import Any, List, Tuple, Dict, FrozenSet
 
 import numpy as np
 
@@ -25,6 +25,11 @@ class PolygonMesh:
         self.render_vertices = self.vertices[flat_indices]
         triangle_colors = face_colors[np.array(triangle_face_indices)]
         self.render_colors = np.repeat(triangle_colors, 3, axis=0)
+
+        self.face_metadata: List[Dict[str, Any]] = [{} for _ in range(n_faces)]
+
+    def set_face_metadata(self, face_idx: int, **metadata: Any) -> None:
+        self.face_metadata[face_idx].update(metadata)
 
 
 class Mesh(PolygonMesh):
