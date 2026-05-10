@@ -4,7 +4,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 import numpy as np
 import pytest
-from mesh.mymesh import Mesh, Polytope
+from mesh.mymesh import Mesh, PolygonMesh
 
 
 class TestIcosphere:
@@ -63,26 +63,26 @@ class TestPolytopeMeshDual:
     def test_dual_icosphere0_counts(self):
         # Dual of icosahedron (12 verts, 20 faces) → dodecahedron (20 verts, 12 faces)
         mesh = Mesh.icosphere(0)
-        dual = Polytope.mesh_dual(mesh)
+        dual = mesh.mesh_dual()
         assert len(dual.vertices) == 20
         assert len(dual.faces) == 12
 
     def test_dual_icosphere0_all_pentagons(self):
         mesh = Mesh.icosphere(0)
-        dual = Polytope.mesh_dual(mesh)
+        dual = mesh.mesh_dual()
         assert all(len(f) == 5 for f in dual.faces)
 
     def test_dual_icosphere1_counts(self):
         # Dual of (42 verts, 80 faces) → (80 verts, 42 faces)
         mesh = Mesh.icosphere(1)
-        dual = Polytope.mesh_dual(mesh)
+        dual = mesh.mesh_dual()
         assert len(dual.vertices) == 80
         assert len(dual.faces) == 42
 
     def test_dual_icosphere1_pentagon_and_hexagon_faces(self):
         # depth-1 icosphere dual: 12 pentagons + 30 hexagons = 42 faces
         mesh = Mesh.icosphere(1)
-        dual = Polytope.mesh_dual(mesh)
+        dual = mesh.mesh_dual()
         sizes = [len(f) for f in dual.faces]
         assert sizes.count(5) == 12
         assert sizes.count(6) == 30
@@ -90,7 +90,7 @@ class TestPolytopeMeshDual:
     def test_dual_vertices_on_unit_sphere(self):
         for depth in range(3):
             mesh = Mesh.icosphere(depth)
-            dual = Polytope.mesh_dual(mesh)
+            dual = mesh.mesh_dual()
             norms = np.linalg.norm(dual.vertices, axis=1)
             np.testing.assert_allclose(norms, 1.0, atol=1e-6,
                                        err_msg=f"Failed at depth {depth}")
@@ -99,7 +99,7 @@ class TestPolytopeMeshDual:
         """Fan triangles of each dual face must have normals pointing outward."""
         for depth in range(3):
             mesh = Mesh.icosphere(depth)
-            dual = Polytope.mesh_dual(mesh)
+            dual = mesh.mesh_dual()
             for face_idx, face in enumerate(dual.faces):
                 verts = dual.vertices[np.array(face)]
                 centroid = np.mean(verts, axis=0)
@@ -118,7 +118,7 @@ class TestPolytopeMeshDual:
         """Consecutive edges of each dual face should turn the same direction."""
         for depth in range(3):
             mesh = Mesh.icosphere(depth)
-            dual = Polytope.mesh_dual(mesh)
+            dual = mesh.mesh_dual()
             for face_idx, face in enumerate(dual.faces):
                 verts = dual.vertices[np.array(face)]
                 centroid = np.mean(verts, axis=0)

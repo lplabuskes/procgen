@@ -1,4 +1,4 @@
-from typing import Optional, Union
+from typing import Optional
 
 import OpenGL.GL as GL
 import OpenGL.GLU as GLU
@@ -9,12 +9,12 @@ from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtGui import QSurfaceFormat
 from PySide6.QtCore import QTimer
 
-from mymesh import Mesh, Polytope
+from mymesh import PolygonMesh
 
 class MeshViewer(QOpenGLWidget):
-    def __init__(self, parent=None, mesh: Optional[Union[Mesh, Polytope]]=None):
+    def __init__(self, parent=None, mesh: Optional[PolygonMesh]=None):
         super(MeshViewer, self).__init__(parent)
-        self.mesh: Optional[Union[Mesh, Polytope]] = mesh
+        self.mesh: Optional[PolygonMesh] = mesh
         self.vertex_buffer: Optional[vbo.VBO] = None
         self.color_buffer: Optional[vbo.VBO] = None
         self.angle = 0
@@ -70,7 +70,7 @@ class MeshViewer(QOpenGLWidget):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, mesh: Optional[Union[Mesh, Polytope]]=None):
+    def __init__(self, mesh: Optional[PolygonMesh]=None):
         super(MainWindow, self).__init__()
         self.setWindowTitle("Mesh Viewer")
         self.resize(800, 600)
@@ -94,7 +94,7 @@ class MainWindow(QMainWindow):
         self.viewer.cleanup()
         super().closeEvent(event)
 
-    def set_mesh(self, mesh: Union[Mesh, Polytope]):
+    def set_mesh(self, mesh: PolygonMesh):
         self.viewer.mesh = mesh
         self.viewer.vertex_buffer = vbo.VBO(mesh.render_vertices)
         self.viewer.color_buffer = vbo.VBO(mesh.render_colors)
