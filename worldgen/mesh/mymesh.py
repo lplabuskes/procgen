@@ -82,7 +82,11 @@ class Mesh:
                 av = next(v for v in f1 if v != bv and v != cv)
                 dv = next(v for v in f2 if v != bv and v != cv)
 
-                if len(adj[av]) != 6 or len(adj[dv]) != 6:
+                # av and dv gain a degree. avoid degree >=7 to avoid octagons
+                if len(adj[av]) >= 7 or len(adj[dv]) >= 7:
+                    continue
+                # bv and cv lose a degree. avoid degree <=5 to avoid squares
+                if len(adj[bv]) <= 5 or len(adj[cv]) <= 5:
                     continue
 
                 # ensure_ccw only swaps p1/p2, so result is (av, bv, dv) or (av, dv, bv)
