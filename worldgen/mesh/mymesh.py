@@ -1,4 +1,5 @@
-from typing import List, Tuple, Dict
+import random
+from typing import List, Tuple, Dict, FrozenSet
 
 import numpy as np
 
@@ -16,6 +17,121 @@ class Mesh:
         flat_indices = self.index_array.flatten()
         self.render_vertices = self.vertices[flat_indices]
         self.render_colors = np.repeat(face_colors, 3, axis=0)
+
+    def deregularize(self, n_swaps: int = 1000, n_relax: int = 10,
+                     stiffness: float = 0.1, outer_iters: int = 3) -> 'Mesh':
+        """Edge-swap + spring-relax loop to break icosphere regularity."""
+        verts = self.vertices.astype(np.float64)
+        faces: List[Tuple[int, int, int]] = list(self.faces)
+        n_verts = len(verts)
+
+        # adj[v] = set of neighboring vertex indices
+        adj: List[set] = [set() for _ in range(n_verts)]
+        # vertex_faces[v] = list of face indices that contain v
+        vertex_faces: List[List[int]] = [[] for _ in range(n_verts)]
+        # edge_faces[frozenset{a,b}] = list of face indices sharing that edge
+        edge_faces: Dict[FrozenSet, List[int]] = {}
+
+        for fi, (a, b, c) in enumerate(faces):
+            vertex_faces[a].append(fi)
+            vertex_faces[b].append(fi)
+            vertex_faces[c].append(fi)
+            adj[a].update([b, c])
+            adj[b].update([a, c])
+            adj[c].update([a, b])
+            for e in (frozenset([a, b]), frozenset([a, c]), frozenset([b, c])):
+                edge_faces.setdefault(e, []).append(fi)
+
+        def ensure_ccw(p0: int, p1: int, p2: int) -> Tuple[int, int, int]:
+            centroid = (verts[p0] + verts[p1] + verts[p2]) / 3.0
+            normal = np.cross(verts[p1] - verts[p0], verts[p2] - verts[p0])
+            return (p0, p1, p2) if np.dot(normal, centroid) >= 0 else (p0, p2, p1)
+
+        def remove_face(fi: int) -> None:
+            f = faces[fi]
+            a, b, c = f
+            for v in f:
+                vertex_faces[v].remove(fi)
+            for e in (frozenset([a, b]), frozenset([a, c]), frozenset([b, c])):
+                edge_faces[e].remove(fi)
+                if not edge_faces[e]:
+                    del edge_faces[e]
+
+        def add_face(fi: int, f: Tuple[int, int, int]) -> None:
+            faces[fi] = f
+            a, b, c = f
+            for v in f:
+                vertex_faces[v].append(fi)
+            for e in (frozenset([a, b]), frozenset([a, c]), frozenset([b, c])):
+                edge_faces.setdefault(e, []).append(fi)
+
+        for _ in range(outer_iters):
+            # --- Edge swap phase ---
+            for _ in range(n_swaps):
+                fi_pick = random.randrange(len(faces))
+                f_pick = faces[fi_pick]
+                ei = random.randrange(3)
+                bv, cv = f_pick[ei], f_pick[(ei + 1) % 3]
+                edge = frozenset([bv, cv])
+                ef = edge_faces.get(edge)
+                if ef is None or len(ef) != 2:
+                    continue
+
+                fi1, fi2 = ef[0], ef[1]
+                f1, f2 = faces[fi1], faces[fi2]
+                av = next(v for v in f1 if v != bv and v != cv)
+                dv = next(v for v in f2 if v != bv and v != cv)
+
+                if len(adj[av]) != 6 or len(adj[dv]) != 6:
+                    continue
+
+                # ensure_ccw only swaps p1/p2, so result is (av, bv, dv) or (av, dv, bv)
+                new_f1 = ensure_ccw(av, bv, dv)
+                p0, p1, p2 = new_f1
+                # Derive new_f2 so the shared AD edge runs opposite to new_f1
+                if (p0 == av and p1 == dv) or (p1 == av and p2 == dv) or (p2 == av and p0 == dv):
+                    new_f2 = (dv, av, cv)  # a→d in new_f1 → d→a in new_f2
+                else:
+                    new_f2 = (av, dv, cv)  # d→a in new_f1 → a→d in new_f2
+
+                remove_face(fi1)
+                remove_face(fi2)
+                adj[bv].discard(cv)
+                adj[cv].discard(bv)
+                adj[av].add(dv)
+                adj[dv].add(av)
+                add_face(fi1, new_f1)
+                add_face(fi2, new_f2)
+
+            # --- Spring relaxation phase ---
+            # Build directed edge arrays for vectorized mean-neighbor computation
+            src_list, dst_list = [], []
+            for v in range(n_verts):
+                for u in adj[v]:
+                    src_list.append(v)
+                    dst_list.append(u)
+            src_arr = np.array(src_list)
+            dst_arr = np.array(dst_list)
+            degree = np.bincount(src_arr, minlength=n_verts).astype(np.float64)
+
+            for _ in range(n_relax):
+                neighbor_sum = np.zeros((n_verts, 3), dtype=np.float64)
+                np.add.at(neighbor_sum, src_arr, verts[dst_arr])
+                target = neighbor_sum / degree[:, np.newaxis]
+                verts += stiffness * (target - verts)
+                verts /= np.linalg.norm(verts, axis=1, keepdims=True)
+
+        # Commit results
+        self.vertices = verts.astype(np.float32)
+        self.faces = faces
+        self.index_array = np.array(faces, dtype=np.uint32)
+        n_faces = len(faces)
+        face_colors = np.random.rand(n_faces, 4).astype(np.float32)
+        face_colors[:, 3] = 1.0
+        flat_indices = self.index_array.flatten()
+        self.render_vertices = self.vertices[flat_indices]
+        self.render_colors = np.repeat(face_colors, 3, axis=0)
+        return self
 
     # Took vertices from https://github.com/lazysquirrellabs/sphere_generator/blob/main/Assets/Lazy%20Squirrel%20Labs/SphereGenerator/Runtime/Generators/IcosphereGenerator.cs
     @staticmethod
