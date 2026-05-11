@@ -16,10 +16,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from projections import ALL_PROJECTIONS, EquirectangularProjection, Projection
+from mapview.projections import ALL_PROJECTIONS, EquirectangularProjection, Projection
 
 if TYPE_CHECKING:
-    from mymesh import PolygonMesh
+    from mesh.mymesh import PolygonMesh
 
 
 def _split_at_antimeridian(face_ecef: np.ndarray) -> list[np.ndarray]:

@@ -2,8 +2,8 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
-from mymesh import Mesh
-from gui import MainWindow
+from mesh.mymesh import Mesh
+from mesh.gui import MainWindow
 
 
 if __name__ == "__main__":

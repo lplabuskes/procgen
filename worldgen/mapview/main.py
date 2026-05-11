@@ -1,12 +1,9 @@
-import os
 import sys
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "mesh"))
 
 from PySide6.QtWidgets import QApplication
 
-from mapview import MapWindow
-from mymesh import Mesh
+from mapview.mapview import MapWindow
+from mesh.mymesh import Mesh
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

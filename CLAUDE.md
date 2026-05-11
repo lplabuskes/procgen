@@ -6,15 +6,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 source .venv/bin/activate
-cd worldgen/mesh && python3 main.py       # 3-D mesh viewer
-cd worldgen/mapview && python3 main.py    # 2-D map viewer
+cd worldgen && python3 -m mesh.main       # 3-D mesh viewer
+cd worldgen && python3 -m mapview.main    # 2-D map viewer
 ```
 
 No build step or linter is configured. Run the test suites with:
 
 ```bash
-cd worldgen && python3 -m pytest mesh/test/test_mymesh.py -v
-cd worldgen && python3 -m pytest mapview/test/test_mapview.py -v
+python3 -m pytest                                         # all tests (testpaths in pyproject.toml)
+python3 -m pytest worldgen/mesh/test/test_mymesh.py -v
+python3 -m pytest worldgen/mapview/test/test_mapview.py -v
 ```
 
 `mesh/test/test_mymesh.py` covers `Mesh` (icosphere topology, unit-sphere property, outward face normals) and `Mesh.mesh_dual` (dual topology counts, face sizes, and correct CCW winding of all fan triangles).

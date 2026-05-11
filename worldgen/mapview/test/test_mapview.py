@@ -1,13 +1,6 @@
-import sys
-import os
-
-# mapview.py uses bare `from projections import ...`, so its package dir must be on sys.path
-_MAPVIEW_DIR = os.path.join(os.path.dirname(__file__), "..")
-sys.path.insert(0, _MAPVIEW_DIR)
-
 import numpy as np
 import pytest
-from projections import (
+from mapview.projections import (
     EquirectangularProjection,
     MercatorProjection,
     MollweideProjection,

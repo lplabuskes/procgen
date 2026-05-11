@@ -9,7 +9,7 @@ from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtGui import QSurfaceFormat
 from PySide6.QtCore import QTimer
 
-from mymesh import PolygonMesh
+from mesh.mymesh import PolygonMesh
 
 class MeshViewer(QOpenGLWidget):
     def __init__(self, parent=None, mesh: Optional[PolygonMesh]=None):
