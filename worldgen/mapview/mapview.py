@@ -20,7 +20,54 @@ from projections import ALL_PROJECTIONS, EquirectangularProjection, Projection
 if TYPE_CHECKING:
     from mymesh import PolygonMesh
 
-_ANTIMERIDIAN_THRESHOLD = 1.0
+
+def _split_at_antimeridian(face_ecef: np.ndarray) -> list[np.ndarray]:
+    """
+    face_ecef: (N, 3) ECEF unit-sphere vertices of a polygon.
+    Returns a list of (M, 2) [lon, lat] (radians) polygons.
+    Single-element list if no antimeridian crossing; two elements if crossing.
+    """
+    n = len(face_ecef)
+    lon = np.arctan2(face_ecef[:, 1], face_ecef[:, 0])
+    lat = np.arcsin(np.clip(face_ecef[:, 2], -1.0, 1.0))
+
+    # An edge crosses the antimeridian when the direct lon difference exceeds π,
+    # meaning the shorter geodesic path goes via ±180°.
+    crosses = np.array(
+        [abs(lon[i] - lon[(i + 1) % n]) > np.pi for i in range(n)], dtype=bool
+    )
+
+    if not crosses.any():
+        return [np.column_stack([lon, lat])]
+
+    east: list[list[float]] = []  # lon in [0, π]
+    west: list[list[float]] = []  # lon in [-π, 0)
+
+    for i in range(n):
+        lo, la = float(lon[i]), float(lat[i])
+        (east if lo >= 0 else west).append([lo, la])
+
+        if crosses[i]:
+            # Find where the edge crosses y=0 (the antimeridian half-plane x<0, y=0)
+            a, b = face_ecef[i], face_ecef[(i + 1) % n]
+            t = -a[1] / (b[1] - a[1])
+            p = a + t * (b - a)
+            p = p / np.linalg.norm(p)
+            p_lat = float(np.arcsin(np.clip(p[2], -1.0, 1.0)))
+
+            if lo >= 0:
+                east.append([np.pi, p_lat])
+                west.append([-np.pi, p_lat])
+            else:
+                west.append([-np.pi, p_lat])
+                east.append([np.pi, p_lat])
+
+    result = []
+    if len(east) >= 3:
+        result.append(np.array(east, dtype=np.float64))
+    if len(west) >= 3:
+        result.append(np.array(west, dtype=np.float64))
+    return result
 
 
 class MapWidget(QWidget):
@@ -30,77 +77,85 @@ class MapWidget(QWidget):
         self._projection: Projection = EquirectangularProjection()
         self._override_colors: Optional[np.ndarray] = None
 
-        self._proj_verts: Optional[np.ndarray] = None
-        self._active_colors: Optional[np.ndarray] = None
-        self._skip_faces: Optional[np.ndarray] = None
-        self._face_vert_indices: Optional[list[np.ndarray]] = None
+        # Lon/lat polygons after antimeridian split (coordinate-system-agnostic)
+        self._faces_lonlat: list[np.ndarray] = []  # each (N, 2)
+        self._face_src: list[int] = []             # original face index per polygon
+        self._face_colors: list[np.ndarray] = []   # RGBA color per polygon
+
+        # Projected (u, v) polygons, rebuilt on projection change
+        self._proj_faces: list[np.ndarray] = []    # each (N, 2)
 
     def set_mesh(self, mesh: PolygonMesh) -> None:
         self._mesh = mesh
-        self._face_vert_indices = [np.array(f, dtype=np.int32) for f in mesh.faces]
-        self._recompute()
+        self._rebuild_faces()
+        self._rebuild_colors()
+        self._reproject()
         self.update()
 
     def set_projection(self, proj: Projection) -> None:
         self._projection = proj
-        self._recompute()
+        self._reproject()
         self.update()
 
     def set_face_colors(self, colors: Optional[np.ndarray]) -> None:
         self._override_colors = colors
-        self._recompute()
+        self._rebuild_colors()
         self.update()
 
-    def _recompute(self) -> None:
+    def _rebuild_faces(self) -> None:
+        """Convert ECEF faces to lon/lat polygons, splitting at the antimeridian."""
         if self._mesh is None:
             return
+        verts = self._mesh.vertices
+        self._faces_lonlat = []
+        self._face_src = []
+        for i, face in enumerate(self._mesh.faces):
+            face_ecef = verts[np.array(face, dtype=np.int32)]
+            for poly_lonlat in _split_at_antimeridian(face_ecef):
+                self._faces_lonlat.append(poly_lonlat)
+                self._face_src.append(i)
 
-        self._proj_verts = self._projection.project(self._mesh.vertices)
-
+    def _rebuild_colors(self) -> None:
+        """Build per-polygon color list indexed via _face_src."""
+        if self._mesh is None or not self._face_src:
+            return
         if self._override_colors is not None:
-            self._active_colors = self._override_colors
+            raw = self._override_colors
         else:
             counts = np.array([len(f) - 2 for f in self._mesh.faces], dtype=np.int32)
             starts = np.concatenate([[0], np.cumsum(counts[:-1])])
-            self._active_colors = self._mesh.render_colors[starts * 3]
+            raw = self._mesh.render_colors[starts * 3]
+        self._face_colors = [raw[i] for i in self._face_src]
 
-        n = len(self._mesh.faces)
-        skip = np.zeros(n, dtype=bool)
-        for i, indices in enumerate(self._face_vert_indices):
-            u_vals = self._proj_verts[indices, 0]
-            if u_vals.max() - u_vals.min() > _ANTIMERIDIAN_THRESHOLD:
-                # Face vertices span more than half the map width — almost certainly
-                # wrapping across the ±180° antimeridian boundary. Skip rather than
-                # draw a huge horizontal band. Proper fix: clip polygon at antimeridian.
-                skip[i] = True
-        self._skip_faces = skip
+    def _reproject(self) -> None:
+        """Project lon/lat polygons to (u, v) map coordinates."""
+        self._proj_faces = [
+            self._projection.project_lonlat(poly) for poly in self._faces_lonlat
+        ]
 
-    def paintEvent(self, event) -> None:
+    def paintEvent(self, _) -> None:
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         W, H = float(self.width()), float(self.height())
 
         painter.fillRect(self.rect(), QColor(30, 100, 180))
 
-        if self._mesh is None or self._proj_verts is None:
+        if not self._proj_faces:
             return
 
-        for i, (indices, skip) in enumerate(
-            zip(self._face_vert_indices, self._skip_faces)
-        ):
-            if skip:
-                continue
-            uvs = self._proj_verts[indices]
-            px = (uvs[:, 0] + 1.0) * 0.5 * W
-            py = (1.0 - uvs[:, 1]) * 0.5 * H
-            color = self._active_colors[i]
+        painter.setPen(Qt.PenStyle.NoPen)
+        for poly_uv, color in zip(self._proj_faces, self._face_colors):
+            px = (poly_uv[:, 0] + 1.0) * 0.5 * W
+            py = (1.0 - poly_uv[:, 1]) * 0.5 * H
             painter.setBrush(
-                QBrush(QColor.fromRgbF(float(color[0]), float(color[1]),
-                                       float(color[2]), float(color[3])))
+                QBrush(QColor.fromRgbF(
+                    float(color[0]), float(color[1]),
+                    float(color[2]), float(color[3])
+                ))
             )
-            painter.setPen(Qt.NoPen)
-            poly = QPolygonF([QPointF(float(x), float(y)) for x, y in zip(px, py)])
-            painter.drawPolygon(poly)
+            painter.drawPolygon(
+                QPolygonF([QPointF(float(x), float(y)) for x, y in zip(px, py)])
+            )
 
     def resizeEvent(self, event) -> None:
         self.update()

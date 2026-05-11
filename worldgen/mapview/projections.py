@@ -10,15 +10,21 @@ class Projection:
         lon = np.arctan2(vertices[:, 1], vertices[:, 0])
         return lon, lat
 
-    def project(self, vertices: np.ndarray) -> np.ndarray:
+    def _from_lonlat(self, _lon: np.ndarray, _lat: np.ndarray) -> np.ndarray:
         raise NotImplementedError
+
+    def project(self, vertices: np.ndarray) -> np.ndarray:
+        lon, lat = self._to_lonlat(vertices)
+        return self._from_lonlat(lon, lat)
+
+    def project_lonlat(self, lonlat: np.ndarray) -> np.ndarray:
+        return self._from_lonlat(lonlat[:, 0], lonlat[:, 1])
 
 
 class EquirectangularProjection(Projection):
     name = "Equirectangular"
 
-    def project(self, vertices: np.ndarray) -> np.ndarray:
-        lon, lat = self._to_lonlat(vertices)
+    def _from_lonlat(self, lon: np.ndarray, lat: np.ndarray) -> np.ndarray:
         u = lon / np.pi
         v = lat / (np.pi / 2)
         return np.column_stack([u, v]).astype(np.float32)
@@ -30,8 +36,7 @@ class MercatorProjection(Projection):
     _LAT_LIMIT = np.radians(85.051129)
     _Y_MAX = float(np.log(np.tan(np.pi / 4 + np.radians(85.051129) / 2)))
 
-    def project(self, vertices: np.ndarray) -> np.ndarray:
-        lon, lat = self._to_lonlat(vertices)
+    def _from_lonlat(self, lon: np.ndarray, lat: np.ndarray) -> np.ndarray:
         u = lon / np.pi
         lat_c = np.clip(lat, -self._LAT_LIMIT, self._LAT_LIMIT)
         v = np.log(np.tan(np.pi / 4 + lat_c / 2)) / self._Y_MAX
@@ -41,9 +46,7 @@ class MercatorProjection(Projection):
 class MollweideProjection(Projection):
     name = "Mollweide"
 
-    def project(self, vertices: np.ndarray) -> np.ndarray:
-        lon, lat = self._to_lonlat(vertices)
-
+    def _from_lonlat(self, lon: np.ndarray, lat: np.ndarray) -> np.ndarray:
         # Iterative Newton solve for auxiliary angle theta
         theta = lat.copy()
         sin_lat = np.sin(lat)
@@ -76,8 +79,7 @@ _ROBINSON_PDFE = np.array([
 class RobinsonProjection(Projection):
     name = "Robinson"
 
-    def project(self, vertices: np.ndarray) -> np.ndarray:
-        lon, lat = self._to_lonlat(vertices)
+    def _from_lonlat(self, lon: np.ndarray, lat: np.ndarray) -> np.ndarray:
         abs_lat_deg = np.abs(lat) * (180.0 / np.pi)
         plen = np.interp(abs_lat_deg, _ROBINSON_LATS, _ROBINSON_PLEN)
         pdfe = np.interp(abs_lat_deg, _ROBINSON_LATS, _ROBINSON_PDFE)
