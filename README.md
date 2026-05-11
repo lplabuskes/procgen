@@ -64,3 +64,43 @@ Hosts `MeshViewer` in an 800×600 window. Call `set_mesh(mesh)` to swap the disp
 ### `test/test_mymesh.py`
 
 Covers `Mesh` (vertex/face counts at various subdivision depths, unit-sphere property, outward face normals) and `PolygonMesh.mesh_dual` (dual topology counts, face sizes, outward winding of all fan triangles, convexity of dual faces on the sphere).
+
+## `worldgen/mapview`
+
+### Overview
+
+Renders a `PolygonMesh` as a flat 2-D map with selectable projection and interactive pan/zoom.
+
+```
+PolygonMesh (from mesh pipeline)
+    └─ MapWindow.set_mesh(mesh)
+        └─ MapWidget._rebuild_faces()    # antimeridian split → lon/lat polygons
+            └─ MapWidget._reproject()   # Projection.project_lonlat → (u, v)
+                └─ MapWidget.paintEvent # QPainter draws filled polygons
+```
+
+### `projections.py`
+
+All projections inherit from `Projection` and expose `project(ecef)` and `project_lonlat(lonlat)`, returning `float32 (N, 2)` arrays in normalized map coordinates (ECEF convention: Z is north, lon=0 at +X axis).
+
+**`EquirectangularProjection`** — Linear: u = lon/π, v = lat/(π/2). Output in [−1, 1]².
+
+**`MercatorProjection`** — Conformal cylindrical. Latitudes clamped at ±85.051° so v stays in [−1, 1].
+
+**`MollweideProjection`** — Equal-area pseudocylindrical. Auxiliary angle θ is solved with 10 Newton steps; polar vertices are snapped to θ = ±π/2 to avoid division by zero. Output fits an ellipse with semi-axes √2 in both u and v.
+
+**`RobinsonProjection`** — Compromise projection. Parallel lengths (plen) and y-offsets (pdfe) are interpolated from the classic Robinson lookup table at 5° latitude intervals.
+
+**`ALL_PROJECTIONS`** — List of one instance of each projection, used to populate the viewer combo-box.
+
+### `mapview.py`
+
+**`_split_at_antimeridian(face_ecef)`** — Takes an `(N, 3)` array of ECEF unit-sphere vertices and returns a list of `(M, 2)` lon/lat arrays. Detects antimeridian crossings (|Δlon| > π on a direct edge), interpolates the crossing latitude, and splits the polygon into eastern and western halves. Sub-polygons with fewer than 3 vertices are discarded.
+
+**`MapWidget(QWidget)`** — Paints lon/lat polygons by projecting them on each `_reproject()` call and drawing filled `QPolygonF` shapes via `QPainter`. Pan via left-button drag; zoom via scroll wheel (clamped to [1×, 50×]). Call `set_mesh(mesh)` to load a new mesh; `set_face_colors(colors)` to override per-face colors.
+
+**`MapWindow(QMainWindow)`** — 900×500 window hosting `MapWidget` plus a toolbar with a projection combo-box and Zoom In / Zoom Out / Reset buttons.
+
+### `test/test_mapview.py`
+
+Covers all four projections (equator at v=0, prime meridian at u=0, N/S and E/W symmetry, `project` vs `project_lonlat` agreement, projection-specific bounds such as equirectangular unit square, Mercator monotonicity and clamping, Mollweide ellipse containment, Robinson pole positions and parallel-length shrinkage) and `_split_at_antimeridian` (no-crossing passthrough, two-polygon split when two edges cross, hemisphere lon-sign invariant, boundary latitude continuity).

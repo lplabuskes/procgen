@@ -6,16 +6,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 source .venv/bin/activate
-cd worldgen/mesh && python3 main.py
+cd worldgen/mesh && python3 main.py       # 3-D mesh viewer
+cd worldgen/mapview && python3 main.py    # 2-D map viewer
 ```
 
-No build step or linter is configured. Run the test suite with:
+No build step or linter is configured. Run the test suites with:
 
 ```bash
 cd worldgen && python3 -m pytest mesh/test/test_mymesh.py -v
+cd worldgen && python3 -m pytest mapview/test/test_mapview.py -v
 ```
 
-Tests live in `worldgen/mesh/test/test_mymesh.py` and cover `Mesh` (icosphere topology, unit-sphere property, outward face normals) and `Mesh.mesh_dual` (dual topology counts, face sizes, and correct CCW winding of all fan triangles).
+`mesh/test/test_mymesh.py` covers `Mesh` (icosphere topology, unit-sphere property, outward face normals) and `Mesh.mesh_dual` (dual topology counts, face sizes, and correct CCW winding of all fan triangles).
+
+`mapview/test/test_mapview.py` covers all four projections (equator/meridian anchors, N/S and E/W symmetry, projection-specific bounds, `project` vs `project_lonlat` consistency) and `_split_at_antimeridian` (no-crossing passthrough, two-polygon split, boundary latitude continuity).
 
 ## Architecture
 
@@ -34,6 +38,25 @@ This is a procedural mesh generation and 3D visualization project. The pipeline 
 ### `worldgen/mesh/main.py` — Entry point
 
 Creates an `icosphere(depth=4)`, deregularizes it, computes its dual, and opens the viewer.
+
+### `worldgen/mapview/projections.py` — Map projections
+
+All projections share a `Projection` base class with `project(ecef_vertices)` and `project_lonlat(lonlat)` methods (ECEF convention: Z is north, lon=0 at +X). Output is `float32 (N, 2)` in normalized map coordinates.
+
+- **`EquirectangularProjection`**: u = lon/π, v = lat/(π/2). Output in [−1, 1]².
+- **`MercatorProjection`**: Conformal cylindrical; latitudes clamped at ±85.05° so v stays in [−1, 1].
+- **`MollweideProjection`**: Equal-area pseudocylindrical; solved via Newton iteration for auxiliary angle θ. Fits an ellipse with semi-axes √2 (u) and √2 (v).
+- **`RobinsonProjection`**: Table-based compromise; parallel lengths and y-offsets interpolated from the original Robinson lookup tables at 5° latitude steps.
+
+### `worldgen/mapview/mapview.py` — Qt map widget
+
+- **`_split_at_antimeridian(face_ecef)`**: Splits a unit-sphere polygon at the ±180° meridian. Returns a list of one or two lon/lat polygons; discards sub-polygons with fewer than 3 vertices.
+- **`MapWidget`** (`QWidget`): Paints projected polygons using `QPainter`. Supports pan (drag) and zoom (scroll wheel or ±/Reset buttons). Zoom is clamped to [1×, 50×].
+- **`MapWindow`** (`QMainWindow`): Hosts `MapWidget` with a projection combo-box toolbar.
+
+### `worldgen/mapview/main.py` — Entry point
+
+Creates an `icosphere(depth=4)`, deregularizes it, computes its dual, and opens the map viewer.
 
 ## Key Design Notes
 
