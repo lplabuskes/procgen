@@ -1,5 +1,4 @@
-meshlib
 numpy
-plotly
 PyOpenGL
 pyside6
+pytest
