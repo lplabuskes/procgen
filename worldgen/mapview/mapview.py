@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -85,6 +86,13 @@ class MapWidget(QWidget):
         # Projected (u, v) polygons, rebuilt on projection change
         self._proj_faces: list[np.ndarray] = []    # each (N, 2)
 
+        self._zoom: float = 1.0
+        self._center: np.ndarray = np.zeros(2, dtype=np.float64)
+        self._drag_start: Optional[tuple[float, float]] = None
+        self._drag_start_center: np.ndarray = np.zeros(2, dtype=np.float64)
+        self.setFocusPolicy(Qt.FocusPolicy.WheelFocus)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+
     def set_mesh(self, mesh: PolygonMesh) -> None:
         self._mesh = mesh
         self._rebuild_faces()
@@ -143,10 +151,14 @@ class MapWidget(QWidget):
         if not self._proj_faces:
             return
 
+        cx, cy = self._center[0], self._center[1]
+        scale_x = self._zoom * 0.5 * W
+        scale_y = self._zoom * 0.5 * H
+
         painter.setPen(Qt.PenStyle.NoPen)
         for poly_uv, color in zip(self._proj_faces, self._face_colors):
-            px = (poly_uv[:, 0] + 1.0) * 0.5 * W
-            py = (1.0 - poly_uv[:, 1]) * 0.5 * H
+            px = (poly_uv[:, 0] - cx) * scale_x + W * 0.5
+            py = -(poly_uv[:, 1] - cy) * scale_y + H * 0.5
             painter.setBrush(
                 QBrush(QColor.fromRgbF(
                     float(color[0]), float(color[1]),
@@ -156,6 +168,67 @@ class MapWidget(QWidget):
             painter.drawPolygon(
                 QPolygonF([QPointF(float(x), float(y)) for x, y in zip(px, py)])
             )
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start = (float(event.position().x()), float(event.position().y()))
+            self._drag_start_center = self._center.copy()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag_start is None:
+            return
+        W, H = float(self.width()), float(self.height())
+        dx = float(event.position().x()) - self._drag_start[0]
+        dy = float(event.position().y()) - self._drag_start[1]
+        scale_x = self._zoom * 0.5 * W
+        scale_y = self._zoom * 0.5 * H
+        self._center[0] = self._drag_start_center[0] - dx / scale_x
+        self._center[1] = self._drag_start_center[1] + dy / scale_y
+        self._clamp_center()
+        self.update()
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start = None
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+
+    def wheelEvent(self, event) -> None:
+        delta = event.angleDelta().y()
+        if delta:
+            pos = event.position()
+            self._zoom_toward(float(pos.x()), float(pos.y()), 1.2 ** (delta / 120.0))
+        event.accept()
+
+    def _zoom_toward(self, mx: float, my: float, factor: float) -> None:
+        W, H = float(self.width()), float(self.height())
+        u = (mx - W * 0.5) / (self._zoom * 0.5 * W) + self._center[0]
+        v = -(my - H * 0.5) / (self._zoom * 0.5 * H) + self._center[1]
+        new_zoom = max(1.0, min(50.0, self._zoom * factor))
+        if new_zoom == 1.0:
+            self._zoom = 1.0
+            self._center[:] = 0.0
+        else:
+            self._zoom = new_zoom
+            self._center[0] = u - (mx - W * 0.5) / (self._zoom * 0.5 * W)
+            self._center[1] = v + (my - H * 0.5) / (self._zoom * 0.5 * H)
+        self.update()
+
+    def zoom_in(self) -> None:
+        self._zoom_toward(self.width() * 0.5, self.height() * 0.5, 1.2)
+
+    def zoom_out(self) -> None:
+        self._zoom_toward(self.width() * 0.5, self.height() * 0.5, 1.0 / 1.2)
+
+    def _clamp_center(self) -> None:
+        limit = 1.0 - 1.0 / self._zoom
+        self._center[0] = float(np.clip(self._center[0], -limit, limit))
+        self._center[1] = float(np.clip(self._center[1], -limit, limit))
+
+    def reset_view(self) -> None:
+        self._zoom = 1.0
+        self._center[:] = 0.0
+        self.update()
 
     def resizeEvent(self, event) -> None:
         self.update()
@@ -184,6 +257,20 @@ class MapWindow(QMainWindow):
         )
         toolbar_layout.addWidget(self._combo)
         toolbar_layout.addStretch()
+
+        zoom_out_btn = QPushButton("−")
+        zoom_out_btn.setFixedWidth(30)
+        zoom_out_btn.clicked.connect(lambda: self._map.zoom_out())
+        toolbar_layout.addWidget(zoom_out_btn)
+
+        zoom_in_btn = QPushButton("+")
+        zoom_in_btn.setFixedWidth(30)
+        zoom_in_btn.clicked.connect(lambda: self._map.zoom_in())
+        toolbar_layout.addWidget(zoom_in_btn)
+
+        reset_btn = QPushButton("Reset")
+        reset_btn.clicked.connect(lambda: self._map.reset_view())
+        toolbar_layout.addWidget(reset_btn)
 
         self._map = MapWidget()
 
