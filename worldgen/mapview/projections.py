@@ -89,8 +89,8 @@ class RobinsonProjection(Projection):
 
 
 ALL_PROJECTIONS: list[Projection] = [
-    EquirectangularProjection(),
-    MercatorProjection(),
-    MollweideProjection(),
     RobinsonProjection(),
+    MollweideProjection(),
+    MercatorProjection(),
+    EquirectangularProjection(),
 ]

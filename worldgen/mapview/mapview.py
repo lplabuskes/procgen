@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mapview.projections import ALL_PROJECTIONS, EquirectangularProjection, Projection
+from mapview.projections import ALL_PROJECTIONS, RobinsonProjection, Projection
 
 if TYPE_CHECKING:
     from mesh.mymesh import PolygonMesh
@@ -75,7 +75,7 @@ class MapWidget(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._mesh: Optional[PolygonMesh] = None
-        self._projection: Projection = EquirectangularProjection()
+        self._projection: Projection = RobinsonProjection()
         self._override_colors: Optional[np.ndarray] = None
 
         # Lon/lat polygons after antimeridian split (coordinate-system-agnostic)
