@@ -4,7 +4,7 @@ import sys
 import numpy as np
 from PySide6.QtWidgets import QApplication
 
-from geology.tectonics import generate_plates
+from geology.tectonics import generate_plate_velocities, generate_plates, relax_plates
 from mapview.mapview import MapWindow
 from mesh.mymesh import Mesh
 
@@ -35,6 +35,8 @@ if __name__ == "__main__":
     dual = mesh.mesh_dual()
 
     plate_ids = generate_plates(dual, n_plates=N_PLATES)
+    plate_omegas = generate_plate_velocities(dual, plate_ids, n_plates=N_PLATES)
+    plate_ids = relax_plates(dual, plate_ids, plate_omegas)
     palette = _plate_palette(N_PLATES)
     colors = _face_colors(plate_ids, palette)
 
