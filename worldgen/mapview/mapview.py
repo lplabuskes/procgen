@@ -76,7 +76,6 @@ class MapWidget(QWidget):
         super().__init__(parent)
         self._mesh: Optional[PolygonMesh] = None
         self._projection: Projection = RobinsonProjection()
-        self._override_colors: Optional[np.ndarray] = None
 
         # Lon/lat polygons after antimeridian split (coordinate-system-agnostic)
         self._faces_lonlat: list[np.ndarray] = []  # each (N, 2)
@@ -105,11 +104,6 @@ class MapWidget(QWidget):
         self._reproject()
         self.update()
 
-    def set_face_colors(self, colors: Optional[np.ndarray]) -> None:
-        self._override_colors = colors
-        self._rebuild_colors()
-        self.update()
-
     def _rebuild_faces(self) -> None:
         """Convert ECEF faces to lon/lat polygons, splitting at the antimeridian."""
         if self._mesh is None:
@@ -127,13 +121,7 @@ class MapWidget(QWidget):
         """Build per-polygon color list indexed via _face_src."""
         if self._mesh is None or not self._face_src:
             return
-        if self._override_colors is not None:
-            raw = self._override_colors
-        else:
-            counts = np.array([len(f) - 2 for f in self._mesh.faces], dtype=np.int32)
-            starts = np.concatenate([[0], np.cumsum(counts[:-1])])
-            raw = self._mesh.render_colors[starts * 3]
-        self._face_colors = [raw[i] for i in self._face_src]
+        self._face_colors = [self._mesh.face_colors[i] for i in self._face_src]
 
     def _reproject(self) -> None:
         """Project lon/lat polygons to (u, v) map coordinates."""
@@ -283,6 +271,3 @@ class MapWindow(QMainWindow):
 
     def set_mesh(self, mesh: PolygonMesh) -> None:
         self._map.set_mesh(mesh)
-
-    def set_face_colors(self, colors: Optional[np.ndarray]) -> None:
-        self._map.set_face_colors(colors)

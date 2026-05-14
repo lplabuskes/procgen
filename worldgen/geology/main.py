@@ -21,11 +21,6 @@ def _plate_palette(n: int) -> np.ndarray:
     return rgba
 
 
-def _face_colors(plate_ids: list[int], palette: np.ndarray) -> np.ndarray:
-    ids = np.array(plate_ids, dtype=np.int32)
-    return palette[ids]
-
-
 if __name__ == "__main__":
     app = QApplication(sys.argv)
 
@@ -38,10 +33,9 @@ if __name__ == "__main__":
     plate_omegas = generate_plate_velocities(dual, plate_ids, n_plates=N_PLATES)
     plate_ids = relax_plates(dual, plate_ids, plate_omegas)
     palette = _plate_palette(N_PLATES)
-    colors = _face_colors(plate_ids, palette)
+    dual.set_face_colors(palette[np.array(plate_ids, dtype=np.int32)])
 
     window = MapWindow(mesh=dual)
-    window.set_face_colors(colors)
     window.setWindowTitle("Plate Tectonics")
     window.show()
 

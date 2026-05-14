@@ -10,23 +10,54 @@ class PolygonMesh:
         self.faces = faces
 
         n_faces = len(faces)
-        face_colors = np.random.rand(n_faces, 4).astype(np.float32)
-        face_colors[:, 3] = 1.0
+        self.face_colors = np.random.rand(n_faces, 4).astype(np.float32)
+        self.face_colors[:, 3] = 1.0
+        self._rebuild_render_arrays()
 
+        self.face_metadata: List[Dict[str, Any]] = [{} for _ in range(n_faces)]
+        self.face_adjacency: List[List[int]] = self._build_face_adjacency()
+        self.face_centroids: np.ndarray = self._compute_face_centroids()
+
+    def _rebuild_render_arrays(self) -> None:
         triangles = []
         triangle_face_indices = []
-        for face_idx, face in enumerate(faces):
+        for face_idx, face in enumerate(self.faces):
             for i in range(1, len(face) - 1):
                 triangles.append((face[0], face[i], face[i + 1]))
                 triangle_face_indices.append(face_idx)
         self.index_array = np.array(triangles, dtype=np.uint32)
-
         flat_indices = self.index_array.flatten()
         self.render_vertices = self.vertices[flat_indices]
-        triangle_colors = face_colors[np.array(triangle_face_indices)]
+        triangle_colors = self.face_colors[np.array(triangle_face_indices)]
         self.render_colors = np.repeat(triangle_colors, 3, axis=0)
 
-        self.face_metadata: List[Dict[str, Any]] = [{} for _ in range(n_faces)]
+    def _compute_face_centroids(self) -> np.ndarray:
+        n_faces = len(self.faces)
+        centroids = np.zeros((n_faces, 3), dtype=np.float64)
+        for i, face in enumerate(self.faces):
+            pts = self.vertices[np.array(face)]
+            c = np.mean(pts, axis=0)
+            centroids[i] = c / np.linalg.norm(c)
+        return centroids
+
+    def _build_face_adjacency(self) -> List[List[int]]:
+        edge_to_faces: Dict[FrozenSet, List[int]] = {}
+        for face_idx, face in enumerate(self.faces):
+            n = len(face)
+            for i in range(n):
+                edge = frozenset([face[i], face[(i + 1) % n]])
+                edge_to_faces.setdefault(edge, []).append(face_idx)
+        adjacency: List[List[int]] = [[] for _ in range(len(self.faces))]
+        for neighbors in edge_to_faces.values():
+            if len(neighbors) == 2:
+                a, b = neighbors
+                adjacency[a].append(b)
+                adjacency[b].append(a)
+        return adjacency
+
+    def set_face_colors(self, colors: np.ndarray) -> None:
+        self.face_colors = colors.astype(np.float32)
+        self._rebuild_render_arrays()
 
     def set_face_metadata(self, face_idx: int, **metadata: Any) -> None:
         self.face_metadata[face_idx].update(metadata)
@@ -192,13 +223,12 @@ class Mesh(PolygonMesh):
         # Commit results
         self.vertices = verts.astype(np.float32)
         self.faces = faces
-        self.index_array = np.array(faces, dtype=np.uint32)
         n_faces = len(faces)
-        face_colors = np.random.rand(n_faces, 4).astype(np.float32)
-        face_colors[:, 3] = 1.0
-        flat_indices = self.index_array.flatten()
-        self.render_vertices = self.vertices[flat_indices]
-        self.render_colors = np.repeat(face_colors, 3, axis=0)
+        self.face_colors = np.random.rand(n_faces, 4).astype(np.float32)
+        self.face_colors[:, 3] = 1.0
+        self._rebuild_render_arrays()
+        self.face_adjacency = self._build_face_adjacency()
+        self.face_centroids = self._compute_face_centroids()
         return self
 
     # Took vertices from https://github.com/lazysquirrellabs/sphere_generator/blob/main/Assets/Lazy%20Squirrel%20Labs/SphereGenerator/Runtime/Generators/IcosphereGenerator.cs

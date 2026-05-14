@@ -7,24 +7,6 @@ import numpy as np
 from mesh.mymesh import PolygonMesh
 
 
-def build_face_adjacency(mesh: PolygonMesh) -> List[List[int]]:
-    """Return adjacency[i] = list of face indices sharing an edge with face i."""
-    edge_to_faces: dict = {}
-    for face_idx, face in enumerate(mesh.faces):
-        n = len(face)
-        for i in range(n):
-            edge = frozenset([face[i], face[(i + 1) % n]])
-            edge_to_faces.setdefault(edge, []).append(face_idx)
-
-    adjacency: List[List[int]] = [[] for _ in range(len(mesh.faces))]
-    for neighbors in edge_to_faces.values():
-        if len(neighbors) == 2:
-            a, b = neighbors
-            adjacency[a].append(b)
-            adjacency[b].append(a)
-    return adjacency
-
-
 def generate_plates(
     mesh: PolygonMesh,
     n_plates: int,
@@ -44,14 +26,8 @@ def generate_plates(
     rng = random.Random(seed)
     n_faces = len(mesh.faces)
     n_plates = min(n_plates, n_faces)
-    adjacency = build_face_adjacency(mesh)
-
-    # Precompute normalized face centroids for distance calculations.
-    face_centroids = np.zeros((n_faces, 3), dtype=np.float64)
-    for i, face in enumerate(mesh.faces):
-        pts = mesh.vertices[np.array(face)]
-        c = np.mean(pts, axis=0)
-        face_centroids[i] = c / np.linalg.norm(c)
+    adjacency = mesh.face_adjacency
+    face_centroids = mesh.face_centroids
 
     plate_ids: List[int] = [-1] * n_faces
     seeds = rng.sample(range(n_faces), n_plates)
@@ -142,22 +118,10 @@ def generate_plate_velocities(
     return (drift_omega + spin_omega).astype(np.float64)
 
 
-def _compute_face_centroids(mesh: PolygonMesh) -> np.ndarray:
-    n_faces = len(mesh.faces)
-    centroids = np.zeros((n_faces, 3), dtype=np.float64)
-    for i, face in enumerate(mesh.faces):
-        pts = mesh.vertices[np.array(face)]
-        c = np.mean(pts, axis=0)
-        centroids[i] = c / np.linalg.norm(c)
-    return centroids
-
-
 def compute_face_stress(
     mesh: PolygonMesh,
     plate_ids: List[int],
     plate_omegas: np.ndarray,
-    adjacency: Optional[List[List[int]]] = None,
-    face_centroids: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Return stress at each face (shape: n_faces,).
 
@@ -166,10 +130,8 @@ def compute_face_stress(
 
     Interior faces (all neighbors on the same plate) get stress 0.
     """
-    if adjacency is None:
-        adjacency = build_face_adjacency(mesh)
-    if face_centroids is None:
-        face_centroids = _compute_face_centroids(mesh)
+    adjacency = mesh.face_adjacency
+    face_centroids = mesh.face_centroids
 
     n_faces = len(mesh.faces)
     pids = np.asarray(plate_ids)
@@ -241,8 +203,6 @@ def apply_stress_reassignment(
     plate_ids: List[int],
     plate_omegas: np.ndarray,
     stress_percentile: float = 90.0,
-    adjacency: Optional[List[List[int]]] = None,
-    face_centroids: Optional[np.ndarray] = None,
 ) -> List[int]:
     """Reassign high-stress boundary faces to the neighboring plate that minimises their stress.
 
@@ -250,12 +210,10 @@ def apply_stress_reassignment(
     Each candidate is assigned to whichever adjacent plate would yield the lowest
     hypothetical stress, keeping the current plate if no neighbor improves things.
     """
-    if adjacency is None:
-        adjacency = build_face_adjacency(mesh)
-    if face_centroids is None:
-        face_centroids = _compute_face_centroids(mesh)
+    adjacency = mesh.face_adjacency
+    face_centroids = mesh.face_centroids
 
-    stress = compute_face_stress(mesh, plate_ids, plate_omegas, adjacency, face_centroids)
+    stress = compute_face_stress(mesh, plate_ids, plate_omegas)
 
     boundary_stress = stress[stress > 0.0]
     if boundary_stress.size == 0:
@@ -292,20 +250,15 @@ def relax_plates(
     plate_omegas: np.ndarray,
     stress_percentile: float = 90.0,
     max_passes: int = 10,
-    adjacency: Optional[List[List[int]]] = None,
 ) -> List[int]:
     """Iteratively reassign high-stress faces until convergence or max_passes.
 
     Returns the stabilised plate assignment.
     """
-    if adjacency is None:
-        adjacency = build_face_adjacency(mesh)
-    face_centroids = _compute_face_centroids(mesh)
-
     current = list(plate_ids)
     for _ in range(max_passes):
         updated = apply_stress_reassignment(
-            mesh, current, plate_omegas, stress_percentile, adjacency, face_centroids
+            mesh, current, plate_omegas, stress_percentile
         )
         if updated == current:
             break
