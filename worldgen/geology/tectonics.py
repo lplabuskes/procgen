@@ -264,3 +264,30 @@ def relax_plates(
             break
         current = updated
     return current
+
+
+def assign_plate_types(
+    n_plates: int,
+    oceanic_fraction: float = 0.7,
+    seed: Optional[int] = None,
+) -> List[str]:
+    """Classify each plate as 'oceanic' or 'continental'.
+
+    Returns a list of length n_plates. oceanic_fraction controls the expected
+    proportion of oceanic plates (default 0.7 matches Earth's rough ratio).
+    """
+    rng = random.Random(seed)
+    return [
+        "oceanic" if rng.random() < oceanic_fraction else "continental"
+        for _ in range(n_plates)
+    ]
+
+
+def tag_face_metadata(
+    mesh: PolygonMesh,
+    plate_ids: List[int],
+    plate_types: List[str],
+) -> None:
+    """Write plate_id and plate_type into each face's metadata dict in-place."""
+    for face_idx, pid in enumerate(plate_ids):
+        mesh.set_face_metadata(face_idx, plate_id=pid, plate_type=plate_types[pid])

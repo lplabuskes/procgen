@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Callable, Optional, Sequence
 
 import numpy as np
 from PySide6.QtCore import Qt
@@ -85,6 +85,9 @@ class MapWidget(QWidget):
         # Projected (u, v) polygons, rebuilt on projection change
         self._proj_faces: list[np.ndarray] = []    # each (N, 2)
 
+        self._color_schemes: dict[str, Callable[[dict], Sequence[float]]] = {}
+        self._active_scheme: Optional[str] = None
+
         self._zoom: float = 1.0
         self._center: np.ndarray = np.zeros(2, dtype=np.float64)
         self._drag_start: Optional[tuple[float, float]] = None
@@ -104,6 +107,17 @@ class MapWidget(QWidget):
         self._reproject()
         self.update()
 
+    def set_color_schemes(self, schemes: dict[str, Callable[[dict], Sequence[float]]]) -> None:
+        self._color_schemes = schemes
+        self._active_scheme = next(iter(schemes)) if schemes else None
+        self._rebuild_colors()
+        self.update()
+
+    def set_color_scheme(self, name: str) -> None:
+        self._active_scheme = name
+        self._rebuild_colors()
+        self.update()
+
     def _rebuild_faces(self) -> None:
         """Convert ECEF faces to lon/lat polygons, splitting at the antimeridian."""
         if self._mesh is None:
@@ -121,7 +135,14 @@ class MapWidget(QWidget):
         """Build per-polygon color list indexed via _face_src."""
         if self._mesh is None or not self._face_src:
             return
-        self._face_colors = [self._mesh.face_colors[i] for i in self._face_src]
+        if self._active_scheme is not None:
+            functor = self._color_schemes[self._active_scheme]
+            self._face_colors = [
+                np.asarray(functor(self._mesh.face_metadata[i]), dtype=np.float32)
+                for i in self._face_src
+            ]
+        else:
+            self._face_colors = [self._mesh.face_colors[i] for i in self._face_src]
 
     def _reproject(self) -> None:
         """Project lon/lat polygons to (u, v) map coordinates."""
@@ -244,6 +265,14 @@ class MapWindow(QMainWindow):
             lambda i: self._map.set_projection(ALL_PROJECTIONS[i])
         )
         toolbar_layout.addWidget(self._combo)
+
+        self._color_label = QLabel("Coloration:")
+        self._color_combo = QComboBox()
+        toolbar_layout.addWidget(self._color_label)
+        toolbar_layout.addWidget(self._color_combo)
+        self._color_label.setVisible(False)
+        self._color_combo.setVisible(False)
+
         toolbar_layout.addStretch()
 
         zoom_out_btn = QPushButton("−")
@@ -261,6 +290,7 @@ class MapWindow(QMainWindow):
         toolbar_layout.addWidget(reset_btn)
 
         self._map = MapWidget()
+        self._color_combo.currentTextChanged.connect(self._map.set_color_scheme)
 
         layout.addWidget(toolbar)
         layout.addWidget(self._map, stretch=1)
@@ -271,3 +301,14 @@ class MapWindow(QMainWindow):
 
     def set_mesh(self, mesh: PolygonMesh) -> None:
         self._map.set_mesh(mesh)
+
+    def set_color_schemes(self, schemes: dict[str, Callable[[dict], Sequence[float]]]) -> None:
+        self._color_combo.blockSignals(True)
+        self._color_combo.clear()
+        for name in schemes:
+            self._color_combo.addItem(name)
+        self._color_combo.blockSignals(False)
+        visible = bool(schemes)
+        self._color_label.setVisible(visible)
+        self._color_combo.setVisible(visible)
+        self._map.set_color_schemes(schemes)

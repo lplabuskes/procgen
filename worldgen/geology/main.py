@@ -4,11 +4,17 @@ import sys
 import numpy as np
 from PySide6.QtWidgets import QApplication
 
-from geology.tectonics import generate_plate_velocities, generate_plates, relax_plates
+from geology.tectonics import (
+    assign_plate_types,
+    generate_plate_velocities,
+    generate_plates,
+    relax_plates,
+    tag_face_metadata,
+)
 from mapview.mapview import MapWindow
 from mesh.mymesh import Mesh
 
-N_PLATES = 12
+N_PLATES = 20
 
 
 def _plate_palette(n: int) -> np.ndarray:
@@ -24,7 +30,7 @@ def _plate_palette(n: int) -> np.ndarray:
 if __name__ == "__main__":
     app = QApplication(sys.argv)
 
-    mesh = Mesh.icosphere(3).deregularize(
+    mesh = Mesh.icosphere(4).deregularize(
         n_swaps=1000, n_relax=10, stiffness=0.1, outer_iters=3
     )
     dual = mesh.mesh_dual()
@@ -32,11 +38,17 @@ if __name__ == "__main__":
     plate_ids = generate_plates(dual, n_plates=N_PLATES)
     plate_omegas = generate_plate_velocities(dual, plate_ids, n_plates=N_PLATES)
     plate_ids = relax_plates(dual, plate_ids, plate_omegas)
+    plate_types = assign_plate_types(N_PLATES)
+    tag_face_metadata(dual, plate_ids, plate_types)
     palette = _plate_palette(N_PLATES)
     dual.set_face_colors(palette[np.array(plate_ids, dtype=np.int32)])
 
     window = MapWindow(mesh=dual)
     window.setWindowTitle("Plate Tectonics")
+    window.set_color_schemes({
+        "Plates": lambda meta: palette[meta["plate_id"]],
+        "Plate Type": lambda meta: (0.25, 0.55, 0.85, 1.0) if meta["plate_type"] == "oceanic" else (0.72, 0.52, 0.25, 1.0),
+    })
     window.show()
 
     sys.exit(app.exec())
