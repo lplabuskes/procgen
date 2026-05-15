@@ -23,13 +23,15 @@ source .venv/bin/activate
 
 ### Overview
 
-The pipeline is: build a triangular `Mesh` → deregularize it → compute its dual `PolygonMesh` → display it.
+The core pipeline is: build a triangular `Mesh` → deregularize it → compute its dual `PolygonMesh` → display it. The geology pipeline extends this by running tectonic simulation on the dual mesh.
 
 ```
 Mesh.icosphere(depth)
-    └─ .deregularize(...)   # edge-swap + spring relax
-        └─ .mesh_dual()     # → PolygonMesh
-            └─ MainWindow(mesh=dual)
+    └─ .deregularize(...)        # edge-swap + spring relax
+        └─ .mesh_dual()          # → PolygonMesh
+            ├─ MainWindow(mesh)  # 3-D viewer (mesh module)
+            ├─ MapWindow(mesh)   # 2-D map viewer (mapview module)
+            └─ generate_plates / relax_plates / ...  # geology module
 ```
 
 ### `mymesh.py`
@@ -37,7 +39,13 @@ Mesh.icosphere(depth)
 **`PolygonMesh(vertices, faces)`**
 
 Base class for any polygon mesh. Faces are tuples of vertex indices of arbitrary length.
-On construction it fan-triangulates every face and pre-builds flat `render_vertices` and `render_colors` arrays (one random color per face) ready for direct VBO upload.
+On construction it fan-triangulates every face and pre-builds flat `render_vertices` and `render_colors` arrays (one random color per face) ready for direct VBO upload. Also pre-computes:
+
+- `face_adjacency` — `List[List[int]]` of edge-sharing neighbor face indices per face.
+- `face_centroids` — `(N, 3) float64` unit-sphere centroid for each face.
+- `face_metadata` — `List[dict]` of per-face key-value stores for downstream annotation.
+
+`set_face_colors(colors)` replaces `face_colors` and rebuilds the render arrays. `set_face_metadata(face_idx, **kwargs)` merges kwargs into that face's metadata dict.
 
 **`Mesh(vertices, faces)`** — subclass of `PolygonMesh`
 
@@ -46,10 +54,6 @@ Triangular mesh only (faces are 3-tuples). Vertices are re-sorted along the Z-ax
 - `Mesh.icosphere(depth)` — generates a subdivided icosahedron, projecting all vertices onto the unit sphere. Each subdivision level quadruples the face count: depth 0 gives 20 triangles, depth `n` gives `20 × 4ⁿ`.
 - `.deregularize(n_swaps, n_relax, stiffness, outer_iters)` — breaks the icosphere's regularity by alternating random edge-swaps with spring relaxation. Edge-swaps are rejected if they would create a vertex with degree ≤ 5 (squares in the dual) or ≥ 7 (octagons). Spring relaxation pulls each vertex toward the mean position of its neighbors and re-projects onto the unit sphere.
 - `.mesh_dual()` — builds the dual `PolygonMesh`. Each original face becomes a vertex (its centroid, normalized to the unit sphere). Each original vertex becomes a face whose vertices are the centroids of its adjacent faces, ordered CCW by projecting onto the tangent plane at that vertex.
-
-**`PolygonMesh.set_face_metadata(face_idx, **kwargs)`**
-
-Attaches arbitrary key-value data to a face for downstream use.
 
 ### `gui.py`
 
@@ -97,10 +101,51 @@ All projections inherit from `Projection` and expose `project(ecef)` and `projec
 
 **`_split_at_antimeridian(face_ecef)`** — Takes an `(N, 3)` array of ECEF unit-sphere vertices and returns a list of `(M, 2)` lon/lat arrays. Detects antimeridian crossings (|Δlon| > π on a direct edge), interpolates the crossing latitude, and splits the polygon into eastern and western halves. Sub-polygons with fewer than 3 vertices are discarded.
 
-**`MapWidget(QWidget)`** — Paints lon/lat polygons by projecting them on each `_reproject()` call and drawing filled `QPolygonF` shapes via `QPainter`. Pan via left-button drag; zoom via scroll wheel (clamped to [1×, 50×]). Call `set_mesh(mesh)` to load a new mesh; `set_face_colors(colors)` to override per-face colors.
+**`MapWidget(QWidget)`** — Paints lon/lat polygons by projecting them on each `_reproject()` call and drawing filled `QPolygonF` shapes via `QPainter`. Pan via left-button drag; zoom via scroll wheel (clamped to [1×, 50×]). Call `set_mesh(mesh)` to load a new mesh. Color can be driven by named schemes registered via `set_color_schemes(schemes)` — a `dict[str, Callable[[dict], RGBA]]` mapping display names to functions over face metadata; `set_color_scheme(name)` switches the active scheme. Falls back to `PolygonMesh.face_colors` when no scheme is active.
 
-**`MapWindow(QMainWindow)`** — 900×500 window hosting `MapWidget` plus a toolbar with a projection combo-box and Zoom In / Zoom Out / Reset buttons.
+**`MapWindow(QMainWindow)`** — 900×500 window hosting `MapWidget` plus a toolbar with a projection combo-box, a coloration combo-box (shown only when schemes are registered via `set_color_schemes`), and Zoom In / Zoom Out / Reset buttons.
 
 ### `test/test_mapview.py`
 
 Covers all four projections (equator at v=0, prime meridian at u=0, N/S and E/W symmetry, `project` vs `project_lonlat` agreement, projection-specific bounds such as equirectangular unit square, Mercator monotonicity and clamping, Mollweide ellipse containment, Robinson pole positions and parallel-length shrinkage) and `_split_at_antimeridian` (no-crossing passthrough, two-polygon split when two edges cross, hemisphere lon-sign invariant, boundary latitude continuity).
+
+## `worldgen/geology`
+
+### Overview
+
+Tectonic simulation layer that runs on a `PolygonMesh` dual. Assigns faces to plates, relaxes plate boundaries, assigns oceanic/continental types, and annotates face metadata for display via `MapWindow` color schemes.
+
+```
+PolygonMesh (dual from mesh pipeline)
+    └─ generate_plates(mesh, n_plates)   # flood-fill assignment
+        └─ relax_plates(mesh, plate_ids) # remove appendages via articulation points
+            └─ assign_plate_types(n_plates)
+                └─ tag_face_metadata(mesh, plate_ids, plate_types)
+                    └─ MapWindow with color schemes
+```
+
+### `tectonics.py`
+
+**`generate_plates(mesh, n_plates, seed, compactness)`**
+
+Assigns each face to a plate via per-plate randomized-priority flood fill. At each step a plate is chosen by weighted random draw (plates have random weights so the result has a realistic spread of sizes, not near-uniform areas), then expanded one face using a distance-biased min-heap so cells near the seed are preferred. `compactness` in [0, 1] blends pure distance priority (circular plates) with pure random priority (snaky plates). Post-fill, any plate entirely surrounded by one other plate is absorbed. Returns `List[int]` of plate IDs indexed by face.
+
+**`relax_plates(mesh, plate_ids, max_passes)`**
+
+Iteratively removes appendages — sets of faces connected to the rest of their plate only through a single articulation point. Uses iterative Tarjan's algorithm (`_tarjan_aps_iterative`) to find articulation points per plate, identifies the stranded faces behind each one, then reassigns them to the neighboring plate they border most. Repeats until no reassignments occur or `max_passes` is reached.
+
+**`generate_plate_velocities(mesh, plate_ids, n_plates, drift_scale, spin_scale, seed)`**
+
+Returns `(n_plates, 3) float64` angular velocity vectors. Each plate's omega is the sum of a drift component (a random vector projected onto the tangent plane at the plate's centroid, so the plate translates across the sphere) and a spin component (a random scalar along the centroid axis). The surface velocity of a point `p` on plate `k` is `omega[k] × p`.
+
+**`assign_plate_types(n_plates, oceanic_fraction, seed)`**
+
+Classifies each plate as `'oceanic'` or `'continental'` by Bernoulli draws with probability `oceanic_fraction` (default 0.7).
+
+**`tag_face_metadata(mesh, plate_ids, plate_types)`**
+
+Writes `plate_id` (int) and `plate_type` (`'oceanic'` or `'continental'`) into every face's metadata dict via `PolygonMesh.set_face_metadata`.
+
+### `main.py`
+
+Builds an `icosphere(4)` dual, runs the full tectonics pipeline, then opens `MapWindow` with two color schemes: **Plates** (evenly-spaced HSV hues) and **Plate Type** (blue for oceanic, tan for continental).

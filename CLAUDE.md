@@ -8,6 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 source .venv/bin/activate
 cd worldgen && python3 -m mesh.main       # 3-D mesh viewer
 cd worldgen && python3 -m mapview.main    # 2-D map viewer
+cd worldgen && python3 -m geology.main    # plate tectonics map viewer
 ```
 
 No build step or linter is configured. Run the test suites with:
@@ -24,12 +25,12 @@ python3 -m pytest worldgen/mapview/test/test_mapview.py -v
 
 ## Architecture
 
-This is a procedural mesh generation and 3D visualization project. The pipeline is: generate a mesh → deregularize it → compute its dual → display it.
+This is a procedural world generation project. The core pipeline is: generate a mesh → deregularize it → compute its dual → display it. A geology layer runs on top of the dual mesh to simulate tectonic plates.
 
 ### `worldgen/mesh/mymesh.py` — Mesh data structures
 
-- **`PolygonMesh`**: Base class for any polygon mesh. Fan-triangulates faces and pre-computes `render_vertices` and `render_colors` (flat per-vertex arrays) at construction time for direct VBO upload.
-- **`Mesh`** (subclass of `PolygonMesh`): Triangular mesh. `icosphere(depth)` generates a subdivided icosahedron; vertices are sorted along the Z-axis for spatial locality. `.deregularize()` breaks regularity via random edge-swaps and spring relaxation on the unit sphere. `.mesh_dual()` returns a `PolygonMesh` by placing new vertices at face centroids (normalized to unit sphere), then for each original vertex builds a CCW-wound face from the centroids of its adjacent faces.
+- **`PolygonMesh`**: Base class for any polygon mesh. Fan-triangulates faces and pre-computes `render_vertices` and `render_colors` (flat per-vertex arrays) at construction time for direct VBO upload. Also pre-computes `face_adjacency` (edge-sharing neighbor lists), `face_centroids` (unit-sphere centroids, shape `(N, 3)`), and `face_metadata` (list of per-face `dict`s). Exposes `set_face_colors(colors)` to update colors and rebuild render arrays, and `set_face_metadata(face_idx, **kw)` to write arbitrary attributes into a face's metadata dict.
+- **`Mesh`** (subclass of `PolygonMesh`): Triangular mesh. `icosphere(depth)` generates a subdivided icosahedron; vertices are sorted along the Z-axis for spatial locality. `.deregularize(n_swaps, n_relax, stiffness, outer_iters)` breaks regularity via random edge-swaps and spring relaxation on the unit sphere. `.mesh_dual()` returns a `PolygonMesh` by placing new vertices at face centroids (normalized to unit sphere), then for each original vertex builds a CCW-wound face from the centroids of its adjacent faces.
 
 ### `worldgen/mesh/gui.py` — OpenGL/Qt renderer
 
@@ -52,12 +53,24 @@ All projections share a `Projection` base class with `project(ecef_vertices)` an
 ### `worldgen/mapview/mapview.py` — Qt map widget
 
 - **`_split_at_antimeridian(face_ecef)`**: Splits a unit-sphere polygon at the ±180° meridian. Returns a list of one or two lon/lat polygons; discards sub-polygons with fewer than 3 vertices.
-- **`MapWidget`** (`QWidget`): Paints projected polygons using `QPainter`. Supports pan (drag) and zoom (scroll wheel or ±/Reset buttons). Zoom is clamped to [1×, 50×].
-- **`MapWindow`** (`QMainWindow`): Hosts `MapWidget` with a projection combo-box toolbar.
+- **`MapWidget`** (`QWidget`): Paints projected polygons using `QPainter`. Supports pan (drag) and zoom (scroll wheel or ±/Reset buttons). Zoom is clamped to [1×, 50×]. Accepts named color schemes via `set_color_schemes(schemes)` where each scheme is a `dict[str, Callable[[dict], RGBA]]` mapping a display name to a function that receives a face's metadata dict and returns an RGBA tuple. `set_color_scheme(name)` switches the active scheme.
+- **`MapWindow`** (`QMainWindow`): Hosts `MapWidget` with a projection combo-box toolbar. `set_color_schemes(schemes)` populates a coloration combo box in the toolbar (hidden when no schemes are registered).
 
 ### `worldgen/mapview/main.py` — Entry point
 
 Creates an `icosphere(depth=4)`, deregularizes it, computes its dual, and opens the map viewer.
+
+### `worldgen/geology/tectonics.py` — Plate tectonics simulation
+
+- **`generate_plates(mesh, n_plates, seed, compactness)`**: Assigns each face to a plate via per-plate randomized-priority flood fill. Each step picks a plate weighted by a random draw (so no plate gets a compounding size advantage) and expands it using a distance-biased heap, producing compact plates with irregular borders. Post-fill, any plate wholly surrounded by a single other plate is absorbed into it. Returns `List[int]` of plate IDs indexed by face.
+- **`relax_plates(mesh, plate_ids, max_passes)`**: Iteratively removes appendages using articulation point detection (`_tarjan_aps_iterative`). Each pass finds faces reachable only via a single articulation point and reassigns them to whichever neighboring plate they border most. Repeats until stable.
+- **`generate_plate_velocities(mesh, plate_ids, n_plates, drift_scale, spin_scale, seed)`**: Returns `(n_plates, 3)` angular velocity vectors. Each plate's omega combines a random drift component (tangential to the plate centroid, i.e., pure translation across the sphere) and a spin component (along the centroid axis). The velocity of a face on plate k is `omega[k] × face_centroid`.
+- **`assign_plate_types(n_plates, oceanic_fraction, seed)`**: Classifies each plate as `'oceanic'` or `'continental'`. Default `oceanic_fraction=0.7` matches Earth's rough ratio.
+- **`tag_face_metadata(mesh, plate_ids, plate_types)`**: Writes `plate_id` and `plate_type` into each face's metadata dict in-place via `set_face_metadata`.
+
+### `worldgen/geology/main.py` — Entry point
+
+Builds a deregularized icosphere dual, runs `generate_plates` → `relax_plates` → `assign_plate_types` → `tag_face_metadata`, then opens `MapWindow` with two color schemes: **Plates** (HSV hue-wheel palette by plate ID) and **Plate Type** (blue for oceanic, tan for continental).
 
 ## Key Design Notes
 
@@ -66,3 +79,5 @@ Creates an `icosphere(depth=4)`, deregularizes it, computes its dual, and opens 
 - Both classes pre-expand geometry into flat `render_vertices`/`render_colors` arrays at construction time; the renderer calls `glDrawArrays` with no index buffer.
 - OpenGL context is set to 3.3 compatibility profile (not core) so legacy calls remain available during development.
 - Edge-swaps in `deregularize` are rejected if they would create a vertex with degree ≤ 4 (which produces squares in the dual) or ≥ 8 (octagons).
+- `PolygonMesh` pre-computes `face_adjacency` and `face_centroids` at construction and after `deregularize`; geology code relies on these without recomputing them.
+- Face coloring has two layers: `face_colors` (static RGBA array, used when no active scheme is set) and named color schemes (callables over `face_metadata`, registered via `set_color_schemes`). The color scheme layer takes priority in `MapWidget`.
