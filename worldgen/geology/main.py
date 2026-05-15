@@ -46,7 +46,7 @@ if __name__ == "__main__":
     window = MapWindow(mesh=dual)
     window.setWindowTitle("Plate Tectonics")
     window.set_color_schemes({
-        "Plates": lambda meta: palette[meta["plate_id"]],
+        "Plates": lambda meta: tuple(palette[meta["plate_id"]]),
         "Plate Type": lambda meta: (0.25, 0.55, 0.85, 1.0) if meta["plate_type"] == "oceanic" else (0.72, 0.52, 0.25, 1.0),
     })
     window.show()

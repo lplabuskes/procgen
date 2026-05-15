@@ -176,26 +176,47 @@ def compute_face_stress(
     return stress
 
 
-def _hypothetical_stress(
+def _face_stress(
     face_idx: int,
-    candidate_plate: int,
     plate_ids: List[int],
     plate_omegas: np.ndarray,
     face_centroids: np.ndarray,
     adjacency: List[List[int]],
 ) -> float:
-    """Stress face_idx would have if assigned to candidate_plate."""
+    """Stress of face_idx given plate_ids (which may differ from the stored assignment)."""
     p_i = face_centroids[face_idx]
+    k = plate_ids[face_idx]
     max_rel = 0.0
     for j in adjacency[face_idx]:
         m = plate_ids[j]
-        if m == candidate_plate:
+        if m == k:
             continue
-        delta_omega = plate_omegas[candidate_plate] - plate_omegas[m]
-        rel_vel = float(np.linalg.norm(np.cross(delta_omega, p_i)))
+        rel_vel = float(np.linalg.norm(np.cross(plate_omegas[k] - plate_omegas[m], p_i)))
         if rel_vel > max_rel:
             max_rel = rel_vel
     return max_rel
+
+
+def _neighborhood_stress_delta(
+    face_idx: int,
+    target_plate: int,
+    plate_ids: List[int],
+    plate_omegas: np.ndarray,
+    face_centroids: np.ndarray,
+    adjacency: List[List[int]],
+) -> float:
+    """Change in total stress of face_idx and its neighbors if face_idx moves to target_plate.
+
+    Negative means the move improves (reduces) total stress.
+    """
+    temp = list(plate_ids)
+    temp[face_idx] = target_plate
+    delta = 0.0
+    for idx in [face_idx] + list(adjacency[face_idx]):
+        old_s = _face_stress(idx, plate_ids, plate_omegas, face_centroids, adjacency)
+        new_s = _face_stress(idx, temp, plate_omegas, face_centroids, adjacency)
+        delta += new_s - old_s
+    return delta
 
 
 def _plate_remains_connected(
@@ -252,12 +273,12 @@ def apply_stress_reassignment(
             continue
 
         best_plate = current[i]
-        best_stress = _hypothetical_stress(i, current[i], current, plate_omegas, face_centroids, adjacency)
+        best_delta = 0.0
 
         for m in neighbor_plates:
-            s = _hypothetical_stress(i, m, current, plate_omegas, face_centroids, adjacency)
-            if s < best_stress:
-                best_stress = s
+            delta = _neighborhood_stress_delta(i, m, current, plate_omegas, face_centroids, adjacency)
+            if delta < best_delta:
+                best_delta = delta
                 best_plate = m
 
         if best_plate != current[i] and _plate_remains_connected(i, current[i], current, adjacency):
