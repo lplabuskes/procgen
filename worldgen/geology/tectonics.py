@@ -238,20 +238,45 @@ def relax_plates(
 
             appendage_faces: set[int] = set()
             for ap in aps:
-                # BFS from rep through the plate minus this AP and already-found appendages.
                 remaining = faces - {ap} - appendage_faces
-                if rep not in remaining:
-                    continue
-                visited: set[int] = {rep}
-                queue = [rep]
-                while queue:
-                    node = queue.pop()
-                    for nb in adjacency[node]:
-                        if nb in remaining and nb not in visited:
-                            visited.add(nb)
-                            queue.append(nb)
-                appendage_faces |= remaining - visited
+                if rep in remaining:
+                    # Normal case: BFS from rep; unreachable faces are appendages.
+                    visited: set[int] = {rep}
+                    queue = [rep]
+                    while queue:
+                        node = queue.pop()
+                        for nb in adjacency[node]:
+                            if nb in remaining and nb not in visited:
+                                visited.add(nb)
+                                queue.append(nb)
+                    appendage_faces |= remaining - visited
+                else:
+                    # rep is the AP itself: find all components of remaining and
+                    # keep the largest; everything else is an appendage.
+                    components: list[set[int]] = []
+                    unvisited = set(remaining)
+                    while unvisited:
+                        start = next(iter(unvisited))
+                        comp: set[int] = set()
+                        stack = [start]
+                        while stack:
+                            node = stack.pop()
+                            if node in comp:
+                                continue
+                            comp.add(node)
+                            for nb in adjacency[node]:
+                                if nb in remaining and nb not in comp:
+                                    stack.append(nb)
+                        unvisited -= comp
+                        components.append(comp)
+                    if len(components) > 1:
+                        main = max(components, key=len)
+                        for comp in components:
+                            if comp is not main:
+                                appendage_faces |= comp
 
+            # Assign boundary appendage faces (those with external plate neighbors) first.
+            boundary_queue: list[int] = []
             for f in appendage_faces:
                 counts: dict[int, int] = {}
                 for nb in adjacency[f]:
@@ -260,11 +285,33 @@ def relax_plates(
                         counts[nb_pid] = counts.get(nb_pid, 0) + 1
                 if counts:
                     reassignments[f] = max(counts, key=counts.__getitem__)
+                    boundary_queue.append(f)
+
+            # Propagate inward to appendage faces with no external neighbours.
+            while boundary_queue:
+                f = boundary_queue.pop()
+                for nb in adjacency[f]:
+                    if nb in appendage_faces and nb not in reassignments:
+                        reassignments[nb] = reassignments[f]
+                        boundary_queue.append(nb)
 
         if not reassignments:
             break
         for f, new_pid in reassignments.items():
             current[f] = new_pid
+
+        # Batch reassignment can leave faces isolated (e.g. two plates swapping
+        # appendage faces simultaneously).  Reassign any such faces now so the
+        # next AP pass operates on a clean state.
+        snapshot = list(current)
+        for f in range(len(current)):
+            pid = snapshot[f]
+            if not any(snapshot[nb] == pid for nb in adjacency[f]):
+                counts: dict[int, int] = {}
+                for nb in adjacency[f]:
+                    counts[snapshot[nb]] = counts.get(snapshot[nb], 0) + 1
+                if counts:
+                    current[f] = max(counts, key=counts.__getitem__)
 
     return current
 
