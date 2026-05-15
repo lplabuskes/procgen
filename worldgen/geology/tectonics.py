@@ -140,172 +140,132 @@ def generate_plate_velocities(
     return (drift_omega + spin_omega).astype(np.float64)
 
 
-def compute_face_stress(
-    mesh: PolygonMesh,
-    plate_ids: List[int],
-    plate_omegas: np.ndarray,
-) -> np.ndarray:
-    """Return stress at each face (shape: n_faces,).
+def _tarjan_aps_iterative(nodes: set, adjacency: list) -> set:
+    """Find articulation points in the subgraph induced by nodes using iterative Tarjan's."""
+    if len(nodes) <= 2:
+        return set()
 
-    Stress is the maximum relative tangential velocity across any cross-plate edge:
-        stress[i] = max over cross-plate neighbors j of |(omega_k - omega_m) x p_i|
+    _ROOT = -1
+    disc: dict[int, int] = {}
+    low: dict[int, int] = {}
+    parent: dict[int, int] = {}
+    root_child_count: dict[int, int] = {}
+    ap: set[int] = set()
+    timer = [0]
 
-    Interior faces (all neighbors on the same plate) get stress 0.
-    """
-    adjacency = mesh.face_adjacency
-    face_centroids = mesh.face_centroids
+    nbrs = {u: [v for v in adjacency[u] if v in nodes] for u in nodes}
 
-    n_faces = len(mesh.faces)
-    pids = np.asarray(plate_ids)
-    stress = np.zeros(n_faces, dtype=np.float64)
-
-    for i in range(n_faces):
-        k = pids[i]
-        p_i = face_centroids[i]
-        max_rel = 0.0
-        for j in adjacency[i]:
-            m = pids[j]
-            if m == k:
-                continue
-            delta_omega = plate_omegas[k] - plate_omegas[m]
-            rel_vel = np.linalg.norm(np.cross(delta_omega, p_i))
-            if rel_vel > max_rel:
-                max_rel = rel_vel
-        stress[i] = max_rel
-
-    return stress
-
-
-def _face_stress(
-    face_idx: int,
-    plate_ids: List[int],
-    plate_omegas: np.ndarray,
-    face_centroids: np.ndarray,
-    adjacency: List[List[int]],
-) -> float:
-    """Stress of face_idx given plate_ids (which may differ from the stored assignment)."""
-    p_i = face_centroids[face_idx]
-    k = plate_ids[face_idx]
-    max_rel = 0.0
-    for j in adjacency[face_idx]:
-        m = plate_ids[j]
-        if m == k:
-            continue
-        rel_vel = float(np.linalg.norm(np.cross(plate_omegas[k] - plate_omegas[m], p_i)))
-        if rel_vel > max_rel:
-            max_rel = rel_vel
-    return max_rel
-
-
-def _neighborhood_stress_delta(
-    face_idx: int,
-    target_plate: int,
-    plate_ids: List[int],
-    plate_omegas: np.ndarray,
-    face_centroids: np.ndarray,
-    adjacency: List[List[int]],
-) -> float:
-    """Change in total stress of face_idx and its neighbors if face_idx moves to target_plate.
-
-    Negative means the move improves (reduces) total stress.
-    """
-    temp = list(plate_ids)
-    temp[face_idx] = target_plate
-    delta = 0.0
-    for idx in [face_idx] + list(adjacency[face_idx]):
-        old_s = _face_stress(idx, plate_ids, plate_omegas, face_centroids, adjacency)
-        new_s = _face_stress(idx, temp, plate_omegas, face_centroids, adjacency)
-        delta += new_s - old_s
-    return delta
-
-
-def _plate_remains_connected(
-    face_idx: int,
-    plate_id: int,
-    plate_ids: List[int],
-    adjacency: List[List[int]],
-) -> bool:
-    """Return True if plate_id stays connected after removing face_idx from it."""
-    members = [i for i, pid in enumerate(plate_ids) if pid == plate_id and i != face_idx]
-    if not members:
-        return True
-    in_plate = set(members)
-    visited = {members[0]}
-    stack = [members[0]]
-    while stack:
-        cur = stack.pop()
-        for nb in adjacency[cur]:
-            if nb in in_plate and nb not in visited:
-                visited.add(nb)
-                stack.append(nb)
-    return len(visited) == len(members)
-
-
-def apply_stress_reassignment(
-    mesh: PolygonMesh,
-    plate_ids: List[int],
-    plate_omegas: np.ndarray,
-    stress_percentile: float = 90.0,
-) -> List[int]:
-    """Reassign high-stress boundary faces to the neighboring plate that minimises their stress.
-
-    Faces in the top `stress_percentile` percent of boundary stress are candidates.
-    Each candidate is assigned to whichever adjacent plate would yield the lowest
-    hypothetical stress, keeping the current plate if no neighbor improves things.
-    """
-    adjacency = mesh.face_adjacency
-    face_centroids = mesh.face_centroids
-
-    stress = compute_face_stress(mesh, plate_ids, plate_omegas)
-
-    boundary_stress = stress[stress > 0.0]
-    if boundary_stress.size == 0:
-        return list(plate_ids)
-    threshold = float(np.percentile(boundary_stress, stress_percentile))
-
-    current = list(plate_ids)
-    for i in range(len(plate_ids)):
-        if stress[i] <= threshold:
+    for start in nodes:
+        if start in disc:
             continue
 
-        neighbor_plates = {current[j] for j in adjacency[i]} - {current[i]}
-        if not neighbor_plates:
-            continue
+        parent[start] = _ROOT
+        disc[start] = low[start] = timer[0]
+        timer[0] += 1
+        root_child_count[start] = 0
 
-        best_plate = current[i]
-        best_delta = 0.0
+        stack = [(start, iter(nbrs[start]))]
 
-        for m in neighbor_plates:
-            delta = _neighborhood_stress_delta(i, m, current, plate_omegas, face_centroids, adjacency)
-            if delta < best_delta:
-                best_delta = delta
-                best_plate = m
+        while stack:
+            u, it = stack[-1]
+            v = next(it, None)
 
-        if best_plate != current[i] and _plate_remains_connected(i, current[i], current, adjacency):
-            current[i] = best_plate
+            if v is None:
+                stack.pop()
+                if stack:
+                    p = parent[u]
+                    low[p] = min(low[p], low[u])
+                    if parent[p] != _ROOT and low[u] >= disc[p]:
+                        ap.add(p)
+            elif v not in disc:
+                parent[v] = u
+                disc[v] = low[v] = timer[0]
+                timer[0] += 1
+                if parent[u] == _ROOT:
+                    root_child_count[u] += 1
+                stack.append((v, iter(nbrs[v])))
+            elif v != parent[u]:
+                low[u] = min(low[u], disc[v])
 
-    return current
+    for root, cnt in root_child_count.items():
+        if cnt > 1:
+            ap.add(root)
+
+    return ap
 
 
 def relax_plates(
     mesh: PolygonMesh,
     plate_ids: List[int],
-    plate_omegas: np.ndarray,
-    stress_percentile: float = 90.0,
     max_passes: int = 10,
 ) -> List[int]:
-    """Iteratively reassign high-stress faces until convergence or max_passes.
+    """Iteratively remove appendages from plates using articulation point detection.
 
-    Returns the stabilised plate assignment.
+    An appendage is a set of faces reachable from the rest of its plate only through
+    a single face (the articulation point). Each pass: for every plate, find articulation
+    points, identify the faces stranded behind each one, and reassign those faces to
+    whichever neighboring plate they border most. Repeats until stable or max_passes.
     """
+    adjacency = mesh.face_adjacency
+    face_centroids = mesh.face_centroids
     current = list(plate_ids)
+
     for _ in range(max_passes):
-        updated = apply_stress_reassignment(
-            mesh, current, plate_omegas, stress_percentile
-        )
-        if updated == current:
+        plate_faces: dict[int, set] = {}
+        for i, pid in enumerate(current):
+            plate_faces.setdefault(pid, set()).add(i)
+
+        # Representative face for each plate: closest to the plate's unit centroid.
+        plate_reps: dict[int, int] = {}
+        for pid, faces in plate_faces.items():
+            face_list = list(faces)
+            pts = face_centroids[face_list]
+            centroid = np.mean(pts, axis=0)
+            norm = np.linalg.norm(centroid)
+            if norm > 0:
+                centroid /= norm
+            plate_reps[pid] = face_list[int(np.argmax(pts @ centroid))]
+
+        reassignments: dict[int, int] = {}
+
+        for pid, faces in plate_faces.items():
+            if len(faces) <= 1:
+                continue
+            rep = plate_reps[pid]
+            aps = _tarjan_aps_iterative(faces, adjacency)
+            if not aps:
+                continue
+
+            appendage_faces: set[int] = set()
+            for ap in aps:
+                # BFS from rep through the plate minus this AP and already-found appendages.
+                remaining = faces - {ap} - appendage_faces
+                if rep not in remaining:
+                    continue
+                visited: set[int] = {rep}
+                queue = [rep]
+                while queue:
+                    node = queue.pop()
+                    for nb in adjacency[node]:
+                        if nb in remaining and nb not in visited:
+                            visited.add(nb)
+                            queue.append(nb)
+                appendage_faces |= remaining - visited
+
+            for f in appendage_faces:
+                counts: dict[int, int] = {}
+                for nb in adjacency[f]:
+                    nb_pid = current[nb]
+                    if nb_pid != pid:
+                        counts[nb_pid] = counts.get(nb_pid, 0) + 1
+                if counts:
+                    reassignments[f] = max(counts, key=counts.__getitem__)
+
+        if not reassignments:
             break
-        current = updated
+        for f, new_pid in reassignments.items():
+            current[f] = new_pid
+
     return current
 
 

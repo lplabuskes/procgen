@@ -6,7 +6,6 @@ from PySide6.QtWidgets import QApplication
 
 from geology.tectonics import (
     assign_plate_types,
-    generate_plate_velocities,
     generate_plates,
     relax_plates,
     tag_face_metadata,
@@ -36,8 +35,7 @@ if __name__ == "__main__":
     dual = mesh.mesh_dual()
 
     plate_ids = generate_plates(dual, n_plates=N_PLATES)
-    plate_omegas = generate_plate_velocities(dual, plate_ids, n_plates=N_PLATES)
-    plate_ids = relax_plates(dual, plate_ids, plate_omegas)
+    plate_ids = relax_plates(dual, plate_ids)
     plate_types = assign_plate_types(N_PLATES)
     tag_face_metadata(dual, plate_ids, plate_types)
     palette = _plate_palette(N_PLATES)
