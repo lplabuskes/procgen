@@ -70,6 +70,28 @@ def generate_plates(
             active.pop()
             active_weights.pop()
 
+    # Absorb any plate wholly surrounded by a single other plate.
+    changed = True
+    while changed:
+        changed = False
+        plate_neighbor_set: dict[int, set[int]] = {}
+        for face_idx in range(n_faces):
+            pid = plate_ids[face_idx]
+            if pid not in plate_neighbor_set:
+                plate_neighbor_set[pid] = set()
+            for nb in adjacency[face_idx]:
+                nb_pid = plate_ids[nb]
+                if nb_pid != pid:
+                    plate_neighbor_set[pid].add(nb_pid)
+        for pid, neighbors in plate_neighbor_set.items():
+            if len(neighbors) == 1:
+                surrounding = next(iter(neighbors))
+                for face_idx in range(n_faces):
+                    if plate_ids[face_idx] == pid:
+                        plate_ids[face_idx] = surrounding
+                changed = True
+                break  # recompute neighbor sets with updated plate_ids
+
     return plate_ids
 
 
