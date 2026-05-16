@@ -6,6 +6,9 @@ from PySide6.QtWidgets import QApplication
 
 from geology.tectonics import (
     assign_plate_types,
+    compute_face_velocities,
+    compute_plate_centroids,
+    generate_plate_velocities,
     generate_plates,
     relax_plates,
 )
@@ -13,7 +16,8 @@ from mapview.mapview import MapWindow
 from mesh.mymesh import Mesh
 
 N_PLATES = 12
-
+OCEAN_COLOR = (0.25, 0.55, 0.85, 1.0)
+LAND_COLOR = (0.72, 0.52, 0.25, 1.0)
 
 def _plate_palette(n: int) -> np.ndarray:
     """Return (n, 4) float32 RGBA colors evenly spaced around the HSV hue wheel."""
@@ -37,8 +41,14 @@ if __name__ == "__main__":
     plate_ids = relax_plates(dual, plate_ids)
     plate_types = assign_plate_types(N_PLATES)
     plate_types = [plate_types[i] for i in plate_ids]
+
+    _, centroid_faces = compute_plate_centroids(dual, plate_ids, N_PLATES)
+    plate_omegas = generate_plate_velocities(dual, plate_ids, N_PLATES)
+    face_velocities = compute_face_velocities(dual, plate_ids, plate_omegas)
+
     dual.apply_metadata_channel("plate_id", plate_ids)
     dual.apply_metadata_channel("plate_type", plate_types)
+    dual.apply_metadata_channel("surface_velocity", [tuple(v) for v in face_velocities])
     palette = _plate_palette(N_PLATES)
     dual.set_face_colors(palette[np.array(plate_ids, dtype=np.int32)])
 
@@ -46,7 +56,7 @@ if __name__ == "__main__":
     window.setWindowTitle("Plate Tectonics")
     window.set_color_schemes({
         "Plates": lambda meta: tuple(palette[meta["plate_id"]]),
-        "Plate Type": lambda meta: (0.25, 0.55, 0.85, 1.0) if meta["plate_type"] == "oceanic" else (0.72, 0.52, 0.25, 1.0),
+        "Plate Type": lambda meta: OCEAN_COLOR if meta["plate_type"] == "oceanic" else LAND_COLOR,
     })
     window.show()
 

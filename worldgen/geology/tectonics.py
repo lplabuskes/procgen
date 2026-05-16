@@ -95,6 +95,38 @@ def generate_plates(
     return plate_ids
 
 
+def compute_plate_centroids(
+    mesh: PolygonMesh,
+    plate_ids: List[int],
+    n_plates: int,
+) -> tuple[np.ndarray, List[int]]:
+    """Return unit-sphere plate centroids and the index of each plate's representative face.
+
+    Returns:
+        centroids: (n_plates, 3) float64 array of unit-sphere centroids.
+        centroid_faces: centroid_faces[k] is the face in plate k whose centroid is
+            closest to the plate's geometric center.
+    """
+    face_centroids = mesh.face_centroids
+    ids = np.array(plate_ids, dtype=np.int32)
+
+    centroid_sum = np.zeros((n_plates, 3), dtype=np.float64)
+    np.add.at(centroid_sum, ids, face_centroids)
+    norms = np.linalg.norm(centroid_sum, axis=1, keepdims=True)
+    centroids = (centroid_sum / np.where(norms > 0, norms, 1.0)).astype(np.float64)
+
+    centroid_faces: List[int] = []
+    for pid in range(n_plates):
+        face_indices = np.where(ids == pid)[0]
+        if len(face_indices) == 0:
+            centroid_faces.append(-1)
+        else:
+            dots = face_centroids[face_indices] @ centroids[pid]
+            centroid_faces.append(int(face_indices[np.argmax(dots)]))
+
+    return centroids, centroid_faces
+
+
 def generate_plate_velocities(
     mesh: PolygonMesh,
     plate_ids: List[int],
@@ -113,15 +145,7 @@ def generate_plate_velocities(
     """
     rng = np.random.default_rng(seed)
 
-    # Compute normalized centroid for each plate.
-    plate_centroid_sum = np.zeros((n_plates, 3), dtype=np.float64)
-    plate_count = np.zeros(n_plates, dtype=np.int64)
-    for face_idx, pid in enumerate(plate_ids):
-        pts = mesh.vertices[np.array(mesh.faces[face_idx])]
-        plate_centroid_sum[pid] += np.mean(pts, axis=0)
-        plate_count[pid] += 1
-    norms = np.linalg.norm(plate_centroid_sum, axis=1, keepdims=True)
-    plate_centroids = plate_centroid_sum / np.where(norms > 0, norms, 1.0)
+    plate_centroids, _ = compute_plate_centroids(mesh, plate_ids, n_plates)
 
     # Draw a random drift pole (uniform on S²) and a random speed for each plate.
     drift_axes = rng.standard_normal((n_plates, 3))
@@ -138,6 +162,20 @@ def generate_plate_velocities(
     spin_omega = spin_speeds[:, np.newaxis] * plate_centroids
 
     return (drift_omega + spin_omega).astype(np.float64)
+
+
+def compute_face_velocities(
+    mesh: PolygonMesh,
+    plate_ids: List[int],
+    plate_omegas: np.ndarray,
+) -> np.ndarray:
+    """Return (n_faces, 3) surface velocity vectors.
+
+    velocity[i] = plate_omegas[plate_ids[i]] x face_centroids[i]
+    """
+    face_centroids = mesh.face_centroids
+    omegas = plate_omegas[np.array(plate_ids, dtype=np.int32)]
+    return np.cross(omegas, face_centroids)
 
 
 def _tarjan_aps_iterative(nodes: set, adjacency: list) -> set:
@@ -207,7 +245,6 @@ def relax_plates(
     whichever neighboring plate they border most. Repeats until stable or max_passes.
     """
     adjacency = mesh.face_adjacency
-    face_centroids = mesh.face_centroids
     current = list(plate_ids)
 
     for _ in range(max_passes):
@@ -216,15 +253,9 @@ def relax_plates(
             plate_faces.setdefault(pid, set()).add(i)
 
         # Representative face for each plate: closest to the plate's unit centroid.
-        plate_reps: dict[int, int] = {}
-        for pid, faces in plate_faces.items():
-            face_list = list(faces)
-            pts = face_centroids[face_list]
-            centroid = np.mean(pts, axis=0)
-            norm = np.linalg.norm(centroid)
-            if norm > 0:
-                centroid /= norm
-            plate_reps[pid] = face_list[int(np.argmax(pts @ centroid))]
+        n_plates_local = max(plate_faces.keys()) + 1
+        _, centroid_faces = compute_plate_centroids(mesh, current, n_plates_local)
+        plate_reps: dict[int, int] = {pid: centroid_faces[pid] for pid in plate_faces}
 
         reassignments: dict[int, int] = {}
 
