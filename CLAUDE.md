@@ -60,6 +60,11 @@ All projections share a `Projection` base class with `project(ecef_vertices)` an
 
 Creates an `icosphere(depth=4)`, deregularizes it, computes its dual, and opens the map viewer.
 
+### `worldgen/geology/globe_builder.py` — High-level pipeline orchestration
+
+- **`GlobeParams`** (dataclass): Centralizes every tuning knob in the pipeline. Groups: *mesh generation* (`icosphere_depth`, `n_swaps`, `n_relax`, `stiffness`, `outer_iters`), *plate layout* (`n_plates`, `plate_compactness`, `relax_max_passes`, `oceanic_fraction`), *plate motion* (`drift_scale`, `spin_scale`), and *reproducibility* (`seed`). A top-level `seed` fans out to per-stage sub-seeds (`seed+0` for plate generation, `seed+1` for plate types, `seed+2` for velocities); `None` means random each run.
+- **`GlobeBuilder`**: Owns a `GlobeParams` and runs the full pipeline when `build()` is called. Returns the dual `PolygonMesh` with all metadata applied and stores intermediate results as attributes: `mesh`, `plate_ids`, `plate_omegas`, `face_velocities`, `boundary_types`, `max_speed`. Callers (e.g. visualization code) read these attributes without re-running any work.
+
 ### `worldgen/geology/tectonics.py` — Plate tectonics simulation
 
 - **`generate_plates(mesh, n_plates, seed, compactness)`**: Assigns each face to a plate via per-plate randomized-priority flood fill. Each step picks a plate weighted by a random draw (so no plate gets a compounding size advantage) and expands it using a distance-biased heap, producing compact plates with irregular borders. Post-fill, any plate wholly surrounded by a single other plate is absorbed into it. Returns `List[int]` of plate IDs indexed by face.
@@ -69,7 +74,7 @@ Creates an `icosphere(depth=4)`, deregularizes it, computes its dual, and opens 
 
 ### `worldgen/geology/main.py` — Entry point
 
-Builds a deregularized icosphere dual (12 plates by default), runs `generate_plates` → `relax_plates` → `assign_plate_types`, then uses `apply_metadata_channel` to write `plate_id` and `plate_type` onto every face. Opens `MapWindow` with two color schemes: **Plates** (HSV hue-wheel palette by plate ID) and **Plate Type** (blue for oceanic, tan for continental).
+Creates a `GlobeBuilder(GlobeParams())`, calls `build()`, then sets up `MapWindow` with four color schemes: **Plates** (HSV hue-wheel palette by plate ID), **Plate Type** (blue for oceanic, tan for continental), **Speed** (warm-to-cool by surface speed), and **Boundary** (color-coded by convergent/divergent/transform/interior).
 
 ## Key Design Notes
 
