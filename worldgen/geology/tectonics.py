@@ -300,18 +300,64 @@ def relax_plates(
         for f, new_pid in reassignments.items():
             current[f] = new_pid
 
-        # Batch reassignment can leave faces isolated (e.g. two plates swapping
-        # appendage faces simultaneously).  Reassign any such faces now so the
-        # next AP pass operates on a clean state.
-        snapshot = list(current)
-        for f in range(len(current)):
-            pid = snapshot[f]
-            if not any(snapshot[nb] == pid for nb in adjacency[f]):
-                counts: dict[int, int] = {}
-                for nb in adjacency[f]:
-                    counts[snapshot[nb]] = counts.get(snapshot[nb], 0) + 1
-                if counts:
-                    current[f] = max(counts, key=counts.__getitem__)
+        # Batch reassignment can leave disconnected islands (not just isolated
+        # single faces).  For each plate with multiple components, absorb every
+        # minor component into its neighbors via BFS from the boundary inward.
+        repaired = True
+        while repaired:
+            repaired = False
+            pf: dict[int, set] = {}
+            for i, pid in enumerate(current):
+                pf.setdefault(pid, set()).add(i)
+            for pid, faces in pf.items():
+                comps: list[set] = []
+                unvisited = set(faces)
+                while unvisited:
+                    start = next(iter(unvisited))
+                    comp: set[int] = set()
+                    stk = [start]
+                    while stk:
+                        node = stk.pop()
+                        if node in comp:
+                            continue
+                        comp.add(node)
+                        for nb in adjacency[node]:
+                            if nb in unvisited:
+                                stk.append(nb)
+                    unvisited -= comp
+                    comps.append(comp)
+                if len(comps) <= 1:
+                    continue
+                repaired = True
+                main_comp = max(comps, key=len)
+                for comp in comps:
+                    if comp is main_comp:
+                        continue
+                    island = set(comp)
+                    queue = [
+                        f for f in island
+                        if any(current[nb] != pid for nb in adjacency[f])
+                    ]
+                    while island:
+                        nxt: list[int] = []
+                        for f in queue:
+                            if f not in island:
+                                continue
+                            counts: dict[int, int] = {}
+                            for nb in adjacency[f]:
+                                nb_pid = current[nb]
+                                if nb_pid != pid:
+                                    counts[nb_pid] = counts.get(nb_pid, 0) + 1
+                            if counts:
+                                current[f] = max(counts, key=counts.__getitem__)
+                                island.discard(f)
+                                for nb in adjacency[f]:
+                                    if nb in island:
+                                        nxt.append(nb)
+                        queue = nxt
+                        if not queue and island:
+                            queue = list(island)
+                break  # pf is stale; restart connectivity scan
 
     return current
 
