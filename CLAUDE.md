@@ -29,7 +29,7 @@ This is a procedural world generation project. The core pipeline is: generate a 
 
 ### `worldgen/mesh/mymesh.py` — Mesh data structures
 
-- **`PolygonMesh`**: Base class for any polygon mesh. Fan-triangulates faces and pre-computes `render_vertices` and `render_colors` (flat per-vertex arrays) at construction time for direct VBO upload. Also pre-computes `face_adjacency` (edge-sharing neighbor lists), `face_centroids` (unit-sphere centroids, shape `(N, 3)`), and `face_metadata` (list of per-face `dict`s). Exposes `set_face_colors(colors)` to update colors and rebuild render arrays, and `set_face_metadata(face_idx, **kw)` to write arbitrary attributes into a face's metadata dict.
+- **`PolygonMesh`**: Base class for any polygon mesh. Fan-triangulates faces and pre-computes `render_vertices` and `render_colors` (flat per-vertex arrays) at construction time for direct VBO upload. Also pre-computes `face_adjacency` (edge-sharing neighbor lists), `face_centroids` (unit-sphere centroids, shape `(N, 3)`), and `face_metadata` (list of per-face `dict`s). Exposes `set_face_colors(colors)` to update colors and rebuild render arrays, `set_face_metadata(face_idx, **kw)` to write arbitrary attributes into a face's metadata dict, and `apply_metadata_channel(key, values)` to bulk-write a single key across all faces at once (raises `ValueError` if `len(values)` doesn't match the face count).
 - **`Mesh`** (subclass of `PolygonMesh`): Triangular mesh. `icosphere(depth)` generates a subdivided icosahedron; vertices are sorted along the Z-axis for spatial locality. `.deregularize(n_swaps, n_relax, stiffness, outer_iters)` breaks regularity via random edge-swaps and spring relaxation on the unit sphere. `.mesh_dual()` returns a `PolygonMesh` by placing new vertices at face centroids (normalized to unit sphere), then for each original vertex builds a CCW-wound face from the centroids of its adjacent faces.
 
 ### `worldgen/mesh/gui.py` — OpenGL/Qt renderer
@@ -66,11 +66,10 @@ Creates an `icosphere(depth=4)`, deregularizes it, computes its dual, and opens 
 - **`relax_plates(mesh, plate_ids, max_passes)`**: Iteratively removes appendages using articulation point detection (`_tarjan_aps_iterative`). Each pass finds faces reachable only via a single articulation point and reassigns them to whichever neighboring plate they border most. Repeats until stable.
 - **`generate_plate_velocities(mesh, plate_ids, n_plates, drift_scale, spin_scale, seed)`**: Returns `(n_plates, 3)` angular velocity vectors. Each plate's omega combines a random drift component (tangential to the plate centroid, i.e., pure translation across the sphere) and a spin component (along the centroid axis). The velocity of a face on plate k is `omega[k] × face_centroid`.
 - **`assign_plate_types(n_plates, oceanic_fraction, seed)`**: Classifies each plate as `'oceanic'` or `'continental'`. Default `oceanic_fraction=0.7` matches Earth's rough ratio.
-- **`tag_face_metadata(mesh, plate_ids, plate_types)`**: Writes `plate_id` and `plate_type` into each face's metadata dict in-place via `set_face_metadata`.
 
 ### `worldgen/geology/main.py` — Entry point
 
-Builds a deregularized icosphere dual, runs `generate_plates` → `relax_plates` → `assign_plate_types` → `tag_face_metadata`, then opens `MapWindow` with two color schemes: **Plates** (HSV hue-wheel palette by plate ID) and **Plate Type** (blue for oceanic, tan for continental).
+Builds a deregularized icosphere dual (12 plates by default), runs `generate_plates` → `relax_plates` → `assign_plate_types`, then uses `apply_metadata_channel` to write `plate_id` and `plate_type` onto every face. Opens `MapWindow` with two color schemes: **Plates** (HSV hue-wheel palette by plate ID) and **Plate Type** (blue for oceanic, tan for continental).
 
 ## Key Design Notes
 

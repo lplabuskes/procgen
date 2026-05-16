@@ -45,7 +45,7 @@ On construction it fan-triangulates every face and pre-builds flat `render_verti
 - `face_centroids` — `(N, 3) float64` unit-sphere centroid for each face.
 - `face_metadata` — `List[dict]` of per-face key-value stores for downstream annotation.
 
-`set_face_colors(colors)` replaces `face_colors` and rebuilds the render arrays. `set_face_metadata(face_idx, **kwargs)` merges kwargs into that face's metadata dict.
+`set_face_colors(colors)` replaces `face_colors` and rebuilds the render arrays. `set_face_metadata(face_idx, **kwargs)` merges kwargs into that face's metadata dict. `apply_metadata_channel(key, values)` bulk-writes a single key across all faces at once; raises `ValueError` if `len(values)` doesn't match the face count.
 
 **`Mesh(vertices, faces)`** — subclass of `PolygonMesh`
 
@@ -117,10 +117,10 @@ Tectonic simulation layer that runs on a `PolygonMesh` dual. Assigns faces to pl
 
 ```
 PolygonMesh (dual from mesh pipeline)
-    └─ generate_plates(mesh, n_plates)   # flood-fill assignment
-        └─ relax_plates(mesh, plate_ids) # remove appendages via articulation points
+    └─ generate_plates(mesh, n_plates)      # flood-fill assignment
+        └─ relax_plates(mesh, plate_ids)    # remove appendages via articulation points
             └─ assign_plate_types(n_plates)
-                └─ tag_face_metadata(mesh, plate_ids, plate_types)
+                └─ apply_metadata_channel() # bulk-write plate_id / plate_type onto faces
                     └─ MapWindow with color schemes
 ```
 
@@ -142,10 +142,6 @@ Returns `(n_plates, 3) float64` angular velocity vectors. Each plate's omega is 
 
 Classifies each plate as `'oceanic'` or `'continental'` by Bernoulli draws with probability `oceanic_fraction` (default 0.7).
 
-**`tag_face_metadata(mesh, plate_ids, plate_types)`**
-
-Writes `plate_id` (int) and `plate_type` (`'oceanic'` or `'continental'`) into every face's metadata dict via `PolygonMesh.set_face_metadata`.
-
 ### `main.py`
 
-Builds an `icosphere(4)` dual, runs the full tectonics pipeline, then opens `MapWindow` with two color schemes: **Plates** (evenly-spaced HSV hues) and **Plate Type** (blue for oceanic, tan for continental).
+Builds an `icosphere(4)` dual with 12 plates, runs the full tectonics pipeline, then uses `apply_metadata_channel` to write `plate_id` and `plate_type` onto every face. Opens `MapWindow` with two color schemes: **Plates** (evenly-spaced HSV hues) and **Plate Type** (blue for oceanic, tan for continental).

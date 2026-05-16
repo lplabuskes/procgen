@@ -8,12 +8,11 @@ from geology.tectonics import (
     assign_plate_types,
     generate_plates,
     relax_plates,
-    tag_face_metadata,
 )
 from mapview.mapview import MapWindow
 from mesh.mymesh import Mesh
 
-N_PLATES = 20
+N_PLATES = 12
 
 
 def _plate_palette(n: int) -> np.ndarray:
@@ -37,7 +36,9 @@ if __name__ == "__main__":
     plate_ids = generate_plates(dual, n_plates=N_PLATES)
     plate_ids = relax_plates(dual, plate_ids)
     plate_types = assign_plate_types(N_PLATES)
-    tag_face_metadata(dual, plate_ids, plate_types)
+    plate_types = [plate_types[i] for i in plate_ids]
+    dual.apply_metadata_channel("plate_id", plate_ids)
+    dual.apply_metadata_channel("plate_type", plate_types)
     palette = _plate_palette(N_PLATES)
     dual.set_face_colors(palette[np.array(plate_ids, dtype=np.int32)])
 

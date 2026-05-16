@@ -1,5 +1,5 @@
 import random
-from typing import Any, List, Tuple, Dict, FrozenSet
+from typing import Any, Dict, FrozenSet, List, Tuple
 
 import numpy as np
 
@@ -61,6 +61,14 @@ class PolygonMesh:
 
     def set_face_metadata(self, face_idx: int, **metadata: Any) -> None:
         self.face_metadata[face_idx].update(metadata)
+
+    def apply_metadata_channel(self, key: str, values: List[Any]) -> None:
+        if len(values) != len(self.faces):
+            raise ValueError(
+                f"values length {len(values)} != face count {len(self.faces)}"
+            )
+        for face_idx, value in enumerate(values):
+            self.face_metadata[face_idx][key] = value
 
 
 class Mesh(PolygonMesh):
