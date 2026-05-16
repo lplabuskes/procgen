@@ -1,9 +1,11 @@
+import numpy as np
 import pytest
 
 from mesh.mymesh import Mesh
 from geology.tectonics import (
     _tarjan_aps_iterative,
     assign_plate_types,
+    generate_plate_velocities,
     generate_plates,
     relax_plates,
 )
@@ -206,3 +208,65 @@ class TestAssignPlateTypes:
     def test_all_continental(self):
         types = assign_plate_types(10, oceanic_fraction=0.0, seed=0)
         assert all(t == "continental" for t in types)
+
+
+# ---------------------------------------------------------------------------
+# generate_plate_velocities — NNR correction
+# ---------------------------------------------------------------------------
+
+class TestGeneratePlateVelocities:
+    N_PLATES = 6
+    _DENSITY = {"oceanic": 3.0, "continental": 2.7}
+
+    @pytest.fixture
+    def dual(self):
+        # Function-scoped so each test starts with clean face metadata.
+        mesh = Mesh.icosphere(2)
+        mesh.deregularize(n_swaps=40, n_relax=3, stiffness=0.5, outer_iters=2)
+        return mesh.mesh_dual()
+
+    def test_output_shape(self, dual):
+        plate_ids = generate_plates(dual, n_plates=self.N_PLATES, seed=0)
+        omegas = generate_plate_velocities(dual, plate_ids, self.N_PLATES, seed=0)
+        assert omegas.shape == (self.N_PLATES, 3)
+
+    def test_nnr_without_metadata(self, dual):
+        """Area-weighted sum of omegas is zero when no plate_type metadata present."""
+        plate_ids = generate_plates(dual, n_plates=self.N_PLATES, seed=1)
+        omegas = generate_plate_velocities(dual, plate_ids, self.N_PLATES, seed=1)
+        ids = np.array(plate_ids, dtype=np.int32)
+        weighted_sum = (dual.face_areas[:, np.newaxis] * omegas[ids]).sum(axis=0)
+        np.testing.assert_allclose(weighted_sum, 0.0, atol=1e-12)
+
+    def test_nnr_with_density_weighting(self, dual):
+        """(area × density)-weighted sum of omegas is zero when plate_type is set."""
+        plate_ids = generate_plates(dual, n_plates=self.N_PLATES, seed=2)
+        plate_types_per_plate = assign_plate_types(self.N_PLATES, seed=2)
+        plate_types = [plate_types_per_plate[p] for p in plate_ids]
+        dual.apply_metadata_channel("plate_type", plate_types)
+
+        omegas = generate_plate_velocities(dual, plate_ids, self.N_PLATES, seed=2)
+        ids = np.array(plate_ids, dtype=np.int32)
+        densities = np.array([self._DENSITY[t] for t in plate_types], dtype=np.float64)
+        weighted_sum = (dual.face_areas[:, np.newaxis] * densities[:, np.newaxis] * omegas[ids]).sum(axis=0)
+        np.testing.assert_allclose(weighted_sum, 0.0, atol=1e-12)
+
+    def test_density_weighting_changes_result(self, dual):
+        """Density-weighted NNR produces different omegas than area-only NNR."""
+        plate_ids = generate_plates(dual, n_plates=self.N_PLATES, seed=3)
+        # Guaranteed alternating mix so the two corrections differ.
+        plate_types_per_plate = ["oceanic", "continental"] * (self.N_PLATES // 2)
+        plate_types = [plate_types_per_plate[p] for p in plate_ids]
+
+        omegas_uniform = generate_plate_velocities(dual, plate_ids, self.N_PLATES, seed=3)
+
+        dual.apply_metadata_channel("plate_type", plate_types)
+        omegas_density = generate_plate_velocities(dual, plate_ids, self.N_PLATES, seed=3)
+
+        assert not np.allclose(omegas_uniform, omegas_density)
+
+    def test_deterministic_with_seed(self, dual):
+        plate_ids = generate_plates(dual, n_plates=self.N_PLATES, seed=4)
+        a = generate_plate_velocities(dual, plate_ids, self.N_PLATES, seed=4)
+        b = generate_plate_velocities(dual, plate_ids, self.N_PLATES, seed=4)
+        np.testing.assert_array_equal(a, b)
