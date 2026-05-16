@@ -17,6 +17,7 @@ class PolygonMesh:
         self.face_metadata: List[Dict[str, Any]] = [{} for _ in range(n_faces)]
         self.face_adjacency: List[List[int]] = self._build_face_adjacency()
         self.face_centroids: np.ndarray = self._compute_face_centroids()
+        self.face_areas: np.ndarray = self._compute_face_areas()
 
     def _rebuild_render_arrays(self) -> None:
         triangles = []
@@ -30,6 +31,17 @@ class PolygonMesh:
         self.render_vertices = self.vertices[flat_indices]
         triangle_colors = self.face_colors[np.array(triangle_face_indices)]
         self.render_colors = np.repeat(triangle_colors, 3, axis=0)
+
+    def _compute_face_areas(self) -> np.ndarray:
+        areas = np.zeros(len(self.faces), dtype=np.float64)
+        for face_idx, face in enumerate(self.faces):
+            verts = self.vertices[np.array(face)]
+            v0 = verts[0]
+            edges1 = verts[1:-1] - v0
+            edges2 = verts[2:] - v0
+            crosses = np.cross(edges1, edges2)
+            areas[face_idx] = 0.5 * np.linalg.norm(crosses, axis=1).sum()
+        return areas
 
     def _compute_face_centroids(self) -> np.ndarray:
         n_faces = len(self.faces)
@@ -237,6 +249,7 @@ class Mesh(PolygonMesh):
         self._rebuild_render_arrays()
         self.face_adjacency = self._build_face_adjacency()
         self.face_centroids = self._compute_face_centroids()
+        self.face_areas = self._compute_face_areas()
         return self
 
     # Took vertices from https://github.com/lazysquirrellabs/sphere_generator/blob/main/Assets/Lazy%20Squirrel%20Labs/SphereGenerator/Runtime/Generators/IcosphereGenerator.cs

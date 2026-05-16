@@ -161,7 +161,29 @@ def generate_plate_velocities(
     spin_speeds = rng.normal(scale=spin_scale, size=n_plates)
     spin_omega = spin_speeds[:, np.newaxis] * plate_centroids
 
-    return (drift_omega + spin_omega).astype(np.float64)
+    plate_omegas = (drift_omega + spin_omega).astype(np.float64)
+
+    # No-net-rotation correction: subtract the area-weighted mean angular velocity.
+    # Weight each face by area × crustal density if plate_type is in face metadata,
+    # otherwise fall back to area alone.
+    _DENSITY = {"oceanic": 3.0, "continental": 2.7}
+    face_areas = mesh.face_areas
+    sample_type = mesh.face_metadata[0].get("plate_type") if mesh.face_metadata else None
+    if sample_type is not None:
+        densities = np.array(
+            [_DENSITY.get(mesh.face_metadata[i].get("plate_type", ""), 1.0)
+             for i in range(len(plate_ids))],
+            dtype=np.float64,
+        )
+        face_masses = face_areas * densities
+    else:
+        face_masses = face_areas
+    plate_mass = np.zeros(n_plates, dtype=np.float64)
+    np.add.at(plate_mass, np.array(plate_ids, dtype=np.int32), face_masses)
+    omega_mean = (plate_mass[:, np.newaxis] * plate_omegas).sum(axis=0) / plate_mass.sum()
+    plate_omegas -= omega_mean
+
+    return plate_omegas
 
 
 def compute_face_velocities(
@@ -391,6 +413,70 @@ def relax_plates(
                 break  # pf is stale; restart connectivity scan
 
     return current
+
+
+def classify_plate_boundaries(
+    mesh: PolygonMesh,
+    plate_ids: List[int],
+    plate_omegas: np.ndarray,
+) -> List[str]:
+    """Classify each face as 'interior', 'convergent', 'divergent', or 'transform'.
+
+    For each inter-plate edge adjacent to a face, decompose the relative plate
+    velocity at the boundary midpoint into a normal component (convergence/divergence)
+    and a shear component (transform). The face is classified by whichever signal
+    dominates, averaged over all its inter-plate edges.
+    """
+    adjacency = mesh.face_adjacency
+    face_centroids = mesh.face_centroids
+    n_faces = len(mesh.faces)
+    result = ["interior"] * n_faces
+
+    for face_idx in range(n_faces):
+        pid_a = plate_ids[face_idx]
+        normal_sum = 0.0
+        shear_sum = 0.0
+        n_boundary = 0
+
+        for nb in adjacency[face_idx]:
+            pid_b = plate_ids[nb]
+            if pid_b == pid_a:
+                continue
+
+            m = face_centroids[face_idx] + face_centroids[nb]
+            m_norm = float(np.linalg.norm(m))
+            if m_norm < 1e-10:
+                continue
+            m = m / m_norm
+
+            v_rel = np.cross(plate_omegas[pid_a], m) - np.cross(plate_omegas[pid_b], m)
+
+            # Boundary-normal direction: from neighbor centroid toward this face's centroid,
+            # projected onto the tangent plane at m. Positive v_n means plates diverge.
+            d = face_centroids[face_idx] - face_centroids[nb]
+            d = d - np.dot(d, m) * m
+            d_norm = float(np.linalg.norm(d))
+            if d_norm < 1e-10:
+                continue
+            d = d / d_norm
+
+            v_n = float(np.dot(v_rel, d))
+            v_s = float(np.linalg.norm(v_rel - v_n * d))
+            normal_sum += v_n
+            shear_sum += v_s
+            n_boundary += 1
+
+        if n_boundary == 0:
+            continue
+
+        normal_avg = normal_sum / n_boundary
+        shear_avg = shear_sum / n_boundary
+        if abs(normal_avg) >= shear_avg:
+            result[face_idx] = "divergent" if normal_avg > 0 else "convergent"
+        else:
+            result[face_idx] = "transform"
+
+    return result
 
 
 def assign_plate_types(
