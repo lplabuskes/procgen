@@ -129,6 +129,7 @@ class MapWidget(QWidget):
 
         self._color_schemes: dict[str, Callable[[dict], Sequence[float]]] = {}
         self._active_scheme: Optional[str] = None
+        self._scheme_texture_key: dict[str, str] = {}
 
         self._zoom: float = 1.0
         self._center: np.ndarray = np.zeros(2, dtype=np.float64)
@@ -158,8 +159,20 @@ class MapWidget(QWidget):
 
     def set_color_scheme(self, name: str) -> None:
         self._active_scheme = name
+        self._rebuild_faces()
+        self._rebuild_textures()
         self._rebuild_colors()
+        self._reproject()
         self.update()
+
+    def associate_scheme_texture(self, scheme_name: str, texture_key: str) -> None:
+        """Associate a named face texture with a color scheme for per-pixel rendering."""
+        self._scheme_texture_key[scheme_name] = texture_key
+        if self._active_scheme == scheme_name:
+            self._rebuild_faces()
+            self._rebuild_textures()
+            self._reproject()
+            self.update()
 
     def _rebuild_faces(self) -> None:
         """Convert ECEF faces to lon/lat polygons, splitting at the antimeridian."""
@@ -169,7 +182,11 @@ class MapWidget(QWidget):
         self._faces_lonlat = []
         self._face_src = []
         self._face_uvs = []
-        has_textures = bool(self._mesh.face_textures)
+        if self._scheme_texture_key:
+            tex_key = self._scheme_texture_key.get(self._active_scheme)
+            has_textures = tex_key is not None and tex_key in self._mesh.face_textures
+        else:
+            has_textures = bool(self._mesh.face_textures)
         for i, face in enumerate(self._mesh.faces):
             face_ecef = verts[np.array(face, dtype=np.int32)]
             if has_textures:
@@ -188,7 +205,13 @@ class MapWidget(QWidget):
         self._texture_qimages = {}
         if self._mesh is None or not self._mesh.face_textures:
             return
-        textures = next(iter(self._mesh.face_textures.values()))  # (N, H, W, 4) float32
+        if self._scheme_texture_key:
+            tex_key = self._scheme_texture_key.get(self._active_scheme)
+            if tex_key is None or tex_key not in self._mesh.face_textures:
+                return
+            textures = self._mesh.face_textures[tex_key]
+        else:
+            textures = next(iter(self._mesh.face_textures.values()))  # (N, H, W, 4) float32
         N, H, W = textures.shape[:3]
         for i in range(N):
             img = np.ascontiguousarray((textures[i] * 255).clip(0, 255).astype(np.uint8))
@@ -419,6 +442,9 @@ class MapWindow(QMainWindow):
         self._rerun_btn.clicked.connect(callback)
         self._has_rebuild_callback = True
         self._rerun_btn.setVisible(True)
+
+    def associate_scheme_texture(self, scheme_name: str, texture_key: str) -> None:
+        self._map.associate_scheme_texture(scheme_name, texture_key)
 
     def set_color_schemes(self, schemes: dict[str, Callable[[dict], Sequence[float]]]) -> None:
         self._color_combo.blockSignals(True)

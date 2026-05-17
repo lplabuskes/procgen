@@ -6,6 +6,7 @@ import numpy as np
 
 from mesh.mymesh import PolygonMesh
 
+
 # Baseline elevation by plate type (km, roughly)
 _BASELINE = {
     "oceanic": -4.0,
@@ -119,3 +120,76 @@ def compute_face_elevations(
 
     elevation += delta_field
     return elevation
+
+
+def compute_elevation_delta_textures(
+    mesh: PolygonMesh,
+    elevations: np.ndarray,
+    tex_size: int = 32,
+) -> np.ndarray:
+    """Per-face elevation delta textures for smooth cross-face gradients.
+
+    Each pixel stores (elevation_at_point - face_center_elevation) in km.
+    The face center has delta=0; edge pixels blend toward the mean elevation
+    of faces sharing that vertex.
+
+    Returns:
+        float32 array of shape (N_faces, tex_size, tex_size, 4).
+        R channel = delta in km; G, B, A = 0.
+    """
+    n_faces = len(mesh.faces)
+    textures = np.zeros((n_faces, tex_size, tex_size, 4), dtype=np.float32)
+
+    # vertex → list of face indices
+    vertex_to_faces: dict[int, list[int]] = {}
+    for face_idx, face in enumerate(mesh.faces):
+        for v_idx in face:
+            vertex_to_faces.setdefault(v_idx, []).append(face_idx)
+
+    # vertex elevation = mean of adjacent face elevations
+    n_verts = len(mesh.vertices)
+    vertex_elevations = np.empty(n_verts, dtype=np.float64)
+    for v_idx in range(n_verts):
+        adj = vertex_to_faces.get(v_idx, [])
+        vertex_elevations[v_idx] = elevations[adj].mean() if adj else 0.0
+
+    # pixel grid in [0, 1]² UV space
+    coords = np.linspace(0.0, 1.0, tex_size)
+    uu, vv = np.meshgrid(coords, coords)
+    pixels_uv = np.stack([uu.ravel(), vv.ravel()], axis=1)  # (tex_size², 2)
+
+    for face_idx, face in enumerate(mesh.faces):
+        verts_3d = mesh.vertices[np.array(face)]
+
+        # tangent plane at face centroid (same convention as _rebuild_render_arrays)
+        centroid = np.mean(verts_3d, axis=0)
+        n_hat = centroid / np.linalg.norm(centroid)
+        ref = np.array([0.0, 0.0, 1.0]) if abs(n_hat[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
+        u_axis = np.cross(ref, n_hat)
+        u_axis /= np.linalg.norm(u_axis)
+        v_axis = np.cross(n_hat, u_axis)
+
+        offsets = verts_3d - centroid
+        us = offsets @ u_axis
+        vs_tp = offsets @ v_axis
+
+        u_min, u_r = float(us.min()), float(us.max() - us.min()) or 1.0
+        v_min, v_r = float(vs_tp.min()), float(vs_tp.max() - vs_tp.min()) or 1.0
+
+        verts_uv = np.stack([(us - u_min) / u_r, (vs_tp - v_min) / v_r], axis=1)
+        centroid_uv = np.array([-u_min / u_r, -v_min / v_r])  # centroid is tangent-plane origin
+
+        face_elev = float(elevations[face_idx])
+        vert_deltas = vertex_elevations[np.array(face)] - face_elev
+
+        ctrl_uv = np.vstack([centroid_uv, verts_uv])      # (1 + n_v, 2)
+        ctrl_delta = np.concatenate([[0.0], vert_deltas])  # (1 + n_v,)
+
+        # IDW with power 2
+        diffs = pixels_uv[:, np.newaxis, :] - ctrl_uv[np.newaxis, :, :]  # (n_pix, n_ctrl, 2)
+        weights = 1.0 / (np.sum(diffs ** 2, axis=2) + 1e-6)               # (n_pix, n_ctrl)
+        textures[face_idx, :, :, 0] = (
+            (weights @ ctrl_delta) / weights.sum(axis=1)
+        ).reshape(tex_size, tex_size).astype(np.float32)
+
+    return textures

@@ -5,7 +5,7 @@ from typing import List, Optional
 
 import numpy as np
 
-from geology.elevation import compute_face_elevations
+from geology.elevation import compute_elevation_delta_textures, compute_face_elevations
 from geology.tectonics import (
     assign_plate_types,
     classify_plate_boundaries,
@@ -117,6 +117,9 @@ class GlobeBuilder:
             rate_norm=p.elevation_rate_norm,
         )
         dual.apply_metadata_channel("elevation", elevations.tolist())
+
+        elevation_delta_textures = compute_elevation_delta_textures(dual, elevations)
+        dual.set_face_textures("elevation_delta", elevation_delta_textures)
 
         self.mesh = dual
         self.plate_ids = plate_ids

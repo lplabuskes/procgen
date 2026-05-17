@@ -33,11 +33,11 @@ _ELEVATION_STOPS = [
     (-8.0, (0.02, 0.06, 0.35, 1.0)),  # abyssal plain
     (-3.5, (0.06, 0.22, 0.62, 1.0)),  # deep ocean
     (-0.5, (0.16, 0.48, 0.82, 1.0)),  # continental shelf
-    ( 0.0, (0.20, 0.52, 0.88, 1.0)),  # sea level (ocean side)
-    ( 0.0, (0.78, 0.70, 0.42, 1.0)),  # sea level (land side — beach/sand)
-    ( 0.8, (0.33, 0.60, 0.20, 1.0)),  # lowland / plains
-    ( 2.5, (0.50, 0.38, 0.18, 1.0)),  # highland
-    ( 5.5, (0.92, 0.92, 0.92, 1.0)),  # snow-capped peaks
+    (0.0, (0.20, 0.52, 0.88, 1.0)),  # sea level (ocean side)
+    (0.0, (0.78, 0.70, 0.42, 1.0)),  # sea level (land side — beach/sand)
+    (0.8, (0.33, 0.60, 0.20, 1.0)),  # lowland / plains
+    (2.5, (0.50, 0.38, 0.18, 1.0)),  # highland
+    (5.5, (0.92, 0.92, 0.92, 1.0)),  # snow-capped peaks
 ]
 
 
@@ -61,6 +61,36 @@ def _elevation_color(meta: dict) -> tuple:
     return stops[-1][1]
 
 
+def _elevation_color_vec(elevs: np.ndarray) -> np.ndarray:
+    """Vectorized elevation color scheme. Returns (..., 4) float32.
+
+    Processes stop pairs in reverse so lower-elevation pairs overwrite higher
+    ones, correctly implementing the hard sea-level break (two stops at 0.0).
+    """
+    shape = elevs.shape
+    result = np.full((*shape, 4), _ELEVATION_STOPS[-1][1], dtype=np.float32)
+    for i in range(len(_ELEVATION_STOPS) - 2, -1, -1):
+        e0, c0 = _ELEVATION_STOPS[i]
+        e1, c1 = _ELEVATION_STOPS[i + 1]
+        if e0 == e1:
+            continue
+        mask = (elevs >= e0) & (elevs <= e1)
+        t = np.where(mask, (elevs - e0) / (e1 - e0), 0.0)
+        for ch in range(4):
+            result[..., ch] = np.where(mask, c0[ch] + t * (c1[ch] - c0[ch]), result[..., ch])
+    result[elevs <= _ELEVATION_STOPS[0][0]] = np.array(_ELEVATION_STOPS[0][1], dtype=np.float32)
+    result[elevs >= _ELEVATION_STOPS[-1][0]] = np.array(_ELEVATION_STOPS[-1][1], dtype=np.float32)
+    return result
+
+
+def _build_elevation_display_texture(mesh) -> np.ndarray:
+    """Convert elevation_delta face textures to smooth RGBA elevation colors."""
+    delta_tex = mesh.face_textures["elevation_delta"]          # (N, H, W, 4)
+    face_elevs = np.array([m["elevation"] for m in mesh.face_metadata], dtype=np.float32)
+    elev_map = face_elevs[:, np.newaxis, np.newaxis] + delta_tex[:, :, :, 0]  # (N, H, W)
+    return _elevation_color_vec(elev_map)                      # (N, H, W, 4)
+
+
 def _build_and_apply(window: MapWindow) -> None:
     builder = GlobeBuilder(GlobeParams())
     gmesh = builder.build()
@@ -73,6 +103,9 @@ def _build_and_apply(window: MapWindow) -> None:
         t = meta["surface_speed"] / max_speed
         return (t, 0.2 + 0.3 * (1.0 - t), 1.0 - t, 1.0)
 
+    elevation_rgba = _build_elevation_display_texture(gmesh)
+    gmesh.set_face_textures("elevation_rgba", elevation_rgba)
+
     window.set_mesh(gmesh)
     window.set_color_schemes({
         "Elevation": _elevation_color,
@@ -81,6 +114,7 @@ def _build_and_apply(window: MapWindow) -> None:
         "Speed": _speed_color,
         "Boundary": lambda meta: BOUNDARY_COLORS[meta["boundary_type"]],
     })
+    window.associate_scheme_texture("Elevation", "elevation_rgba")
 
 
 if __name__ == "__main__":

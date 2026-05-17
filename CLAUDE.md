@@ -2,6 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Working Style
+
+- Ask for clarification rather than churning your wheels. If the task or approach is ambiguous, ask before attempting.
+
+
 ## Running the Project
 
 ```bash
