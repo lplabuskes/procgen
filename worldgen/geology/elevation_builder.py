@@ -24,7 +24,7 @@ from worldgen.mesh.mymesh import Mesh, PolygonMesh
 
 
 @dataclass
-class GlobeParams:
+class ElevationParams:
     # Mesh generation
     icosphere_depth: int = 4
     n_swaps: int = 1000
@@ -57,16 +57,16 @@ class GlobeParams:
     seed: Optional[int] = None
 
 
-class GlobeBuilder:
-    """Orchestrates the full globe-generation pipeline.
+class ElevationBuilder:
+    """Orchestrates the full elevation/tectonics pipeline.
 
     Call build() to run every stage. Intermediate results are stored as
     attributes so callers (e.g. visualization code) can read them without
     re-running any work.
     """
 
-    def __init__(self, params: GlobeParams | None = None) -> None:
-        self.params: GlobeParams = params or GlobeParams()
+    def __init__(self, params: ElevationParams | None = None) -> None:
+        self.params: ElevationParams = params or ElevationParams()
         self.mesh: Optional[PolygonMesh] = None
         self.plate_ids: Optional[List[int]] = None
         self.plate_omegas: Optional[np.ndarray] = None

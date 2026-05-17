@@ -20,6 +20,7 @@ from worldgen.mapview.projections import ALL_PROJECTIONS, RobinsonProjection, Pr
 
 if TYPE_CHECKING:
     from worldgen.mesh.mymesh import PolygonMesh
+    from worldgen.globe.globe import Globe
 
 
 def _split_at_antimeridian(face_ecef: np.ndarray, face_uv: Optional[np.ndarray] = None) -> list:
@@ -94,7 +95,6 @@ def _split_at_antimeridian(face_ecef: np.ndarray, face_uv: Optional[np.ndarray] 
     return result
 
 
-
 class MapWidget(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -130,6 +130,9 @@ class MapWidget(QWidget):
         self._rebuild_colors()
         self._reproject()
         self.update()
+
+    def set_globe(self, globe: "Globe") -> None:
+        self.set_mesh(globe.mesh)
 
     def set_projection(self, proj: Projection) -> None:
         self._projection = proj
@@ -425,6 +428,9 @@ class MapWindow(QMainWindow):
 
     def set_mesh(self, mesh: PolygonMesh) -> None:
         self._map.set_mesh(mesh)
+
+    def set_globe(self, globe: "Globe") -> None:
+        self._map.set_globe(globe)
 
     def set_status(self, text: str) -> None:
         self._status_label.setText(text)

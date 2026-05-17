@@ -11,9 +11,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 source .venv/bin/activate
-python3 -m worldgen.mesh.main       # 3-D mesh viewer
-python3 -m worldgen.mapview.main    # 2-D map viewer
-python3 -m worldgen.geology.main    # plate tectonics map viewer
+python3 -m worldgen.main            # primary entrypoint — full procedural world viewer
+python3 -m worldgen.mesh.main       # 3-D mesh viewer (dev)
+python3 -m worldgen.mapview.main    # 2-D map viewer (dev)
 ```
 
 No build step or linter is configured. Run the test suites with:
@@ -30,7 +30,9 @@ python3 -m pytest worldgen/mapview/test/test_mapview.py -v
 
 ## Architecture
 
-This is a procedural world generation project. The core pipeline is: generate a mesh → deregularize it → compute its dual → display it. A geology layer runs on top of the dual mesh to simulate tectonic plates.
+This is a procedural world generation project. The core pipeline is: generate a mesh → deregularize it → compute its dual → run stage-specific generation (geology, etc.) → wrap in a `Globe` → display it.
+
+The top-level orchestrator is `worldgen.globe.GlobeBuilder`, which runs each stage (currently just elevation/tectonics) and returns a `Globe`. The `Globe` holds the surface `mesh` plus a generic `features` registry for vector-style overlays (rivers, coastlines, etc.) that don't fit the per-face rasterized structure.
 
 ### `worldgen/mesh/mymesh.py` — Mesh data structures
 
@@ -70,10 +72,20 @@ Creates an `icosphere(depth=4)`, deregularizes it, computes its dual, builds a r
 
 - **`compute_face_elevations(mesh, plate_types_by_face, boundary_data, decay_rate, max_hops, rate_norm)`**: Computes elevation (km) per face. Baseline is set by plate type (`'oceanic'` → −4.0 km, `'continental'` → +0.3 km). Each boundary face receives a delta based on boundary type, convergence rate, and the types of neighboring plates (e.g., continental-continental convergence → +4 km mountain range, oceanic subducting under continental → −2.5 km trench on the oceanic side). Deltas propagate outward from boundary faces via BFS with exponential decay (`exp(-decay_rate * hops)`) up to `max_hops` steps; the maximum-magnitude contribution wins at each face. Returns a `float64` array of shape `(n_faces,)`.
 
-### `worldgen/geology/globe_builder.py` — High-level pipeline orchestration
+### `worldgen/geology/elevation_builder.py` — Geology stage orchestration
 
-- **`GlobeParams`** (dataclass): Centralizes every tuning knob in the pipeline. Groups: *mesh generation* (`icosphere_depth`, `n_swaps`, `n_relax`, `stiffness`, `outer_iters`), *plate layout* (`n_plates`, `plate_compactness`, `relax_max_passes`, `oceanic_fraction`), *plate motion* (`drift_scale`, `spin_scale`), *elevation* (`elevation_rate_norm`, `elevation_decay_rate`, `elevation_max_hops`), and *reproducibility* (`seed`). A top-level `seed` fans out to per-stage sub-seeds (`seed+0` for plate generation, `seed+1` for plate types, `seed+2` for velocities); `None` means random each run.
-- **`GlobeBuilder`**: Owns a `GlobeParams` and runs the full pipeline when `build()` is called. Returns the dual `PolygonMesh` with all metadata applied and stores intermediate results as attributes: `mesh`, `plate_ids`, `plate_omegas`, `face_velocities`, `boundary_types`, `boundary_data`, `elevations`, `max_speed`. `boundary_data` is the richer `List[dict]` from `classify_plate_boundaries` (with `normal_avg` and `neighbor_plate_types`); `boundary_types` is the `List[str]` derived from it. Callers (e.g. visualization code) read these attributes without re-running any work.
+- **`ElevationParams`** (dataclass): Centralizes every tuning knob in the elevation/tectonics pipeline. Groups: *mesh generation* (`icosphere_depth`, `n_swaps`, `n_relax`, `stiffness`, `outer_iters`), *plate layout* (`n_plates`, `plate_compactness`, `relax_max_passes`, `oceanic_fraction`), *plate motion* (`drift_scale`, `spin_scale`), *elevation* (`elevation_rate_norm`, `elevation_decay_rate`, `elevation_max_hops`), and *reproducibility* (`seed`). A top-level `seed` fans out to per-stage sub-seeds (`seed+0` for plate generation, `seed+1` for plate types, `seed+2` for velocities); `None` means random each run.
+- **`ElevationBuilder`**: Owns an `ElevationParams` and runs the elevation/tectonics pipeline when `build()` is called. Returns the dual `PolygonMesh` with all metadata applied and stores intermediate results as attributes: `mesh`, `plate_ids`, `plate_omegas`, `face_velocities`, `boundary_types`, `boundary_data`, `elevations`, `max_speed`. `boundary_data` is the richer `List[dict]` from `classify_plate_boundaries` (with `normal_avg` and `neighbor_plate_types`); `boundary_types` is the `List[str]` derived from it. Callers (e.g. visualization code) read these attributes without re-running any work.
+
+### `worldgen/geology/display.py` — Geology-specific visualization
+
+Holds the color schemes (`Elevation`, `Plates`, `Plate Type`, `Speed`, `Boundary`, `Volcanic Activity`), the palette helper, and `build_elevation_display_texture(mesh)`. The entrypoint is `apply_geology_display(window, builder)` which wires the schemes and elevation texture into a `MapWindow` given an `ElevationBuilder` with results already populated.
+
+### `worldgen/globe/` — Top-level orchestration
+
+- **`Globe`** ([globe.py](worldgen/globe/globe.py)): Container for a generated world. Holds `mesh: PolygonMesh` plus a generic feature registry: `add_feature(name, data)`, `get_feature(name)`, `has_feature(name)`, `remove_feature(name)`, `feature_names()`. Use the registry for vector-style overlays (rivers, coastlines) that don't fit the per-face structure.
+- **`GlobeParams`** ([builder.py](worldgen/globe/builder.py)): Composes per-stage params dataclasses. Currently exposes `elevation: ElevationParams`; add new stages as new fields.
+- **`GlobeBuilder`** ([builder.py](worldgen/globe/builder.py)): Owns a `GlobeParams`, instantiates each stage builder (currently `elevation_builder: ElevationBuilder`), and `build(progress=...)` runs every stage and returns a `Globe`. Stage builders remain accessible as attributes so display code can pull intermediate state.
 
 ### `worldgen/geology/tectonics.py` — Plate tectonics simulation
 
@@ -83,9 +95,9 @@ Creates an `icosphere(depth=4)`, deregularizes it, computes its dual, builds a r
 - **`assign_plate_types(n_plates, oceanic_fraction, seed)`**: Classifies each plate as `'oceanic'` or `'continental'`. Default `oceanic_fraction=0.7` matches Earth's rough ratio.
 - **`classify_plate_boundaries(mesh, plate_ids, plate_omegas)`**: Returns `List[dict]` (one per face) with keys `boundary_type` (`'interior'|'convergent'|'divergent'|'transform'`), `normal_avg` (mean normal velocity component across inter-plate edges; positive = diverging), and `neighbor_plate_types` (set of plate type strings seen across those edges). Interior faces get zeros/empty set.
 
-### `worldgen/geology/main.py` — Entry point
+### `worldgen/main.py` — Primary entrypoint
 
-Creates a `GlobeBuilder(GlobeParams())`, calls `build()`, then sets up `MapWindow` with five color schemes: **Elevation** (multi-stop gradient from abyssal ocean blues through beach/lowland/highland to snow-capped peaks, with a hard break at sea level), **Plates** (HSV hue-wheel palette by plate ID), **Plate Type** (blue for oceanic, tan for continental), **Speed** (warm-to-cool by surface speed), and **Boundary** (color-coded by convergent/divergent/transform/interior). The window is created first and a Re-run callback is registered so the world can be regenerated in place without restarting.
+Top-level entrypoint. Creates a `GlobeBuilder(GlobeParams())`, calls `build()` to produce a `Globe`, passes it to `MapWindow.set_globe(globe)`, and calls `apply_geology_display(window, builder.elevation_builder)` to wire color schemes and the elevation texture. Available schemes: **Elevation** (multi-stop gradient from abyssal ocean blues through beach/lowland/highland to snow-capped peaks, with a hard break at sea level), **Plates** (HSV hue-wheel palette by plate ID), **Plate Type** (blue for oceanic, tan for continental), **Speed** (warm-to-cool by surface speed), **Boundary** (color-coded by convergent/divergent/transform/interior), and **Volcanic Activity**. A Re-run callback is registered so the world can be regenerated in place without restarting.
 
 ## Key Design Notes
 

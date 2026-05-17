@@ -1,11 +1,14 @@
+from __future__ import annotations
+
 import colorsys
-import sys
+from typing import Callable
 
 import numpy as np
-from PySide6.QtWidgets import QApplication
 
-from worldgen.geology.globe_builder import GlobeBuilder, GlobeParams
+from worldgen.geology.elevation_builder import ElevationBuilder
 from worldgen.mapview.mapview import MapWindow
+from worldgen.mesh.mymesh import PolygonMesh
+
 
 OCEAN_COLOR = (0.25, 0.55, 0.85, 1.0)
 LAND_COLOR = (0.72, 0.52, 0.25, 1.0)
@@ -15,17 +18,6 @@ BOUNDARY_COLORS = {
     "divergent":  (0.95, 0.90, 0.30, 1.0),
     "transform":  (0.60, 0.20, 0.80, 1.0),
 }
-
-
-def _plate_palette(n: int) -> np.ndarray:
-    """Return (n, 4) float32 RGBA colors evenly spaced around the HSV hue wheel."""
-    hues = np.linspace(0, 1, n, endpoint=False)
-    rgba = np.ones((n, 4), dtype=np.float32)
-    for i, h in enumerate(hues):
-        r, g, b = colorsys.hsv_to_rgb(h, 0.65, 0.85)
-        rgba[i, :3] = r, g, b
-    return rgba
-
 
 # Elevation color stops: (elevation_km, RGBA)
 # Two stops at 0.0 create a hard break between ocean (blue) and land (sand/green).
@@ -41,6 +33,16 @@ _ELEVATION_STOPS = [
 ]
 
 
+def _plate_palette(n: int) -> np.ndarray:
+    """Return (n, 4) float32 RGBA colors evenly spaced around the HSV hue wheel."""
+    hues = np.linspace(0, 1, n, endpoint=False)
+    rgba = np.ones((n, 4), dtype=np.float32)
+    for i, h in enumerate(hues):
+        r, g, b = colorsys.hsv_to_rgb(h, 0.65, 0.85)
+        rgba[i, :3] = r, g, b
+    return rgba
+
+
 def _elevation_color(meta: dict) -> tuple:
     e = meta["elevation"]
     stops = _ELEVATION_STOPS
@@ -48,13 +50,11 @@ def _elevation_color(meta: dict) -> tuple:
         return stops[0][1]
     if e >= stops[-1][0]:
         return stops[-1][1]
-    # Walk stops in order; for the duplicate 0.0 pair, choose the land-side stop
-    # (index 4) for e > 0 and the ocean-side stop (index 3) for e <= 0.
     for i in range(len(stops) - 1):
         e0, c0 = stops[i]
         e1, c1 = stops[i + 1]
         if e0 == e1:
-            continue  # skip the hard-break pair itself
+            continue
         if e0 <= e <= e1:
             t = (e - e0) / (e1 - e0)
             return tuple(c0[j] + t * (c1[j] - c0[j]) for j in range(4))
@@ -62,11 +62,7 @@ def _elevation_color(meta: dict) -> tuple:
 
 
 def _elevation_color_vec(elevs: np.ndarray) -> np.ndarray:
-    """Vectorized elevation color scheme. Returns (..., 4) float32.
-
-    Processes stop pairs in reverse so lower-elevation pairs overwrite higher
-    ones, correctly implementing the hard sea-level break (two stops at 0.0).
-    """
+    """Vectorized elevation color scheme. Returns (..., 4) float32."""
     shape = elevs.shape
     result = np.full((*shape, 4), _ELEVATION_STOPS[-1][1], dtype=np.float32)
     for i in range(len(_ELEVATION_STOPS) - 2, -1, -1):
@@ -83,7 +79,7 @@ def _elevation_color_vec(elevs: np.ndarray) -> np.ndarray:
     return result
 
 
-def _build_elevation_display_texture(mesh) -> np.ndarray:
+def build_elevation_display_texture(mesh: PolygonMesh) -> np.ndarray:
     """Convert elevation_delta face textures to smooth RGBA elevation colors."""
     delta_tex = mesh.face_textures["elevation_delta"]          # (N, H, W, 4)
     face_elevs = np.array([m["elevation"] for m in mesh.face_metadata], dtype=np.float32)
@@ -91,30 +87,21 @@ def _build_elevation_display_texture(mesh) -> np.ndarray:
     return _elevation_color_vec(elev_map)                      # (N, H, W, 4)
 
 
-def _build_and_apply(window: MapWindow) -> None:
-    window.set_rebuild_enabled(False)
-
-    def _progress(msg: str) -> None:
-        window.set_status(msg)
-        QApplication.processEvents()
-
-    builder = GlobeBuilder(GlobeParams())
-    gmesh = builder.build(progress=_progress)
-
+def apply_geology_display(window: MapWindow, builder: ElevationBuilder) -> None:
+    """Wire elevation-textured display and all geology color schemes into the window."""
+    mesh = builder.mesh
     palette = _plate_palette(builder.params.n_plates)
     max_speed = builder.max_speed
-    gmesh.set_face_colors(palette[np.array(builder.plate_ids, dtype=np.int32)])
+
+    mesh.set_face_colors(palette[np.array(builder.plate_ids, dtype=np.int32)])
+
+    elevation_rgba = build_elevation_display_texture(mesh)
+    mesh.set_face_textures("elevation_rgba", elevation_rgba)
 
     def _speed_color(meta: dict) -> tuple:
         t = meta["surface_speed"] / max_speed
         return (t, 0.2 + 0.3 * (1.0 - t), 1.0 - t, 1.0)
 
-    elevation_rgba = _build_elevation_display_texture(gmesh)
-    gmesh.set_face_textures("elevation_rgba", elevation_rgba)
-
-    window.set_mesh(gmesh)
-    window.set_status("")
-    window.set_rebuild_enabled(True)
     def _volcanic_color(meta: dict) -> tuple:
         t = meta["volcanic_activity"]
         if t <= 0.0:
@@ -126,24 +113,14 @@ def _build_and_apply(window: MapWindow) -> None:
             s = (t - 0.5) / 0.5
             return (0.95, 0.25 - 0.20 * s, 0.0, 1.0)
 
-    window.set_color_schemes({
+    schemes: dict[str, Callable[[dict], tuple]] = {
         "Elevation": _elevation_color,
         "Plates": lambda meta: tuple(palette[meta["plate_id"]]),
         "Plate Type": lambda meta: OCEAN_COLOR if meta["plate_type"] == "oceanic" else LAND_COLOR,
         "Speed": _speed_color,
         "Boundary": lambda meta: BOUNDARY_COLORS[meta["boundary_type"]],
         "Volcanic Activity": _volcanic_color,
-    })
+    }
+
+    window.set_color_schemes(schemes)
     window.associate_scheme_texture("Elevation", "elevation_rgba")
-
-
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-
-    window = MapWindow()
-    window.setWindowTitle("Plate Tectonics")
-    window.set_rebuild_callback(lambda: _build_and_apply(window))
-    _build_and_apply(window)
-    window.show()
-
-    sys.exit(app.exec())
