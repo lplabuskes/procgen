@@ -139,6 +139,31 @@ class PolygonMesh:
         for face_idx, value in enumerate(values):
             self.face_metadata[face_idx][key] = value
 
+    def face_tangent_frames(self):
+        """Return pre-computed per-face tangent-plane data.
+
+        Returns (u_axes, v_axes, u_offsets, v_offsets, u_ranges, v_ranges, vertex_uvs):
+        - u_axes, v_axes: float32 (n_faces, 3) — orthonormal tangent-plane axes
+        - u_offsets, v_offsets: float32 (n_faces,) — min projected coord per axis
+        - u_ranges, v_ranges: float32 (n_faces,) — coord span per axis
+        - vertex_uvs: list of (n_v, 2) float32 — per-face vertex UV coords in [0, 1]²
+
+        To project a 3D point p onto face i's UV plane:
+            offset = p - _tangent_centroids[i]
+            u_norm = (dot(offset, u_axes[i]) - u_offsets[i]) / u_ranges[i]
+            v_norm = (dot(offset, v_axes[i]) - v_offsets[i]) / v_ranges[i]
+        The face centroid maps to UV (-u_offsets[i]/u_ranges[i], -v_offsets[i]/v_ranges[i]).
+        """
+        return (
+            self._u_axes,
+            self._v_axes,
+            self._u_offsets,
+            self._v_offsets,
+            self._u_ranges,
+            self._v_ranges,
+            self._face_vertex_uvs,
+        )
+
     def face_texture_positions(self, h: int, w: int) -> np.ndarray:
         """Return unit-sphere 3D positions for an (H, W) texture grid over every face.
 

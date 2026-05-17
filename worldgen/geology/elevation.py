@@ -222,26 +222,14 @@ def compute_elevation_delta_textures(
     uu, vv = np.meshgrid(coords, coords)
     pixels_uv = np.stack([uu.ravel(), vv.ravel()], axis=1)  # (tex_size², 2)
 
+    _, _, u_offsets, v_offsets, u_ranges, v_ranges, vertex_uvs = mesh.face_tangent_frames()
+
     for face_idx, face in enumerate(mesh.faces):
-        verts_3d = mesh.vertices[np.array(face)]
-
-        # tangent plane at face centroid (same convention as _rebuild_render_arrays)
-        centroid = np.mean(verts_3d, axis=0)
-        n_hat = centroid / np.linalg.norm(centroid)
-        ref = np.array([0.0, 0.0, 1.0]) if abs(n_hat[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
-        u_axis = np.cross(ref, n_hat)
-        u_axis /= np.linalg.norm(u_axis)
-        v_axis = np.cross(n_hat, u_axis)
-
-        offsets = verts_3d - centroid
-        us = offsets @ u_axis
-        vs_tp = offsets @ v_axis
-
-        u_min, u_r = float(us.min()), float(us.max() - us.min()) or 1.0
-        v_min, v_r = float(vs_tp.min()), float(vs_tp.max() - vs_tp.min()) or 1.0
-
-        verts_uv = np.stack([(us - u_min) / u_r, (vs_tp - v_min) / v_r], axis=1)
-        centroid_uv = np.array([-u_min / u_r, -v_min / v_r])  # centroid is tangent-plane origin
+        verts_uv = vertex_uvs[face_idx]
+        centroid_uv = np.array([
+            -u_offsets[face_idx] / u_ranges[face_idx],
+            -v_offsets[face_idx] / v_ranges[face_idx],
+        ])
 
         face_elev = float(elevations[face_idx])
         vert_deltas = vertex_elevations[np.array(face)] - face_elev

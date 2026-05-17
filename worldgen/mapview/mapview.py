@@ -94,21 +94,6 @@ def _split_at_antimeridian(face_ecef: np.ndarray, face_uv: Optional[np.ndarray] 
     return result
 
 
-def _compute_face_uv(face_ecef: np.ndarray) -> np.ndarray:
-    """Tangent-plane UV parameterization. Returns (N, 2) float32 with values in [0, 1]."""
-    centroid = np.mean(face_ecef, axis=0)
-    n = centroid / np.linalg.norm(centroid)
-    ref = np.array([0.0, 0.0, 1.0]) if abs(n[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
-    u_axis = np.cross(ref, n)
-    u_axis /= np.linalg.norm(u_axis)
-    v_axis = np.cross(n, u_axis)
-    offsets = face_ecef - centroid
-    us = offsets @ u_axis
-    vs = offsets @ v_axis
-    u_r = float(us.max() - us.min()) or 1.0
-    v_r = float(vs.max() - vs.min()) or 1.0
-    return np.stack([(us - us.min()) / u_r, (vs - vs.min()) / v_r], axis=1).astype(np.float32)
-
 
 class MapWidget(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -187,11 +172,13 @@ class MapWidget(QWidget):
             has_textures = tex_key is not None and tex_key in self._mesh.face_textures
         else:
             has_textures = bool(self._mesh.face_textures)
+        vertex_uvs = None
+        if has_textures:
+            *_, vertex_uvs = self._mesh.face_tangent_frames()
         for i, face in enumerate(self._mesh.faces):
             face_ecef = verts[np.array(face, dtype=np.int32)]
             if has_textures:
-                face_uv = _compute_face_uv(face_ecef)
-                for poly_lonlat, poly_uv in _split_at_antimeridian(face_ecef, face_uv):
+                for poly_lonlat, poly_uv in _split_at_antimeridian(face_ecef, vertex_uvs[i]):
                     self._faces_lonlat.append(poly_lonlat)
                     self._face_src.append(i)
                     self._face_uvs.append(poly_uv)
