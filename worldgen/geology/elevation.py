@@ -133,6 +133,9 @@ def compute_noise_elevation_deltas(
     persistence: float = 0.5,
     seed: int = 0,
     nyquist_safety: float = 0.5,
+    face_elevations: np.ndarray | None = None,
+    elevation_deltas: np.ndarray | None = None,
+    coast_sigma: float = 1.5,
 ) -> np.ndarray:
     """Per-pixel fBm simplex noise at uniform amplitude across all faces.
 
@@ -180,6 +183,12 @@ def compute_noise_elevation_deltas(
     noise_norm = (noise_sum / total_amp).reshape(n_faces, tex_size, tex_size)
 
     noise_delta = (noise_norm * amplitude).astype(np.float32)
+
+    if face_elevations is not None:
+        per_pixel_elev = face_elevations[:, np.newaxis, np.newaxis].astype(np.float32)
+        if elevation_deltas is not None:
+            per_pixel_elev = per_pixel_elev + elevation_deltas
+        noise_delta *= np.exp(-np.abs(per_pixel_elev) / coast_sigma)
 
     result = np.zeros((n_faces, tex_size, tex_size, 4), dtype=np.float32)
     result[:, :, :, 0] = noise_delta

@@ -44,7 +44,8 @@ class GlobeParams:
     elevation_max_hops: int = 8
     elevation_tex_size: int = 32
     # Elevation noise
-    noise_amplitude: float = 1.5
+    noise_amplitude: float = 4.0
+    noise_coast_sigma: float = 1.5  # km; controls how far noise extends from sea level
     # Reproducibility — None means random each run
     seed: Optional[int] = None
 
@@ -134,6 +135,9 @@ class GlobeBuilder:
             tex_size=p.elevation_tex_size,
             amplitude=p.noise_amplitude,
             seed=noise_seed or 0,
+            face_elevations=elevations,
+            elevation_deltas=elevation_delta_textures[:, :, :, 0],
+            coast_sigma=p.noise_coast_sigma,
         )
         elevation_delta_textures[:, :, :, 0] += noise_deltas[:, :, :, 0]
         dual.set_face_textures("elevation_delta", elevation_delta_textures)
