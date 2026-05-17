@@ -61,14 +61,11 @@ def _elevation_color(meta: dict) -> tuple:
     return stops[-1][1]
 
 
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-
+def _build_and_apply(window: MapWindow) -> None:
     builder = GlobeBuilder(GlobeParams())
     gmesh = builder.build()
 
-    n_plates = builder.params.n_plates
-    palette = _plate_palette(n_plates)
+    palette = _plate_palette(builder.params.n_plates)
     max_speed = builder.max_speed
     gmesh.set_face_colors(palette[np.array(builder.plate_ids, dtype=np.int32)])
 
@@ -76,15 +73,23 @@ if __name__ == "__main__":
         t = meta["surface_speed"] / max_speed
         return (t, 0.2 + 0.3 * (1.0 - t), 1.0 - t, 1.0)
 
-    window = MapWindow(mesh=gmesh)
-    window.setWindowTitle("Plate Tectonics")
+    window.set_mesh(gmesh)
     window.set_color_schemes({
+        "Elevation": _elevation_color,
         "Plates": lambda meta: tuple(palette[meta["plate_id"]]),
         "Plate Type": lambda meta: OCEAN_COLOR if meta["plate_type"] == "oceanic" else LAND_COLOR,
         "Speed": _speed_color,
         "Boundary": lambda meta: BOUNDARY_COLORS[meta["boundary_type"]],
-        "Elevation": _elevation_color,
     })
+
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+
+    window = MapWindow()
+    window.setWindowTitle("Plate Tectonics")
+    window.set_rebuild_callback(lambda: _build_and_apply(window))
+    _build_and_apply(window)
     window.show()
 
     sys.exit(app.exec())

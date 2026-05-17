@@ -289,11 +289,21 @@ class MapWindow(QMainWindow):
         reset_btn.clicked.connect(lambda: self._map.reset_view())
         toolbar_layout.addWidget(reset_btn)
 
+        bottom_toolbar = QWidget()
+        bottom_layout = QHBoxLayout(bottom_toolbar)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.addStretch()
+        self._rerun_btn = QPushButton("Re-run")
+        self._rerun_btn.setVisible(False)
+        self._has_rebuild_callback = False
+        bottom_layout.addWidget(self._rerun_btn)
+
         self._map = MapWidget()
         self._color_combo.currentTextChanged.connect(self._map.set_color_scheme)
 
         layout.addWidget(toolbar)
         layout.addWidget(self._map, stretch=1)
+        layout.addWidget(bottom_toolbar)
         self.setCentralWidget(central)
 
         if mesh is not None:
@@ -301,6 +311,13 @@ class MapWindow(QMainWindow):
 
     def set_mesh(self, mesh: PolygonMesh) -> None:
         self._map.set_mesh(mesh)
+
+    def set_rebuild_callback(self, callback: Callable[[], None]) -> None:
+        if self._has_rebuild_callback:
+            self._rerun_btn.clicked.disconnect()
+        self._rerun_btn.clicked.connect(callback)
+        self._has_rebuild_callback = True
+        self._rerun_btn.setVisible(True)
 
     def set_color_schemes(self, schemes: dict[str, Callable[[dict], Sequence[float]]]) -> None:
         self._color_combo.blockSignals(True)
