@@ -123,3 +123,5 @@ def apply_geology_display(window: MapWindow, builder: ElevationBuilder) -> None:
 
     window.set_color_schemes(schemes)
     window.associate_scheme_texture("Elevation", "elevation_rgba")
+    if builder.rivers:
+        window.add_overlay("rivers", label="Rivers")

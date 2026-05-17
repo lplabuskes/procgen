@@ -4,13 +4,14 @@ from typing import TYPE_CHECKING, Callable, Optional, Sequence
 
 import numpy as np
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPolygonF, QTransform
+from PySide6.QtGui import QAction, QBrush, QColor, QImage, QPainter, QPen, QPolygonF, QTransform
 from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -116,6 +117,9 @@ class MapWidget(QWidget):
         self._active_scheme: Optional[str] = None
         self._scheme_texture_key: dict[str, str] = {}
 
+        self._globe: Optional["Globe"] = None
+        self._overlay_visible: dict[str, bool] = {}
+
         self._zoom: float = 1.0
         self._center: np.ndarray = np.zeros(2, dtype=np.float64)
         self._drag_start: Optional[tuple[float, float]] = None
@@ -132,7 +136,12 @@ class MapWidget(QWidget):
         self.update()
 
     def set_globe(self, globe: "Globe") -> None:
+        self._globe = globe
         self.set_mesh(globe.mesh)
+
+    def set_overlay_visible(self, name: str, visible: bool) -> None:
+        self._overlay_visible[name] = visible
+        self.update()
 
     def set_projection(self, proj: Projection) -> None:
         self._projection = proj
@@ -293,6 +302,45 @@ class MapWidget(QWidget):
                     QPolygonF([QPointF(float(x), float(y)) for x, y in zip(px, py)])
                 )
 
+        if self._overlay_visible.get("rivers") and self._globe is not None:
+            self._draw_rivers_overlay(painter, W, H, cx, cy, scale_x, scale_y)
+
+    def _draw_rivers_overlay(
+        self,
+        painter: QPainter,
+        W: float, H: float,
+        cx: float, cy: float,
+        scale_x: float, scale_y: float,
+    ) -> None:
+        river_paths = self._globe.get_feature("rivers")  # type: ignore[union-attr]
+        if not river_paths or self._mesh is None:
+            return
+        centroids = self._mesh.face_centroids  # (N, 3)
+        pen = QPen(QColor(100, 180, 255, 200))
+        pen.setWidthF(1.5)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for path in river_paths:
+            if len(path) < 2:
+                continue
+            pts = centroids[np.array(path, dtype=np.int32)]
+            lon = np.arctan2(pts[:, 1], pts[:, 0])
+            lat = np.arcsin(np.clip(pts[:, 2], -1.0, 1.0))
+            lonlat = np.column_stack([lon, lat])
+            proj = self._projection.project_lonlat(lonlat)
+            sx = (proj[:, 0] - cx) * scale_x + W * 0.5
+            sy = -(proj[:, 1] - cy) * scale_y + H * 0.5
+            seg: list[QPointF] = [QPointF(float(sx[0]), float(sy[0]))]
+            for j in range(1, len(path)):
+                if abs(lon[j] - lon[j - 1]) > np.pi:
+                    if len(seg) > 1:
+                        painter.drawPolyline(QPolygonF(seg))
+                    seg = [QPointF(float(sx[j]), float(sy[j]))]
+                else:
+                    seg.append(QPointF(float(sx[j]), float(sy[j])))
+            if len(seg) > 1:
+                painter.drawPolyline(QPolygonF(seg))
+
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_start = (float(event.position().x()), float(event.position().y()))
@@ -388,6 +436,13 @@ class MapWindow(QMainWindow):
         self._color_label.setVisible(False)
         self._color_combo.setVisible(False)
 
+        self._overlays_btn = QPushButton("Overlays")
+        self._overlays_menu = QMenu(self._overlays_btn)
+        self._overlays_btn.setMenu(self._overlays_menu)
+        self._overlays_btn.setVisible(False)
+        self._overlay_actions: dict[str, QAction] = {}
+        toolbar_layout.addWidget(self._overlays_btn)
+
         toolbar_layout.addStretch()
 
         zoom_out_btn = QPushButton("−")
@@ -460,6 +515,20 @@ class MapWindow(QMainWindow):
 
     def associate_scheme_texture(self, scheme_name: str, texture_key: str) -> None:
         self._map.associate_scheme_texture(scheme_name, texture_key)
+
+    def add_overlay(self, name: str, label: Optional[str] = None, checked: bool = True) -> None:
+        """Register a named overlay toggle. Safe to call on every re-run (idempotent)."""
+        if name in self._overlay_actions:
+            self._map.set_overlay_visible(name, self._overlay_actions[name].isChecked())
+            return
+        action = QAction(label or name.title(), self._overlays_menu)
+        action.setCheckable(True)
+        action.setChecked(checked)
+        action.toggled.connect(lambda v, n=name: self._map.set_overlay_visible(n, v))
+        self._overlays_menu.addAction(action)
+        self._overlay_actions[name] = action
+        self._overlays_btn.setVisible(True)
+        self._map.set_overlay_visible(name, checked)
 
     def set_color_schemes(self, schemes: dict[str, Callable[[dict], Sequence[float]]]) -> None:
         self._color_combo.blockSignals(True)
