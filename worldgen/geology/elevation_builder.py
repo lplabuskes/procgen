@@ -25,8 +25,8 @@ from worldgen.mesh.mymesh import Mesh, PolygonMesh
 @dataclass
 class ElevationParams:
     # Mesh generation
-    icosphere_depth: int = 4
-    n_swaps: int = 1000
+    icosphere_depth: int = 5
+    n_swaps: int = 4000
     n_relax: int = 10
     stiffness: float = 0.1
     outer_iters: int = 3
@@ -40,16 +40,16 @@ class ElevationParams:
     spin_scale: float = 0.1
     # Elevation
     elevation_rate_norm: float = 1.75
-    elevation_decay_rate: float = 0.5
-    elevation_max_hops: int = 8
-    elevation_tex_size: int = 32
+    elevation_decay_rate: float = 0.25
+    elevation_max_hops: int = 16
+    elevation_tex_size: int = 16
     # Elevation noise
     noise_amplitude: float = 4.0
     noise_coast_sigma: float = 1.5  # km; controls how far noise extends from sea level
     # Volcanism
     n_hotspots: int = 8
-    volcanic_decay_rate: float = 0.6
-    volcanic_max_hops: int = 6
+    volcanic_decay_rate: float = 0.3
+    volcanic_max_hops: int = 12
     volcanic_elevation_scale: float = 2.0           # km added at full activity (continental)
     volcanic_elevation_scale_oceanic: float = 5.5   # km added at full activity (oceanic)
     # Reproducibility — None means random each run
