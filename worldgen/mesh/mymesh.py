@@ -1,5 +1,5 @@
 import random
-from typing import Any, Dict, FrozenSet, List, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 import numpy as np
 
@@ -288,8 +288,10 @@ class Mesh(PolygonMesh):
         return PolygonMesh(dual_vertices, dual_faces)
 
     def deregularize(self, n_swaps: int = 1000, n_relax: int = 10,
-                     stiffness: float = 0.1, outer_iters: int = 3) -> 'Mesh':
+                     stiffness: float = 0.1, outer_iters: int = 3,
+                     seed: Optional[int] = None) -> 'Mesh':
         """Edge-swap + spring-relax loop to break icosphere regularity."""
+        rng = random.Random(seed)
         verts = self.vertices.astype(np.float64)
         faces: List[Tuple[int, int, int]] = list(self.faces)
         n_verts = len(verts)
@@ -337,9 +339,9 @@ class Mesh(PolygonMesh):
         for _ in range(outer_iters):
             # --- Edge swap phase ---
             for _ in range(n_swaps):
-                fi_pick = random.randrange(len(faces))
+                fi_pick = rng.randrange(len(faces))
                 f_pick = faces[fi_pick]
-                ei = random.randrange(3)
+                ei = rng.randrange(3)
                 bv, cv = f_pick[ei], f_pick[(ei + 1) % 3]
                 edge = frozenset([bv, cv])
                 ef = edge_faces.get(edge)

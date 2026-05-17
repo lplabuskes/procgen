@@ -411,6 +411,10 @@ class MapWindow(QMainWindow):
         self._status_label.setStyleSheet("color: #aaaaaa; font-size: 11px;")
         bottom_layout.addWidget(self._status_label)
         bottom_layout.addStretch()
+        self._params_btn = QPushButton("Parameters…")
+        self._params_btn.setVisible(False)
+        self._has_params_callback = False
+        bottom_layout.addWidget(self._params_btn)
         self._rerun_btn = QPushButton("Re-run")
         self._rerun_btn.setVisible(False)
         self._has_rebuild_callback = False
@@ -438,6 +442,14 @@ class MapWindow(QMainWindow):
 
     def set_rebuild_enabled(self, enabled: bool) -> None:
         self._rerun_btn.setEnabled(enabled)
+        self._params_btn.setEnabled(enabled)
+
+    def set_params_callback(self, callback: Callable[[], None]) -> None:
+        if self._has_params_callback:
+            self._params_btn.clicked.disconnect()
+        self._params_btn.clicked.connect(callback)
+        self._has_params_callback = True
+        self._params_btn.setVisible(True)
 
     def set_rebuild_callback(self, callback: Callable[[], None]) -> None:
         if self._has_rebuild_callback:

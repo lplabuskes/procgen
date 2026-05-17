@@ -93,6 +93,7 @@ class ElevationBuilder:
             n_relax=p.n_relax,
             stiffness=p.stiffness,
             outer_iters=p.outer_iters,
+            seed=self._sub_seed(5),
         )
         _report("Computing dual mesh…")
         dual = tri.mesh_dual()
