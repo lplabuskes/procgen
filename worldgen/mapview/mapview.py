@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Callable, Optional, Sequence
 
 import numpy as np
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QBrush, QColor, QPainter, QPolygonF
+from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPolygonF, QTransform
 from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import (
     QComboBox,
@@ -22,10 +22,13 @@ if TYPE_CHECKING:
     from mesh.mymesh import PolygonMesh
 
 
-def _split_at_antimeridian(face_ecef: np.ndarray) -> list[np.ndarray]:
+def _split_at_antimeridian(face_ecef: np.ndarray, face_uv: Optional[np.ndarray] = None) -> list:
     """
     face_ecef: (N, 3) ECEF unit-sphere vertices of a polygon.
-    Returns a list of (M, 2) [lon, lat] (radians) polygons.
+    face_uv: optional (N, 2) per-vertex UV coordinates.
+
+    Without face_uv: returns list of (M, 2) [lon, lat] arrays.
+    With face_uv: returns list of ((M, 2) lonlat, (M, 2) uv) tuples.
     Single-element list if no antimeridian crossing; two elements if crossing.
     """
     n = len(face_ecef)
@@ -39,14 +42,24 @@ def _split_at_antimeridian(face_ecef: np.ndarray) -> list[np.ndarray]:
     )
 
     if not crosses.any():
-        return [np.column_stack([lon, lat])]
+        lonlat = np.column_stack([lon, lat])
+        return [lonlat] if face_uv is None else [(lonlat, face_uv)]
 
-    east: list[list[float]] = []  # lon in [0, π]
-    west: list[list[float]] = []  # lon in [-π, 0)
+    east_ll: list[list[float]] = []   # lon in [0, π]
+    west_ll: list[list[float]] = []   # lon in [-π, 0)
+    east_uv_pts: list[np.ndarray] = []
+    west_uv_pts: list[np.ndarray] = []
 
     for i in range(n):
         lo, la = float(lon[i]), float(lat[i])
-        (east if lo >= 0 else west).append([lo, la])
+        if lo >= 0:
+            east_ll.append([lo, la])
+            if face_uv is not None:
+                east_uv_pts.append(face_uv[i])
+        else:
+            west_ll.append([lo, la])
+            if face_uv is not None:
+                west_uv_pts.append(face_uv[i])
 
         if crosses[i]:
             # Find where the edge crosses y=0 (the antimeridian half-plane x<0, y=0)
@@ -57,18 +70,44 @@ def _split_at_antimeridian(face_ecef: np.ndarray) -> list[np.ndarray]:
             p_lat = float(np.arcsin(np.clip(p[2], -1.0, 1.0)))
 
             if lo >= 0:
-                east.append([np.pi, p_lat])
-                west.append([-np.pi, p_lat])
+                east_ll.append([np.pi, p_lat])
+                west_ll.append([-np.pi, p_lat])
+                if face_uv is not None:
+                    uv_cross = face_uv[i] + t * (face_uv[(i + 1) % n] - face_uv[i])
+                    east_uv_pts.append(uv_cross)
+                    west_uv_pts.append(uv_cross)
             else:
-                west.append([-np.pi, p_lat])
-                east.append([np.pi, p_lat])
+                west_ll.append([-np.pi, p_lat])
+                east_ll.append([np.pi, p_lat])
+                if face_uv is not None:
+                    uv_cross = face_uv[i] + t * (face_uv[(i + 1) % n] - face_uv[i])
+                    west_uv_pts.append(uv_cross)
+                    east_uv_pts.append(uv_cross)
 
     result = []
-    if len(east) >= 3:
-        result.append(np.array(east, dtype=np.float64))
-    if len(west) >= 3:
-        result.append(np.array(west, dtype=np.float64))
+    if len(east_ll) >= 3:
+        lonlat = np.array(east_ll, dtype=np.float64)
+        result.append(lonlat if face_uv is None else (lonlat, np.array(east_uv_pts, dtype=np.float32)))
+    if len(west_ll) >= 3:
+        lonlat = np.array(west_ll, dtype=np.float64)
+        result.append(lonlat if face_uv is None else (lonlat, np.array(west_uv_pts, dtype=np.float32)))
     return result
+
+
+def _compute_face_uv(face_ecef: np.ndarray) -> np.ndarray:
+    """Tangent-plane UV parameterization. Returns (N, 2) float32 with values in [0, 1]."""
+    centroid = np.mean(face_ecef, axis=0)
+    n = centroid / np.linalg.norm(centroid)
+    ref = np.array([0.0, 0.0, 1.0]) if abs(n[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
+    u_axis = np.cross(ref, n)
+    u_axis /= np.linalg.norm(u_axis)
+    v_axis = np.cross(n, u_axis)
+    offsets = face_ecef - centroid
+    us = offsets @ u_axis
+    vs = offsets @ v_axis
+    u_r = float(us.max() - us.min()) or 1.0
+    v_r = float(vs.max() - vs.min()) or 1.0
+    return np.stack([(us - us.min()) / u_r, (vs - vs.min()) / v_r], axis=1).astype(np.float32)
 
 
 class MapWidget(QWidget):
@@ -81,9 +120,12 @@ class MapWidget(QWidget):
         self._faces_lonlat: list[np.ndarray] = []  # each (N, 2)
         self._face_src: list[int] = []             # original face index per polygon
         self._face_colors: list[np.ndarray] = []   # RGBA color per polygon
+        self._face_uvs: list[np.ndarray] = []      # per-vertex UV (N, 2), populated when textured
 
         # Projected (u, v) polygons, rebuilt on projection change
         self._proj_faces: list[np.ndarray] = []    # each (N, 2)
+
+        self._texture_qimages: dict[int, QImage] = {}  # face_src → QImage, when textured
 
         self._color_schemes: dict[str, Callable[[dict], Sequence[float]]] = {}
         self._active_scheme: Optional[str] = None
@@ -98,6 +140,7 @@ class MapWidget(QWidget):
     def set_mesh(self, mesh: PolygonMesh) -> None:
         self._mesh = mesh
         self._rebuild_faces()
+        self._rebuild_textures()
         self._rebuild_colors()
         self._reproject()
         self.update()
@@ -125,11 +168,33 @@ class MapWidget(QWidget):
         verts = self._mesh.vertices
         self._faces_lonlat = []
         self._face_src = []
+        self._face_uvs = []
+        has_textures = self._mesh.face_textures is not None
         for i, face in enumerate(self._mesh.faces):
             face_ecef = verts[np.array(face, dtype=np.int32)]
-            for poly_lonlat in _split_at_antimeridian(face_ecef):
-                self._faces_lonlat.append(poly_lonlat)
-                self._face_src.append(i)
+            if has_textures:
+                face_uv = _compute_face_uv(face_ecef)
+                for poly_lonlat, poly_uv in _split_at_antimeridian(face_ecef, face_uv):
+                    self._faces_lonlat.append(poly_lonlat)
+                    self._face_src.append(i)
+                    self._face_uvs.append(poly_uv)
+            else:
+                for poly_lonlat in _split_at_antimeridian(face_ecef):
+                    self._faces_lonlat.append(poly_lonlat)
+                    self._face_src.append(i)
+
+    def _rebuild_textures(self) -> None:
+        """Build cached QImages from mesh face textures, one per face."""
+        self._texture_qimages = {}
+        if self._mesh is None or self._mesh.face_textures is None:
+            return
+        textures = self._mesh.face_textures  # (N, H, W, 4) float32
+        N, H, W = textures.shape[:3]
+        for i in range(N):
+            img = np.ascontiguousarray((textures[i] * 255).clip(0, 255).astype(np.uint8))
+            self._texture_qimages[i] = QImage(
+                img.data, W, H, W * 4, QImage.Format.Format_RGBA8888
+            ).copy()
 
     def _rebuild_colors(self) -> None:
         """Build per-polygon color list indexed via _face_src."""
@@ -165,18 +230,54 @@ class MapWidget(QWidget):
         scale_y = self._zoom * 0.5 * H
 
         painter.setPen(Qt.PenStyle.NoPen)
-        for poly_uv, color in zip(self._proj_faces, self._face_colors):
-            px = (poly_uv[:, 0] - cx) * scale_x + W * 0.5
-            py = -(poly_uv[:, 1] - cy) * scale_y + H * 0.5
-            painter.setBrush(
-                QBrush(QColor.fromRgbF(
-                    float(color[0]), float(color[1]),
-                    float(color[2]), float(color[3])
-                ))
-            )
-            painter.drawPolygon(
-                QPolygonF([QPointF(float(x), float(y)) for x, y in zip(px, py)])
-            )
+        for idx, (poly_proj, color) in enumerate(zip(self._proj_faces, self._face_colors)):
+            face_src = self._face_src[idx]
+            px = (poly_proj[:, 0] - cx) * scale_x + W * 0.5
+            py = -(poly_proj[:, 1] - cy) * scale_y + H * 0.5
+
+            if face_src in self._texture_qimages:
+                # Per-triangle affine texture mapping: solve image-pixel → screen for each fan triangle.
+                qimage = self._texture_qimages[face_src]
+                img_w = float(qimage.width())
+                img_h = float(qimage.height())
+                uvs = self._face_uvs[idx]  # (n_verts, 2)
+                n_verts = len(px)
+                for k in range(1, n_verts - 1):
+                    sx = np.array([px[0], px[k], px[k + 1]])
+                    sy = np.array([py[0], py[k], py[k + 1]])
+                    tu = uvs[[0, k, k + 1], 0] * img_w
+                    tv = uvs[[0, k, k + 1], 1] * img_h
+                    A = np.array([[tu[0], tv[0], 1.0],
+                                  [tu[1], tv[1], 1.0],
+                                  [tu[2], tv[2], 1.0]])
+                    if abs(np.linalg.det(A)) < 1e-8:
+                        continue
+                    X = np.linalg.solve(A, np.array([[sx[0], sy[0]],
+                                                     [sx[1], sy[1]],
+                                                     [sx[2], sy[2]]]))
+                    # QTransform(m11,m12,m21,m22,dx,dy): x'=m11*x+m21*y+dx, y'=m12*x+m22*y+dy
+                    brush = QBrush(qimage)
+                    brush.setTransform(QTransform(
+                        float(X[0, 0]), float(X[0, 1]),
+                        float(X[1, 0]), float(X[1, 1]),
+                        float(X[2, 0]), float(X[2, 1]),
+                    ))
+                    painter.setBrush(brush)
+                    painter.drawPolygon(QPolygonF([
+                        QPointF(sx[0], sy[0]),
+                        QPointF(sx[1], sy[1]),
+                        QPointF(sx[2], sy[2]),
+                    ]))
+            else:
+                painter.setBrush(
+                    QBrush(QColor.fromRgbF(
+                        float(color[0]), float(color[1]),
+                        float(color[2]), float(color[3])
+                    ))
+                )
+                painter.drawPolygon(
+                    QPolygonF([QPointF(float(x), float(y)) for x, y in zip(px, py)])
+                )
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
