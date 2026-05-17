@@ -42,6 +42,7 @@ class GlobeParams:
     elevation_rate_norm: float = 1.75
     elevation_decay_rate: float = 0.5
     elevation_max_hops: int = 8
+    elevation_tex_size: int = 64
     # Elevation noise
     noise_amplitude: float = 1.5
     # Reproducibility — None means random each run
@@ -124,10 +125,15 @@ class GlobeBuilder:
         )
         dual.apply_metadata_channel("elevation", elevations.tolist())
 
-        elevation_delta_textures = compute_elevation_delta_textures(dual, elevations)
+        elevation_delta_textures = compute_elevation_delta_textures(
+            dual, elevations, tex_size=p.elevation_tex_size
+        )
         noise_seed = self._sub_seed(3)
         noise_deltas = compute_noise_elevation_deltas(
-            dual, amplitude=p.noise_amplitude, seed=noise_seed or 0
+            dual,
+            tex_size=p.elevation_tex_size,
+            amplitude=p.noise_amplitude,
+            seed=noise_seed or 0,
         )
         elevation_delta_textures[:, :, :, 0] += noise_deltas[:, :, :, 0]
         dual.set_face_textures("elevation_delta", elevation_delta_textures)
