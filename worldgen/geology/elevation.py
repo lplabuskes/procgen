@@ -4,6 +4,7 @@ from typing import List
 
 import numpy as np
 
+from geology.simplex import make_perm, simplex3_vec
 from mesh.mymesh import PolygonMesh
 
 
@@ -120,6 +121,46 @@ def compute_face_elevations(
 
     elevation += delta_field
     return elevation
+
+
+def compute_noise_elevation_deltas(
+    mesh: PolygonMesh,
+    tex_size: int = 32,
+    amplitude: float = 1.5,
+    base_frequency: float = 1.5,
+    octaves: int = 6,
+    lacunarity: float = 2.0,
+    persistence: float = 0.5,
+    seed: int = 0,
+) -> np.ndarray:
+    """Per-pixel fBm simplex noise at uniform amplitude across all faces.
+
+    Fully vectorized — evaluates all pixels in one numpy pass per octave.
+
+    Returns:
+        float32 array of shape (N_faces, tex_size, tex_size, 4).
+        R channel = noise delta in km; G, B, A = 0.
+    """
+    n_faces = len(mesh.faces)
+    positions = mesh.face_texture_positions(tex_size, tex_size)  # (N, H, W, 3)
+    flat_xyz = positions.reshape(-1, 3).astype(np.float64)       # (N*H*W, 3)
+
+    perm = make_perm(seed)
+    noise_sum = np.zeros(len(flat_xyz), dtype=np.float64)
+    amp, freq, total_amp = 1.0, float(base_frequency), 0.0
+    for _ in range(octaves):
+        noise_sum += amp * simplex3_vec(flat_xyz * freq, perm)
+        total_amp += amp
+        amp *= persistence
+        freq *= lacunarity
+
+    noise_norm = (noise_sum / total_amp).reshape(n_faces, tex_size, tex_size)
+
+    noise_delta = (noise_norm * amplitude).astype(np.float32)
+
+    result = np.zeros((n_faces, tex_size, tex_size, 4), dtype=np.float32)
+    result[:, :, :, 0] = noise_delta
+    return result
 
 
 def compute_elevation_delta_textures(
