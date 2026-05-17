@@ -19,7 +19,8 @@ from worldgen.geology.tectonics import (
     generate_plates,
     relax_plates,
 )
-from worldgen.mesh.mymesh import Mesh, PolygonMesh
+from worldgen.mesh import cache as mesh_cache
+from worldgen.mesh.mymesh import PolygonMesh
 
 
 @dataclass
@@ -87,16 +88,18 @@ class ElevationBuilder:
 
         p = self.params
 
-        _report("Building icosphere mesh…")
-        tri = Mesh.icosphere(p.icosphere_depth).deregularize(
-            n_swaps=p.n_swaps,
-            n_relax=p.n_relax,
-            stiffness=p.stiffness,
-            outer_iters=p.outer_iters,
-            seed=self._sub_seed(5),
-        )
-        _report("Computing dual mesh…")
-        dual = tri.mesh_dual()
+        if not mesh_cache.is_populated():
+            _report("Building mesh cache (first run only)…")
+            mesh_cache.build(
+                icosphere_depth=p.icosphere_depth,
+                n_swaps=p.n_swaps,
+                n_relax=p.n_relax,
+                stiffness=p.stiffness,
+                outer_iters=p.outer_iters,
+                progress=_report,
+            )
+        _report("Loading mesh…")
+        dual = mesh_cache.load_random(seed=self._sub_seed(5))
 
         _report("Generating tectonic plates…")
         plate_ids = generate_plates(

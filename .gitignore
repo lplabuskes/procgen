@@ -1,4 +1,4 @@
-resource/
+mesh_cache/
 *.pyc
 .DS_Store
 .vscode/
