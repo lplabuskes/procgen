@@ -25,6 +25,15 @@ class PolygonMesh:
         triangle_face_indices = []
         render_uv_list = []
 
+        n_faces = len(self.faces)
+        tangent_centroids = np.zeros((n_faces, 3), dtype=np.float32)
+        u_axes = np.zeros((n_faces, 3), dtype=np.float32)
+        v_axes = np.zeros((n_faces, 3), dtype=np.float32)
+        u_offsets = np.zeros(n_faces, dtype=np.float32)
+        v_offsets = np.zeros(n_faces, dtype=np.float32)
+        u_ranges = np.zeros(n_faces, dtype=np.float32)
+        v_ranges = np.zeros(n_faces, dtype=np.float32)
+
         for face_idx, face in enumerate(self.faces):
             verts = self.vertices[np.array(face)]
             centroid = np.mean(verts, axis=0)
@@ -42,6 +51,14 @@ class PolygonMesh:
                 [(us - us.min()) / u_r, (vs - vs.min()) / v_r], axis=1
             ).astype(np.float32)
 
+            tangent_centroids[face_idx] = centroid
+            u_axes[face_idx] = u_axis
+            v_axes[face_idx] = v_axis
+            u_offsets[face_idx] = us.min()
+            v_offsets[face_idx] = vs.min()
+            u_ranges[face_idx] = u_r
+            v_ranges[face_idx] = v_r
+
             for i in range(1, len(face) - 1):
                 triangles.append((face[0], face[i], face[i + 1]))
                 triangle_face_indices.append(face_idx)
@@ -54,6 +71,14 @@ class PolygonMesh:
         self.render_colors = np.repeat(self.face_colors[tfi], 3, axis=0)
         self.render_face_indices: np.ndarray = np.repeat(tfi, 3)
         self.render_local_uvs: np.ndarray = np.array(render_uv_list, dtype=np.float32).reshape(-1, 2)
+
+        self._tangent_centroids = tangent_centroids
+        self._u_axes = u_axes
+        self._v_axes = v_axes
+        self._u_offsets = u_offsets
+        self._v_offsets = v_offsets
+        self._u_ranges = u_ranges
+        self._v_ranges = v_ranges
 
     def _compute_face_areas(self) -> np.ndarray:
         areas = np.zeros(len(self.faces), dtype=np.float64)
@@ -110,6 +135,32 @@ class PolygonMesh:
             )
         for face_idx, value in enumerate(values):
             self.face_metadata[face_idx][key] = value
+
+    def face_texture_positions(self, h: int, w: int) -> np.ndarray:
+        """Return unit-sphere 3D positions for a (H, W) texture grid over every face.
+
+        Uses the same tangent-plane parameterization as the UV coordinates stored in
+        render_local_uvs, then projects back to the unit sphere via normalization.
+
+        Returns:
+            float32 array of shape (N_faces, H, W, 3).
+        """
+        u_coords = np.linspace(0.0, 1.0, w, dtype=np.float32)  # (W,)
+        v_coords = np.linspace(0.0, 1.0, h, dtype=np.float32)  # (H,)
+
+        # Local tangent-plane coordinates — shape (N, H, W)
+        u_local = (self._u_offsets[:, None, None]
+                   + u_coords[None, None, :] * self._u_ranges[:, None, None])
+        v_local = (self._v_offsets[:, None, None]
+                   + v_coords[None, :, None] * self._v_ranges[:, None, None])
+
+        # 3D points on the tangent plane — shape (N, H, W, 3)
+        points = (self._tangent_centroids[:, None, None, :]
+                  + u_local[:, :, :, None] * self._u_axes[:, None, None, :]
+                  + v_local[:, :, :, None] * self._v_axes[:, None, None, :])
+
+        norms = np.linalg.norm(points, axis=-1, keepdims=True)
+        return (points / norms).astype(np.float32)
 
 
 class Mesh(PolygonMesh):

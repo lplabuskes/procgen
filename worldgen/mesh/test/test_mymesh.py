@@ -128,3 +128,71 @@ class TestPolytopeMeshDual:
                     assert np.dot(cross, n) > 0, (
                         f"depth={depth} face_idx={face_idx}: non-convex turn at vertex {i}"
                     )
+
+
+class TestFaceTexturePositions:
+    def test_shape(self):
+        mesh = Mesh.icosphere(1)
+        dual = mesh.mesh_dual()
+        pos = dual.face_texture_positions(8, 16)
+        assert pos.shape == (len(dual.faces), 8, 16, 3)
+
+    def test_on_unit_sphere(self):
+        mesh = Mesh.icosphere(2)
+        dual = mesh.mesh_dual()
+        pos = dual.face_texture_positions(16, 16)
+        norms = np.linalg.norm(pos, axis=-1)
+        np.testing.assert_allclose(norms, 1.0, atol=1e-5)
+
+    def test_dtype_is_float32(self):
+        mesh = Mesh.icosphere(1)
+        pos = mesh.face_texture_positions(4, 4)
+        assert pos.dtype == np.float32
+
+    def test_pixels_near_face_centroid(self):
+        # Every pixel for face f should be in the same hemisphere as that face's centroid.
+        mesh = Mesh.icosphere(2)
+        dual = mesh.mesh_dual()
+        pos = dual.face_texture_positions(8, 8)  # (N, H, W, 3)
+        centroids = dual.face_centroids  # (N, 3)
+        dots = np.einsum('nhwc,nc->nhw', pos, centroids)
+        assert np.all(dots > 0), "Some texture pixels ended up in the wrong hemisphere"
+
+    def test_vertex_uv_roundtrip(self):
+        # For each face vertex, compute its UV coordinate using the stored tangent frame,
+        # snap to the nearest pixel in a dense grid, and verify that pixel's 3D position
+        # is within 1° of the original vertex on the sphere.
+        H, W = 101, 101
+        mesh = Mesh.icosphere(0)
+        pos = mesh.face_texture_positions(H, W)
+
+        for face_idx, face in enumerate(mesh.faces):
+            verts = mesh.vertices[np.array(face)]
+            centroid = mesh._tangent_centroids[face_idx]
+            u_axis = mesh._u_axes[face_idx]
+            v_axis = mesh._v_axes[face_idx]
+            u_offset = float(mesh._u_offsets[face_idx])
+            v_offset = float(mesh._v_offsets[face_idx])
+            u_range = float(mesh._u_ranges[face_idx])
+            v_range = float(mesh._v_ranges[face_idx])
+
+            for vert in verts:
+                offset = vert - centroid
+                u_norm = (np.dot(offset, u_axis) - u_offset) / u_range
+                v_norm = (np.dot(offset, v_axis) - v_offset) / v_range
+                j = int(np.clip(round(u_norm * (W - 1)), 0, W - 1))
+                i = int(np.clip(round(v_norm * (H - 1)), 0, H - 1))
+                pixel_pos = pos[face_idx, i, j]
+                vert_sphere = vert / np.linalg.norm(vert)
+                dot = float(np.dot(pixel_pos, vert_sphere))
+                angle_deg = float(np.degrees(np.arccos(np.clip(dot, -1.0, 1.0))))
+                assert angle_deg < 1.0, (
+                    f"face {face_idx}: vertex roundtrip error {angle_deg:.3f}°"
+                )
+
+    def test_triangular_mesh_directly(self):
+        mesh = Mesh.icosphere(1)
+        pos = mesh.face_texture_positions(4, 4)
+        assert pos.shape == (len(mesh.faces), 4, 4, 3)
+        norms = np.linalg.norm(pos, axis=-1)
+        np.testing.assert_allclose(norms, 1.0, atol=1e-5)
