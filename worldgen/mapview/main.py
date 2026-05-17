@@ -3,8 +3,8 @@ import sys
 import numpy as np
 from PySide6.QtWidgets import QApplication
 
-from mapview.mapview import MapWindow
-from mesh.mymesh import Mesh
+from worldgen.mapview.mapview import MapWindow
+from worldgen.mesh.mymesh import Mesh
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

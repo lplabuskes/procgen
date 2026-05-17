@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from mesh.mymesh import Mesh, PolygonMesh
+from worldgen.mesh.mymesh import Mesh, PolygonMesh
 
 
 class TestIcosphere:

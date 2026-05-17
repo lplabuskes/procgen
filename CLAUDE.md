@@ -11,9 +11,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 source .venv/bin/activate
-cd worldgen && python3 -m mesh.main       # 3-D mesh viewer
-cd worldgen && python3 -m mapview.main    # 2-D map viewer
-cd worldgen && python3 -m geology.main    # plate tectonics map viewer
+python3 -m worldgen.mesh.main       # 3-D mesh viewer
+python3 -m worldgen.mapview.main    # 2-D map viewer
+python3 -m worldgen.geology.main    # plate tectonics map viewer
 ```
 
 No build step or linter is configured. Run the test suites with:

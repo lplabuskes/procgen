@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from geology.elevation import compute_noise_elevation_deltas
-from mesh.mymesh import Mesh
+from worldgen.geology.elevation import compute_noise_elevation_deltas
+from worldgen.mesh.mymesh import Mesh
 
 
 def _bilinear_sample(texture: np.ndarray, uv: np.ndarray) -> np.ndarray:

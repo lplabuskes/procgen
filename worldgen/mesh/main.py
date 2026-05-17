@@ -3,8 +3,8 @@ import sys
 import numpy as np
 from PySide6.QtWidgets import QApplication
 
-from mesh.mymesh import Mesh
-from mesh.gui import MainWindow
+from worldgen.mesh.mymesh import Mesh
+from worldgen.mesh.gui import MainWindow
 
 
 if __name__ == "__main__":

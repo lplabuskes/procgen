@@ -4,8 +4,8 @@ import sys
 import numpy as np
 from PySide6.QtWidgets import QApplication
 
-from geology.globe_builder import GlobeBuilder, GlobeParams
-from mapview.mapview import MapWindow
+from worldgen.geology.globe_builder import GlobeBuilder, GlobeParams
+from worldgen.mapview.mapview import MapWindow
 
 OCEAN_COLOR = (0.25, 0.55, 0.85, 1.0)
 LAND_COLOR = (0.72, 0.52, 0.25, 1.0)

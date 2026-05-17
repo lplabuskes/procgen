@@ -4,7 +4,7 @@ from typing import List, Optional
 
 import numpy as np
 
-from mesh.mymesh import PolygonMesh
+from worldgen.mesh.mymesh import PolygonMesh
 
 
 def generate_plates(

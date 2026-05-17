@@ -5,12 +5,12 @@ from typing import List, Optional
 
 import numpy as np
 
-from geology.elevation import (
+from worldgen.geology.elevation import (
     compute_elevation_delta_textures,
     compute_face_elevations,
     compute_noise_elevation_deltas,
 )
-from geology.tectonics import (
+from worldgen.geology.tectonics import (
     assign_plate_types,
     classify_plate_boundaries,
     compute_face_velocities,
@@ -19,7 +19,7 @@ from geology.tectonics import (
     generate_plates,
     relax_plates,
 )
-from mesh.mymesh import Mesh, PolygonMesh
+from worldgen.mesh.mymesh import Mesh, PolygonMesh
 
 
 @dataclass
@@ -42,7 +42,7 @@ class GlobeParams:
     elevation_rate_norm: float = 1.75
     elevation_decay_rate: float = 0.5
     elevation_max_hops: int = 8
-    elevation_tex_size: int = 64
+    elevation_tex_size: int = 32
     # Elevation noise
     noise_amplitude: float = 1.5
     # Reproducibility — None means random each run

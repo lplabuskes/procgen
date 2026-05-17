@@ -11,7 +11,7 @@ from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtGui import QSurfaceFormat
 from PySide6.QtCore import QTimer
 
-from mesh.mymesh import PolygonMesh
+from worldgen.mesh.mymesh import PolygonMesh
 
 
 class MeshViewer(QOpenGLWidget):

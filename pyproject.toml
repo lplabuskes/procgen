@@ -1,6 +1,6 @@
 [tool.pytest.ini_options]
 testpaths = ["worldgen/mesh/test", "worldgen/mapview/test", "worldgen/geology/test"]
-pythonpath = ["worldgen"]
+pythonpath = ["."]
 
 [tool.pyright]
 extraPaths = ["worldgen"]

@@ -4,8 +4,8 @@ from typing import List
 
 import numpy as np
 
-from geology.simplex import make_perm, simplex3_vec
-from mesh.mymesh import PolygonMesh
+from worldgen.geology.simplex import make_perm, simplex3_vec
+from worldgen.mesh.mymesh import PolygonMesh
 
 
 # Baseline elevation by plate type (km, roughly)
