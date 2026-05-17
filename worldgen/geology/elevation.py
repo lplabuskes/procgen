@@ -1,5 +1,5 @@
 import math
-from collections import deque
+from collections import defaultdict, deque
 from typing import List
 
 import numpy as np
@@ -212,58 +212,82 @@ def compute_elevation_delta_textures(
         R channel = delta in km; G, B, A = 0.
     """
     n_faces = len(mesh.faces)
+    n_verts = len(mesh.vertices)
     textures = np.zeros((n_faces, tex_size, tex_size, 4), dtype=np.float32)
 
-    # vertex → list of face indices
-    vertex_to_faces: dict[int, list[int]] = {}
-    for face_idx, face in enumerate(mesh.faces):
-        for v_idx in face:
-            vertex_to_faces.setdefault(v_idx, []).append(face_idx)
+    # Scatter-add to compute mean face elevation at each vertex (no Python loop).
+    face_sizes = np.array([len(f) for f in mesh.faces])
+    all_verts = np.concatenate([np.asarray(f) for f in mesh.faces])
+    all_face_idx = np.repeat(np.arange(n_faces), face_sizes)
+    vertex_sum = np.zeros(n_verts, dtype=np.float64)
+    vertex_count = np.zeros(n_verts, dtype=np.float64)
+    np.add.at(vertex_sum, all_verts, elevations[all_face_idx])
+    np.add.at(vertex_count, all_verts, 1.0)
+    vertex_elevations = vertex_sum / np.maximum(vertex_count, 1.0)
 
-    # vertex elevation = mean of adjacent face elevations
-    n_verts = len(mesh.vertices)
-    vertex_elevations = np.empty(n_verts, dtype=np.float64)
-    for v_idx in range(n_verts):
-        adj = vertex_to_faces.get(v_idx, [])
-        vertex_elevations[v_idx] = elevations[adj].mean() if adj else 0.0
-
-    # Barycentric interpolation within fan triangles — mirrors face_texture_positions.
-    # At any polygon edge, the fan-apex barycentric weight is exactly 0, so the
-    # interpolated elevation depends only on the two shared endpoint vertices, giving
-    # the same absolute value from both adjacent faces (perfect edge continuity).
+    # Pixel UV grid in [0, 1]^2 — identical for every face.
     u_coords = np.linspace(0.0, 1.0, tex_size, dtype=np.float64)
     v_coords = np.linspace(0.0, 1.0, tex_size, dtype=np.float64)
     uu, vv = np.meshgrid(u_coords, v_coords)
-    pixel_uv = np.stack([uu.ravel(), vv.ravel()], axis=1)  # (H*W, 2)
+    pixel_uv = np.stack([uu.ravel(), vv.ravel()], axis=1)  # (P, 2)
     n_pix = pixel_uv.shape[0]
-    pix_idx = np.arange(n_pix)
 
-    for face_idx, face in enumerate(mesh.faces):
-        face_arr = np.array(face)
-        verts_uv = mesh._face_vertex_uvs[face_idx].astype(np.float64)  # (n_v, 2)
-        vert_deltas = (vertex_elevations[face_arr] - float(elevations[face_idx]))  # (n_v,)
+    # Group faces by degree so every batch has the same fan-triangle structure,
+    # enabling fully vectorized barycentric solves across the batch.
+    # For an icosphere dual this is just 2 groups: ~12 pentagons + N hexagons.
+    degree_groups: dict[int, list[int]] = defaultdict(list)
+    for i, face in enumerate(mesh.faces):
+        degree_groups[len(face)].append(i)
 
-        v0_uv = verts_uv[0]
-        e1_uv = verts_uv[1:-1] - v0_uv   # (n_tris, 2)
-        e2_uv = verts_uv[2:] - v0_uv     # (n_tris, 2)
+    for degree, fidx_list in degree_groups.items():
+        fidx = np.asarray(fidx_list)
+        B = len(fidx)
 
-        det = e1_uv[:, 0] * e2_uv[:, 1] - e1_uv[:, 1] * e2_uv[:, 0]
+        # (B, degree, 2) vertex UVs; (B, degree) elevation deltas from face center.
+        verts_uv = np.stack([
+            mesh._face_vertex_uvs[i].astype(np.float64) for i in fidx_list
+        ])
+        batch_verts = np.array([mesh.faces[i] for i in fidx_list])  # (B, degree)
+        vert_deltas = (
+            vertex_elevations[batch_verts] - elevations[fidx, np.newaxis]
+        )  # (B, degree)
+
+        # Fan-triangle edge vectors from apex (vertex 0).
+        v0_uv = verts_uv[:, 0, :]                                    # (B, 2)
+        e1_uv = verts_uv[:, 1:-1, :] - v0_uv[:, np.newaxis, :]      # (B, n_tris, 2)
+        e2_uv = verts_uv[:, 2:, :] - v0_uv[:, np.newaxis, :]        # (B, n_tris, 2)
+        det = (
+            e1_uv[:, :, 0] * e2_uv[:, :, 1]
+            - e1_uv[:, :, 1] * e2_uv[:, :, 0]
+        )  # (B, n_tris)
         det = np.where(np.abs(det) < 1e-12, 1.0, det)
 
-        pv = pixel_uv - v0_uv
-        beta = (pv[:, 0:1] * e2_uv[None, :, 1] - pv[:, 1:2] * e2_uv[None, :, 0]) / det  # weight for face[i]
-        gamma = (e1_uv[None, :, 0] * pv[:, 1:2] - e1_uv[None, :, 1] * pv[:, 0:1]) / det  # weight for face[i+1]
-        alpha = 1.0 - beta - gamma  # weight for face[0]
+        # Barycentric coordinates for all pixels across all triangles: (B, P, n_tris).
+        pv = pixel_uv[np.newaxis, :, :] - v0_uv[:, np.newaxis, :]   # (B, P, 2)
+        beta = (
+            pv[:, :, 0:1] * e2_uv[:, np.newaxis, :, 1]
+            - pv[:, :, 1:2] * e2_uv[:, np.newaxis, :, 0]
+        ) / det[:, np.newaxis, :]
+        gamma = (
+            e1_uv[:, np.newaxis, :, 0] * pv[:, :, 1:2]
+            - e1_uv[:, np.newaxis, :, 1] * pv[:, :, 0:1]
+        ) / det[:, np.newaxis, :]
 
-        best_tri = np.argmax(np.minimum(alpha, np.minimum(beta, gamma)), axis=1)
-        b_sel = beta[pix_idx, best_tri]
-        g_sel = gamma[pix_idx, best_tri]
+        best_tri = np.argmax(
+            np.minimum(1.0 - beta - gamma, np.minimum(beta, gamma)), axis=2
+        )  # (B, P)
+
+        bi = np.arange(B)[:, np.newaxis]    # (B, 1)
+        pi = np.arange(n_pix)[np.newaxis, :]  # (1, P)
+        b_sel = beta[bi, pi, best_tri]      # (B, P)
+        g_sel = gamma[bi, pi, best_tri]     # (B, P)
 
         delta_vals = (
-            (1.0 - b_sel - g_sel) * vert_deltas[0]
-            + b_sel * vert_deltas[1:-1][best_tri]
-            + g_sel * vert_deltas[2:][best_tri]
-        )
-        textures[face_idx, :, :, 0] = delta_vals.reshape(tex_size, tex_size).astype(np.float32)
+            (1.0 - b_sel - g_sel) * vert_deltas[:, 0:1]
+            + b_sel * vert_deltas[bi, best_tri + 1]
+            + g_sel * vert_deltas[bi, best_tri + 2]
+        )  # (B, P)
+
+        textures[fidx, :, :, 0] = delta_vals.reshape(B, tex_size, tex_size).astype(np.float32)
 
     return textures
