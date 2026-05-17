@@ -33,6 +33,7 @@ class PolygonMesh:
         v_offsets = np.zeros(n_faces, dtype=np.float32)
         u_ranges = np.zeros(n_faces, dtype=np.float32)
         v_ranges = np.zeros(n_faces, dtype=np.float32)
+        face_vertex_uvs: List[np.ndarray] = []
 
         for face_idx, face in enumerate(self.faces):
             verts = self.vertices[np.array(face)]
@@ -58,6 +59,7 @@ class PolygonMesh:
             v_offsets[face_idx] = vs.min()
             u_ranges[face_idx] = u_r
             v_ranges[face_idx] = v_r
+            face_vertex_uvs.append(face_uv)
 
             for i in range(1, len(face) - 1):
                 triangles.append((face[0], face[i], face[i + 1]))
@@ -79,6 +81,7 @@ class PolygonMesh:
         self._v_offsets = v_offsets
         self._u_ranges = u_ranges
         self._v_ranges = v_ranges
+        self._face_vertex_uvs = face_vertex_uvs
 
     def _compute_face_areas(self) -> np.ndarray:
         areas = np.zeros(len(self.faces), dtype=np.float64)
@@ -137,30 +140,76 @@ class PolygonMesh:
             self.face_metadata[face_idx][key] = value
 
     def face_texture_positions(self, h: int, w: int) -> np.ndarray:
-        """Return unit-sphere 3D positions for a (H, W) texture grid over every face.
+        """Return unit-sphere 3D positions for an (H, W) texture grid over every face.
 
-        Uses the same tangent-plane parameterization as the UV coordinates stored in
-        render_local_uvs, then projects back to the unit sphere via normalization.
+        For each pixel UV, finds the fan triangle (same fan triangulation the renderer
+        uses) containing that UV, computes barycentric coordinates in UV space, and
+        interpolates the triangle's actual 3D mesh-vertex positions before normalizing
+        to the unit sphere. Because adjacent faces share their edge vertices, pixels
+        sitting on a shared edge map to the same great-circle 3D point in both
+        neighboring faces — so per-pixel sphere-coordinate computations (e.g. 3D
+        simplex noise) are naturally continuous across face boundaries.
+
+        Pixels whose UV falls outside the polygon (in the four corners of the [0,1]²
+        bounding box) are assigned to whichever fan triangle they fit "least badly"
+        (largest minimum barycentric); the resulting linear extrapolation keeps edge-
+        adjacent pixels well-behaved for bilinear texture filtering.
 
         Returns:
             float32 array of shape (N_faces, H, W, 3).
         """
-        u_coords = np.linspace(0.0, 1.0, w, dtype=np.float32)  # (W,)
-        v_coords = np.linspace(0.0, 1.0, h, dtype=np.float32)  # (H,)
+        u_coords = np.linspace(0.0, 1.0, w, dtype=np.float64)
+        v_coords = np.linspace(0.0, 1.0, h, dtype=np.float64)
+        uu, vv = np.meshgrid(u_coords, v_coords)
+        pixel_uv = np.stack([uu.ravel(), vv.ravel()], axis=1)  # (h*w, 2)
+        n_pix = pixel_uv.shape[0]
+        pix_idx = np.arange(n_pix)
 
-        # Local tangent-plane coordinates — shape (N, H, W)
-        u_local = (self._u_offsets[:, None, None]
-                   + u_coords[None, None, :] * self._u_ranges[:, None, None])
-        v_local = (self._v_offsets[:, None, None]
-                   + v_coords[None, :, None] * self._v_ranges[:, None, None])
+        n_faces = len(self.faces)
+        positions = np.zeros((n_faces, h, w, 3), dtype=np.float32)
 
-        # 3D points on the tangent plane — shape (N, H, W, 3)
-        points = (self._tangent_centroids[:, None, None, :]
-                  + u_local[:, :, :, None] * self._u_axes[:, None, None, :]
-                  + v_local[:, :, :, None] * self._v_axes[:, None, None, :])
+        for face_idx, face in enumerate(self.faces):
+            face_arr = np.array(face)
+            verts_3d = self.vertices[face_arr].astype(np.float64)         # (n_v, 3)
+            verts_uv = self._face_vertex_uvs[face_idx].astype(np.float64)  # (n_v, 2)
 
-        norms = np.linalg.norm(points, axis=-1, keepdims=True)
-        return (points / norms).astype(np.float32)
+            # Fan triangles (V0, Vi, Vi+1) — same triangulation as _rebuild_render_arrays.
+            v0_uv = verts_uv[0]
+            v0_3d = verts_3d[0]
+            e1_uv = verts_uv[1:-1] - v0_uv   # (n_tris, 2)
+            e2_uv = verts_uv[2:] - v0_uv     # (n_tris, 2)
+            e1_3d = verts_3d[1:-1] - v0_3d   # (n_tris, 3)
+            e2_3d = verts_3d[2:] - v0_3d     # (n_tris, 3)
+
+            # 2D signed-area determinant per triangle.
+            det = e1_uv[:, 0] * e2_uv[:, 1] - e1_uv[:, 1] * e2_uv[:, 0]
+            det = np.where(np.abs(det) < 1e-12, 1.0, det)
+
+            pv = pixel_uv - v0_uv  # (n_pix, 2)
+            pv_cross_e2 = (pv[:, 0:1] * e2_uv[None, :, 1]
+                           - pv[:, 1:2] * e2_uv[None, :, 0])               # (n_pix, n_tris)
+            e1_cross_pv = (e1_uv[None, :, 0] * pv[:, 1:2]
+                           - e1_uv[None, :, 1] * pv[:, 0:1])               # (n_pix, n_tris)
+            beta = pv_cross_e2 / det[None, :]
+            gamma = e1_cross_pv / det[None, :]
+            alpha = 1.0 - beta - gamma
+
+            # Pick the triangle a pixel lies in (all bary >= 0). Outside-the-polygon
+            # pixels get the triangle they're "closest to" — i.e. the one with the
+            # largest minimum barycentric coordinate. This extrapolates linearly.
+            min_bary = np.minimum(alpha, np.minimum(beta, gamma))
+            best_tri = np.argmax(min_bary, axis=1)
+            b_sel = beta[pix_idx, best_tri]
+            g_sel = gamma[pix_idx, best_tri]
+
+            pts = (v0_3d[None, :]
+                   + b_sel[:, None] * e1_3d[best_tri]
+                   + g_sel[:, None] * e2_3d[best_tri])
+            norms = np.linalg.norm(pts, axis=1, keepdims=True)
+            norms = np.where(norms < 1e-12, 1.0, norms)
+            positions[face_idx] = (pts / norms).astype(np.float32).reshape(h, w, 3)
+
+        return positions
 
 
 class Mesh(PolygonMesh):

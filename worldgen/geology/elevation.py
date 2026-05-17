@@ -132,10 +132,21 @@ def compute_noise_elevation_deltas(
     lacunarity: float = 2.0,
     persistence: float = 0.5,
     seed: int = 0,
+    nyquist_safety: float = 0.5,
 ) -> np.ndarray:
     """Per-pixel fBm simplex noise at uniform amplitude across all faces.
 
     Fully vectorized — evaluates all pixels in one numpy pass per octave.
+
+    The fBm sum is band-limited to the pixel grid: octaves whose spatial
+    frequency exceeds `nyquist_safety / max_pixel_spacing` (cycles per unit)
+    are skipped, where `max_pixel_spacing` is the largest adjacent-pixel 3D
+    distance across the whole mesh. Without this, high-frequency octaves
+    alias against the per-face pixel grids, and because adjacent faces sample
+    the same continuous noise field on slightly different grids, bilinear
+    reconstruction near a shared edge gives different values on each side —
+    a visible seam. `nyquist_safety=0.5` keeps the highest octave at no more
+    than ~4 samples per cycle.
 
     Returns:
         float32 array of shape (N_faces, tex_size, tex_size, 4).
@@ -143,16 +154,28 @@ def compute_noise_elevation_deltas(
     """
     n_faces = len(mesh.faces)
     positions = mesh.face_texture_positions(tex_size, tex_size)  # (N, H, W, 3)
+
+    # Empirical pixel spacing in 3D: largest adjacent-pixel step across the mesh.
+    dx = np.linalg.norm(np.diff(positions, axis=2), axis=-1)
+    dy = np.linalg.norm(np.diff(positions, axis=1), axis=-1)
+    max_pixel_spacing = float(max(dx.max(), dy.max()))
+    max_freq = nyquist_safety / max_pixel_spacing if max_pixel_spacing > 0 else float("inf")
+
     flat_xyz = positions.reshape(-1, 3).astype(np.float64)       # (N*H*W, 3)
 
     perm = make_perm(seed)
     noise_sum = np.zeros(len(flat_xyz), dtype=np.float64)
     amp, freq, total_amp = 1.0, float(base_frequency), 0.0
     for _ in range(octaves):
+        if freq > max_freq:
+            break
         noise_sum += amp * simplex3_vec(flat_xyz * freq, perm)
         total_amp += amp
         amp *= persistence
         freq *= lacunarity
+
+    if total_amp == 0.0:
+        total_amp = 1.0  # all octaves above Nyquist — output is flat zero.
 
     noise_norm = (noise_sum / total_amp).reshape(n_faces, tex_size, tex_size)
 
