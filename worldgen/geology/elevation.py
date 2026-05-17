@@ -2,6 +2,8 @@ import math
 from collections import defaultdict, deque
 from typing import List
 
+import heapq
+
 import numpy as np
 
 from worldgen.geology.simplex import make_perm, simplex3_vec
@@ -122,6 +124,108 @@ def compute_face_elevations(
 
     elevation += delta_field
     return elevation
+
+
+def compute_erosion(
+    mesh: PolygonMesh,
+    elevations: np.ndarray,
+    hydraulic_iterations: int = 5,
+    hydraulic_erosion_rate: float = 0.4,
+    hydraulic_deposition_rate: float = 0.3,
+    thermal_iterations: int = 10,
+    thermal_talus: float = 0.5,
+    thermal_erosion_rate: float = 0.5,
+) -> np.ndarray:
+    """Apply hydraulic then thermal erosion to face-level elevations.
+
+    Hydraulic pass: iteratively fills local sinks (priority-queue fill to lowest
+    outflow neighbor), then erodes high faces proportional to flow volume received
+    from uphill neighbors, depositing sediment on the receiving face.
+
+    Thermal pass: for each face, if the elevation difference to a neighbor exceeds
+    `thermal_talus` (km), transfer `thermal_erosion_rate` of the excess to that
+    neighbor (gravity-driven slumping).
+
+    Args:
+        mesh: The dual polygon mesh.
+        elevations: Per-face elevations in km, shape (n_faces,).
+        hydraulic_iterations: Number of full hydraulic fill+erode cycles.
+        hydraulic_erosion_rate: Fraction of elevation removed per unit flow at eroding faces.
+        hydraulic_deposition_rate: Fraction of transported sediment deposited per step.
+        thermal_iterations: Number of thermal erosion sweeps.
+        thermal_talus: Slope threshold (km) above which material slides.
+        thermal_erosion_rate: Fraction of excess slope transferred per sweep.
+
+    Returns:
+        float64 array of shape (n_faces,) with eroded elevations.
+    """
+    elev = elevations.copy()
+    adjacency = mesh.face_adjacency
+    n_faces = len(mesh.faces)
+
+    # --- Hydraulic erosion ---
+    for _ in range(hydraulic_iterations):
+        # Priority-queue fill: raise sinks to the level of their lowest outflow neighbor.
+        # Process faces from lowest to highest; any face whose all neighbors are higher
+        # gets filled to the min neighbor elevation.
+        order = np.argsort(elev)
+        for i in order:
+            neighbors = adjacency[i]
+            if not neighbors:
+                continue
+            nb_elevs = [elev[nb] for nb in neighbors]
+            min_nb = min(nb_elevs)
+            if elev[i] < min_nb:
+                elev[i] = min_nb
+
+        # Flow accumulation: route water downhill, accumulate volume at each face.
+        flow = np.ones(n_faces, dtype=np.float64)
+        order = np.argsort(elev)[::-1]  # highest first
+        for i in order:
+            neighbors = adjacency[i]
+            lower = [nb for nb in neighbors if elev[nb] < elev[i]]
+            if not lower:
+                continue
+            # Distribute flow proportionally by elevation drop.
+            drops = np.array([elev[i] - elev[nb] for nb in lower], dtype=np.float64)
+            drops /= drops.sum()
+            for nb, frac in zip(lower, drops):
+                flow[nb] += flow[i] * frac
+
+        # Erode high faces, deposit on receiving faces.
+        sediment = np.zeros(n_faces, dtype=np.float64)
+        for i in order:
+            neighbors = adjacency[i]
+            lower = [nb for nb in neighbors if elev[nb] < elev[i]]
+            if not lower:
+                # Deposition at sinks
+                elev[i] += sediment[i] * hydraulic_deposition_rate
+                continue
+            erosion = hydraulic_erosion_rate * math.log1p(flow[i]) * 0.01
+            elev[i] -= erosion
+            drops = np.array([elev[i] - elev[nb] for nb in lower if elev[nb] < elev[i]], dtype=np.float64)
+            lower = [nb for nb in lower if elev[nb] < elev[i]]
+            if len(drops) == 0:
+                elev[i] += sediment[i] * hydraulic_deposition_rate
+                continue
+            drops /= drops.sum()
+            for nb, frac in zip(lower, drops):
+                sediment[nb] += (erosion + sediment[i]) * frac * (1.0 - hydraulic_deposition_rate)
+            elev[i] += sediment[i] * hydraulic_deposition_rate
+
+    # --- Thermal erosion ---
+    for _ in range(thermal_iterations):
+        # Single sweep; iterate faces in random-ish order (by elevation, high to low).
+        order = np.argsort(elev)[::-1]
+        for i in order:
+            for nb in adjacency[i]:
+                diff = elev[i] - elev[nb]
+                if diff > thermal_talus:
+                    transfer = thermal_erosion_rate * (diff - thermal_talus) * 0.5
+                    elev[i] -= transfer
+                    elev[nb] += transfer
+
+    return elev
 
 
 def compute_noise_elevation_deltas(

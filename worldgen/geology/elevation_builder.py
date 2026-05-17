@@ -7,6 +7,7 @@ import numpy as np
 
 from worldgen.geology.elevation import (
     compute_elevation_textures,
+    compute_erosion,
     compute_face_elevations,
     compute_noise_elevation_deltas,
 )
@@ -47,6 +48,13 @@ class ElevationParams:
     # Elevation noise
     noise_amplitude: float = 4.0
     noise_coast_sigma: float = 1.5  # km; controls how far noise extends from sea level
+    # Erosion
+    hydraulic_iterations: int = 5
+    hydraulic_erosion_rate: float = 0.4
+    hydraulic_deposition_rate: float = 0.3
+    thermal_iterations: int = 10
+    thermal_talus: float = 0.5
+    thermal_erosion_rate: float = 0.5
     # Volcanism
     n_hotspots: int = 8
     volcanic_decay_rate: float = 0.3
@@ -158,6 +166,18 @@ class ElevationBuilder:
             rate_norm=p.elevation_rate_norm,
             seed=self._sub_seed(4),
         )
+        _report("Applying erosion…")
+        elevations = compute_erosion(
+            dual,
+            elevations,
+            hydraulic_iterations=p.hydraulic_iterations,
+            hydraulic_erosion_rate=p.hydraulic_erosion_rate,
+            hydraulic_deposition_rate=p.hydraulic_deposition_rate,
+            thermal_iterations=p.thermal_iterations,
+            thermal_talus=p.thermal_talus,
+            thermal_erosion_rate=p.thermal_erosion_rate,
+        )
+
         oceanic_mask = np.array([t == "oceanic" for t in plate_types], dtype=np.float64)
         elev_scale = (
             oceanic_mask * p.volcanic_elevation_scale_oceanic
