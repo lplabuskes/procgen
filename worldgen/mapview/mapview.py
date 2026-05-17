@@ -403,6 +403,9 @@ class MapWindow(QMainWindow):
         bottom_toolbar = QWidget()
         bottom_layout = QHBoxLayout(bottom_toolbar)
         bottom_layout.setContentsMargins(0, 0, 0, 0)
+        self._status_label = QLabel("")
+        self._status_label.setStyleSheet("color: #aaaaaa; font-size: 11px;")
+        bottom_layout.addWidget(self._status_label)
         bottom_layout.addStretch()
         self._rerun_btn = QPushButton("Re-run")
         self._rerun_btn.setVisible(False)
@@ -422,6 +425,12 @@ class MapWindow(QMainWindow):
 
     def set_mesh(self, mesh: PolygonMesh) -> None:
         self._map.set_mesh(mesh)
+
+    def set_status(self, text: str) -> None:
+        self._status_label.setText(text)
+
+    def set_rebuild_enabled(self, enabled: bool) -> None:
+        self._rerun_btn.setEnabled(enabled)
 
     def set_rebuild_callback(self, callback: Callable[[], None]) -> None:
         if self._has_rebuild_callback:

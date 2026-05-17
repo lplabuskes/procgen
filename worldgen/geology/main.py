@@ -92,8 +92,14 @@ def _build_elevation_display_texture(mesh) -> np.ndarray:
 
 
 def _build_and_apply(window: MapWindow) -> None:
+    window.set_rebuild_enabled(False)
+
+    def _progress(msg: str) -> None:
+        window.set_status(msg)
+        QApplication.processEvents()
+
     builder = GlobeBuilder(GlobeParams())
-    gmesh = builder.build()
+    gmesh = builder.build(progress=_progress)
 
     palette = _plate_palette(builder.params.n_plates)
     max_speed = builder.max_speed
@@ -107,6 +113,8 @@ def _build_and_apply(window: MapWindow) -> None:
     gmesh.set_face_textures("elevation_rgba", elevation_rgba)
 
     window.set_mesh(gmesh)
+    window.set_status("")
+    window.set_rebuild_enabled(True)
     def _volcanic_color(meta: dict) -> tuple:
         t = meta["volcanic_activity"]
         if t <= 0.0:

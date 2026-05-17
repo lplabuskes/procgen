@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 import numpy as np
 
@@ -80,26 +80,35 @@ class GlobeBuilder:
     def _sub_seed(self, offset: int) -> Optional[int]:
         return None if self.params.seed is None else self.params.seed + offset
 
-    def build(self) -> PolygonMesh:
+    def build(self, progress: Optional[Callable[[str], None]] = None) -> PolygonMesh:
         """Run the full pipeline and return the dual mesh with all metadata applied."""
+        def _report(msg: str) -> None:
+            if progress is not None:
+                progress(msg)
+
         p = self.params
 
+        _report("Building icosphere mesh…")
         tri = Mesh.icosphere(p.icosphere_depth).deregularize(
             n_swaps=p.n_swaps,
             n_relax=p.n_relax,
             stiffness=p.stiffness,
             outer_iters=p.outer_iters,
         )
+        _report("Computing dual mesh…")
         dual = tri.mesh_dual()
 
+        _report("Generating tectonic plates…")
         plate_ids = generate_plates(
             dual,
             n_plates=p.n_plates,
             seed=self._sub_seed(0),
             compactness=p.plate_compactness,
         )
+        _report("Relaxing plate boundaries…")
         plate_ids = relax_plates(dual, plate_ids, max_passes=p.relax_max_passes)
 
+        _report("Assigning plate types and velocities…")
         plate_types_by_plate = assign_plate_types(
             p.n_plates, oceanic_fraction=p.oceanic_fraction, seed=self._sub_seed(1)
         )
@@ -115,6 +124,7 @@ class GlobeBuilder:
             seed=self._sub_seed(2),
         )
         face_velocities = compute_face_velocities(dual, plate_ids, plate_omegas)
+        _report("Classifying plate boundaries…")
         boundary_data = classify_plate_boundaries(dual, plate_ids, plate_omegas)
         boundary_types = [d["boundary_type"] for d in boundary_data]
 
@@ -124,6 +134,7 @@ class GlobeBuilder:
         dual.apply_metadata_channel("surface_velocity", [tuple(v) for v in face_velocities])
         dual.apply_metadata_channel("surface_speed", speeds.tolist())
 
+        _report("Computing elevations…")
         elevations = compute_face_elevations(
             dual,
             plate_types,
@@ -133,6 +144,7 @@ class GlobeBuilder:
             rate_norm=p.elevation_rate_norm,
         )
 
+        _report("Computing volcanism…")
         volcanism = compute_volcanism(
             dual,
             plate_types,
@@ -152,9 +164,11 @@ class GlobeBuilder:
         dual.apply_metadata_channel("volcanic_activity", volcanism.tolist())
         dual.apply_metadata_channel("elevation", elevations.tolist())
 
+        _report("Generating elevation textures…")
         elevation_delta_textures = compute_elevation_delta_textures(
             dual, elevations, tex_size=p.elevation_tex_size
         )
+        _report("Applying elevation noise…")
         noise_seed = self._sub_seed(3)
         noise_deltas = compute_noise_elevation_deltas(
             dual,
@@ -178,4 +192,5 @@ class GlobeBuilder:
         self.volcanism = volcanism
         self.max_speed = float(speeds.max()) or 1.0
 
+        _report("Done.")
         return dual
