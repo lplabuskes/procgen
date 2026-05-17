@@ -50,6 +50,14 @@ _ELEVATION_GROUPS: list[tuple[str, list[tuple[str, str, type, float, float]]]] =
         ("noise_amplitude", "Amplitude (km)", float, 0.0, 20.0),
         ("noise_coast_sigma", "Coast sigma (km)", float, 0.1, 10.0),
     ]),
+    ("Pixel Erosion", [
+        ("pixel_thermal_iterations", "Thermal iterations", int, 0, 30),
+        ("pixel_thermal_talus", "Thermal talus (km)", float, 0.001, 1.0),
+        ("pixel_thermal_erosion_rate", "Erosion rate", float, 0.0, 1.0),
+    ]),
+    ("Rivers", [
+        ("river_flow_threshold", "Flow threshold (faces)", float, 1.0, 1000.0),
+    ]),
     ("Volcanism", [
         ("n_hotspots", "Hotspots", int, 0, 30),
         ("volcanic_decay_rate", "Decay rate", float, 0.0, 5.0),

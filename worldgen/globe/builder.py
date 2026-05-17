@@ -33,5 +33,7 @@ class GlobeBuilder:
     def build(self, progress: Optional[Callable[[str], None]] = None) -> Globe:
         mesh = self.elevation_builder.build(progress=progress)
         globe = Globe(mesh=mesh)
+        if self.elevation_builder.rivers is not None:
+            globe.add_feature("rivers", self.elevation_builder.rivers)
         self.globe = globe
         return globe
