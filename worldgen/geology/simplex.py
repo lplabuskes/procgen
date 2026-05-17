@@ -58,16 +58,24 @@ def simplex3_vec(xyz: np.ndarray, perm: np.ndarray) -> np.ndarray:
     j2 = (~x_ge_y | y_ge_z).astype(np.int32)       # y is not smallest
     k2 = (~(x_ge_z & y_ge_z)).astype(np.int32)     # z is not smallest
 
-    x1 = x0 - i1 + _G3;  y1 = y0 - j1 + _G3;  z1 = z0 - k1 + _G3
-    x2 = x0 - i2 + 2.0 * _G3;  y2 = y0 - j2 + 2.0 * _G3;  z2 = z0 - k2 + 2.0 * _G3
-    x3 = x0 - 1.0 + 3.0 * _G3;  y3 = y0 - 1.0 + 3.0 * _G3;  z3 = z0 - 1.0 + 3.0 * _G3
+    x1 = x0 - i1 + _G3
+    y1 = y0 - j1 + _G3
+    z1 = z0 - k1 + _G3
+    x2 = x0 - i2 + 2.0 * _G3
+    y2 = y0 - j2 + 2.0 * _G3
+    z2 = z0 - k2 + 2.0 * _G3
+    x3 = x0 - 1.0 + 3.0 * _G3
+    y3 = y0 - 1.0 + 3.0 * _G3
+    z3 = z0 - 1.0 + 3.0 * _G3
 
-    ii = i & 255;  jj = j & 255;  kk = k & 255
+    ii = i & 255
+    jj = j & 255
+    kk = k & 255
 
-    gi0 = perm[ii      + perm[jj      + perm[kk     ]]] % 12
+    gi0 = perm[ii + perm[jj + perm[kk]]] % 12
     gi1 = perm[ii + i1 + perm[jj + j1 + perm[kk + k1]]] % 12
     gi2 = perm[ii + i2 + perm[jj + j2 + perm[kk + k2]]] % 12
-    gi3 = perm[ii + 1  + perm[jj + 1  + perm[kk + 1 ]]] % 12
+    gi3 = perm[ii + 1 + perm[jj + 1 + perm[kk + 1]]] % 12
 
     def _contrib(gi: np.ndarray, dx: np.ndarray, dy: np.ndarray, dz: np.ndarray) -> np.ndarray:
         t_ = 0.6 - dx * dx - dy * dy - dz * dz

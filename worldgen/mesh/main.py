@@ -28,7 +28,7 @@ if __name__ == "__main__":
     bright_4d = brightness[np.newaxis, :, :, np.newaxis]   # (1, H, W, 1)
     color_data = (rgb_4d * bright_4d).astype(np.float32)   # (N, H, W, 3)
     alpha = np.ones((N, H, W, 1), dtype=np.float32)
-    textures = np.concatenate([color_data, alpha], axis=3) # (N, H, W, 4)
+    textures = np.concatenate([color_data, alpha], axis=3)  # (N, H, W, 4)
 
     dual.set_face_textures("default", textures)
 

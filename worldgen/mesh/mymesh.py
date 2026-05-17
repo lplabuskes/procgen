@@ -406,7 +406,8 @@ class Mesh(PolygonMesh):
         self.face_areas = self._compute_face_areas()
         return self
 
-    # Took vertices from https://github.com/lazysquirrellabs/sphere_generator/blob/main/Assets/Lazy%20Squirrel%20Labs/SphereGenerator/Runtime/Generators/IcosphereGenerator.cs
+    # Vertices from:
+    # https://github.com/lazysquirrellabs/sphere_generator/blob/main/Assets/Lazy%20Squirrel%20Labs/SphereGenerator/Runtime/Generators/IcosphereGenerator.cs
     @staticmethod
     def icosphere(depth: int = 0):
         phi = (1 + np.sqrt(5)) / 2

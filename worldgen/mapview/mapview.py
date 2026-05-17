@@ -170,17 +170,18 @@ class MapWidget(QWidget):
         self._faces_lonlat = []
         self._face_src = []
         self._face_uvs = []
-        if self._scheme_texture_key:
+        if self._scheme_texture_key and self._active_scheme is not None:
             tex_key = self._scheme_texture_key.get(self._active_scheme)
             has_textures = tex_key is not None and tex_key in self._mesh.face_textures
         else:
             has_textures = bool(self._mesh.face_textures)
-        vertex_uvs = None
+        vertex_uvs: Optional[list[np.ndarray]] = None
         if has_textures:
             *_, vertex_uvs = self._mesh.face_tangent_frames()
         for i, face in enumerate(self._mesh.faces):
             face_ecef = verts[np.array(face, dtype=np.int32)]
             if has_textures:
+                assert vertex_uvs is not None
                 for poly_lonlat, poly_uv in _split_at_antimeridian(face_ecef, vertex_uvs[i]):
                     self._faces_lonlat.append(poly_lonlat)
                     self._face_src.append(i)
@@ -195,7 +196,7 @@ class MapWidget(QWidget):
         self._texture_qimages = {}
         if self._mesh is None or not self._mesh.face_textures:
             return
-        if self._scheme_texture_key:
+        if self._scheme_texture_key and self._active_scheme is not None:
             tex_key = self._scheme_texture_key.get(self._active_scheme)
             if tex_key is None or tex_key not in self._mesh.face_textures:
                 return

@@ -80,7 +80,7 @@ class MeshViewer(QOpenGLWidget):
     def paintGL(self):
         if self.mesh is None or self.vertex_buffer is None:
             return
-        GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)  # type: ignore[operator]
         GL.glLoadIdentity()
         GL.glTranslatef(0.0, 0.0, -5.0)
         GL.glRotatef(self.angle, 1.0, 1.0, 0.0)
@@ -145,7 +145,7 @@ class MainWindow(QMainWindow):
         fmt = QSurfaceFormat()
         fmt.setDepthBufferSize(24)
         fmt.setVersion(3, 3)
-        fmt.setProfile(QSurfaceFormat.CompatibilityProfile)
+        fmt.setProfile(QSurfaceFormat.OpenGLContextProfile.CompatibilityProfile)
         QSurfaceFormat.setDefaultFormat(fmt)
 
         self.viewer = MeshViewer(self, mesh)

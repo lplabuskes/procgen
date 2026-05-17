@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import colorsys
-from typing import Callable
+from typing import Callable, Sequence
 
 import numpy as np
 
@@ -90,6 +90,7 @@ def build_elevation_display_texture(mesh: PolygonMesh) -> np.ndarray:
 def apply_geology_display(window: MapWindow, builder: ElevationBuilder) -> None:
     """Wire elevation-textured display and all geology color schemes into the window."""
     mesh = builder.mesh
+    assert mesh is not None, "ElevationBuilder.build() must be called before apply_geology_display"
     palette = _plate_palette(builder.params.n_plates)
     max_speed = builder.max_speed
 
@@ -113,7 +114,7 @@ def apply_geology_display(window: MapWindow, builder: ElevationBuilder) -> None:
             s = (t - 0.5) / 0.5
             return (0.95, 0.25 - 0.20 * s, 0.0, 1.0)
 
-    schemes: dict[str, Callable[[dict], tuple]] = {
+    schemes: dict[str, Callable[[dict], Sequence[float]]] = {
         "Elevation": _elevation_color,
         "Plates": lambda meta: tuple(palette[meta["plate_id"]]),
         "Plate Type": lambda meta: OCEAN_COLOR if meta["plate_type"] == "oceanic" else LAND_COLOR,

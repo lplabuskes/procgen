@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 from worldgen.mapview.projections import (
     EquirectangularProjection,
     MercatorProjection,
@@ -28,7 +27,7 @@ def _check_equator_at_zero(proj):
     for lon_deg in (-180, -90, 0, 90):
         pts = np.radians([[lon_deg, 0.0]])
         uv = proj.project_lonlat(pts)
-        assert abs(uv[0, 1]) < 1e-6, f"{proj.name}: equator v={uv[0,1]} at lon={lon_deg}"
+        assert abs(uv[0, 1]) < 1e-6, f"{proj.name}: equator v={uv[0, 1]} at lon={lon_deg}"
 
 
 def _check_prime_meridian_at_zero(proj):
@@ -36,7 +35,7 @@ def _check_prime_meridian_at_zero(proj):
     for lat_deg in (-60, -30, 0, 30, 60):
         pts = np.radians([[0.0, lat_deg]])
         uv = proj.project_lonlat(pts)
-        assert abs(uv[0, 0]) < 1e-6, f"{proj.name}: prime meridian u={uv[0,0]} at lat={lat_deg}"
+        assert abs(uv[0, 0]) < 1e-6, f"{proj.name}: prime meridian u={uv[0, 0]} at lat={lat_deg}"
 
 
 def _check_ns_symmetry(proj):
@@ -79,7 +78,7 @@ def _check_project_vs_project_lonlat(proj):
     uv_from_ecef = proj.project(ecef)
     uv_from_lonlat = proj.project_lonlat(lonlat)
     np.testing.assert_allclose(uv_from_ecef, uv_from_lonlat, atol=1e-6,
-                                err_msg=f"{proj.name}: project() vs project_lonlat() mismatch")
+                               err_msg=f"{proj.name}: project() vs project_lonlat() mismatch")
 
 
 # ---------------------------------------------------------------------------
@@ -209,7 +208,7 @@ class TestMollweideProjection:
                 pts = np.radians([[lon_deg, lat_deg]])
                 uv = self.proj.project_lonlat(pts)
                 assert abs(uv[0, 0]) < 1e-5, (
-                    f"Mollweide pole u={uv[0,0]} at lon={lon_deg}, lat={lat_deg}"
+                    f"Mollweide pole u={uv[0, 0]} at lon={lon_deg}, lat={lat_deg}"
                 )
 
     def test_equatorial_antimeridian_u(self):
@@ -333,8 +332,8 @@ class TestSplitAtAntimeridian:
         face = _make_ecef((170, 20), (-170, 30), (-160, -10))
         result = _split_at_antimeridian(face)
         lons = [poly[:, 0] for poly in result]
-        east_lons = [l for l in lons if np.all(l >= -1e-9)]
-        west_lons = [l for l in lons if np.all(l <= 1e-9)]
+        east_lons = [arr for arr in lons if np.all(arr >= -1e-9)]
+        west_lons = [arr for arr in lons if np.all(arr <= 1e-9)]
         assert len(east_lons) == 1
         assert len(west_lons) == 1
 

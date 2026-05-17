@@ -15,7 +15,6 @@ from worldgen.geology.tectonics import (
     assign_plate_types,
     classify_plate_boundaries,
     compute_face_velocities,
-    compute_plate_centroids,
     generate_plate_velocities,
     generate_plates,
     relax_plates,
