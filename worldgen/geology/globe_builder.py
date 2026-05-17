@@ -10,6 +10,7 @@ from worldgen.geology.elevation import (
     compute_face_elevations,
     compute_noise_elevation_deltas,
 )
+from worldgen.geology.volcanism import compute_volcanism
 from worldgen.geology.tectonics import (
     assign_plate_types,
     classify_plate_boundaries,
@@ -46,6 +47,12 @@ class GlobeParams:
     # Elevation noise
     noise_amplitude: float = 4.0
     noise_coast_sigma: float = 1.5  # km; controls how far noise extends from sea level
+    # Volcanism
+    n_hotspots: int = 8
+    volcanic_decay_rate: float = 0.6
+    volcanic_max_hops: int = 6
+    volcanic_elevation_scale: float = 2.0           # km added at full activity (continental)
+    volcanic_elevation_scale_oceanic: float = 5.5   # km added at full activity (oceanic)
     # Reproducibility — None means random each run
     seed: Optional[int] = None
 
@@ -67,6 +74,7 @@ class GlobeBuilder:
         self.boundary_types: Optional[List[str]] = None
         self.boundary_data: Optional[List[dict]] = None
         self.elevations: Optional[np.ndarray] = None
+        self.volcanism: Optional[np.ndarray] = None
         self.max_speed: float = 1.0
 
     def _sub_seed(self, offset: int) -> Optional[int]:
@@ -124,6 +132,24 @@ class GlobeBuilder:
             max_hops=p.elevation_max_hops,
             rate_norm=p.elevation_rate_norm,
         )
+
+        volcanism = compute_volcanism(
+            dual,
+            plate_types,
+            boundary_data,
+            n_hotspots=p.n_hotspots,
+            decay_rate=p.volcanic_decay_rate,
+            max_hops=p.volcanic_max_hops,
+            rate_norm=p.elevation_rate_norm,
+            seed=self._sub_seed(4),
+        )
+        oceanic_mask = np.array([t == "oceanic" for t in plate_types], dtype=np.float64)
+        elev_scale = (
+            oceanic_mask * p.volcanic_elevation_scale_oceanic
+            + (1.0 - oceanic_mask) * p.volcanic_elevation_scale
+        )
+        elevations += volcanism * elev_scale
+        dual.apply_metadata_channel("volcanic_activity", volcanism.tolist())
         dual.apply_metadata_channel("elevation", elevations.tolist())
 
         elevation_delta_textures = compute_elevation_delta_textures(
@@ -149,6 +175,7 @@ class GlobeBuilder:
         self.boundary_types = boundary_types
         self.boundary_data = boundary_data
         self.elevations = elevations
+        self.volcanism = volcanism
         self.max_speed = float(speeds.max()) or 1.0
 
         return dual

@@ -107,12 +107,24 @@ def _build_and_apply(window: MapWindow) -> None:
     gmesh.set_face_textures("elevation_rgba", elevation_rgba)
 
     window.set_mesh(gmesh)
+    def _volcanic_color(meta: dict) -> tuple:
+        t = meta["volcanic_activity"]
+        if t <= 0.0:
+            return (0.35, 0.35, 0.35, 1.0)
+        elif t < 0.5:
+            s = t / 0.5
+            return (0.35 + 0.60 * s, 0.35 - 0.10 * s, 0.35 - 0.35 * s, 1.0)
+        else:
+            s = (t - 0.5) / 0.5
+            return (0.95, 0.25 - 0.20 * s, 0.0, 1.0)
+
     window.set_color_schemes({
         "Elevation": _elevation_color,
         "Plates": lambda meta: tuple(palette[meta["plate_id"]]),
         "Plate Type": lambda meta: OCEAN_COLOR if meta["plate_type"] == "oceanic" else LAND_COLOR,
         "Speed": _speed_color,
         "Boundary": lambda meta: BOUNDARY_COLORS[meta["boundary_type"]],
+        "Volcanic Activity": _volcanic_color,
     })
     window.associate_scheme_texture("Elevation", "elevation_rgba")
 
