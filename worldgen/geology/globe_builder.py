@@ -5,6 +5,7 @@ from typing import List, Optional
 
 import numpy as np
 
+from geology.elevation import compute_face_elevations
 from geology.tectonics import (
     assign_plate_types,
     classify_plate_boundaries,
@@ -33,6 +34,10 @@ class GlobeParams:
     # Plate motion
     drift_scale: float = 1.0
     spin_scale: float = 0.1
+    # Elevation
+    elevation_rate_norm: float = 1.75
+    elevation_decay_rate: float = 0.5
+    elevation_max_hops: int = 8
     # Reproducibility — None means random each run
     seed: Optional[int] = None
 
@@ -52,6 +57,8 @@ class GlobeBuilder:
         self.plate_omegas: Optional[np.ndarray] = None
         self.face_velocities: Optional[np.ndarray] = None
         self.boundary_types: Optional[List[str]] = None
+        self.boundary_data: Optional[List[dict]] = None
+        self.elevations: Optional[np.ndarray] = None
         self.max_speed: float = 1.0
 
     def _sub_seed(self, offset: int) -> Optional[int]:
@@ -92,7 +99,8 @@ class GlobeBuilder:
             seed=self._sub_seed(2),
         )
         face_velocities = compute_face_velocities(dual, plate_ids, plate_omegas)
-        boundary_types = classify_plate_boundaries(dual, plate_ids, plate_omegas)
+        boundary_data = classify_plate_boundaries(dual, plate_ids, plate_omegas)
+        boundary_types = [d["boundary_type"] for d in boundary_data]
 
         speeds = np.linalg.norm(face_velocities, axis=1)
         dual.apply_metadata_channel("plate_id", plate_ids)
@@ -100,11 +108,23 @@ class GlobeBuilder:
         dual.apply_metadata_channel("surface_velocity", [tuple(v) for v in face_velocities])
         dual.apply_metadata_channel("surface_speed", speeds.tolist())
 
+        elevations = compute_face_elevations(
+            dual,
+            plate_types,
+            boundary_data,
+            decay_rate=p.elevation_decay_rate,
+            max_hops=p.elevation_max_hops,
+            rate_norm=p.elevation_rate_norm,
+        )
+        dual.apply_metadata_channel("elevation", elevations.tolist())
+
         self.mesh = dual
         self.plate_ids = plate_ids
         self.plate_omegas = plate_omegas
         self.face_velocities = face_velocities
         self.boundary_types = boundary_types
+        self.boundary_data = boundary_data
+        self.elevations = elevations
         self.max_speed = float(speeds.max()) or 1.0
 
         return dual

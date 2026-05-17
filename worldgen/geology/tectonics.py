@@ -419,29 +419,43 @@ def classify_plate_boundaries(
     mesh: PolygonMesh,
     plate_ids: List[int],
     plate_omegas: np.ndarray,
-) -> List[str]:
-    """Classify each face as 'interior', 'convergent', 'divergent', or 'transform'.
+) -> List[dict]:
+    """Classify each face's boundary context and return richer per-face data.
 
     For each inter-plate edge adjacent to a face, decompose the relative plate
     velocity at the boundary midpoint into a normal component (convergence/divergence)
     and a shear component (transform). The face is classified by whichever signal
     dominates, averaged over all its inter-plate edges.
+
+    Returns a list of dicts with keys:
+        boundary_type: 'interior' | 'convergent' | 'divergent' | 'transform'
+        normal_avg: float — mean normal velocity component (positive = diverging,
+            negative = converging). Zero for interior faces.
+        neighbor_plate_types: set[str] — plate types seen across inter-plate edges.
     """
     adjacency = mesh.face_adjacency
     face_centroids = mesh.face_centroids
     n_faces = len(mesh.faces)
-    result = ["interior"] * n_faces
+    result: List[dict] = [
+        {"boundary_type": "interior", "normal_avg": 0.0, "neighbor_plate_types": set()}
+        for _ in range(n_faces)
+    ]
 
     for face_idx in range(n_faces):
         pid_a = plate_ids[face_idx]
         normal_sum = 0.0
         shear_sum = 0.0
         n_boundary = 0
+        neighbor_types: set[str] = set()
 
         for nb in adjacency[face_idx]:
             pid_b = plate_ids[nb]
             if pid_b == pid_a:
                 continue
+
+            nb_type = mesh.face_metadata[nb].get("plate_type", "")
+            if nb_type:
+                neighbor_types.add(nb_type)
 
             m = face_centroids[face_idx] + face_centroids[nb]
             m_norm = float(np.linalg.norm(m))
@@ -472,9 +486,15 @@ def classify_plate_boundaries(
         normal_avg = normal_sum / n_boundary
         shear_avg = shear_sum / n_boundary
         if abs(normal_avg) >= shear_avg:
-            result[face_idx] = "divergent" if normal_avg > 0 else "convergent"
+            btype = "divergent" if normal_avg > 0 else "convergent"
         else:
-            result[face_idx] = "transform"
+            btype = "transform"
+
+        result[face_idx] = {
+            "boundary_type": btype,
+            "normal_avg": normal_avg,
+            "neighbor_plate_types": neighbor_types,
+        }
 
     return result
 

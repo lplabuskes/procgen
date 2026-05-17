@@ -27,6 +27,40 @@ def _plate_palette(n: int) -> np.ndarray:
     return rgba
 
 
+# Elevation color stops: (elevation_km, RGBA)
+# Two stops at 0.0 create a hard break between ocean (blue) and land (sand/green).
+_ELEVATION_STOPS = [
+    (-8.0, (0.02, 0.06, 0.35, 1.0)),  # abyssal plain
+    (-3.5, (0.06, 0.22, 0.62, 1.0)),  # deep ocean
+    (-0.5, (0.16, 0.48, 0.82, 1.0)),  # continental shelf
+    ( 0.0, (0.20, 0.52, 0.88, 1.0)),  # sea level (ocean side)
+    ( 0.0, (0.78, 0.70, 0.42, 1.0)),  # sea level (land side — beach/sand)
+    ( 0.8, (0.33, 0.60, 0.20, 1.0)),  # lowland / plains
+    ( 2.5, (0.50, 0.38, 0.18, 1.0)),  # highland
+    ( 5.5, (0.92, 0.92, 0.92, 1.0)),  # snow-capped peaks
+]
+
+
+def _elevation_color(meta: dict) -> tuple:
+    e = meta["elevation"]
+    stops = _ELEVATION_STOPS
+    if e <= stops[0][0]:
+        return stops[0][1]
+    if e >= stops[-1][0]:
+        return stops[-1][1]
+    # Walk stops in order; for the duplicate 0.0 pair, choose the land-side stop
+    # (index 4) for e > 0 and the ocean-side stop (index 3) for e <= 0.
+    for i in range(len(stops) - 1):
+        e0, c0 = stops[i]
+        e1, c1 = stops[i + 1]
+        if e0 == e1:
+            continue  # skip the hard-break pair itself
+        if e0 <= e <= e1:
+            t = (e - e0) / (e1 - e0)
+            return tuple(c0[j] + t * (c1[j] - c0[j]) for j in range(4))
+    return stops[-1][1]
+
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
 
@@ -49,6 +83,7 @@ if __name__ == "__main__":
         "Plate Type": lambda meta: OCEAN_COLOR if meta["plate_type"] == "oceanic" else LAND_COLOR,
         "Speed": _speed_color,
         "Boundary": lambda meta: BOUNDARY_COLORS[meta["boundary_type"]],
+        "Elevation": _elevation_color,
     })
     window.show()
 
