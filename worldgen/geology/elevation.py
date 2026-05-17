@@ -217,31 +217,43 @@ def compute_elevation_delta_textures(
         adj = vertex_to_faces.get(v_idx, [])
         vertex_elevations[v_idx] = elevations[adj].mean() if adj else 0.0
 
-    # pixel grid in [0, 1]² UV space
-    coords = np.linspace(0.0, 1.0, tex_size)
-    uu, vv = np.meshgrid(coords, coords)
-    pixels_uv = np.stack([uu.ravel(), vv.ravel()], axis=1)  # (tex_size², 2)
-
-    _, _, u_offsets, v_offsets, u_ranges, v_ranges, vertex_uvs = mesh.face_tangent_frames()
+    # Barycentric interpolation within fan triangles — mirrors face_texture_positions.
+    # At any polygon edge, the fan-apex barycentric weight is exactly 0, so the
+    # interpolated elevation depends only on the two shared endpoint vertices, giving
+    # the same absolute value from both adjacent faces (perfect edge continuity).
+    u_coords = np.linspace(0.0, 1.0, tex_size, dtype=np.float64)
+    v_coords = np.linspace(0.0, 1.0, tex_size, dtype=np.float64)
+    uu, vv = np.meshgrid(u_coords, v_coords)
+    pixel_uv = np.stack([uu.ravel(), vv.ravel()], axis=1)  # (H*W, 2)
+    n_pix = pixel_uv.shape[0]
+    pix_idx = np.arange(n_pix)
 
     for face_idx, face in enumerate(mesh.faces):
-        verts_uv = vertex_uvs[face_idx]
-        centroid_uv = np.array([
-            -u_offsets[face_idx] / u_ranges[face_idx],
-            -v_offsets[face_idx] / v_ranges[face_idx],
-        ])
+        face_arr = np.array(face)
+        verts_uv = mesh._face_vertex_uvs[face_idx].astype(np.float64)  # (n_v, 2)
+        vert_deltas = (vertex_elevations[face_arr] - float(elevations[face_idx]))  # (n_v,)
 
-        face_elev = float(elevations[face_idx])
-        vert_deltas = vertex_elevations[np.array(face)] - face_elev
+        v0_uv = verts_uv[0]
+        e1_uv = verts_uv[1:-1] - v0_uv   # (n_tris, 2)
+        e2_uv = verts_uv[2:] - v0_uv     # (n_tris, 2)
 
-        ctrl_uv = np.vstack([centroid_uv, verts_uv])      # (1 + n_v, 2)
-        ctrl_delta = np.concatenate([[0.0], vert_deltas])  # (1 + n_v,)
+        det = e1_uv[:, 0] * e2_uv[:, 1] - e1_uv[:, 1] * e2_uv[:, 0]
+        det = np.where(np.abs(det) < 1e-12, 1.0, det)
 
-        # IDW with power 2
-        diffs = pixels_uv[:, np.newaxis, :] - ctrl_uv[np.newaxis, :, :]  # (n_pix, n_ctrl, 2)
-        weights = 1.0 / (np.sum(diffs ** 2, axis=2) + 1e-6)               # (n_pix, n_ctrl)
-        textures[face_idx, :, :, 0] = (
-            (weights @ ctrl_delta) / weights.sum(axis=1)
-        ).reshape(tex_size, tex_size).astype(np.float32)
+        pv = pixel_uv - v0_uv
+        beta = (pv[:, 0:1] * e2_uv[None, :, 1] - pv[:, 1:2] * e2_uv[None, :, 0]) / det  # weight for face[i]
+        gamma = (e1_uv[None, :, 0] * pv[:, 1:2] - e1_uv[None, :, 1] * pv[:, 0:1]) / det  # weight for face[i+1]
+        alpha = 1.0 - beta - gamma  # weight for face[0]
+
+        best_tri = np.argmax(np.minimum(alpha, np.minimum(beta, gamma)), axis=1)
+        b_sel = beta[pix_idx, best_tri]
+        g_sel = gamma[pix_idx, best_tri]
+
+        delta_vals = (
+            (1.0 - b_sel - g_sel) * vert_deltas[0]
+            + b_sel * vert_deltas[1:-1][best_tri]
+            + g_sel * vert_deltas[2:][best_tri]
+        )
+        textures[face_idx, :, :, 0] = delta_vals.reshape(tex_size, tex_size).astype(np.float32)
 
     return textures

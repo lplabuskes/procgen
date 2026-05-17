@@ -1,7 +1,10 @@
 import numpy as np
 import pytest
 
-from worldgen.geology.elevation import compute_noise_elevation_deltas
+from worldgen.geology.elevation import (
+    compute_elevation_delta_textures,
+    compute_noise_elevation_deltas,
+)
 from worldgen.mesh.mymesh import Mesh
 
 
@@ -197,4 +200,74 @@ class TestNoiseContinuity:
         assert max_diff < self.SEAM_TOL_KM, (
             f"edge-interior noise discrepancy {max_diff:.4f} km at "
             f"faces/t={worst} (amplitude={amplitude})"
+        )
+
+
+class TestElevationDeltaContinuity:
+    """Absolute elevation (face_elev + delta) must agree at shared edges.
+
+    The delta texture stores elevation relative to each face's own baseline, so
+    we compare `elevations[fa] + delta_fa(P)` vs `elevations[fb] + delta_fb(P)`
+    for points P on the shared edge.  These should match regardless of which face
+    computes the interpolation.
+    """
+
+    # Vertex tolerance accounts for bilinear sampling error (UV corners don't land
+    # exactly on pixel centers in a tex_size=32 grid).
+    # Edge tolerance reflects the near-zero residual from barycentric interpolation
+    # (measured ~0.001 km; pre-fix UV-space IDW reached ~1.8 km).
+    VERTEX_TOL_KM = 0.1
+    EDGE_TOL_KM = 0.01
+
+    def _make_test_case(self, seed=42):
+        mesh = Mesh.icosphere(2).mesh_dual()
+        rng = np.random.default_rng(seed)
+        elevations = rng.uniform(-5.0, 5.0, size=len(mesh.faces))
+        return mesh, elevations
+
+    def test_absolute_elevation_matches_at_shared_vertices(self):
+        mesh, elevations = self._make_test_case()
+        tex_size = 32
+        textures = compute_elevation_delta_textures(
+            mesh, elevations, tex_size=tex_size
+        )[:, :, :, 0]
+
+        max_diff = 0.0
+        for fa, fb, vi, vj in _iter_shared_edges(mesh):
+            uv_a_i, _ = _edge_uvs(mesh, fa, vi, vj)
+            uv_b_i, _ = _edge_uvs(mesh, fb, vi, vj)
+            delta_a = float(_bilinear_sample(textures[fa], uv_a_i))
+            delta_b = float(_bilinear_sample(textures[fb], uv_b_i))
+            diff = abs((float(elevations[fa]) + delta_a) - (float(elevations[fb]) + delta_b))
+            max_diff = max(max_diff, diff)
+
+        assert max_diff < self.VERTEX_TOL_KM, (
+            f"absolute elevation mismatch at shared vertices: {max_diff:.4f} km"
+        )
+
+    def test_absolute_elevation_matches_along_shared_edge(self):
+        mesh, elevations = self._make_test_case()
+        tex_size = 32
+        textures = compute_elevation_delta_textures(
+            mesh, elevations, tex_size=tex_size
+        )[:, :, :, 0]
+
+        ts = np.array([0.13, 0.27, 0.41, 0.59, 0.73, 0.87])
+        max_diff = 0.0
+        worst = None
+        for fa, fb, vi, vj in _iter_shared_edges(mesh):
+            uv_a_i, uv_a_j = _edge_uvs(mesh, fa, vi, vj)
+            uv_b_i, uv_b_j = _edge_uvs(mesh, fb, vi, vj)
+            for t in ts:
+                uv_a = (1 - t) * uv_a_i + t * uv_a_j
+                uv_b = (1 - t) * uv_b_i + t * uv_b_j
+                delta_a = float(_bilinear_sample(textures[fa], uv_a))
+                delta_b = float(_bilinear_sample(textures[fb], uv_b))
+                diff = abs((float(elevations[fa]) + delta_a) - (float(elevations[fb]) + delta_b))
+                if diff > max_diff:
+                    max_diff = diff
+                    worst = (fa, fb, float(t))
+
+        assert max_diff < self.EDGE_TOL_KM, (
+            f"absolute elevation mismatch along shared edge: {max_diff:.4f} km at {worst}"
         )
