@@ -39,13 +39,14 @@ Mesh.icosphere(depth)
 **`PolygonMesh(vertices, faces)`**
 
 Base class for any polygon mesh. Faces are tuples of vertex indices of arbitrary length.
-On construction it fan-triangulates every face and pre-builds flat `render_vertices` and `render_colors` arrays (one random color per face) ready for direct VBO upload. Also pre-computes:
+On construction it fan-triangulates every face and pre-builds flat `render_vertices` and `render_colors` arrays (one random color per face) ready for direct VBO upload. The triangulation also produces `render_face_indices` (per-render-vertex face index) and `render_local_uvs` (per-render-vertex UV in [0, 1]² from a tangent-plane parameterization) for the texture pipeline. Also pre-computes:
 
 - `face_adjacency` — `List[List[int]]` of edge-sharing neighbor face indices per face.
 - `face_centroids` — `(N, 3) float64` unit-sphere centroid for each face.
 - `face_metadata` — `List[dict]` of per-face key-value stores for downstream annotation.
+- `face_textures` — `Optional[(N, H, W, 4) float32]`; `None` until set.
 
-`set_face_colors(colors)` replaces `face_colors` and rebuilds the render arrays. `set_face_metadata(face_idx, **kwargs)` merges kwargs into that face's metadata dict. `apply_metadata_channel(key, values)` bulk-writes a single key across all faces at once; raises `ValueError` if `len(values)` doesn't match the face count.
+`set_face_colors(colors)` replaces `face_colors` and rebuilds the render arrays. `set_face_metadata(face_idx, **kwargs)` merges kwargs into that face's metadata dict. `apply_metadata_channel(key, values)` bulk-writes a single key across all faces at once; raises `ValueError` if `len(values)` doesn't match the face count. `set_face_textures(textures)` attaches a `(N, H, W, 4) float32` RGBA texture array (one per face).
 
 **`Mesh(vertices, faces)`** — subclass of `PolygonMesh`
 
@@ -59,7 +60,7 @@ Triangular mesh only (faces are 3-tuples). Vertices are re-sorted along the Z-ax
 
 **`MeshViewer(QOpenGLWidget)`**
 
-Renders a `PolygonMesh` via two VBOs (vertices + colors) using `glDrawArrays(GL_TRIANGLES, ...)`. Rotates the mesh 0.5°/frame driven by a 16 ms `QTimer` (~60 FPS). OpenGL 3.3 compatibility profile.
+Renders a `PolygonMesh` via VBOs using `glDrawArrays(GL_TRIANGLES, ...)`. Rotates the mesh 0.5°/frame driven by a 16 ms `QTimer` (~60 FPS). OpenGL 3.3 compatibility profile. When the mesh has `face_textures`, all per-face textures are packed into a square grid atlas, uploaded as a single `GL_TEXTURE_2D`, and rendered via a UV VBO; otherwise the color-array path is used.
 
 **`MainWindow(QMainWindow)`**
 
@@ -99,11 +100,13 @@ All projections inherit from `Projection` and expose `project(ecef)` and `projec
 
 ### `mapview.py`
 
-**`_split_at_antimeridian(face_ecef)`** — Takes an `(N, 3)` array of ECEF unit-sphere vertices and returns a list of `(M, 2)` lon/lat arrays. Detects antimeridian crossings (|Δlon| > π on a direct edge), interpolates the crossing latitude, and splits the polygon into eastern and western halves. Sub-polygons with fewer than 3 vertices are discarded.
+**`_split_at_antimeridian(face_ecef, face_uv=None)`** — Takes an `(N, 3)` array of ECEF unit-sphere vertices and returns a list of `(M, 2)` lon/lat arrays. Detects antimeridian crossings (|Δlon| > π on a direct edge), interpolates the crossing latitude, and splits the polygon into eastern and western halves. Sub-polygons with fewer than 3 vertices are discarded. When `face_uv` is supplied, returns `(lonlat, uv)` tuples with UVs interpolated at crossing points.
 
-**`MapWidget(QWidget)`** — Paints lon/lat polygons by projecting them on each `_reproject()` call and drawing filled `QPolygonF` shapes via `QPainter`. Pan via left-button drag; zoom via scroll wheel (clamped to [1×, 50×]). Call `set_mesh(mesh)` to load a new mesh. Color can be driven by named schemes registered via `set_color_schemes(schemes)` — a `dict[str, Callable[[dict], RGBA]]` mapping display names to functions over face metadata; `set_color_scheme(name)` switches the active scheme. Falls back to `PolygonMesh.face_colors` when no scheme is active.
+**`_compute_face_uv(face_ecef)`** — Tangent-plane UV parameterization for a face's vertices. Returns `(N, 2) float32` in [0, 1].
 
-**`MapWindow(QMainWindow)`** — 900×500 window hosting `MapWidget` plus a toolbar with a projection combo-box, a coloration combo-box (shown only when schemes are registered via `set_color_schemes`), and Zoom In / Zoom Out / Reset buttons.
+**`MapWidget(QWidget)`** — Paints lon/lat polygons by projecting them on each `_reproject()` call and drawing via `QPainter`. Pan via left-button drag; zoom via scroll wheel (clamped to [1×, 50×]). Call `set_mesh(mesh)` to load a new mesh. Color can be driven by named schemes registered via `set_color_schemes(schemes)` — a `dict[str, Callable[[dict], RGBA]]` mapping display names to functions over face metadata; `set_color_scheme(name)` switches the active scheme. Falls back to `PolygonMesh.face_colors` when no scheme is active. When the mesh has `face_textures`, each face is painted using per-triangle affine texture mapping (`QBrush` with a `QTransform` solved from UV→screen coordinates).
+
+**`MapWindow(QMainWindow)`** — 900×500 window hosting `MapWidget` plus a toolbar with a projection combo-box, a coloration combo-box (shown only when schemes are registered via `set_color_schemes`), and Zoom In / Zoom Out / Reset buttons. Call `set_rebuild_callback(fn)` to show a Re-run button that fires `fn` when clicked.
 
 ### `test/test_mapview.py`
 
@@ -124,6 +127,12 @@ PolygonMesh (dual from mesh pipeline)
                     └─ MapWindow with color schemes
 ```
 
+### `elevation.py`
+
+**`compute_face_elevations(mesh, plate_types_by_face, boundary_data, decay_rate, max_hops, rate_norm)`**
+
+Computes elevation (km) for each face. Baseline is set by plate type (`'oceanic'` → −4.0 km, `'continental'` → +0.3 km). Each boundary face receives a delta determined by its boundary type and the types of adjacent plates (continental-continental collision → +4 km, oceanic trench → −2.5 km, mid-ocean ridge → +2 km above oceanic baseline, continental rift → −1.5 km, etc.). Deltas are scaled by convergence rate and propagated outward via BFS with exponential decay (`exp(-decay_rate * hops)`) up to `max_hops` steps. Returns `float64 (n_faces,)`.
+
 ### `tectonics.py`
 
 **`generate_plates(mesh, n_plates, seed, compactness)`**
@@ -142,6 +151,10 @@ Returns `(n_plates, 3) float64` angular velocity vectors. Each plate's omega is 
 
 Classifies each plate as `'oceanic'` or `'continental'` by Bernoulli draws with probability `oceanic_fraction` (default 0.7).
 
+**`classify_plate_boundaries(mesh, plate_ids, plate_omegas)`**
+
+Returns `List[dict]` (one per face) with keys `boundary_type` (`'interior'|'convergent'|'divergent'|'transform'`), `normal_avg` (mean normal velocity component, positive = diverging), and `neighbor_plate_types` (set of plate type strings across inter-plate edges).
+
 ### `main.py`
 
-Builds an `icosphere(4)` dual with 12 plates, runs the full tectonics pipeline, then uses `apply_metadata_channel` to write `plate_id` and `plate_type` onto every face. Opens `MapWindow` with two color schemes: **Plates** (evenly-spaced HSV hues) and **Plate Type** (blue for oceanic, tan for continental).
+Builds an `icosphere(4)` dual, runs the full tectonics and elevation pipeline, then opens `MapWindow` with five color schemes: **Elevation** (multi-stop gradient from abyssal blues through lowlands to snow peaks), **Plates** (evenly-spaced HSV hues), **Plate Type** (blue for oceanic, tan for continental), **Speed** (warm-to-cool by surface speed), and **Boundary** (color-coded by type). Registers a Re-run button so the world can be regenerated in place.
