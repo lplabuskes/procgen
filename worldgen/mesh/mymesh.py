@@ -1,5 +1,5 @@
 import random
-from typing import Any, Dict, FrozenSet, List, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 import numpy as np
 
@@ -14,6 +14,7 @@ class PolygonMesh:
         self.face_colors[:, 3] = 1.0
         self._rebuild_render_arrays()
 
+        self.face_textures: Optional[np.ndarray] = None
         self.face_metadata: List[Dict[str, Any]] = [{} for _ in range(n_faces)]
         self.face_adjacency: List[List[int]] = self._build_face_adjacency()
         self.face_centroids: np.ndarray = self._compute_face_centroids()
@@ -22,15 +23,37 @@ class PolygonMesh:
     def _rebuild_render_arrays(self) -> None:
         triangles = []
         triangle_face_indices = []
+        render_uv_list = []
+
         for face_idx, face in enumerate(self.faces):
+            verts = self.vertices[np.array(face)]
+            centroid = np.mean(verts, axis=0)
+            n = centroid / np.linalg.norm(centroid)
+            ref = np.array([0.0, 0.0, 1.0]) if abs(n[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
+            u_axis = np.cross(ref, n)
+            u_axis /= np.linalg.norm(u_axis)
+            v_axis = np.cross(n, u_axis)
+            offsets = verts - centroid
+            us = offsets @ u_axis
+            vs = offsets @ v_axis
+            u_r = float(us.max() - us.min()) or 1.0
+            v_r = float(vs.max() - vs.min()) or 1.0
+            face_uv = np.stack(
+                [(us - us.min()) / u_r, (vs - vs.min()) / v_r], axis=1
+            ).astype(np.float32)
+
             for i in range(1, len(face) - 1):
                 triangles.append((face[0], face[i], face[i + 1]))
                 triangle_face_indices.append(face_idx)
+                render_uv_list.extend([face_uv[0], face_uv[i], face_uv[i + 1]])
+
         self.index_array = np.array(triangles, dtype=np.uint32)
         flat_indices = self.index_array.flatten()
         self.render_vertices = self.vertices[flat_indices]
-        triangle_colors = self.face_colors[np.array(triangle_face_indices)]
-        self.render_colors = np.repeat(triangle_colors, 3, axis=0)
+        tfi = np.array(triangle_face_indices, dtype=np.int32)
+        self.render_colors = np.repeat(self.face_colors[tfi], 3, axis=0)
+        self.render_face_indices: np.ndarray = np.repeat(tfi, 3)
+        self.render_local_uvs: np.ndarray = np.array(render_uv_list, dtype=np.float32).reshape(-1, 2)
 
     def _compute_face_areas(self) -> np.ndarray:
         areas = np.zeros(len(self.faces), dtype=np.float64)
@@ -73,6 +96,12 @@ class PolygonMesh:
 
     def set_face_metadata(self, face_idx: int, **metadata: Any) -> None:
         self.face_metadata[face_idx].update(metadata)
+
+    def set_face_textures(self, textures: np.ndarray) -> None:
+        """Set per-face textures. Shape must be (N_faces, H, W, 4), float32 in [0, 1]."""
+        if textures.shape[0] != len(self.faces):
+            raise ValueError(f"textures count {textures.shape[0]} != face count {len(self.faces)}")
+        self.face_textures = textures.astype(np.float32)
 
     def apply_metadata_channel(self, key: str, values: List[Any]) -> None:
         if len(values) != len(self.faces):
