@@ -30,7 +30,7 @@ if __name__ == "__main__":
     alpha = np.ones((N, H, W, 1), dtype=np.float32)
     textures = np.concatenate([color_data, alpha], axis=3) # (N, H, W, 4)
 
-    dual.set_face_textures(textures)
+    dual.set_face_textures("default", textures)
 
     window = MainWindow(mesh=dual)
     window.show()

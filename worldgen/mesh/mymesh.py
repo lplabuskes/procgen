@@ -1,5 +1,5 @@
 import random
-from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, List, Tuple
 
 import numpy as np
 
@@ -14,7 +14,7 @@ class PolygonMesh:
         self.face_colors[:, 3] = 1.0
         self._rebuild_render_arrays()
 
-        self.face_textures: Optional[np.ndarray] = None
+        self.face_textures: Dict[str, np.ndarray] = {}
         self.face_metadata: List[Dict[str, Any]] = [{} for _ in range(n_faces)]
         self.face_adjacency: List[List[int]] = self._build_face_adjacency()
         self.face_centroids: np.ndarray = self._compute_face_centroids()
@@ -97,11 +97,11 @@ class PolygonMesh:
     def set_face_metadata(self, face_idx: int, **metadata: Any) -> None:
         self.face_metadata[face_idx].update(metadata)
 
-    def set_face_textures(self, textures: np.ndarray) -> None:
-        """Set per-face textures. Shape must be (N_faces, H, W, 4), float32 in [0, 1]."""
+    def set_face_textures(self, name: str, textures: np.ndarray) -> None:
+        """Add or replace a named texture layer. Shape must be (N_faces, H, W, 4), float32 in [0, 1]."""
         if textures.shape[0] != len(self.faces):
             raise ValueError(f"textures count {textures.shape[0]} != face count {len(self.faces)}")
-        self.face_textures = textures.astype(np.float32)
+        self.face_textures[name] = textures.astype(np.float32)
 
     def apply_metadata_channel(self, key: str, values: List[Any]) -> None:
         if len(values) != len(self.faces):

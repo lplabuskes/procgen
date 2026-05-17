@@ -25,7 +25,7 @@ if __name__ == "__main__":
     rgb = dual.face_colors[:, :3]
     color_data = (rgb[:, np.newaxis, np.newaxis, :] * brightness[np.newaxis, :, :, np.newaxis]).astype(np.float32)
     alpha = np.ones((N, H, W, 1), dtype=np.float32)
-    dual.set_face_textures(np.concatenate([color_data, alpha], axis=3))
+    dual.set_face_textures("default", np.concatenate([color_data, alpha], axis=3))
 
     window = MapWindow(mesh=dual)
     window.show()

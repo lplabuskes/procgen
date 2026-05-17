@@ -32,7 +32,7 @@ class MeshViewer(QOpenGLWidget):
 
     def _setup_buffers(self, mesh: PolygonMesh) -> None:
         self.vertex_buffer = vbo.VBO(mesh.render_vertices)
-        if mesh.face_textures is not None:
+        if mesh.face_textures:
             self.color_buffer = None
             atlas_bytes, atlas_uvs, atlas_h, atlas_w = self._pack_texture_atlas(mesh)
             self.uv_buffer = vbo.VBO(atlas_uvs)
@@ -49,8 +49,8 @@ class MeshViewer(QOpenGLWidget):
             self.texture_id = None
 
     def _pack_texture_atlas(self, mesh: PolygonMesh) -> Tuple[np.ndarray, np.ndarray, int, int]:
-        assert mesh.face_textures is not None
-        textures = mesh.face_textures  # (N, H, W, 4) float32
+        assert mesh.face_textures
+        textures = next(iter(mesh.face_textures.values()))  # (N, H, W, 4) float32
         N, H, W = textures.shape[:3]
         cols = math.ceil(math.sqrt(N))
         rows = math.ceil(N / cols)

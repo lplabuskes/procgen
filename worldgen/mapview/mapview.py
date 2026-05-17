@@ -169,7 +169,7 @@ class MapWidget(QWidget):
         self._faces_lonlat = []
         self._face_src = []
         self._face_uvs = []
-        has_textures = self._mesh.face_textures is not None
+        has_textures = bool(self._mesh.face_textures)
         for i, face in enumerate(self._mesh.faces):
             face_ecef = verts[np.array(face, dtype=np.int32)]
             if has_textures:
@@ -186,9 +186,9 @@ class MapWidget(QWidget):
     def _rebuild_textures(self) -> None:
         """Build cached QImages from mesh face textures, one per face."""
         self._texture_qimages = {}
-        if self._mesh is None or self._mesh.face_textures is None:
+        if self._mesh is None or not self._mesh.face_textures:
             return
-        textures = self._mesh.face_textures  # (N, H, W, 4) float32
+        textures = next(iter(self._mesh.face_textures.values()))  # (N, H, W, 4) float32
         N, H, W = textures.shape[:3]
         for i in range(N):
             img = np.ascontiguousarray((textures[i] * 255).clip(0, 255).astype(np.uint8))
