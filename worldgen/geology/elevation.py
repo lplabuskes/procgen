@@ -134,8 +134,7 @@ def compute_noise_elevation_deltas(
     persistence: float = 0.5,
     seed: int = 0,
     nyquist_safety: float = 0.5,
-    face_elevations: np.ndarray | None = None,
-    elevation_deltas: np.ndarray | None = None,
+    per_pixel_elevations: np.ndarray | None = None,
     coast_sigma: float = 1.5,
 ) -> np.ndarray:
     """Per-pixel fBm simplex noise at uniform amplitude across all faces.
@@ -185,31 +184,27 @@ def compute_noise_elevation_deltas(
 
     noise_delta = (noise_norm * amplitude).astype(np.float32)
 
-    if face_elevations is not None:
-        per_pixel_elev = face_elevations[:, np.newaxis, np.newaxis].astype(np.float32)
-        if elevation_deltas is not None:
-            per_pixel_elev = per_pixel_elev + elevation_deltas
-        noise_delta *= np.exp(-np.abs(per_pixel_elev) / coast_sigma)
+    if per_pixel_elevations is not None:
+        noise_delta *= np.exp(-np.abs(per_pixel_elevations) / coast_sigma)
 
     result = np.zeros((n_faces, tex_size, tex_size, 4), dtype=np.float32)
     result[:, :, :, 0] = noise_delta
     return result
 
 
-def compute_elevation_delta_textures(
+def compute_elevation_textures(
     mesh: PolygonMesh,
     elevations: np.ndarray,
     tex_size: int = 32,
 ) -> np.ndarray:
-    """Per-face elevation delta textures for smooth cross-face gradients.
+    """Per-face elevation textures for smooth cross-face gradients.
 
-    Each pixel stores (elevation_at_point - face_center_elevation) in km.
-    The face center has delta=0; edge pixels blend toward the mean elevation
-    of faces sharing that vertex.
+    Each pixel stores the interpolated elevation in km, blended from the mean
+    elevation of vertices shared with neighboring faces.
 
     Returns:
         float32 array of shape (N_faces, tex_size, tex_size, 4).
-        R channel = delta in km; G, B, A = 0.
+        R channel = elevation in km; G, B, A = 0.
     """
     n_faces = len(mesh.faces)
     n_verts = len(mesh.vertices)
@@ -248,9 +243,7 @@ def compute_elevation_delta_textures(
             mesh._face_vertex_uvs[i].astype(np.float64) for i in fidx_list
         ])
         batch_verts = np.array([mesh.faces[i] for i in fidx_list])  # (B, degree)
-        vert_deltas = (
-            vertex_elevations[batch_verts] - elevations[fidx, np.newaxis]
-        )  # (B, degree)
+        vert_elev = vertex_elevations[batch_verts]  # (B, degree)
 
         # Fan-triangle edge vectors from apex (vertex 0).
         v0_uv = verts_uv[:, 0, :]                                    # (B, 2)
@@ -283,9 +276,9 @@ def compute_elevation_delta_textures(
         g_sel = gamma[bi, pi, best_tri]     # (B, P)
 
         delta_vals = (
-            (1.0 - b_sel - g_sel) * vert_deltas[:, 0:1]
-            + b_sel * vert_deltas[bi, best_tri + 1]
-            + g_sel * vert_deltas[bi, best_tri + 2]
+            (1.0 - b_sel - g_sel) * vert_elev[:, 0:1]
+            + b_sel * vert_elev[bi, best_tri + 1]
+            + g_sel * vert_elev[bi, best_tri + 2]
         )  # (B, P)
 
         textures[fidx, :, :, 0] = delta_vals.reshape(B, tex_size, tex_size).astype(np.float32)

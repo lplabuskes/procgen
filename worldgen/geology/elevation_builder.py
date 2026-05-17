@@ -6,7 +6,7 @@ from typing import Callable, List, Optional
 import numpy as np
 
 from worldgen.geology.elevation import (
-    compute_elevation_delta_textures,
+    compute_elevation_textures,
     compute_face_elevations,
     compute_noise_elevation_deltas,
 )
@@ -168,7 +168,7 @@ class ElevationBuilder:
         dual.apply_metadata_channel("elevation", elevations.tolist())
 
         _report("Generating elevation textures…")
-        elevation_delta_textures = compute_elevation_delta_textures(
+        elevation_textures = compute_elevation_textures(
             dual, elevations, tex_size=p.elevation_tex_size
         )
         _report("Applying elevation noise…")
@@ -178,12 +178,11 @@ class ElevationBuilder:
             tex_size=p.elevation_tex_size,
             amplitude=p.noise_amplitude,
             seed=noise_seed or 0,
-            face_elevations=elevations,
-            elevation_deltas=elevation_delta_textures[:, :, :, 0],
+            per_pixel_elevations=elevation_textures[:, :, :, 0],
             coast_sigma=p.noise_coast_sigma,
         )
-        elevation_delta_textures[:, :, :, 0] += noise_deltas[:, :, :, 0]
-        dual.set_face_textures("elevation_delta", elevation_delta_textures)
+        elevation_textures[:, :, :, 0] += noise_deltas[:, :, :, 0]
+        dual.set_face_textures("elevation", elevation_textures)
 
         self.mesh = dual
         self.plate_ids = plate_ids

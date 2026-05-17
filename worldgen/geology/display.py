@@ -80,11 +80,9 @@ def _elevation_color_vec(elevs: np.ndarray) -> np.ndarray:
 
 
 def build_elevation_display_texture(mesh: PolygonMesh) -> np.ndarray:
-    """Convert elevation_delta face textures to smooth RGBA elevation colors."""
-    delta_tex = mesh.face_textures["elevation_delta"]          # (N, H, W, 4)
-    face_elevs = np.array([m["elevation"] for m in mesh.face_metadata], dtype=np.float32)
-    elev_map = face_elevs[:, np.newaxis, np.newaxis] + delta_tex[:, :, :, 0]  # (N, H, W)
-    return _elevation_color_vec(elev_map)                      # (N, H, W, 4)
+    """Convert elevation face textures to smooth RGBA elevation colors."""
+    elev_tex = mesh.face_textures["elevation"]                 # (N, H, W, 4)
+    return _elevation_color_vec(elev_tex[:, :, :, 0])         # (N, H, W, 4)
 
 
 def apply_geology_display(window: MapWindow, builder: ElevationBuilder) -> None:
