@@ -48,8 +48,8 @@ class ElevationParams:
     elevation_max_hops: int = 16
     elevation_tex_size: int = 16
     # Elevation noise
-    noise_amplitude: float = 4.0
-    noise_coast_sigma: float = 1.5  # km; controls how far noise extends from sea level
+    noise_amplitude: float = 3.0
+    noise_coast_sigma: float = 3.0  # km; controls how far noise extends from sea level
     # Erosion (face-level)
     hydraulic_iterations: int = 5
     hydraulic_erosion_rate: float = 0.4
@@ -68,7 +68,7 @@ class ElevationParams:
     volcanic_elevation_scale: float = 2.0           # km added at full activity (continental)
     volcanic_elevation_scale_oceanic: float = 5.5   # km added at full activity (oceanic)
     # Rivers
-    river_flow_threshold: float = 100.0  # minimum upstream face count to form a river
+    river_flow_threshold: float = 20.0  # minimum upstream face count to form a river
     # Reproducibility — None means random each run
     seed: Optional[int] = None
 
