@@ -316,11 +316,13 @@ class MapWidget(QWidget):
         if not river_paths or self._mesh is None:
             return
         centroids = self._mesh.face_centroids  # (N, 3)
-        pen = QPen(QColor(100, 180, 255, 200))
-        pen.setWidthF(1.5)
-        painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        for path in river_paths:
+
+        max_flow = max(flows[-1] for _, flows in river_paths if flows)
+        min_width, max_width = 0.5, 4.0
+
+        active_pen: QPen | None = None
+        for path, flows in river_paths:
             if len(path) < 2:
                 continue
             pts = centroids[np.array(path, dtype=np.int32)]
@@ -330,16 +332,19 @@ class MapWidget(QWidget):
             proj = self._projection.project_lonlat(lonlat)
             sx = (proj[:, 0] - cx) * scale_x + W * 0.5
             sy = -(proj[:, 1] - cy) * scale_y + H * 0.5
-            seg: list[QPointF] = [QPointF(float(sx[0]), float(sy[0]))]
             for j in range(1, len(path)):
                 if abs(lon[j] - lon[j - 1]) > np.pi:
-                    if len(seg) > 1:
-                        painter.drawPolyline(QPolygonF(seg))
-                    seg = [QPointF(float(sx[j]), float(sy[j]))]
-                else:
-                    seg.append(QPointF(float(sx[j]), float(sy[j])))
-            if len(seg) > 1:
-                painter.drawPolyline(QPolygonF(seg))
+                    continue
+                w = min_width + (max_width - min_width) * (flows[j] / max_flow) ** 0.5
+                if active_pen is None or abs(active_pen.widthF() - w) > 0.05:
+                    pen = QPen(QColor(100, 180, 255, 200))
+                    pen.setWidthF(w)
+                    painter.setPen(pen)
+                    active_pen = pen
+                painter.drawLine(
+                    QPointF(float(sx[j - 1]), float(sy[j - 1])),
+                    QPointF(float(sx[j]), float(sy[j])),
+                )
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:

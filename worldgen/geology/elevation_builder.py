@@ -11,6 +11,7 @@ from worldgen.geology.elevation import (
     compute_face_elevations,
     compute_noise_elevation_deltas,
     compute_pixel_erosion,
+    face_elevations_from_texture,
 )
 from worldgen.geology.rivers import compute_river_flow, extract_river_paths
 from worldgen.geology.volcanism import compute_volcanism
@@ -48,13 +49,13 @@ class ElevationParams:
     elevation_max_hops: int = 16
     elevation_tex_size: int = 16
     # Elevation noise
-    noise_amplitude: float = 3.0
+    noise_amplitude: float = 1.5
     noise_coast_sigma: float = 3.0  # km; controls how far noise extends from sea level
     # Erosion (face-level)
-    hydraulic_iterations: int = 5
+    hydraulic_iterations: int = 2
     hydraulic_erosion_rate: float = 0.4
     hydraulic_deposition_rate: float = 0.3
-    thermal_iterations: int = 10
+    thermal_iterations: int = 2
     thermal_talus: float = 0.5
     thermal_erosion_rate: float = 0.5
     # Pixel erosion (applied per-texture-pixel after noise)
@@ -224,10 +225,10 @@ class ElevationBuilder:
         # Derive per-face elevations from the final texture for land/ocean masking.
         # Routing still uses the smooth pre-noise elevations; using noisy texture
         # averages for routing produces degenerate flow networks.
-        final_elevations = elevation_textures[:, :, :, 0].mean(axis=(1, 2)).astype(np.float64)
+        final_elevations = face_elevations_from_texture(elevation_textures)
 
         _report("Computing rivers…")
-        river_flow, river_flow_to = compute_river_flow(dual, elevations)
+        river_flow, river_flow_to = compute_river_flow(dual, final_elevations)
         river_paths = extract_river_paths(river_flow, river_flow_to, threshold=p.river_flow_threshold, elevations=final_elevations)
 
         # Store log-normalised river flow in texture channel 1.

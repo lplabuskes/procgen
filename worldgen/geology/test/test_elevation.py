@@ -4,6 +4,7 @@ import pytest
 from worldgen.geology.elevation import (
     compute_elevation_textures,
     compute_noise_elevation_deltas,
+    face_elevations_from_texture,
 )
 from worldgen.mesh.mymesh import Mesh
 
@@ -46,6 +47,43 @@ def _edge_uvs(mesh, face_idx: int, v_i: int, v_j: int):
     ia = face.index(v_i)
     ib = face.index(v_j)
     return mesh._face_vertex_uvs[face_idx][ia], mesh._face_vertex_uvs[face_idx][ib]
+
+
+class TestFaceElevationsFromTexture:
+    def test_output_shape_and_dtype(self):
+        tex = np.zeros((5, 8, 8, 4), dtype=np.float32)
+        result = face_elevations_from_texture(tex)
+        assert result.shape == (5,)
+        assert result.dtype == np.float64
+
+    def test_constant_texture_returns_that_value(self):
+        tex = np.full((3, 4, 4, 4), 0.0, dtype=np.float32)
+        tex[:, :, :, 0] = 2.5
+        result = face_elevations_from_texture(tex)
+        np.testing.assert_allclose(result, 2.5)
+
+    def test_mean_across_spatial_dims(self):
+        tex = np.zeros((2, 2, 2, 4), dtype=np.float32)
+        tex[0, :, :, 0] = [[1.0, 3.0], [5.0, 7.0]]  # mean = 4.0
+        tex[1, :, :, 0] = [[0.0, 0.0], [0.0, 2.0]]  # mean = 0.5
+        result = face_elevations_from_texture(tex)
+        np.testing.assert_allclose(result, [4.0, 0.5])
+
+    def test_only_channel_0_is_used(self):
+        tex = np.zeros((2, 4, 4, 4), dtype=np.float32)
+        tex[0, :, :, 0] = 1.0
+        tex[1, :, :, 0] = -3.0
+        tex[:, :, :, 1:] = 999.0  # other channels should not affect output
+        result = face_elevations_from_texture(tex)
+        np.testing.assert_allclose(result, [1.0, -3.0])
+
+    def test_per_face_values_are_independent(self):
+        rng = np.random.default_rng(0)
+        tex = rng.standard_normal((10, 6, 6, 4)).astype(np.float32)
+        result = face_elevations_from_texture(tex)
+        for i in range(10):
+            expected = float(tex[i, :, :, 0].mean())
+            assert abs(result[i] - expected) < 1e-5, f"face {i} mismatch"
 
 
 class TestNoiseShape:

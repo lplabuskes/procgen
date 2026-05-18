@@ -348,6 +348,18 @@ def compute_noise_elevation_deltas(
     return result
 
 
+def face_elevations_from_texture(elevation_textures: np.ndarray) -> np.ndarray:
+    """Derive per-face elevation by averaging the elevation channel over each face's texture pixels.
+
+    Args:
+        elevation_textures: float32 (N, H, W, 4); channel 0 is elevation in km.
+
+    Returns:
+        float64 array of shape (N,) with mean elevation per face.
+    """
+    return elevation_textures[:, :, :, 0].mean(axis=(1, 2)).astype(np.float64)
+
+
 def compute_elevation_textures(
     mesh: PolygonMesh,
     elevations: np.ndarray,
