@@ -197,10 +197,6 @@ class ElevationBuilder:
         dual.apply_metadata_channel("volcanic_activity", volcanism.tolist())
         dual.apply_metadata_channel("elevation", elevations.tolist())
 
-        _report("Computing rivers…")
-        river_flow, river_flow_to = compute_river_flow(dual, elevations)
-        river_paths = extract_river_paths(river_flow, river_flow_to, threshold=p.river_flow_threshold)
-
         _report("Generating elevation textures…")
         elevation_textures = compute_elevation_textures(
             dual, elevations, tex_size=p.elevation_tex_size
@@ -225,6 +221,15 @@ class ElevationBuilder:
             thermal_erosion_rate=p.pixel_thermal_erosion_rate,
         )
 
+        # Derive per-face elevations from the final texture for land/ocean masking.
+        # Routing still uses the smooth pre-noise elevations; using noisy texture
+        # averages for routing produces degenerate flow networks.
+        final_elevations = elevation_textures[:, :, :, 0].mean(axis=(1, 2)).astype(np.float64)
+
+        _report("Computing rivers…")
+        river_flow, river_flow_to = compute_river_flow(dual, elevations)
+        river_paths = extract_river_paths(river_flow, river_flow_to, threshold=p.river_flow_threshold, elevations=final_elevations)
+
         # Store log-normalised river flow in texture channel 1.
         log_flow = np.log1p(river_flow).astype(np.float32)
         max_log = float(log_flow.max()) or 1.0
@@ -238,7 +243,7 @@ class ElevationBuilder:
         self.face_velocities = face_velocities
         self.boundary_types = boundary_types
         self.boundary_data = boundary_data
-        self.elevations = elevations
+        self.elevations = final_elevations
         self.volcanism = volcanism
         self.river_flow = river_flow
         self.rivers = river_paths

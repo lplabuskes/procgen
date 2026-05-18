@@ -66,6 +66,7 @@ def extract_river_paths(
     flow: np.ndarray,
     flow_to: np.ndarray,
     threshold: float = 100.0,
+    elevations: np.ndarray | None = None,
 ) -> list[list[int]]:
     """Extract river centre-lines as sequences of face indices.
 
@@ -77,12 +78,17 @@ def extract_river_paths(
         flow: Flow accumulation per face (output of compute_river_flow).
         flow_to: Downstream face index per face, -1 for sinks.
         threshold: Minimum flow accumulation for a face to be a river face.
+        elevations: Optional per-face elevations (km). When provided, faces
+            with elevation < 0 (ocean) are excluded from the river set so
+            paths stay on land.
 
     Returns:
         List of paths; each is a list of face indices from source to mouth.
         Confluences cause downstream segments to appear in multiple paths.
     """
     river_set = set(int(i) for i in np.where(flow >= threshold)[0])
+    if elevations is not None:
+        river_set = {i for i in river_set if elevations[i] >= 0.0}
 
     has_river_upstream: set[int] = set()
     for i in river_set:
