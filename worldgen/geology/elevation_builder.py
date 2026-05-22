@@ -10,7 +10,6 @@ from worldgen.geology.elevation import (
     compute_erosion,
     compute_face_elevations,
     compute_noise_elevation_deltas,
-    compute_pixel_erosion,
     face_elevations_from_texture,
 )
 from worldgen.geology.rivers import River, RiverGenerator
@@ -87,13 +86,6 @@ class FaceErosionParams:
 
 
 @dataclass
-class PixelErosionParams:
-    pixel_thermal_iterations: int = _f(5, label="Thermal iterations", min=0, max=30)
-    pixel_thermal_talus: float = _f(0.05, label="Thermal talus (km)", min=0.001, max=1.0)
-    pixel_thermal_erosion_rate: float = _f(0.5, label="Erosion rate", min=0.0, max=1.0)
-
-
-@dataclass
 class VolcanismParams:
     n_hotspots: int = _f(8, label="Hotspots", min=0, max=30)
     volcanic_decay_rate: float = _f(0.3, label="Decay rate", min=0.0, max=5.0)
@@ -115,7 +107,6 @@ class ElevationParams:
     elevation: ElevationFieldParams = field(default_factory=ElevationFieldParams, metadata={"label": "Elevation"})
     noise: NoiseParams = field(default_factory=NoiseParams, metadata={"label": "Elevation Noise"})
     face_erosion: FaceErosionParams = field(default_factory=FaceErosionParams, metadata={"label": "Face Erosion", "hidden": True})
-    pixel_erosion: PixelErosionParams = field(default_factory=PixelErosionParams, metadata={"label": "Pixel Erosion"})
     volcanism: VolcanismParams = field(default_factory=VolcanismParams, metadata={"label": "Volcanism"})
     rivers: RiverParams = field(default_factory=RiverParams, metadata={"label": "Rivers"})
     # Reproducibility — None means random each run
@@ -260,14 +251,6 @@ class ElevationBuilder:
             coast_sigma=p.noise.noise_coast_sigma,
         )
         elevation_textures[:, :, :, 0] += noise_deltas[:, :, :, 0]
-
-        # _report("Applying pixel erosion…")
-        # elevation_textures = compute_pixel_erosion(
-        #     elevation_textures,
-        #     thermal_iterations=p.pixel_erosion.pixel_thermal_iterations,
-        #     thermal_talus=p.pixel_erosion.pixel_thermal_talus,
-        #     thermal_erosion_rate=p.pixel_erosion.pixel_thermal_erosion_rate,
-        # )
 
         # Derive per-face elevations from the final texture for land/ocean masking.
         final_elevations = face_elevations_from_texture(elevation_textures)

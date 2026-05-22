@@ -228,58 +228,6 @@ def compute_erosion(
     return elev
 
 
-def compute_pixel_erosion(
-    elevation_textures: np.ndarray,
-    thermal_iterations: int = 5,
-    thermal_talus: float = 0.05,
-    thermal_erosion_rate: float = 0.5,
-) -> np.ndarray:
-    """Apply pixel-level thermal erosion to elevation textures.
-
-    Smooths noise-induced sharp slopes within each face's texture by
-    transferring material wherever adjacent-pixel elevation differences exceed
-    `thermal_talus`. Vectorized across all faces simultaneously.
-
-    Args:
-        elevation_textures: float32 (N, H, W, 4); channel 0 is elevation (km).
-        thermal_iterations: Number of full erosion sweeps.
-        thermal_talus: Minimum pixel-to-pixel elevation difference (km) that
-            triggers material transfer.
-        thermal_erosion_rate: Fraction of excess slope transferred per sweep.
-
-    Returns:
-        Modified copy of elevation_textures (channel 0 updated; others unchanged).
-    """
-    result = elevation_textures.copy()
-    elev = result[:, :, :, 0].astype(np.float64)  # (N, H, W)
-
-    for _ in range(thermal_iterations):
-        # W-axis: right neighbours
-        diff = elev[:, :, :-1] - elev[:, :, 1:]
-        transfer = np.where(diff > thermal_talus, thermal_erosion_rate * (diff - thermal_talus) * 0.5, 0.0)
-        elev[:, :, :-1] -= transfer
-        elev[:, :, 1:] += transfer
-
-        diff = elev[:, :, 1:] - elev[:, :, :-1]
-        transfer = np.where(diff > thermal_talus, thermal_erosion_rate * (diff - thermal_talus) * 0.5, 0.0)
-        elev[:, :, 1:] -= transfer
-        elev[:, :, :-1] += transfer
-
-        # H-axis: lower neighbours
-        diff = elev[:, :-1, :] - elev[:, 1:, :]
-        transfer = np.where(diff > thermal_talus, thermal_erosion_rate * (diff - thermal_talus) * 0.5, 0.0)
-        elev[:, :-1, :] -= transfer
-        elev[:, 1:, :] += transfer
-
-        diff = elev[:, 1:, :] - elev[:, :-1, :]
-        transfer = np.where(diff > thermal_talus, thermal_erosion_rate * (diff - thermal_talus) * 0.5, 0.0)
-        elev[:, 1:, :] -= transfer
-        elev[:, :-1, :] += transfer
-
-    result[:, :, :, 0] = elev.astype(np.float32)
-    return result
-
-
 def compute_noise_elevation_deltas(
     mesh: PolygonMesh,
     tex_size: int = 32,
