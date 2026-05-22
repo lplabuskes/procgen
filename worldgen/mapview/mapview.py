@@ -318,7 +318,7 @@ class MapWidget(QWidget):
         if not polygons:
             return
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(QColor(80, 140, 220, 180)))
+        painter.setBrush(QBrush(QColor(80, 140, 220, 255)))
         for verts in polygons:
             for lonlat in _split_at_antimeridian(verts):
                 proj = self._projection.project_lonlat(lonlat)
