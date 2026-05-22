@@ -1,571 +1,259 @@
-# River Generation System — Implementation Spec
+# River Generation — As-Built Design
 
-**For:** Claude Code  
-**Language:** Python  
-**Purpose:** Procedurally generate flow-weighted river polylines on a globe mesh with per-face elevation textures.
+**Module:** `worldgen/geology/rivers.py`
+**Purpose:** Produce flow-weighted river polylines on a globe whose terrain lives in per-face elevation textures.
 
----
-
-## ⚠️ Integration Assumptions — Verify Before Implementing
-
-The following interfaces are **assumed** based on a generic globe mesh architecture.
-**Inspect the actual codebase and reconcile before writing any code.**
-
-| Assumption | What to verify |
-|---|---|
-| `mesh.faces` is iterable, yielding face objects | Check the actual mesh class/type |
-| Each face has `.uv_to_world(uv: tuple) -> np.ndarray` | May be named differently or take different args |
-| Each face has a `.id: int` or equivalent unique key | Could be index-based instead |
-| `mesh.adjacent_face_pairs()` yields `(face_a, face_b, shared_edge)` | Adjacency API likely differs; check half-edge or winged-edge structure |
-| Elevation textures are `dict[face_id, np.ndarray]` (float32, shape HxW) | Could be a texture atlas, single equirect map, or GPU resource |
-| Globe is a unit sphere (positions normalized) | Affects projection math in smoothing step |
-| `sea_level` is expressed in the same units as elevation texture values | Critical for sink detection |
+This document describes the system as currently implemented. Earlier drafts of the spec (D4 routing, Catmull-Rom smoothing, grid-snapped traces) are preserved only in git history; the algorithms below superseded them after measuring directional-bias artifacts and runaway loops.
 
 ---
 
-## File Layout
-
-Create a single new module. Suggested path (adjust to match project conventions):
+## Pipeline overview
 
 ```
-<project_root>/
-└── rivers/
-    ├── __init__.py          # re-exports RiverGenerator, River, RiverSegment
-    ├── sampler.py           # ElevationSampler
-    ├── graph.py             # GlobeFlowGraph
-    ├── flow.py              # FlowAccumulator
-    ├── extractor.py         # RiverExtractor
-    ├── smoothing.py         # catmull_rom_smooth
-    └── generator.py         # RiverGenerator (top-level facade)
+elevation textures
+       │
+       ▼
+[ Priority-Flood + ε-bias ]         # _priority_flood
+       │  eff (filled DEM, slopes toward outlets)
+       ▼
+[ D-infinity flow direction ]       # _compute_dinf_flow + _inter_face_fallback
+       │  receiver1/2, frac1/2, flow_angle  (per node)
+       ▼
+[ Multi-receiver flow accumulation ]# _accumulate_flow
+       │  flow_accum (per node)
+       ▼
+[ Headwater identification ]        # extract_rivers (above-threshold, no above-threshold inflow)
+       │
+       ▼
+[ Sub-pixel gradient walk ]         # _trace_river_subpixel + _gradient_angle_at
+       │  one River per headwater
+       ▼
+[ Laplacian smoothing on sphere ]   # laplacian_smooth_sphere
+       │
+       ▼
+List[River]
 ```
-
-Alternatively, collapse into a single `rivers.py` if the project prefers flat structure.
 
 ---
 
-## Data Structures
+## Data structures
 
 ```python
-# rivers/types.py  (or inline in __init__.py)
-from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import Optional
-import numpy as np
-
-
 @dataclass
 class RiverNode:
-    position: np.ndarray        # 3D point on globe surface, shape (3,)
-    elevation: float            # value sampled from elevation texture
-    face_id: int                # which mesh face this node belongs to
-    uv: tuple[float, float]     # UV coordinate within that face [0,1]²
-
+    position: np.ndarray          # 3D point on unit sphere, shape (3,)
+    elevation: float
+    face_id: int
+    uv: tuple[float, float]       # face-local UV in [0, 1]²
 
 @dataclass
 class RiverSegment:
     start: RiverNode
-    end: RiverNode
-    flow_rate: float            # accumulated flow (dimensionless; scale externally if needed)
+    end:   RiverNode
+    flow_rate: float              # upstream flow accumulation at the start node
     tributary_count: int = 0
-
 
 @dataclass
 class River:
-    segments: list[RiverSegment] = field(default_factory=list)
-    source: Optional[RiverNode] = None
-    mouth: Optional[RiverNode] = None
-
-    def as_polyline(self) -> list[np.ndarray]:
-        """Returns ordered list of 3D positions from source to mouth."""
-        if not self.segments:
-            return []
-        pts = [self.segments[0].start.position]
-        pts += [s.end.position for s in self.segments]
-        return pts
-
-    def flow_rates(self) -> list[float]:
-        """Returns flow_rate per segment, parallel to as_polyline() edges."""
-        return [s.flow_rate for s in self.segments]
+    segments: list[RiverSegment]
+    source:   Optional[RiverNode]
+    mouth:    Optional[RiverNode]
+    def as_polyline()  -> list[np.ndarray]   # 3D positions, source → mouth
+    def flow_rates()   -> list[float]        # one per segment
 ```
+
+Trace-walk segments hold **off-grid sub-pixel positions** — the `face_id`/`uv` fields on intermediate `RiverNode`s are placeholders (filled with the segment's last known face and (0, 0)). The source and mouth nodes hold valid grid coordinates.
 
 ---
 
-## Phase 1 — Elevation Sampling (`sampler.py`)
+## Indexing & adjacency
 
-Bilinear interpolation into a per-face heightmap.
+Every grid cell across the whole mesh has a flat index:
 
-**⚠️ If your elevation data is a texture atlas or equirectangular map rather than
-per-face arrays, replace `self.textures[face_id]` lookup with the appropriate
-projection/sampling call.**
+```
+node_idx = face * resolution² + row * resolution + col
+```
+
+`row` corresponds to the v-axis (north in ~90% of faces), `col` to the u-axis (east).
+
+- **Intra-face**: D8 (8-connected) neighbours derived on the fly in `_neighbors`. Used by Priority-Flood and by the inter-face fallback.
+- **Inter-face**: sparse adjacency `self._inter_adj: dict[int, list[int]]` built once in `_stitch_face_boundaries`. For each adjacent face pair the two shared mesh vertices define the polygon edge in 3D; each face's tangent frame projects those vertices into its own UV space, and pixels lying within ½ pixel of that UV segment are matched by parameter `t` along the edge. Matched pixel pairs become bidirectional edges.
+- **Tangent-frame data**: `_u_axes`, `_v_axes`, `_u_offsets`, `_v_offsets`, `_u_ranges`, `_v_ranges`, `_tangent_centroids` are cached at init for the trace walk's UV ↔ 3D projections via `_uv_to_3d` and `_3d_to_uv`. The first six come from `mesh.face_tangent_frames()`; the last is read directly from `mesh._tangent_centroids` since the public API doesn't expose it.
+
+---
+
+## Stage 1 — Priority-Flood with imposed gradient
+
+Standard Planchon-Darboux (2001): seed every node at or below `sea_level`, then BFS outward in a min-heap keyed on filled elevation `eff`. The filled value of a newly-popped neighbour is
+
+```
+eff[nb] = max(elev[nb], eff[parent] + ε)        # ε = 1e-6
+```
+
+The plain `max(elev[nb], eff[parent])` form would leave the interior of any filled depression perfectly flat. The bilinear gradient of a flat field is exactly zero → `_gradient_angle_at` returns NaN → the trace walk has nothing to follow. The ε term gives those filled regions a tiny consistent slope from spill point inward, so the gradient field is non-zero everywhere except at true pits (which don't exist after PF) and so walks routes through filled lakes to their outlets.
+
+`eff` is stored on the generator as `self._eff` for the trace walk.
+
+---
+
+## Stage 2 — D-infinity flow direction (Tarboton 1997)
+
+For each grid node, consider the 8 triangular **facets** formed by adjacent cardinal/diagonal neighbour pairs:
+
+```
+(E, NE), (N, NE), (N, NW), (W, NW),
+(W, SW), (S, SW), (S, SE), (E, SE)
+```
+
+For each facet, compute two perpendicular slopes in face-UV space:
+
+```
+s1 = (eff[src] - eff[cardinal]) / d        # cardinal-direction slope
+s2 = (eff[cardinal] - eff[diagonal]) / d   # orthogonal slope toward diagonal
+r  = atan2(s2, s1)                         # gradient direction angle within facet
+```
+
+Where `d = 1/(res-1)` is the UV grid spacing. The aspect angle `r` is clamped to `[0, π/4]` (the facet's angular extent):
+
+- `r < 0`: steepest direction is "behind" the cardinal → snap to `r = 0`, slope = `s1`
+- `r > π/4`: steepest direction is "past" the diagonal → snap to `r = π/4`, slope = `(eff[src] - eff[diag]) / (d·√2)`
+- otherwise: slope = `√(s1² + s2²)`
+
+The steepest-positive-slope facet wins. Flow is split between its cardinal and diagonal vertices with fractions
+
+```
+frac_to_diagonal = r / (π/4)
+frac_to_cardinal = 1 - frac_to_diagonal
+```
+
+Stored per node: `receiver1` (cardinal), `receiver2` (diagonal), `frac1`, `frac2`. The global UV `flow_angle` (CCW from +U) is `base + sign * r` where `base` is the cardinal direction's global angle and `sign` is ±1 depending on which side of the cardinal the diagonal sits.
+
+Vectorisation: the 8 facets are processed one at a time. For each, build flat-index arrays for `(src, cardinal, diagonal)` triples valid in that facet (clipping at face borders), compute slopes element-wise, and update `best_slope`/`best_nb` where the new facet's slope strictly improves.
+
+**Boundary fallback.** Pixels on a face edge whose only descending neighbour lives in a different face have no intra-face facet with positive slope. `_inter_face_fallback` scans `_inter_adj` for those nodes and picks the steepest single inter-face neighbour (D8-style), setting `frac1=1`, `frac2=0`. The flow angle is derived by projecting the 3D step direction `(receiver_pos - src_pos)` into the source face's UV basis: `atan2(dv, du)`.
+
+The `flow_angle` field is retained for headwater detection and external inspection. The trace walk does **not** use it; it computes its own continuous flow direction from the bilinear gradient of `eff`.
+
+---
+
+## Stage 3 — Multi-receiver flow accumulation
+
+Process nodes in `eff`-descending order. Each node starts with `flow_accum[k] = 1.0` and forwards its accumulated value to up to two receivers per the D-inf fractions:
 
 ```python
-import numpy as np
-
-
-class ElevationSampler:
-    def __init__(self, mesh, elevation_textures: dict):
-        """
-        Args:
-            mesh: The globe mesh object (interface TBD — see assumptions above).
-            elevation_textures: Mapping of face_id -> np.ndarray (float32, shape HxW).
-                                Elevation values should be in a consistent unit
-                                comparable to the sea_level parameter used later.
-        """
-        self.mesh = mesh
-        self.textures = elevation_textures
-
-    def sample(self, face_id: int, uv: tuple[float, float]) -> float:
-        """Bilinear sample at (u,v) in [0,1]² on the given face."""
-        tex = self.textures[face_id]
-        h, w = tex.shape
-        x = uv[0] * (w - 1)
-        y = uv[1] * (h - 1)
-        x0, y0 = int(x), int(y)
-        x1 = min(x0 + 1, w - 1)
-        y1 = min(y0 + 1, h - 1)
-        fx, fy = x - x0, y - y0
-        return float(
-            tex[y0, x0] * (1 - fx) * (1 - fy) +
-            tex[y0, x1] * fx       * (1 - fy) +
-            tex[y1, x0] * (1 - fx) * fy       +
-            tex[y1, x1] * fx       * fy
-        )
+flow_accum[r1] += contrib * frac1[k]
+flow_accum[r2] += contrib * frac2[k]    # only if r2 ≥ 0
 ```
+
+Single-receiver nodes (from the inter-face fallback or where one fraction was exactly zero) forward the full contribution to `r1`.
+
+**Important consequence.** Unlike D8 single-receiver accumulation, with D-inf `flow_accum` can *decrease* downstream at a branch point — both receivers get less than the source. Code must not threshold on `flow_accum` while walking down a river; gates are applied only at headwater selection (`flow_accum ≥ min_flow`).
 
 ---
 
-## Phase 2 — Flow Graph (`graph.py`)
+## Stage 4 — Headwater detection & extraction
 
-Discretizes each mesh face into a uniform grid of `RiverNode`s, then wires up
-intra-face 4-connectivity and cross-face boundary edges.
-
-**⚠️ `_stitch_face_boundaries` is a stub. You must implement it using the actual
-mesh adjacency API (half-edge, winged-edge, adjacency list, etc.). The contract
-is: for each pair of adjacent faces, find boundary grid nodes that are spatially
-coincident (or closest) and add bidirectional edges between them.**
+Above-threshold nodes are those with `flow_accum ≥ min_flow`. A node is a **headwater** if no above-threshold node sends it flow with a non-zero fraction:
 
 ```python
-from __future__ import annotations
-from rivers.types import RiverNode
-from rivers.sampler import ElevationSampler
-
-
-class GlobeFlowGraph:
-    def __init__(self, mesh, sampler: ElevationSampler, resolution: int = 64):
-        """
-        Args:
-            resolution: Number of grid samples per face edge.
-                        64 is reasonable for prototyping; use 128-256 for quality.
-        """
-        self.resolution = resolution
-        self.sampler = sampler
-        # node key: (face_id, i, j)  where i,j in [0, resolution)
-        self.nodes: dict[tuple, RiverNode] = {}
-        # adjacency: key -> list of neighbor keys
-        self.edges: dict[tuple, list[tuple]] = {}
-        self._build(mesh)
-
-    def _build(self, mesh):
-        res = self.resolution
-
-        # --- Intra-face grid sampling ---
-        # ⚠️ VERIFY: how to enumerate faces and convert UV to world position.
-        #    Replace `enumerate(mesh.faces)` and `face.uv_to_world(uv)` as needed.
-        for face_id, face in enumerate(mesh.faces):
-            for i in range(res):
-                for j in range(res):
-                    uv = (i / (res - 1), j / (res - 1))
-                    pos = face.uv_to_world(uv)   # ⚠️ verify method name/signature
-                    elev = self.sampler.sample(face_id, uv)
-                    key = (face_id, i, j)
-                    self.nodes[key] = RiverNode(
-                        position=pos,
-                        elevation=elev,
-                        face_id=face_id,
-                        uv=uv,
-                    )
-                    # 4-connected intra-face neighbors
-                    neighbors = []
-                    for di, dj in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-                        ni, nj = i + di, j + dj
-                        if 0 <= ni < res and 0 <= nj < res:
-                            neighbors.append((face_id, ni, nj))
-                    self.edges[key] = neighbors
-
-        self._stitch_face_boundaries(mesh)
-
-    def _stitch_face_boundaries(self, mesh):
-        """
-        *** STUB — must be implemented against the actual mesh API. ***
-
-        Goal: for each pair of adjacent mesh faces, connect boundary grid nodes
-        across the shared edge with bidirectional edges.
-
-        Pseudocode contract:
-            for face_a, face_b, shared_edge in mesh.adjacent_face_pairs():
-                for key_a, key_b in self._match_boundary_nodes(face_a, face_b):
-                    self.edges[key_a].append(key_b)
-                    self.edges[key_b].append(key_a)
-
-        _match_boundary_nodes should pair nodes by proximity: for each boundary
-        node on face_a, find the nearest boundary node on face_b and yield both keys.
-
-        Implementation hints:
-          - For cube-sphere meshes: boundary nodes share an exact edge; match by
-            index along that edge (they will have the same resolution).
-          - For icosphere meshes: use spatial proximity (kdtree or sorted angular
-            position along the shared great-circle arc).
-          - Threshold for "close enough": roughly 2x the intra-face edge spacing.
-        """
-        raise NotImplementedError(
-            "_stitch_face_boundaries must be implemented using the project's "
-            "mesh adjacency API. See docstring for contract and hints."
-        )
+has_inflow[r1] |= is_above[src] and is_above[r1] and frac1[src] > 0
+has_inflow[r2] |= is_above[src] and is_above[r2] and frac2[src] > 0
+headwaters = above_idx[~has_inflow[above_idx]]
 ```
 
+Each headwater seeds one `_trace_river_subpixel` call. Rivers with fewer than 3 segments are dropped (trivial traces from noise).
+
 ---
 
-## Phase 3 — Flow Accumulation (`flow.py`)
+## Stage 5 — Sub-pixel trace walk
 
-Uses the **Priority-Flood** algorithm to route flow from every land node to the
-nearest ocean sink, handling depressions without explicit pit-filling.
+The trace operates in **face-local UV coordinates** so we never have to snap to a grid pixel mid-walk. Snapping only happens when the step crosses a face boundary and we need to switch UV frames.
 
-```python
-from __future__ import annotations
-import heapq
-from typing import Optional
-from rivers.graph import GlobeFlowGraph
+State carried through the loop:
+- `current_face`: integer face id
+- `(u, v)`: position in current face's UV in `[0, 1]²`
+- `(prev_du, prev_dv)`: previous step's unit direction in UV (for momentum)
+- `recent_positions`: ring buffer (length `stall_window = 40`) for stall detection
 
+Each iteration:
 
-class FlowAccumulator:
-    def __init__(self, graph: GlobeFlowGraph):
-        self.graph = graph
-        # flow_dir[key] = parent_key this node drains into; None means ocean sink
-        self.flow_dir: dict[tuple, Optional[tuple]] = {}
-        # flow_accum[key] = total upstream area (each node contributes 1.0)
-        self.flow_accum: dict[tuple, float] = {}
+```
+ang ← _gradient_angle_at(current_face, u, v)
+if isfinite(ang):
+    (du, dv) ← (cos ang, sin ang)
+    if has_prev:
+        (du, dv) ← normalize((1-α)·grad + α·prev)        # α = 0.5
+elif has_prev:
+    (du, dv) ← (prev_du, prev_dv)                        # coast on momentum
+else:
+    break                                                # genuine dead end at start
 
-    def compute(self, sea_level: float = 0.0) -> None:
-        """
-        Args:
-            sea_level: Elevation threshold below which nodes are ocean sinks.
-                       Must be in the same units as ElevationSampler output.
-        """
-        nodes = self.graph.nodes
-        edges = self.graph.edges
+(new_u, new_v) ← (u + uv_step·du, v + uv_step·dv)       # uv_step = 1/(res-1)
 
-        visited: set[tuple] = set()
-        heap: list[tuple] = []   # (effective_elevation, node_key)
-
-        # Seed ocean/sink nodes
-        for key, node in nodes.items():
-            if node.elevation <= sea_level:
-                heapq.heappush(heap, (node.elevation, key))
-                self.flow_dir[key] = None
-                visited.add(key)
-
-        # Priority-Flood: process lowest nodes first; upstream nodes drain into
-        # the node that first reached them (their effective parent).
-        while heap:
-            elev, key = heapq.heappop(heap)
-            for nb_key in edges.get(key, []):
-                if nb_key not in visited:
-                    nb_node = nodes[nb_key]
-                    self.flow_dir[nb_key] = key
-                    visited.add(nb_key)
-                    # Effective elevation is max(current, neighbor) to prevent
-                    # water flowing "up" through depressions in traversal order.
-                    eff_elev = max(elev, nb_node.elevation)
-                    heapq.heappush(heap, (eff_elev, nb_key))
-
-        # Accumulate flow: process high-to-low, each node adds its count to parent
-        for key in nodes:
-            self.flow_accum[key] = 1.0
-
-        sorted_keys = sorted(nodes.keys(), key=lambda k: -nodes[k].elevation)
-        for key in sorted_keys:
-            parent = self.flow_dir.get(key)
-            if parent is not None:
-                self.flow_accum[parent] = (
-                    self.flow_accum.get(parent, 1.0) +
-                    self.flow_accum.get(key, 1.0)
-                )
+if (new_u, new_v) ∈ [0, 1]²:
+    move within current_face
+else:
+    project attempted 3D position into each adjacent face;
+    pick the first whose UV ∈ [0, 1]² (with small slop), clamp, switch face
 ```
 
+After moving, the closest grid pixel is consulted only to read `elevations[nearest]` for the sea-level stop condition and `flow_accum[nearest]` for the rendered segment width.
+
+### Why negative bilinear gradient instead of bilinear D-inf angle?
+
+Initial drafts walked along a **bilinear interpolation of the D-inf flow_angle vectors** (interpolating `(cos, sin)` to handle wraparound). That vector field has non-zero curl: closed integral curves form around grid cells, and walks got trapped in tiny vortices a fraction of a face wide.
+
+Switching to the negative gradient of the (bilinearly interpolated) scalar field `eff` removed the trap entirely — gradient fields are curl-free by Stokes, so the walk is guaranteed to descend monotonically through `eff`. Combined with the ε-bias in Priority-Flood that gives even filled flats a non-zero gradient, the walk reaches an outlet from anywhere on land that isn't a true ocean pixel.
+
+### Why momentum?
+
+Per-face elevation textures are sampled independently of one another. At a shared face boundary, face A's bilinear sample of the elevation at point X can differ from face B's sample of the same point — the surfaces don't match. Right after crossing into the new face, the new face's gradient can point back into the old face (because its first interior pixel reads as lower than the boundary). Without momentum the walk would ping-pong across the seam for a step or two and `stall_window` would kill it.
+
+Blending 50% prior direction + 50% new gradient lets the walk carry its existing velocity through the boundary band; by step 2 or 3 it has moved far enough into the new face that the local gradient settles down. Momentum also pushes the walk across short flats that escaped the ε-bias (e.g., genuinely identical adjacent pixel values).
+
+### Stall detection
+
+If displacement over the last `stall_window = 40` steps is less than half a face-cell, give up. With ε-bias and momentum this rarely fires in normal terrain; the cap mainly catches cases where momentum is taking the walk in a near-circle.
+
+A hard `max_steps = 4 · resolution²` cap also exists as a final safety. Across-globe rivers are nowhere near that long; hitting the cap means a runaway.
+
 ---
 
-## Phase 4 — River Extraction (`extractor.py`)
+## Stage 6 — Laplacian smoothing on the sphere
 
-Traces rivers downstream from headwater seeds, emitting `RiverSegment`s.
+`laplacian_smooth_sphere(polyline, iterations=8, alpha=0.5)`:
 
-```python
-from __future__ import annotations
-from typing import Optional
-from rivers.types import River, RiverSegment
-from rivers.graph import GlobeFlowGraph
-from rivers.flow import FlowAccumulator
-
-
-class RiverExtractor:
-    def __init__(
-        self,
-        graph: GlobeFlowGraph,
-        accumulator: FlowAccumulator,
-        min_flow_threshold: float = 50.0,
-    ):
-        """
-        Args:
-            min_flow_threshold: Minimum flow_accum value for a node to be part of
-                                a river. Tune this to control river density.
-                                Typical range: 20 (many small streams) – 500 (major rivers only).
-        """
-        self.graph = graph
-        self.acc = accumulator
-        self.threshold = min_flow_threshold
-
-    def extract_all(self) -> list[River]:
-        """Returns all rivers with segments above the flow threshold."""
-        is_above = {
-            k for k, v in self.acc.flow_accum.items()
-            if v >= self.threshold
-        }
-
-        # Headwaters: above threshold, but no upstream neighbor is also above threshold
-        headwaters = []
-        for key in is_above:
-            upstream_above = [
-                nb for nb in self._upstream_neighbors(key)
-                if nb in is_above
-            ]
-            if not upstream_above:
-                headwaters.append(key)
-
-        rivers = []
-        for hw_key in headwaters:
-            river = self._trace_river(hw_key)
-            if river is not None:
-                rivers.append(river)
-        return rivers
-
-    def _upstream_neighbors(self, key: tuple) -> list[tuple]:
-        return [
-            nb for nb in self.graph.edges.get(key, [])
-            if self.acc.flow_dir.get(nb) == key
-        ]
-
-    def _trace_river(self, start_key: tuple) -> Optional[River]:
-        nodes = self.graph.nodes
-        river = River(source=nodes[start_key])
-        current = start_key
-
-        while True:
-            next_key = self.acc.flow_dir.get(current)
-            if next_key is None:
-                river.mouth = nodes[current]
-                break
-
-            seg = RiverSegment(
-                start=nodes[current],
-                end=nodes[next_key],
-                flow_rate=self.acc.flow_accum[current],
-            )
-            river.segments.append(seg)
-            current = next_key
-
-        # Discard trivially short traces
-        return river if len(river.segments) > 2 else None
+```
+for each iteration:
+    interior[i] ← interior[i] + α · (mid(neighbours) - interior[i])
+    interior[i] ← interior[i] / ‖interior[i]‖           # re-project to unit sphere
 ```
 
----
+Endpoints (source, mouth) are pinned. This removes residual sub-pixel zig-zag in the trace, where consecutive steps may differ in angle by a few degrees because each step recomputes the gradient at the new sub-pixel position.
 
-## Phase 5 — Smoothing (`smoothing.py`)
-
-Catmull-Rom spline interpolation, re-projected onto the unit sphere after each
-subdivision step.
-
-**⚠️ If your globe is not a unit sphere (e.g. scaled to planet radius), replace
-`pt / np.linalg.norm(pt)` with the appropriate surface projection for your geometry.**
-
-```python
-from __future__ import annotations
-import numpy as np
-
-
-def catmull_rom_smooth(
-    polyline: list[np.ndarray],
-    subdivisions: int = 4,
-) -> list[np.ndarray]:
-    """
-    Smooth a polyline of 3D points using Catmull-Rom splines, then re-project
-    each interpolated point onto the unit sphere.
-
-    Args:
-        polyline:     Ordered list of np.ndarray positions, shape (3,) each.
-        subdivisions: Interpolated points inserted per segment.
-                      4 is a good default; 8 for high-quality output.
-
-    Returns:
-        Smoothed list of np.ndarray positions on the unit sphere.
-    """
-    pts = polyline
-    if len(pts) < 4:
-        return pts
-
-    # Phantom endpoints to give the spline full tangents at start/end
-    padded = (
-        [pts[0] + (pts[0] - pts[1])]
-        + pts
-        + [pts[-1] + (pts[-1] - pts[-2])]
-    )
-
-    result: list[np.ndarray] = []
-    for i in range(1, len(padded) - 2):
-        p0, p1, p2, p3 = padded[i-1], padded[i], padded[i+1], padded[i+2]
-        for s in range(subdivisions):
-            t = s / subdivisions
-            pt = 0.5 * (
-                (2 * p1) +
-                (-p0 + p2) * t +
-                (2*p0 - 5*p1 + 4*p2 - p3) * t**2 +
-                (-p0 + 3*p1 - 3*p2 + p3) * t**3
-            )
-            # Re-project onto sphere surface
-            norm = np.linalg.norm(pt)
-            result.append(pt / norm if norm > 0 else pt)
-
-    # Append final point
-    last = pts[-1]
-    norm = np.linalg.norm(last)
-    result.append(last / norm if norm > 0 else last)
-    return result
-```
+This is approximating (control points move), not interpolating (a la Catmull-Rom). Catmull-Rom was tried first; it preserved the zigzag because it just passed through the noisy control points. Laplacian flattens them.
 
 ---
 
-## Top-Level Facade (`generator.py`)
+## Tuning knobs (constructor + private)
 
-```python
-from __future__ import annotations
-import numpy as np
-from rivers.types import River
-from rivers.sampler import ElevationSampler
-from rivers.graph import GlobeFlowGraph
-from rivers.flow import FlowAccumulator
-from rivers.extractor import RiverExtractor
-from rivers.smoothing import catmull_rom_smooth
-
-
-class RiverGenerator:
-    """
-    End-to-end river generation pipeline.
-
-    Usage:
-        gen = RiverGenerator(mesh, elevation_textures)
-        rivers = gen.generate()
-        # Each River has .segments (list[RiverSegment]) and .as_polyline()
-        # Each RiverSegment has .flow_rate (float), .start, .end (RiverNode)
-    """
-
-    def __init__(
-        self,
-        mesh,
-        elevation_textures: dict,
-        resolution: int = 64,
-        min_flow: float = 50.0,
-        sea_level: float = 0.0,
-        smooth_subdivisions: int = 4,
-    ):
-        """
-        Args:
-            mesh:                The globe mesh object (see integration assumptions).
-            elevation_textures:  face_id -> np.ndarray heightmap (see integration assumptions).
-            resolution:          Grid samples per face edge (64–256).
-            min_flow:            Flow accumulation threshold for river inclusion.
-            sea_level:           Elevation value treated as ocean/sink.
-            smooth_subdivisions: Catmull-Rom interpolation steps per segment.
-        """
-        self.smooth_subdivisions = smooth_subdivisions
-
-        self.sampler = ElevationSampler(mesh, elevation_textures)
-        self.graph = GlobeFlowGraph(mesh, self.sampler, resolution)
-        self.accumulator = FlowAccumulator(self.graph)
-        self.accumulator.compute(sea_level)
-        self.extractor = RiverExtractor(self.graph, self.accumulator, min_flow)
-
-    def generate(self) -> list[River]:
-        """
-        Run the full pipeline and return all rivers.
-
-        Returns:
-            List of River objects. Each River exposes:
-              .as_polyline()  -> list[np.ndarray]  (3D positions, source to mouth)
-              .flow_rates()   -> list[float]        (one per segment/edge)
-              .segments       -> list[RiverSegment] (full detail)
-              .source         -> RiverNode
-              .mouth          -> RiverNode
-        """
-        rivers = self.extractor.extract_all()
-
-        for river in rivers:
-            raw = river.as_polyline()
-            smoothed = catmull_rom_smooth(raw, self.smooth_subdivisions)
-
-            # Write smoothed positions back into segments
-            for i, seg in enumerate(river.segments):
-                if i < len(smoothed):
-                    seg.start.position = smoothed[i]
-                if i + 1 < len(smoothed):
-                    seg.end.position = smoothed[i + 1]
-
-        return rivers
-```
+| Parameter | Default | Effect |
+|---|---|---|
+| `min_flow` | `50.0` | Headwater threshold. Higher → fewer / larger rivers. With D-inf splitting, intermediate `flow_accum` is lower than D8 would produce; a value that gave dense rivers under D8 will give sparser ones here. |
+| `sea_level` | `0.0` | Elevation at/below which nodes are PF seeds and trace stops. |
+| `smoothing_iterations` | `8` | Laplacian passes. Higher → smoother, more shortening of meanders. |
+| `smoothing_alpha` | `0.5` | Per-iteration pull strength toward neighbour midpoint. |
+| `eps` (in `_priority_flood`) | `1e-6` | Imposed gradient on filled regions. Must be small relative to real terrain gradients. |
+| `momentum` (in `_trace_river_subpixel`) | `0.5` | Blend weight of previous direction. Higher → straighter rivers, more runaway risk; lower → more dead-ends at face seams. |
+| `stall_window` | `40` steps | Loop guard window. |
+| `max_steps` | `4 · res²` | Hard runaway cap. |
 
 ---
 
-## Suggested Configuration Presets
+## Current limitations / known follow-ups
 
-```python
-# Many fine rivers (dense network, slower)
-RiverGenerator(mesh, textures, resolution=128, min_flow=20.0)
-
-# Major rivers only (fast, good for LOD0)
-RiverGenerator(mesh, textures, resolution=64,  min_flow=200.0)
-
-# High-quality smoothing
-RiverGenerator(mesh, textures, resolution=64,  min_flow=50.0, smooth_subdivisions=8)
-```
-
----
-
-## Implementation Order for Claude Code
-
-Implement in this order to enable incremental testing at each step:
-
-1. **`types.py`** — no dependencies, trivially testable
-2. **`sampler.py`** — test with a synthetic 2D array and known UV coords
-3. **`graph.py`** — implement intra-face grid only first; stub `_stitch_face_boundaries` with `pass` (not `raise`) to allow early end-to-end runs on single-face meshes
-4. **`flow.py`** — test with a small hand-crafted graph (5×5 grid, manual elevation values)
-5. **`extractor.py`** — verify headwater detection and trace length filtering
-6. **`smoothing.py`** — test standalone with a known zigzag polyline
-7. **`generator.py`** — wire up and run end-to-end
-8. **`_stitch_face_boundaries`** — implement last, once the mesh adjacency API is understood
-
----
-
-## Known Unknowns (Resolve During Implementation)
-
-- **Cross-face stitching** is the highest-risk integration point. If the mesh uses a
-  half-edge structure, `mesh.half_edges` or `face.adjacent_faces()` may give you
-  what you need. If it uses an indexed face set, build an edge-to-faces lookup first.
-
-- **Memory**: At `resolution=128`, a 6-face cube-sphere has ~98k nodes. At 256, ~393k.
-  If this is too large, consider a sparse representation where only nodes above a
-  flow threshold are kept after accumulation.
-
-- **Performance**: The priority-flood heap processes every node. For large resolutions,
-  consider running accumulation in a separate thread or process, or caching results
-  to disk between runs.
-
-- **Rainfall weighting**: Currently all nodes contribute `1.0` to flow. For realism,
-  weight by latitude (more rain near equator) or a noise-based precipitation map by
-  multiplying the initial `flow_accum[key]` value before accumulation.
+- **Per-face texture continuity.** The fundamental cause of momentum and stall handling is that the elevation field is C0-discontinuous at face boundaries. Reconciling boundary elevations (force matching values during PF, or share one global field) would let us drop momentum entirely and could improve trace quality.
+- **Bias residual.** Geographic bearing-histogram bias is now ~1.2–1.5× peak/mean (uniform = 1.0), down from D8's ~1.7×. The residual comes from the D-inf clamping behaviour at facet edges (cardinal/diagonal snaps) and from face-boundary kinks; it's no longer visually obvious but still measurable.
+- **Runaway rate.** A small fraction of rivers (single-digit % typically, more on rough terrain) still hit `max_steps`. Most appear to be momentum-driven loops in low-relief basins where the ε-gradient is too small to dominate the prior direction.
+- **Flat fraction reaching the ocean.** Depending on seed, 50–80% of generated rivers reach `sea_level`. The rest terminate inland (stall detection, max-steps, or NaN gradient at a true flat the ε-bias didn't catch). Whether this is acceptable depends on whether interior endorheic basins are desirable visually.
+- **No rainfall weighting.** Each grid cell contributes the same 1.0 to flow. Latitude- or noise-based precipitation weights would multiply the initial `flow_accum` array before stage 3.

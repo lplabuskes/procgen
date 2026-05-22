@@ -1,15 +1,22 @@
-"""River generation via per-face grid sampling and Priority-Flood routing.
+"""River generation via per-face grid sampling and D-infinity routing.
 
 Each face is discretized into a `resolution x resolution` grid of nodes (one
-per elevation texture pixel). Intra-face neighbours form a 4-connected grid;
+per elevation texture pixel). Intra-face neighbours form a D8 grid;
 inter-face neighbours are stitched by matching pixels along shared polygon
 edges in UV space. Flow is routed using the Priority-Flood algorithm
-(O. Planchon & F. Darboux, 2001) which handles depressions implicitly.
+(O. Planchon & F. Darboux, 2001) followed by D-infinity flow direction
+(D. Tarboton, 1997): each node sends fractional flow to up to two receivers
+based on a continuous-angle gradient computed from 8 triangular facets.
+
+River traces are sub-pixel: starting from each headwater, the walk steps
+~one grid cell along the continuous flow angle in 3D, snapping back to the
+grid only to look up the next angle. This removes the cardinal/diagonal
+quantization bias that D8 leaves behind.
 
 Public API:
     RiverGenerator(mesh, elevation_textures, ...).generate() -> list[River]
 
-See `river_generation_spec.md` for design rationale.
+See `docs/river_generation_spec.md` for design rationale.
 """
 from __future__ import annotations
 
@@ -98,7 +105,7 @@ class RiverGenerator:
 
     Internally uses flat node indexing (`face * res^2 + row * res + col`) to
     keep memory and Priority-Flood traversal fast on meshes with thousands
-    of faces. Intra-face 4-connectivity is computed on the fly; only the
+    of faces. Intra-face D8 connectivity is computed on the fly; only the
     sparse inter-face stitching is stored explicitly.
     """
 
@@ -157,6 +164,22 @@ class RiverGenerator:
         self.elevations: np.ndarray = elev.astype(np.float32).reshape(-1)
         self.positions: np.ndarray = mesh.face_texture_positions(h, h).reshape(-1, 3)
 
+        # Cache per-face tangent frame data for sub-pixel walks.
+        frames = mesh.face_tangent_frames()
+        self._u_axes = np.asarray(frames[0], dtype=np.float64)
+        self._v_axes = np.asarray(frames[1], dtype=np.float64)
+        self._u_offsets = np.asarray(frames[2], dtype=np.float64)
+        self._v_offsets = np.asarray(frames[3], dtype=np.float64)
+        self._u_ranges = np.asarray(frames[4], dtype=np.float64)
+        self._v_ranges = np.asarray(frames[5], dtype=np.float64)
+        # _tangent_centroids is the unnormalized mean vertex (the origin used
+        # by the same parameterization as face_texture_positions). Accessed
+        # via mymesh's private attribute since face_tangent_frames doesn't
+        # expose it.
+        self._tangent_centroids = np.asarray(
+            mesh._tangent_centroids, dtype=np.float64
+        )
+
         # Sparse inter-face adjacency: node_idx -> list[node_idx].
         # Intra-face neighbours are derived on the fly in `_neighbors`.
         self._inter_adj: Dict[int, List[int]] = {}
@@ -178,9 +201,8 @@ class RiverGenerator:
     def _neighbors(self, node: int) -> List[int]:
         """Intra-face D8 connectivity + any stitched inter-face neighbours.
 
-        Diagonal moves are essential: without them flow is locked to the
-        per-face U and V axes which (for ~90% of faces) align with geographic
-        east and north, producing visibly cardinal-biased rivers.
+        Used only by Priority-Flood; D-infinity routing computes its own
+        per-direction slices vectorised across all faces.
         """
         res = self.resolution
         r2 = res * res
@@ -312,43 +334,57 @@ class RiverGenerator:
         ]
 
     # ------------------------------------------------------------------
-    # Priority-Flood + accumulation
+    # Priority-Flood + D-inf flow + accumulation
     # ------------------------------------------------------------------
 
-    def compute_flow(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Route flow and accumulate upstream counts.
+    def compute_flow(
+        self,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Run priority-flood + D-inf flow direction + multi-receiver accumulation.
 
-        Three stages:
-          1. Priority-Flood fills depressions, producing a filled elevation
-             field `eff` that has no spurious sinks below sea level.
-          2. D8 steepest descent on `eff` (distance-weighted using actual 3D
-             positions) picks each node's downstream neighbour. Using gradient
-             rather than BFS-pop order removes the directional bias toward
-             whichever compass direction was inserted into the heap first.
-          3. Flow accumulation in `eff`-descending order ensures every
-             upstream node has been summed before its parent reads its value.
+        Stores the filled DEM as `self._eff` for the trace walk's bilinear
+        gradient lookup.
 
         Returns:
-            flow_dir: int32 (n_nodes,) — parent node each node drains into,
-                -1 for ocean sinks.
-            flow_accum: float32 (n_nodes,) — total upstream node count
-                (each node contributes 1.0 to itself).
+            receiver1, receiver2: int32 (n,) — up to two downstream receivers
+                per node, -1 when absent.
+            frac1, frac2: float32 (n,) — fractions sent to each receiver
+                (sum to 1 where flow exists).
+            flow_angle: float32 (n,) — continuous flow direction in the
+                source face's local UV plane (radians CCW from +U). NaN where
+                no descending direction was found (sinks, true ocean nodes).
+                Retained for headwater detection and external inspection;
+                the trace walk uses the bilinear elevation gradient instead.
+            flow_accum: float32 (n,) — upstream node count (each node
+                contributes 1.0 to itself).
+        """
+        eff = self._priority_flood()
+        self._eff = eff
+        r1, r2, f1, f2, ang = self._compute_dinf_flow(eff)
+        self._inter_face_fallback(r1, r2, f1, f2, ang, eff)
+        accum = self._accumulate_flow(r1, r2, f1, f2, eff)
+        return r1, r2, f1, f2, ang, accum
+
+    def _priority_flood(self) -> np.ndarray:
+        """Planchon-Darboux depression filling. Returns filled elevation `eff`.
+
+        Adds a small per-step epsilon so the filled surface inside a
+        depression slopes gently toward the spill point. Without it, the
+        bilinear gradient on a filled lake is exactly zero and walks coast
+        forever on momentum instead of routing to the outlet.
         """
         elev = self.elevations
         n = self.n_nodes
         sea = self.sea_level
-
-        # --- Stage 1: Priority-Flood ---
         eff = elev.astype(np.float32, copy=True)
-        pf_parent = np.full(n, -1, dtype=np.int32)
         visited = np.zeros(n, dtype=bool)
+        eps = 1e-6
 
         heap: List[Tuple[float, int]] = []
         ocean_idx = np.where(elev <= sea)[0]
         for idx in ocean_idx.tolist():
             heapq.heappush(heap, (float(elev[idx]), idx))
             visited[idx] = True
-            eff[idx] = float(elev[idx])
 
         while heap:
             eff_elev, key = heapq.heappop(heap)
@@ -357,169 +393,444 @@ class RiverGenerator:
                     continue
                 visited[nb] = True
                 nb_elev = float(elev[nb])
-                nb_eff = nb_elev if nb_elev > eff_elev else eff_elev
+                # Imposed-gradient fill: force a tiny downhill from key to nb
+                # whenever the real elevation would create a flat or sink.
+                nb_eff = max(nb_elev, eff_elev + eps)
                 eff[nb] = nb_eff
-                pf_parent[nb] = key
                 heapq.heappush(heap, (nb_eff, nb))
+        return eff
 
-        # --- Stage 2: D8 steepest descent on filled DEM ---
-        flow_dir = self._steepest_descent(eff, pf_parent)
-
-        # --- Stage 3: Flow accumulation, eff-descending ---
-        flow_accum = np.ones(n, dtype=np.float32)
-        order = np.argsort(-eff)
-        for key in order:
-            parent = int(flow_dir[key])
-            if parent >= 0:
-                flow_accum[parent] += flow_accum[key]
-        return flow_dir, flow_accum
-
-    def _steepest_descent(
+    def _compute_dinf_flow(
         self,
         eff: np.ndarray,
-        pf_parent: np.ndarray,
-    ) -> np.ndarray:
-        """For every node pick the neighbour with the steepest descent on
-        `eff`, weighted by actual 3D distance so diagonals don't dominate.
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Tarboton (1997) D-infinity flow on each face's regular UV grid.
 
-        Nodes with no strictly descending neighbour (e.g. on a filled flat)
-        fall back to the Priority-Flood parent, guaranteeing every non-ocean
-        node has a downstream link.
+        For each node, considers the 8 triangular facets formed by adjacent
+        cardinal/diagonal neighbour pairs. The steepest descending facet wins;
+        flow is split between its cardinal and diagonal vertices proportional
+        to the gradient direction angle within the facet.
+
+        Inter-face neighbours are not part of the 8-facet geometry; boundary
+        nodes with no descending intra-face facet are handled by
+        `_inter_face_fallback`.
         """
         n = self.n_nodes
         res = self.resolution
         r2 = res * res
-        pos = self.positions
 
+        receiver1 = np.full(n, -1, dtype=np.int32)
+        receiver2 = np.full(n, -1, dtype=np.int32)
+        frac1 = np.zeros(n, dtype=np.float32)
+        frac2 = np.zeros(n, dtype=np.float32)
+        flow_angle = np.full(n, np.nan, dtype=np.float32)
         best_slope = np.full(n, -np.inf, dtype=np.float32)
-        best_nb = np.full(n, -1, dtype=np.int32)
 
-        def update(src: np.ndarray, dst: np.ndarray) -> None:
-            delta = eff[src] - eff[dst]
-            diff = pos[src] - pos[dst]
-            d = np.sqrt(np.einsum('ij,ij->i', diff, diff))
-            np.maximum(d, 1e-12, out=d)
-            slope = delta / d
-            better = (slope > best_slope[src]) & (delta > 0)
-            idx = src[better]
-            best_slope[idx] = slope[better]
-            best_nb[idx] = dst[better]
+        d_inv = float(res - 1)                # 1 / (UV grid cell spacing)
+        inv_root2 = 1.0 / float(np.sqrt(2.0))
+        pi_4 = float(np.pi / 4.0)
 
-        # Vectorised intra-face neighbours, one direction at a time.
-        face_offsets = (np.arange(self.n_faces, dtype=np.int64)[:, None, None] * r2)
-        rr, cc = np.meshgrid(np.arange(res), np.arange(res), indexing='ij')
-        grid_flat = face_offsets + (rr[None, :, :] * res + cc[None, :, :])
+        face_offsets = (np.arange(self.n_faces, dtype=np.int64) * r2)[:, None, None]
 
-        directions = [
-            (-1, 0), (1, 0), (0, -1), (0, 1),
-            (-1, -1), (-1, 1), (1, -1), (1, 1),
+        # Each facet: (cardinal_dr, cardinal_dc, diag_dr, diag_dc, base, sign).
+        # +V (row+1) is north, +U (col+1) is east. `base` is the global UV angle
+        # of the cardinal direction; `sign` indicates whether the diagonal lies
+        # CCW (+1) or CW (-1) from the cardinal in the (U east, V north) frame.
+        facets = [
+            (0, +1, +1, +1, 0.0,            +1.0),   # E + NE
+            (+1, 0, +1, +1, np.pi / 2,      -1.0),   # N + NE
+            (+1, 0, +1, -1, np.pi / 2,      +1.0),   # N + NW
+            (0, -1, +1, -1, np.pi,          -1.0),   # W + NW
+            (0, -1, -1, -1, np.pi,          +1.0),   # W + SW
+            (-1, 0, -1, -1, -np.pi / 2,     -1.0),   # S + SW
+            (-1, 0, -1, +1, -np.pi / 2,     +1.0),   # S + SE
+            (0, +1, -1, +1, 0.0,            -1.0),   # E + SE
         ]
-        for dr, dc in directions:
-            r_lo = max(0, -dr); r_hi = res - max(0, dr)
-            c_lo = max(0, -dc); c_hi = res - max(0, dc)
-            if r_lo >= r_hi or c_lo >= c_hi:
+
+        for c_dr, c_dc, d_dr, d_dc, base, sign in facets:
+            r_lo = max(0, -c_dr, -d_dr)
+            r_hi = res - max(0, c_dr, d_dr)
+            col_lo = max(0, -c_dc, -d_dc)
+            col_hi = res - max(0, c_dc, d_dc)
+            if r_lo >= r_hi or col_lo >= col_hi:
                 continue
-            src = grid_flat[:, r_lo:r_hi, c_lo:c_hi].reshape(-1)
-            dst = grid_flat[:, r_lo + dr:r_hi + dr, c_lo + dc:c_hi + dc].reshape(-1)
-            update(src, dst)
 
-        # Inter-face stitched neighbours (sparse).
-        if self._inter_adj:
-            srcs: List[int] = []
-            dsts: List[int] = []
-            for s, neighbors in self._inter_adj.items():
-                srcs.extend([s] * len(neighbors))
-                dsts.extend(neighbors)
-            if srcs:
-                update(np.asarray(srcs, dtype=np.int64),
-                       np.asarray(dsts, dtype=np.int64))
+            rr = np.arange(r_lo, r_hi)
+            cc = np.arange(col_lo, col_hi)
+            R, C = np.meshgrid(rr, cc, indexing='ij')
+            src_local = (R * res + C)[None, :, :]
+            card_local = ((R + c_dr) * res + (C + c_dc))[None, :, :]
+            diag_local = ((R + d_dr) * res + (C + d_dc))[None, :, :]
 
-        # Flats: nothing descending, fall back to PF parent.
-        flats = (best_nb == -1) & (eff > self.sea_level)
-        best_nb[flats] = pf_parent[flats]
-        return best_nb
+            src_flat = (face_offsets + src_local).reshape(-1)
+            card_flat = (face_offsets + card_local).reshape(-1)
+            diag_flat = (face_offsets + diag_local).reshape(-1)
+
+            e0 = eff[src_flat]
+            e1 = eff[card_flat]
+            e2 = eff[diag_flat]
+
+            s1 = (e0 - e1) * d_inv           # cardinal slope
+            s2 = (e1 - e2) * d_inv           # orthogonal slope (toward diagonal)
+            diag_slope = (e0 - e2) * d_inv * inv_root2
+
+            r = np.arctan2(s2, s1)
+            # Outside [0, pi/4]: clamp angle and use the bounding-edge slope.
+            slope = np.where(
+                r < 0.0,
+                s1,
+                np.where(r > pi_4, diag_slope, np.hypot(s1, s2)),
+            )
+            r_clamped = np.clip(r, 0.0, pi_4)
+
+            better = (slope > 0.0) & (slope > best_slope[src_flat])
+            if not better.any():
+                continue
+            idx = src_flat[better]
+            sl = slope[better].astype(np.float32)
+            rc = r_clamped[better]
+
+            best_slope[idx] = sl
+            f2 = (rc / pi_4).astype(np.float32)
+            f1 = (1.0 - f2).astype(np.float32)
+            receiver1[idx] = card_flat[better]
+            receiver2[idx] = diag_flat[better]
+            frac1[idx] = f1
+            frac2[idx] = f2
+            flow_angle[idx] = (base + sign * rc).astype(np.float32)
+
+        return receiver1, receiver2, frac1, frac2, flow_angle
+
+    def _inter_face_fallback(
+        self,
+        receiver1: np.ndarray,
+        receiver2: np.ndarray,
+        frac1: np.ndarray,
+        frac2: np.ndarray,
+        flow_angle: np.ndarray,
+        eff: np.ndarray,
+    ) -> None:
+        """Route boundary nodes with no descending intra-face facet to their
+        steepest inter-face neighbour (D8 single receiver). Updates in place.
+        """
+        if not self._inter_adj:
+            return
+        res = self.resolution
+        r2 = res * res
+        for src, neighbors in self._inter_adj.items():
+            if receiver1[src] != -1:
+                continue
+            e0 = float(eff[src])
+            if e0 <= self.sea_level:
+                continue
+            best_slope = 0.0
+            best_nb = -1
+            for nb in neighbors:
+                delta = e0 - float(eff[nb])
+                if delta <= 0.0:
+                    continue
+                diff = self.positions[src] - self.positions[nb]
+                d = float(np.sqrt(diff @ diff))
+                if d <= 0.0:
+                    continue
+                slope = delta / d
+                if slope > best_slope:
+                    best_slope = slope
+                    best_nb = nb
+            if best_nb < 0:
+                continue
+            face = src // r2
+            direction = self.positions[best_nb] - self.positions[src]
+            du = float(direction @ self._u_axes[face])
+            dv = float(direction @ self._v_axes[face])
+            receiver1[src] = best_nb
+            receiver2[src] = -1
+            frac1[src] = 1.0
+            frac2[src] = 0.0
+            flow_angle[src] = float(np.arctan2(dv, du))
+
+    def _accumulate_flow(
+        self,
+        receiver1: np.ndarray,
+        receiver2: np.ndarray,
+        frac1: np.ndarray,
+        frac2: np.ndarray,
+        eff: np.ndarray,
+    ) -> np.ndarray:
+        """Multi-receiver accumulation in `eff`-descending order."""
+        n = self.n_nodes
+        flow_accum = np.ones(n, dtype=np.float32)
+        order = np.argsort(-eff)
+        for key in order.tolist():
+            r1 = int(receiver1[key])
+            if r1 < 0:
+                continue
+            contrib = float(flow_accum[key])
+            r2 = int(receiver2[key])
+            if r2 < 0:
+                flow_accum[r1] += contrib
+            else:
+                flow_accum[r1] += contrib * float(frac1[key])
+                flow_accum[r2] += contrib * float(frac2[key])
+        return flow_accum
 
     # ------------------------------------------------------------------
-    # River extraction
+    # River extraction (sub-pixel walk)
     # ------------------------------------------------------------------
 
     def extract_rivers(
         self,
-        flow_dir: np.ndarray,
+        receiver1: np.ndarray,
+        receiver2: np.ndarray,
+        frac1: np.ndarray,
+        frac2: np.ndarray,
         flow_accum: np.ndarray,
     ) -> List[River]:
-        """Trace each headwater downstream until it falls below threshold or
-        reaches a sink."""
+        """Identify headwaters and trace each downstream via sub-pixel walk."""
         threshold = self.min_flow
         is_above = flow_accum >= threshold
-
-        # Build upstream lookup (parent -> children) only for above-threshold nodes.
-        upstream: Dict[int, List[int]] = {}
         above_idx = np.where(is_above)[0]
-        for node in above_idx.tolist():
-            parent = int(flow_dir[node])
-            if parent >= 0 and is_above[parent]:
-                upstream.setdefault(parent, []).append(node)
 
-        headwaters: List[int] = [
-            int(node) for node in above_idx.tolist() if node not in upstream
-        ]
+        # Headwater = above-threshold node receiving no above-threshold inflow.
+        has_inflow = np.zeros(self.n_nodes, dtype=bool)
+        for node in above_idx.tolist():
+            r1 = int(receiver1[node])
+            r2 = int(receiver2[node])
+            if r1 >= 0 and is_above[r1] and frac1[node] > 0.0:
+                has_inflow[r1] = True
+            if r2 >= 0 and is_above[r2] and frac2[node] > 0.0:
+                has_inflow[r2] = True
+        headwaters = above_idx[~has_inflow[above_idx]].tolist()
 
         rivers: List[River] = []
         for hw in headwaters:
-            river = self._trace_river(hw, flow_dir, flow_accum)
+            river = self._trace_river_subpixel(int(hw), flow_accum)
             if river is not None and len(river.segments) > 2:
                 rivers.append(river)
         return rivers
 
-    def _trace_river(
+    def _trace_river_subpixel(
         self,
         start: int,
-        flow_dir: np.ndarray,
         flow_accum: np.ndarray,
     ) -> Optional[River]:
-        path: List[int] = [start]
-        current = start
-        while True:
-            nxt = int(flow_dir[current])
-            if nxt < 0:
+        """Walk sub-pixel along the negative bilinear elevation gradient,
+        staying in face-local UV coordinates. The gradient field of the
+        filled DEM is curl-free by construction, so the walk follows true
+        downhill paths without the D8 grid-snap cardinal-sector bias. We
+        only snap to the grid when crossing a face boundary (to switch into
+        the neighbour face's UV frame).
+        """
+        res = self.resolution
+        n_minus_1 = res - 1
+        uv_step = 1.0 / n_minus_1
+        face_init, row_init, col_init = self._unpack(start)
+
+        current_face = face_init
+        u = col_init / n_minus_1
+        v = row_init / n_minus_1
+        current_pos = self._uv_to_3d(current_face, u, v)
+        positions: List[np.ndarray] = [current_pos.copy()]
+        flow_history: List[float] = [float(flow_accum[start])]
+
+        # Momentum carry-over: per-face textures aren't continuous across face
+        # boundaries, so the bilinear gradient can flip direction the instant
+        # we cross. Blending each step with the previous direction lets the
+        # walk push through that boundary band (and across short flats with
+        # NaN gradient) instead of stalling out as a dead end.
+        momentum = 0.5
+        prev_du = 0.0
+        prev_dv = 0.0
+        has_prev = False
+
+        # Stall detection: if the walk genuinely makes no progress over many
+        # steps despite momentum, kill it. Loose enough to let boundary
+        # transients resolve, tight enough to avoid runaway loops.
+        stall_window = 40
+        recent_positions: List[np.ndarray] = [current_pos]
+        face_cell_3d = float(self._u_ranges[current_face]) / (res - 1)
+        stall_threshold = 0.5 * face_cell_3d
+
+        max_steps = 4 * res * res
+        terminated_at_sea = False
+        for step in range(max_steps):
+            ang = self._gradient_angle_at(current_face, u, v)
+            if np.isfinite(ang):
+                du = float(np.cos(ang))
+                dv = float(np.sin(ang))
+                if has_prev:
+                    du = (1.0 - momentum) * du + momentum * prev_du
+                    dv = (1.0 - momentum) * dv + momentum * prev_dv
+                    mag = (du * du + dv * dv) ** 0.5
+                    if mag < 1e-12:
+                        break
+                    du /= mag
+                    dv /= mag
+            elif has_prev:
+                # No gradient (flat or boundary glitch) — coast on momentum.
+                du = prev_du
+                dv = prev_dv
+            else:
                 break
-            path.append(nxt)
-            current = nxt
-            # Stop once we drop into ocean territory — flow_dir still routes
-            # through ocean nodes, but they aren't river-worthy.
-            if self.elevations[nxt] <= self.sea_level:
+            prev_du = du
+            prev_dv = dv
+            has_prev = True
+
+            new_u = u + uv_step * du
+            new_v = v + uv_step * dv
+
+            if 0.0 <= new_u <= 1.0 and 0.0 <= new_v <= 1.0:
+                u, v = new_u, new_v
+                new_pos = self._uv_to_3d(current_face, u, v)
+            else:
+                # Crossed face boundary — find the neighbour the intended
+                # position falls into and switch frames.
+                attempted_pos = self._uv_to_3d(current_face, new_u, new_v)
+                attempted_pos /= max(float(np.linalg.norm(attempted_pos)), 1e-12)
+                next_face = -1
+                next_uv: Optional[Tuple[float, float]] = None
+                for nb_face in self.mesh.face_adjacency[current_face]:
+                    nu, nv = self._3d_to_uv(nb_face, attempted_pos)
+                    if -1e-3 <= nu <= 1.0 + 1e-3 and -1e-3 <= nv <= 1.0 + 1e-3:
+                        next_face = nb_face
+                        next_uv = (max(0.0, min(1.0, nu)),
+                                   max(0.0, min(1.0, nv)))
+                        break
+                if next_face < 0 or next_uv is None:
+                    break
+                current_face = next_face
+                u, v = next_uv
+                new_pos = self._uv_to_3d(current_face, u, v)
+
+            norm = float(np.linalg.norm(new_pos))
+            if norm <= 0.0:
                 break
-        if len(path) < 2:
+            new_pos = new_pos / norm
+            positions.append(new_pos)
+
+            # Use the nearest grid node for stop conditions and flow-rate
+            # display (the only places we still consult the discrete grid).
+            col_n = int(round(u * n_minus_1))
+            row_n = int(round(v * n_minus_1))
+            nearest = current_face * res * res + row_n * res + col_n
+            flow_history.append(float(flow_accum[nearest]))
+            if self.elevations[nearest] <= self.sea_level:
+                terminated_at_sea = True
+                break
+            # NOTE: do not threshold on flow_accum mid-trace — with D-inf
+            # multi-receiver, accumulation can dip below threshold at branch
+            # points yet recover further downstream. Headwater selection
+            # already gates river creation.
+
+            # Stall detection: if momentum hasn't been enough to make real
+            # progress over `stall_window` steps, give up.
+            recent_positions.append(new_pos)
+            if len(recent_positions) > stall_window:
+                oldest = recent_positions.pop(0)
+                if float(np.linalg.norm(new_pos - oldest)) < stall_threshold:
+                    break
+
+        if len(positions) < 2:
             return None
 
-        nodes_obj = [self._make_node(idx) for idx in path]
-        river = River(source=nodes_obj[0], mouth=nodes_obj[-1])
-        for k in range(1, len(path)):
+        source_node = RiverNode(
+            position=positions[0].astype(np.float32),
+            elevation=float(self.elevations[start]),
+            face_id=face_init,
+            uv=(col_init / n_minus_1, row_init / n_minus_1),
+        )
+        mouth_col = int(round(u * n_minus_1))
+        mouth_row = int(round(v * n_minus_1))
+        mouth_idx = current_face * res * res + mouth_row * res + mouth_col
+        mouth_node = RiverNode(
+            position=positions[-1].astype(np.float32),
+            elevation=float(self.elevations[mouth_idx]),
+            face_id=current_face,
+            uv=(u, v),
+        )
+        river = River(source=source_node, mouth=mouth_node)
+        for k in range(1, len(positions)):
+            seg_start = RiverNode(
+                position=positions[k - 1].astype(np.float32),
+                elevation=0.0, face_id=current_face, uv=(0.0, 0.0),
+            )
+            seg_end = RiverNode(
+                position=positions[k].astype(np.float32),
+                elevation=0.0, face_id=current_face, uv=(0.0, 0.0),
+            )
             river.segments.append(RiverSegment(
-                start=nodes_obj[k - 1],
-                end=nodes_obj[k],
-                flow_rate=float(flow_accum[path[k - 1]]),
+                start=seg_start,
+                end=seg_end,
+                flow_rate=flow_history[k - 1],
             ))
+        _ = terminated_at_sea  # for future use; mouth-at-sea info if needed
         return river
 
-    def _make_node(self, flat_idx: int) -> RiverNode:
-        face, row, col = self._unpack(flat_idx)
-        denom = self.resolution - 1
-        return RiverNode(
-            position=self.positions[flat_idx].copy(),
-            elevation=float(self.elevations[flat_idx]),
-            face_id=face,
-            uv=(col / denom, row / denom),
+    # ------------------------------------------------------------------
+    # Tangent-plane projection helpers
+    # ------------------------------------------------------------------
+
+    def _uv_to_3d(self, face: int, u: float, v: float) -> np.ndarray:
+        """Map face-local UV (in [0, 1]²) to a 3D tangent-plane position."""
+        u_local = u * float(self._u_ranges[face]) + float(self._u_offsets[face])
+        v_local = v * float(self._v_ranges[face]) + float(self._v_offsets[face])
+        return (
+            self._tangent_centroids[face]
+            + u_local * self._u_axes[face]
+            + v_local * self._v_axes[face]
         )
+
+    def _3d_to_uv(self, face: int, pos: np.ndarray) -> Tuple[float, float]:
+        """Project a 3D point into face-local UV coordinates."""
+        offset = pos - self._tangent_centroids[face]
+        u_local = float(offset @ self._u_axes[face])
+        v_local = float(offset @ self._v_axes[face])
+        u = (u_local - float(self._u_offsets[face])) / float(self._u_ranges[face])
+        v = (v_local - float(self._v_offsets[face])) / float(self._v_ranges[face])
+        return u, v
+
+    def _gradient_angle_at(self, face: int, u: float, v: float) -> float:
+        """Negative bilinear elevation gradient at sub-pixel UV (u, v).
+
+        Returns the flow angle in face-local UV radians (CCW from +U). Walks
+        along this field cannot loop — the field is the gradient of a scalar
+        (the filled DEM `eff`), and gradient fields are curl-free.
+        Returns NaN on perfectly flat cells.
+        """
+        res = self.resolution
+        n_minus_1 = res - 1
+        fu = max(0.0, min(float(n_minus_1) - 1e-9, u * n_minus_1))
+        fv = max(0.0, min(float(n_minus_1) - 1e-9, v * n_minus_1))
+        c0 = int(fu)
+        r0 = int(fv)
+        c1 = c0 + 1
+        r1 = r0 + 1
+        tu = fu - c0
+        tv = fv - r0
+        base = face * res * res
+        e00 = float(self._eff[base + r0 * res + c0])
+        e10 = float(self._eff[base + r0 * res + c1])
+        e01 = float(self._eff[base + r1 * res + c0])
+        e11 = float(self._eff[base + r1 * res + c1])
+        # Bilinear: E(tu, tv) = (1-tu)(1-tv) e00 + tu(1-tv) e10 + (1-tu)tv e01 + tu tv e11.
+        # Partial derivatives within the cell (scaled by (res-1) to convert
+        # to per-UV-unit; constant scale doesn't affect the angle direction).
+        dE_du = ((1.0 - tv) * (e10 - e00)) + (tv * (e11 - e01))
+        dE_dv = ((1.0 - tu) * (e01 - e00)) + (tu * (e11 - e10))
+        # Flow direction = negative gradient.
+        flow_du = -dE_du
+        flow_dv = -dE_dv
+        if abs(flow_du) < 1e-20 and abs(flow_dv) < 1e-20:
+            return float('nan')
+        return float(np.arctan2(flow_dv, flow_du))
 
     # ------------------------------------------------------------------
     # Facade
     # ------------------------------------------------------------------
 
     def generate(self) -> List[River]:
-        flow_dir, flow_accum = self.compute_flow()
-        rivers = self.extract_rivers(flow_dir, flow_accum)
+        r1, r2, f1, f2, _ang, accum = self.compute_flow()
+        rivers = self.extract_rivers(r1, r2, f1, f2, accum)
         for river in rivers:
             raw = river.as_polyline()
             if len(raw) < 2:
