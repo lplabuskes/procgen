@@ -100,30 +100,6 @@ def laplacian_smooth_sphere(
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _nearest_neighbor_walk(pts: np.ndarray) -> np.ndarray:
-    """Order (N, 3) unit-sphere points into a polygon by nearest-neighbor traversal.
-
-    Greedily visits the closest unvisited point at each step. Produces a
-    correct polygon for any boundary that forms a simple closed curve in 3D
-    (i.e. no two non-adjacent boundary segments pass very close to each other).
-    O(N^2) but N here is the number of boundary pixels, which is O(perimeter)
-    rather than O(area), so it stays small even for large lakes.
-    """
-    n = len(pts)
-    if n <= 3:
-        return pts.astype(np.float32)
-    visited = np.zeros(n, dtype=bool)
-    order = np.empty(n, dtype=int)
-    order[0] = 0
-    visited[0] = True
-    for i in range(1, n):
-        cur = order[i - 1]
-        dists = np.sum((pts - pts[cur]) ** 2, axis=1)
-        dists[visited] = np.inf
-        nxt = int(np.argmin(dists))
-        order[i] = nxt
-        visited[nxt] = True
-    return pts[order].astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -378,15 +354,21 @@ class RiverGenerator:
             flow_accum: float32 (n,) — upstream node count (each node
                 contributes 1.0 to itself).
         """
-        eff = self._priority_flood()
+        eff, was_raised = self._priority_flood()
         self._eff = eff
+        self._was_raised = was_raised
         r1, r2, f1, f2, ang = self._compute_dinf_flow(eff)
         self._inter_face_fallback(r1, r2, f1, f2, ang, eff)
         accum = self._accumulate_flow(r1, r2, f1, f2, eff)
         return r1, r2, f1, f2, ang, accum
 
-    def _priority_flood(self) -> np.ndarray:
-        """Planchon-Darboux depression filling. Returns filled elevation `eff`.
+    def _priority_flood(self) -> Tuple[np.ndarray, np.ndarray]:
+        """Planchon-Darboux depression filling.
+
+        Returns (eff, was_raised) where eff is the filled DEM and
+        was_raised[i] is True for every land node whose natural elevation
+        is strictly below the fill level when it was first reached — i.e.,
+        it sits inside a topographic depression (lake interior).
 
         Adds a small per-step epsilon so the filled surface inside a
         depression slopes gently toward the spill point. Without it, the
@@ -398,6 +380,7 @@ class RiverGenerator:
         sea = self.sea_level
         eff = elev.astype(np.float32, copy=True)
         visited = np.zeros(n, dtype=bool)
+        was_raised = np.zeros(n, dtype=bool)
         eps = 1e-6
 
         heap: List[Tuple[float, int]] = []
@@ -413,12 +396,16 @@ class RiverGenerator:
                     continue
                 visited[nb] = True
                 nb_elev = float(elev[nb])
+                # Node is inside a depression: its natural elevation is below
+                # the fill level being propagated from the spill point.
+                if nb_elev < eff_elev:
+                    was_raised[nb] = True
                 # Imposed-gradient fill: force a tiny downhill from key to nb
                 # whenever the real elevation would create a flat or sink.
                 nb_eff = max(nb_elev, eff_elev + eps)
                 eff[nb] = nb_eff
                 heapq.heappush(heap, (nb_eff, nb))
-        return eff
+        return eff, was_raised
 
     def _compute_dinf_flow(
         self,
@@ -605,7 +592,11 @@ class RiverGenerator:
     ) -> List[River]:
         """Identify headwaters and trace each downstream via sub-pixel walk."""
         threshold = self.min_flow
-        is_above = flow_accum >= threshold
+        # Lake-interior nodes are excluded from river routing: they are not
+        # river nodes themselves, so the outlet (which receives all their
+        # accumulated flow) appears as a headwater and starts a post-lake river.
+        lake_nodes = self._was_raised & (self.elevations > self.sea_level)
+        is_above = (flow_accum >= threshold) & ~lake_nodes
         above_idx = np.where(is_above)[0]
 
         # Headwater = above-threshold node receiving no above-threshold inflow.
@@ -754,6 +745,8 @@ class RiverGenerator:
             if self.elevations[nearest] <= self.sea_level:
                 terminated_at_sea = True
                 break
+            if self._was_raised[nearest]:
+                break  # entered a lake body; stop at its edge
             # NOTE: do not threshold on flow_accum mid-trace — with D-inf
             # multi-receiver, accumulation can dip below threshold at branch
             # points yet recover further downstream. Headwater selection
@@ -901,27 +894,48 @@ class RiverGenerator:
         return components
 
     def get_lake_polygons(self) -> List[np.ndarray]:
-        """Return per-lake convex-hull polygons as ordered unit-sphere positions.
+        """Return per-lake boundary polygons as ordered unit-sphere positions.
 
-        A pixel is a lake if it is above sea level and was raised by Priority-Flood
-        (i.e. it sits inside a topographic depression). Connected lake pixels are
-        grouped into components; each component is projected to a local tangent
-        plane, convex-hulled, and returned as a (M, 3) float32 array of hull
-        vertices. Must be called after `generate()`.
+        A pixel is a lake if it is above sea level and was raised by
+        Priority-Flood. Boundary pixels are traced in pixel-adjacency order:
+        starting from any boundary pixel, walk to unvisited boundary neighbors
+        until no new neighbor is reachable. This follows the actual shoreline
+        for any lake shape without self-intersections. Must be called after
+        `generate()`.
         """
-        lake_mask = (self.elevations > self.sea_level) & (self._eff > self.elevations + 1e-4)
+        lake_mask = (self.elevations > self.sea_level) & self._was_raised
         if not lake_mask.any():
             return []
 
         polygons: List[np.ndarray] = []
-        for comp in self._find_connected_components(lake_mask, min_size=4):
+        for comp in self._find_connected_components(lake_mask, min_size=16):
             boundary = [
                 node for node in comp
                 if any(not lake_mask[nb] for nb in self._neighbors(node))
             ]
             if len(boundary) < 3:
                 continue
-            pts = self.positions[np.array(boundary)]
-            polygons.append(_nearest_neighbor_walk(pts))
+
+            boundary_set = set(boundary)
+            # Adjacency among boundary pixels only.
+            adj: Dict[int, List[int]] = {
+                node: [nb for nb in self._neighbors(node) if nb in boundary_set]
+                for node in boundary
+            }
+            # Walk the boundary graph in connected order.
+            ordered: List[int] = [boundary[0]]
+            visited: set = {boundary[0]}
+            current = boundary[0]
+            while True:
+                nxt = next((nb for nb in adj[current] if nb not in visited), None)
+                if nxt is None:
+                    break
+                ordered.append(nxt)
+                visited.add(nxt)
+                current = nxt
+
+            if len(ordered) < 3:
+                continue
+            polygons.append(self.positions[np.array(ordered)].astype(np.float32))
 
         return polygons
