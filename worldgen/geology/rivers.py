@@ -185,6 +185,7 @@ class RiverGenerator:
         self.n_faces = n_faces
         self.resolution = h
         self.n_nodes = n_faces * h * h
+        self._r2 = h * h
         self.min_flow = min_flow
         self.sea_level = sea_level
         self.smoothing_iterations = smoothing_iterations
@@ -198,17 +199,8 @@ class RiverGenerator:
         frames = mesh.face_tangent_frames()
         self._u_axes = np.asarray(frames[0], dtype=np.float64)
         self._v_axes = np.asarray(frames[1], dtype=np.float64)
-        self._u_offsets = np.asarray(frames[2], dtype=np.float64)
-        self._v_offsets = np.asarray(frames[3], dtype=np.float64)
         self._u_ranges = np.asarray(frames[4], dtype=np.float64)
-        self._v_ranges = np.asarray(frames[5], dtype=np.float64)
-        # _tangent_centroids is the unnormalized mean vertex (the origin used
-        # by the same parameterization as face_texture_positions). Accessed
-        # via mymesh's private attribute since face_tangent_frames doesn't
-        # expose it.
-        self._tangent_centroids = np.asarray(
-            mesh._tangent_centroids, dtype=np.float64
-        )
+        self._vertex_uvs = frames[6]
 
         # Sparse inter-face adjacency: node_idx -> list[node_idx].
         # Intra-face neighbours are derived on the fly in `_neighbors`.
@@ -220,12 +212,11 @@ class RiverGenerator:
     # ------------------------------------------------------------------
 
     def _node_idx(self, face: int, row: int, col: int) -> int:
-        return face * self.resolution * self.resolution + row * self.resolution + col
+        return face * self._r2 + row * self.resolution + col
 
     def _unpack(self, node: int) -> Tuple[int, int, int]:
-        r2 = self.resolution * self.resolution
-        face = node // r2
-        rem = node % r2
+        face = node // self._r2
+        rem = node % self._r2
         return face, rem // self.resolution, rem % self.resolution
 
     def _neighbors(self, node: int) -> List[int]:
@@ -235,8 +226,7 @@ class RiverGenerator:
         per-direction slices vectorised across all faces.
         """
         res = self.resolution
-        r2 = res * res
-        rem = node % r2
+        rem = node % self._r2
         row = rem // res
         col = rem % res
         up = row > 0
@@ -278,7 +268,7 @@ class RiverGenerator:
         shared vertices in both faces.
         """
         mesh = self.mesh
-        _, _, _, _, _, _, vertex_uvs = mesh.face_tangent_frames()
+        vertex_uvs = self._vertex_uvs
 
         for face_a, neighbors in enumerate(mesh.face_adjacency):
             verts_a = mesh.faces[face_a]
@@ -447,7 +437,6 @@ class RiverGenerator:
         """
         n = self.n_nodes
         res = self.resolution
-        r2 = res * res
 
         receiver1 = np.full(n, -1, dtype=np.int32)
         receiver2 = np.full(n, -1, dtype=np.int32)
@@ -460,7 +449,7 @@ class RiverGenerator:
         inv_root2 = 1.0 / float(np.sqrt(2.0))
         pi_4 = float(np.pi / 4.0)
 
-        face_offsets = (np.arange(self.n_faces, dtype=np.int64) * r2)[:, None, None]
+        face_offsets = (np.arange(self.n_faces, dtype=np.int64) * self._r2)[:, None, None]
 
         # Each facet: (cardinal_dr, cardinal_dc, diag_dr, diag_dc, base, sign).
         # +V (row+1) is north, +U (col+1) is east. `base` is the global UV angle
@@ -545,8 +534,6 @@ class RiverGenerator:
         """
         if not self._inter_adj:
             return
-        res = self.resolution
-        r2 = res * res
         for src, neighbors in self._inter_adj.items():
             if receiver1[src] != -1:
                 continue
@@ -569,7 +556,7 @@ class RiverGenerator:
                     best_nb = nb
             if best_nb < 0:
                 continue
-            face = src // r2
+            face = src // self._r2
             direction = self.positions[best_nb] - self.positions[src]
             du = float(direction @ self._u_axes[face])
             dv = float(direction @ self._v_axes[face])
@@ -659,7 +646,7 @@ class RiverGenerator:
         current_face = face_init
         u = col_init / n_minus_1
         v = row_init / n_minus_1
-        current_pos = self._uv_to_3d(current_face, u, v)
+        current_pos = self.mesh.face_uv_to_3d(current_face, u, v)
         positions: List[np.ndarray] = [current_pos.copy()]
         flow_history: List[float] = [float(flow_accum[start])]
 
@@ -717,16 +704,16 @@ class RiverGenerator:
 
             if 0.0 <= new_u <= 1.0 and 0.0 <= new_v <= 1.0:
                 u, v = new_u, new_v
-                new_pos = self._uv_to_3d(current_face, u, v)
+                new_pos = self.mesh.face_uv_to_3d(current_face, u, v)
             else:
                 # Crossed face boundary — find the neighbour the intended
                 # position falls into and switch frames.
-                attempted_pos = self._uv_to_3d(current_face, new_u, new_v)
+                attempted_pos = self.mesh.face_uv_to_3d(current_face, new_u, new_v)
                 attempted_pos /= max(float(np.linalg.norm(attempted_pos)), 1e-12)
                 next_face = -1
                 next_uv: Optional[Tuple[float, float]] = None
                 for nb_face in self.mesh.face_adjacency[current_face]:
-                    nu, nv = self._3d_to_uv(nb_face, attempted_pos)
+                    nu, nv = self.mesh.face_3d_to_uv(nb_face, attempted_pos)
                     if -1e-3 <= nu <= 1.0 + 1e-3 and -1e-3 <= nv <= 1.0 + 1e-3:
                         next_face = nb_face
                         next_uv = (max(0.0, min(1.0, nu)),
@@ -742,18 +729,11 @@ class RiverGenerator:
                 # the walk back the way it came. Re-express momentum in the new
                 # face's UV frame by projecting through 3D.
                 if has_prev:
-                    d_3d = (prev_du * self._u_axes[old_face]
-                            + prev_dv * self._v_axes[old_face])
-                    new_prev_du = float(d_3d @ self._u_axes[current_face])
-                    new_prev_dv = float(d_3d @ self._v_axes[current_face])
-                    pmag = (new_prev_du ** 2 + new_prev_dv ** 2) ** 0.5
-                    if pmag > 1e-12:
-                        prev_du = new_prev_du / pmag
-                        prev_dv = new_prev_dv / pmag
-                    else:
-                        has_prev = False
+                    prev_du, prev_dv, has_prev = self._reproject_momentum(
+                        prev_du, prev_dv, old_face, current_face
+                    )
                 u, v = next_uv
-                new_pos = self._uv_to_3d(current_face, u, v)
+                new_pos = self.mesh.face_uv_to_3d(current_face, u, v)
 
             norm = float(np.linalg.norm(new_pos))
             if norm <= 0.0:
@@ -765,7 +745,7 @@ class RiverGenerator:
             # display (the only places we still consult the discrete grid).
             col_n = int(round(u * n_minus_1))
             row_n = int(round(v * n_minus_1))
-            nearest = current_face * res * res + row_n * res + col_n
+            nearest = self._node_idx(current_face, row_n, col_n)
             if step >= loop_check_start:
                 if nearest in visited_cells:
                     break  # loop detected
@@ -798,7 +778,7 @@ class RiverGenerator:
         )
         mouth_col = int(round(u * n_minus_1))
         mouth_row = int(round(v * n_minus_1))
-        mouth_idx = current_face * res * res + mouth_row * res + mouth_col
+        mouth_idx = self._node_idx(current_face, mouth_row, mouth_col)
         mouth_node = RiverNode(
             position=positions[-1].astype(np.float32),
             elevation=float(self.elevations[mouth_idx]),
@@ -823,28 +803,25 @@ class RiverGenerator:
         _ = terminated_at_sea  # for future use; mouth-at-sea info if needed
         return river
 
-    # ------------------------------------------------------------------
-    # Tangent-plane projection helpers
-    # ------------------------------------------------------------------
+    def _reproject_momentum(
+        self,
+        du: float,
+        dv: float,
+        old_face: int,
+        new_face: int,
+    ) -> Tuple[float, float, bool]:
+        """Re-express a UV momentum direction from old_face's frame into new_face's.
 
-    def _uv_to_3d(self, face: int, u: float, v: float) -> np.ndarray:
-        """Map face-local UV (in [0, 1]²) to a 3D tangent-plane position."""
-        u_local = u * float(self._u_ranges[face]) + float(self._u_offsets[face])
-        v_local = v * float(self._v_ranges[face]) + float(self._v_offsets[face])
-        return (
-            self._tangent_centroids[face]
-            + u_local * self._u_axes[face]
-            + v_local * self._v_axes[face]
-        )
-
-    def _3d_to_uv(self, face: int, pos: np.ndarray) -> Tuple[float, float]:
-        """Project a 3D point into face-local UV coordinates."""
-        offset = pos - self._tangent_centroids[face]
-        u_local = float(offset @ self._u_axes[face])
-        v_local = float(offset @ self._v_axes[face])
-        u = (u_local - float(self._u_offsets[face])) / float(self._u_ranges[face])
-        v = (v_local - float(self._v_offsets[face])) / float(self._v_ranges[face])
-        return u, v
+        Returns (new_du, new_dv, valid). valid=False when the reprojected direction
+        has negligible magnitude (degenerate cross-face transition).
+        """
+        d_3d = du * self._u_axes[old_face] + dv * self._v_axes[old_face]
+        new_du = float(d_3d @ self._u_axes[new_face])
+        new_dv = float(d_3d @ self._v_axes[new_face])
+        pmag = (new_du ** 2 + new_dv ** 2) ** 0.5
+        if pmag > 1e-12:
+            return new_du / pmag, new_dv / pmag, True
+        return 0.0, 0.0, False
 
     def _gradient_angle_at(self, face: int, u: float, v: float) -> float:
         """Negative bilinear elevation gradient at sub-pixel UV (u, v).
@@ -864,7 +841,7 @@ class RiverGenerator:
         r1 = r0 + 1
         tu = fu - c0
         tv = fv - r0
-        base = face * res * res
+        base = face * self._r2
         e00 = float(self._eff[base + r0 * res + c0])
         e10 = float(self._eff[base + r0 * res + c1])
         e01 = float(self._eff[base + r1 * res + c0])
@@ -900,6 +877,29 @@ class RiverGenerator:
                 seg.end.position = smoothed[i + 1]
         return rivers
 
+    def _find_connected_components(
+        self, mask: np.ndarray, min_size: int = 1
+    ) -> List[List[int]]:
+        """Return groups of node indices where mask is True, connected via _neighbors."""
+        visited = np.zeros(self.n_nodes, dtype=bool)
+        components: List[List[int]] = []
+        for start in np.where(mask)[0].tolist():
+            if visited[start]:
+                continue
+            comp: List[int] = []
+            stack = [start]
+            visited[start] = True
+            while stack:
+                node = stack.pop()
+                comp.append(node)
+                for nb in self._neighbors(node):
+                    if not visited[nb] and mask[nb]:
+                        visited[nb] = True
+                        stack.append(nb)
+            if len(comp) >= min_size:
+                components.append(comp)
+        return components
+
     def get_lake_polygons(self) -> List[np.ndarray]:
         """Return per-lake convex-hull polygons as ordered unit-sphere positions.
 
@@ -910,30 +910,11 @@ class RiverGenerator:
         vertices. Must be called after `generate()`.
         """
         lake_mask = (self.elevations > self.sea_level) & (self._eff > self.elevations + 1e-4)
-        lake_indices = np.where(lake_mask)[0]
-        if len(lake_indices) == 0:
+        if not lake_mask.any():
             return []
 
-        visited = np.zeros(self.n_nodes, dtype=bool)
-        components: List[List[int]] = []
-        for start in lake_indices.tolist():
-            if visited[start]:
-                continue
-            comp: List[int] = []
-            stack = [start]
-            visited[start] = True
-            while stack:
-                node = stack.pop()
-                comp.append(node)
-                for nb in self._neighbors(node):
-                    if not visited[nb] and lake_mask[nb]:
-                        visited[nb] = True
-                        stack.append(nb)
-            if len(comp) >= 4:
-                components.append(comp)
-
         polygons: List[np.ndarray] = []
-        for comp in components:
+        for comp in self._find_connected_components(lake_mask, min_size=4):
             boundary = [
                 node for node in comp
                 if any(not lake_mask[nb] for nb in self._neighbors(node))

@@ -164,6 +164,25 @@ class PolygonMesh:
             self._face_vertex_uvs,
         )
 
+    def face_uv_to_3d(self, face: int, u: float, v: float) -> np.ndarray:
+        """Map face-local UV in [0, 1]² to a 3D tangent-plane position."""
+        u_local = u * float(self._u_ranges[face]) + float(self._u_offsets[face])
+        v_local = v * float(self._v_ranges[face]) + float(self._v_offsets[face])
+        return (
+            self._tangent_centroids[face]
+            + u_local * self._u_axes[face]
+            + v_local * self._v_axes[face]
+        )
+
+    def face_3d_to_uv(self, face: int, pos: np.ndarray) -> Tuple[float, float]:
+        """Project a 3D point into face-local UV coordinates."""
+        offset = pos - self._tangent_centroids[face]
+        u_local = float(offset @ self._u_axes[face])
+        v_local = float(offset @ self._v_axes[face])
+        u = (u_local - float(self._u_offsets[face])) / float(self._u_ranges[face])
+        v = (v_local - float(self._v_offsets[face])) / float(self._v_ranges[face])
+        return u, v
+
     def face_texture_positions(self, h: int, w: int) -> np.ndarray:
         """Return unit-sphere 3D positions for an (H, W) texture grid over every face.
 
