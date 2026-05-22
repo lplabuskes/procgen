@@ -96,7 +96,7 @@ class VolcanismParams:
 
 @dataclass
 class RiverParams:
-    river_flow_threshold: float = _f(100.0, label="Flow threshold (faces)", min=1.0, max=1000.0)
+    river_flow_threshold: float = _f(200.0, label="Flow threshold (faces)", min=1.0, max=1000.0)
 
 
 @dataclass
