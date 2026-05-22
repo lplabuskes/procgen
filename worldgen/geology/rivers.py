@@ -683,6 +683,12 @@ class RiverGenerator:
 
         max_steps = 4 * res * res
         terminated_at_sea = False
+        # Track visited grid cells to catch loops that the stall-window check
+        # would miss (loops whose circumference exceeds `stall_window` steps).
+        # Skip checking the first few steps so normal sub-pixel jitter at the
+        # headwater doesn't falsely terminate a valid trace.
+        visited_cells: set = set()
+        loop_check_start = 4
         for step in range(max_steps):
             ang = self._gradient_angle_at(current_face, u, v)
             if np.isfinite(ang):
@@ -728,7 +734,24 @@ class RiverGenerator:
                         break
                 if next_face < 0 or next_uv is None:
                     break
+                old_face = current_face
                 current_face = next_face
+                # prev_du/prev_dv carry momentum in the old face's UV frame.
+                # Blending them with the new face's gradient angle (a different
+                # coordinate system) produces a 3D direction error that can loop
+                # the walk back the way it came. Re-express momentum in the new
+                # face's UV frame by projecting through 3D.
+                if has_prev:
+                    d_3d = (prev_du * self._u_axes[old_face]
+                            + prev_dv * self._v_axes[old_face])
+                    new_prev_du = float(d_3d @ self._u_axes[current_face])
+                    new_prev_dv = float(d_3d @ self._v_axes[current_face])
+                    pmag = (new_prev_du ** 2 + new_prev_dv ** 2) ** 0.5
+                    if pmag > 1e-12:
+                        prev_du = new_prev_du / pmag
+                        prev_dv = new_prev_dv / pmag
+                    else:
+                        has_prev = False
                 u, v = next_uv
                 new_pos = self._uv_to_3d(current_face, u, v)
 
@@ -743,6 +766,10 @@ class RiverGenerator:
             col_n = int(round(u * n_minus_1))
             row_n = int(round(v * n_minus_1))
             nearest = current_face * res * res + row_n * res + col_n
+            if step >= loop_check_start:
+                if nearest in visited_cells:
+                    break  # loop detected
+                visited_cells.add(nearest)
             flow_history.append(float(flow_accum[nearest]))
             if self.elevations[nearest] <= self.sea_level:
                 terminated_at_sea = True
