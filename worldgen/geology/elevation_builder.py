@@ -132,6 +132,7 @@ class ElevationBuilder:
         self.elevations: Optional[np.ndarray] = None
         self.volcanism: Optional[np.ndarray] = None
         self.rivers: Optional[List[River]] = None
+        self.lake_polygons: Optional[List[np.ndarray]] = None
         self.max_speed: float = 1.0
 
     def _sub_seed(self, offset: int) -> Optional[int]:
@@ -263,6 +264,7 @@ class ElevationBuilder:
             sea_level=0.0,
         )
         rivers = river_gen.generate()
+        lake_polygons = river_gen.get_lake_polygons()
 
         dual.set_face_textures("elevation", elevation_textures)
 
@@ -275,6 +277,7 @@ class ElevationBuilder:
         self.elevations = final_elevations
         self.volcanism = volcanism
         self.rivers = rivers
+        self.lake_polygons = lake_polygons
         self.max_speed = float(speeds.max()) or 1.0
 
         _report("Done.")

@@ -46,5 +46,7 @@ class GlobeBuilder:
                 paths_with_flow.append((positions, flows))
             if paths_with_flow:
                 globe.add_feature("rivers", paths_with_flow)
+        if eb.lake_polygons is not None and len(eb.lake_polygons) > 0:
+            globe.add_feature("lakes", eb.lake_polygons)
         self.globe = globe
         return globe

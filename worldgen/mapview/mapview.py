@@ -304,6 +304,29 @@ class MapWidget(QWidget):
 
         if self._overlay_visible.get("rivers") and self._globe is not None:
             self._draw_rivers_overlay(painter, W, H, cx, cy, scale_x, scale_y)
+        if self._overlay_visible.get("lakes") and self._globe is not None:
+            self._draw_lakes_overlay(painter, W, H, cx, cy, scale_x, scale_y)
+
+    def _draw_lakes_overlay(
+        self,
+        painter: QPainter,
+        W: float, H: float,
+        cx: float, cy: float,
+        scale_x: float, scale_y: float,
+    ) -> None:
+        polygons = self._globe.get_feature("lakes")  # type: ignore[union-attr]
+        if not polygons:
+            return
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(QColor(80, 140, 220, 180)))
+        for verts in polygons:
+            for lonlat in _split_at_antimeridian(verts):
+                proj = self._projection.project_lonlat(lonlat)
+                sx = (proj[:, 0] - cx) * scale_x + W * 0.5
+                sy = -(proj[:, 1] - cy) * scale_y + H * 0.5
+                painter.drawPolygon(
+                    QPolygonF([QPointF(float(x), float(y)) for x, y in zip(sx, sy)])
+                )
 
     def _draw_rivers_overlay(
         self,

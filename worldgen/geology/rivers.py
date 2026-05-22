@@ -97,6 +97,36 @@ def laplacian_smooth_sphere(
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _nearest_neighbor_walk(pts: np.ndarray) -> np.ndarray:
+    """Order (N, 3) unit-sphere points into a polygon by nearest-neighbor traversal.
+
+    Greedily visits the closest unvisited point at each step. Produces a
+    correct polygon for any boundary that forms a simple closed curve in 3D
+    (i.e. no two non-adjacent boundary segments pass very close to each other).
+    O(N^2) but N here is the number of boundary pixels, which is O(perimeter)
+    rather than O(area), so it stays small even for large lakes.
+    """
+    n = len(pts)
+    if n <= 3:
+        return pts.astype(np.float32)
+    visited = np.zeros(n, dtype=bool)
+    order = np.empty(n, dtype=int)
+    order[0] = 0
+    visited[0] = True
+    for i in range(1, n):
+        cur = order[i - 1]
+        dists = np.sum((pts - pts[cur]) ** 2, axis=1)
+        dists[visited] = np.inf
+        nxt = int(np.argmin(dists))
+        order[i] = nxt
+        visited[nxt] = True
+    return pts[order].astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
 # RiverGenerator
 # ---------------------------------------------------------------------------
 
@@ -842,3 +872,48 @@ class RiverGenerator:
                 seg.start.position = smoothed[i]
                 seg.end.position = smoothed[i + 1]
         return rivers
+
+    def get_lake_polygons(self) -> List[np.ndarray]:
+        """Return per-lake convex-hull polygons as ordered unit-sphere positions.
+
+        A pixel is a lake if it is above sea level and was raised by Priority-Flood
+        (i.e. it sits inside a topographic depression). Connected lake pixels are
+        grouped into components; each component is projected to a local tangent
+        plane, convex-hulled, and returned as a (M, 3) float32 array of hull
+        vertices. Must be called after `generate()`.
+        """
+        lake_mask = (self.elevations > self.sea_level) & (self._eff > self.elevations + 1e-4)
+        lake_indices = np.where(lake_mask)[0]
+        if len(lake_indices) == 0:
+            return []
+
+        visited = np.zeros(self.n_nodes, dtype=bool)
+        components: List[List[int]] = []
+        for start in lake_indices.tolist():
+            if visited[start]:
+                continue
+            comp: List[int] = []
+            stack = [start]
+            visited[start] = True
+            while stack:
+                node = stack.pop()
+                comp.append(node)
+                for nb in self._neighbors(node):
+                    if not visited[nb] and lake_mask[nb]:
+                        visited[nb] = True
+                        stack.append(nb)
+            if len(comp) >= 4:
+                components.append(comp)
+
+        polygons: List[np.ndarray] = []
+        for comp in components:
+            boundary = [
+                node for node in comp
+                if any(not lake_mask[nb] for nb in self._neighbors(node))
+            ]
+            if len(boundary) < 3:
+                continue
+            pts = self.positions[np.array(boundary)]
+            polygons.append(_nearest_neighbor_walk(pts))
+
+        return polygons
