@@ -13,7 +13,7 @@ from worldgen.geology.elevation import (
     compute_pixel_erosion,
     face_elevations_from_texture,
 )
-from worldgen.geology.rivers import compute_river_flow, extract_river_paths
+from worldgen.geology.rivers import River, RiverGenerator
 from worldgen.geology.volcanism import compute_volcanism
 from worldgen.geology.tectonics import (
     assign_plate_types,
@@ -69,7 +69,7 @@ class ElevationParams:
     volcanic_elevation_scale: float = 2.0           # km added at full activity (continental)
     volcanic_elevation_scale_oceanic: float = 5.5   # km added at full activity (oceanic)
     # Rivers
-    river_flow_threshold: float = 20.0  # minimum upstream face count to form a river
+    river_flow_threshold: float = 100.0  # minimum upstream face count to form a river
     # Reproducibility — None means random each run
     seed: Optional[int] = None
 
@@ -92,8 +92,7 @@ class ElevationBuilder:
         self.boundary_data: Optional[List[dict]] = None
         self.elevations: Optional[np.ndarray] = None
         self.volcanism: Optional[np.ndarray] = None
-        self.river_flow: Optional[np.ndarray] = None
-        self.rivers: Optional[List[List[int]]] = None
+        self.rivers: Optional[List[River]] = None
         self.max_speed: float = 1.0
 
     def _sub_seed(self, offset: int) -> Optional[int]:
@@ -214,27 +213,25 @@ class ElevationBuilder:
         )
         elevation_textures[:, :, :, 0] += noise_deltas[:, :, :, 0]
 
-        _report("Applying pixel erosion…")
-        elevation_textures = compute_pixel_erosion(
-            elevation_textures,
-            thermal_iterations=p.pixel_thermal_iterations,
-            thermal_talus=p.pixel_thermal_talus,
-            thermal_erosion_rate=p.pixel_thermal_erosion_rate,
-        )
+        # _report("Applying pixel erosion…")
+        # elevation_textures = compute_pixel_erosion(
+        #     elevation_textures,
+        #     thermal_iterations=p.pixel_thermal_iterations,
+        #     thermal_talus=p.pixel_thermal_talus,
+        #     thermal_erosion_rate=p.pixel_thermal_erosion_rate,
+        # )
 
         # Derive per-face elevations from the final texture for land/ocean masking.
-        # Routing still uses the smooth pre-noise elevations; using noisy texture
-        # averages for routing produces degenerate flow networks.
         final_elevations = face_elevations_from_texture(elevation_textures)
 
         _report("Computing rivers…")
-        river_flow, river_flow_to = compute_river_flow(dual, final_elevations)
-        river_paths = extract_river_paths(river_flow, river_flow_to, threshold=p.river_flow_threshold, elevations=final_elevations)
-
-        # Store log-normalised river flow in texture channel 1.
-        log_flow = np.log1p(river_flow).astype(np.float32)
-        max_log = float(log_flow.max()) or 1.0
-        elevation_textures[:, :, :, 1] = (log_flow / max_log)[:, np.newaxis, np.newaxis]
+        river_gen = RiverGenerator(
+            dual,
+            elevation_textures,
+            min_flow=p.river_flow_threshold,
+            sea_level=0.0,
+        )
+        rivers = river_gen.generate()
 
         dual.set_face_textures("elevation", elevation_textures)
 
@@ -246,8 +243,7 @@ class ElevationBuilder:
         self.boundary_data = boundary_data
         self.elevations = final_elevations
         self.volcanism = volcanism
-        self.river_flow = river_flow
-        self.rivers = river_paths
+        self.rivers = rivers
         self.max_speed = float(speeds.max()) or 1.0
 
         _report("Done.")

@@ -313,29 +313,29 @@ class MapWidget(QWidget):
         scale_x: float, scale_y: float,
     ) -> None:
         river_paths = self._globe.get_feature("rivers")  # type: ignore[union-attr]
-        if not river_paths or self._mesh is None:
+        if not river_paths:
             return
-        centroids = self._mesh.face_centroids  # (N, 3)
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
-        max_flow = max(flows[-1] for _, flows in river_paths if flows)
+        max_flow = max((flows[-1] for _, flows in river_paths if flows), default=0.0)
+        if max_flow <= 0.0:
+            return
         min_width, max_width = 0.5, 4.0
 
         active_pen: QPen | None = None
-        for path, flows in river_paths:
-            if len(path) < 2:
+        for positions, flows in river_paths:
+            if len(positions) < 2:
                 continue
-            pts = centroids[np.array(path, dtype=np.int32)]
-            lon = np.arctan2(pts[:, 1], pts[:, 0])
-            lat = np.arcsin(np.clip(pts[:, 2], -1.0, 1.0))
+            lon = np.arctan2(positions[:, 1], positions[:, 0])
+            lat = np.arcsin(np.clip(positions[:, 2], -1.0, 1.0))
             lonlat = np.column_stack([lon, lat])
             proj = self._projection.project_lonlat(lonlat)
             sx = (proj[:, 0] - cx) * scale_x + W * 0.5
             sy = -(proj[:, 1] - cy) * scale_y + H * 0.5
-            for j in range(1, len(path)):
+            for j in range(1, len(positions)):
                 if abs(lon[j] - lon[j - 1]) > np.pi:
                     continue
-                w = min_width + (max_width - min_width) * (flows[j] / max_flow) ** 0.5
+                w = min_width + (max_width - min_width) * (flows[j - 1] / max_flow) ** 0.5
                 if active_pen is None or abs(active_pen.widthF() - w) > 0.05:
                     pen = QPen(QColor(100, 180, 255, 200))
                     pen.setWidthF(w)

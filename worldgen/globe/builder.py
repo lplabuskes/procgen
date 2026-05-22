@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import numpy as np
 from typing import Callable, Optional
 
 from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams
@@ -34,11 +35,16 @@ class GlobeBuilder:
         mesh = self.elevation_builder.build(progress=progress)
         globe = Globe(mesh=mesh)
         eb = self.elevation_builder
-        if eb.rivers is not None:
-            paths_with_flow = [
-                (path, [float(eb.river_flow[i]) for i in path])
-                for path in eb.rivers
-            ]
-            globe.add_feature("rivers", paths_with_flow)
+        if eb.rivers:
+            paths_with_flow = []
+            for river in eb.rivers:
+                polyline = river.as_polyline()
+                if len(polyline) < 2:
+                    continue
+                positions = np.stack(polyline).astype(np.float32)  # (M, 3)
+                flows = river.flow_rates()                          # length M-1
+                paths_with_flow.append((positions, flows))
+            if paths_with_flow:
+                globe.add_feature("rivers", paths_with_flow)
         self.globe = globe
         return globe
