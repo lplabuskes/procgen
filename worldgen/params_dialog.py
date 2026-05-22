@@ -1,82 +1,84 @@
 from __future__ import annotations
 
 import dataclasses
-from typing import Optional, Union
+from typing import Any, Optional
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
-    QGroupBox,
+    QFrame,
     QHBoxLayout,
     QScrollArea,
     QSpinBox,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from worldgen.geology.elevation_builder import ElevationParams
 from worldgen.globe.builder import GlobeParams
 
-_SpinWidget = Union[QSpinBox, QDoubleSpinBox]
 
-_ELEVATION_GROUPS: list[tuple[str, list[tuple[str, str, type, float, float]]]] = [
-    ("Mesh Generation", [
-        ("icosphere_depth", "Icosphere depth", int, 1, 8),
-        ("n_swaps", "Edge swaps", int, 0, 10000),
-        ("n_relax", "Relaxation steps", int, 0, 100),
-        ("stiffness", "Stiffness", float, 0.01, 1.0),
-        ("outer_iters", "Outer iterations", int, 1, 20),
-    ]),
-    ("Plate Layout", [
-        ("n_plates", "Number of plates", int, 2, 50),
-        ("plate_compactness", "Compactness", float, 0.0, 1.0),
-        ("relax_max_passes", "Relax max passes", int, 0, 50),
-        ("oceanic_fraction", "Oceanic fraction", float, 0.0, 1.0),
-    ]),
-    ("Plate Motion", [
-        ("drift_scale", "Drift scale", float, 0.0, 10.0),
-        ("spin_scale", "Spin scale", float, 0.0, 10.0),
-    ]),
-    ("Elevation", [
-        ("elevation_rate_norm", "Rate normalization", float, 0.0, 10.0),
-        ("elevation_decay_rate", "Decay rate", float, 0.0, 5.0),
-        ("elevation_max_hops", "Max hops", int, 1, 30),
-        ("elevation_tex_size", "Texture size", int, 8, 128),
-    ]),
-    ("Elevation Noise", [
-        ("noise_amplitude", "Amplitude (km)", float, 0.0, 20.0),
-        ("noise_coast_sigma", "Coast sigma (km)", float, 0.1, 10.0),
-    ]),
-    ("Pixel Erosion", [
-        ("pixel_thermal_iterations", "Thermal iterations", int, 0, 30),
-        ("pixel_thermal_talus", "Thermal talus (km)", float, 0.001, 1.0),
-        ("pixel_thermal_erosion_rate", "Erosion rate", float, 0.0, 1.0),
-    ]),
-    ("Rivers", [
-        ("river_flow_threshold", "Flow threshold (faces)", float, 1.0, 1000.0),
-    ]),
-    ("Volcanism", [
-        ("n_hotspots", "Hotspots", int, 0, 30),
-        ("volcanic_decay_rate", "Decay rate", float, 0.0, 5.0),
-        ("volcanic_max_hops", "Max hops", int, 1, 20),
-        ("volcanic_elevation_scale", "Scale continental (km)", float, 0.0, 20.0),
-        ("volcanic_elevation_scale_oceanic", "Scale oceanic (km)", float, 0.0, 20.0),
-    ]),
-]
+class _CollapsibleSection(QWidget):
+    """A titled section whose content can be hidden via an arrow toggle."""
+
+    def __init__(self, title: str, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._toggle = QToolButton()
+        self._toggle.setText(title)
+        self._toggle.setCheckable(True)
+        self._toggle.setChecked(True)
+        self._toggle.setStyleSheet("QToolButton { border: none; font-weight: bold; }")
+        self._toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._toggle.setArrowType(Qt.ArrowType.DownArrow)
+        self._toggle.clicked.connect(self._on_toggled)
+
+        self._content = QFrame()
+        self._content.setFrameShape(QFrame.Shape.StyledPanel)
+        self._content_layout = QVBoxLayout(self._content)
+        self._content_layout.setContentsMargins(12, 6, 6, 6)
+        self._content_layout.setSpacing(4)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(2)
+        outer.addWidget(self._toggle)
+        outer.addWidget(self._content)
+
+    def _on_toggled(self, checked: bool) -> None:
+        self._toggle.setArrowType(
+            Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow
+        )
+        self._content.setVisible(checked)
+
+    def content_layout(self) -> QVBoxLayout:
+        return self._content_layout
+
+
+def _humanize(field_name: str) -> str:
+    return field_name.replace("_", " ").capitalize()
 
 
 class GlobeParamsDialog(QDialog):
+    """Dialog that walks a (possibly nested) dataclass tree and builds collapsible UI.
+
+    Each dataclass-typed field becomes a collapsible section. Leaf fields are read
+    from their `metadata` dict: `label`, `min`, `max`, optional `step`. Setting
+    `hidden=True` skips the field/section. `kind="optional_int"` adds a "Fixed"
+    checkbox so the value can be None.
+    """
+
     def __init__(self, params: GlobeParams, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("World Parameters")
         self.setMinimumWidth(420)
         self.resize(420, 620)
 
-        ep = params.elevation
-        self._widgets: dict[str, _SpinWidget] = {}
+        # Map from path-tuple (e.g. ("elevation", "mesh", "icosphere_depth")) → widget/state.
+        self._leaves: dict[tuple[str, ...], _LeafBinding] = {}
 
         outer = QVBoxLayout(self)
 
@@ -86,46 +88,23 @@ class GlobeParamsDialog(QDialog):
         content_layout = QVBoxLayout(content)
         content_layout.setSpacing(6)
 
-        for group_name, fields in _ELEVATION_GROUPS:
-            box = QGroupBox(group_name)
-            form = QFormLayout(box)
-            form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
-            for field_name, label, ftype, fmin, fmax in fields:
-                val = getattr(ep, field_name)
-                w: _SpinWidget
-                if ftype is int:
-                    w = QSpinBox()
-                    w.setRange(int(fmin), int(fmax))
-                    w.setValue(int(val))
-                else:
-                    w = QDoubleSpinBox()
-                    w.setRange(fmin, fmax)
-                    w.setDecimals(3)
-                    w.setSingleStep(0.05)
-                    w.setValue(float(val))
-                self._widgets[field_name] = w
-                form.addRow(label + ":", w)
-            content_layout.addWidget(box)
-
-        seed_box = QGroupBox("Reproducibility")
-        seed_form = QFormLayout(seed_box)
-        seed_row = QWidget()
-        seed_row_layout = QHBoxLayout(seed_row)
-        seed_row_layout.setContentsMargins(0, 0, 0, 0)
-        self._seed_check = QCheckBox("Fixed")
-        self._seed_spin = QSpinBox()
-        self._seed_spin.setRange(0, 2**31 - 1)
-        if ep.seed is None:
-            self._seed_check.setChecked(False)
-            self._seed_spin.setEnabled(False)
-        else:
-            self._seed_check.setChecked(True)
-            self._seed_spin.setValue(ep.seed)
-        self._seed_check.toggled.connect(self._seed_spin.setEnabled)
-        seed_row_layout.addWidget(self._seed_check)
-        seed_row_layout.addWidget(self._seed_spin, stretch=1)
-        seed_form.addRow("Seed:", seed_row)
-        content_layout.addWidget(seed_box)
+        # Walk the top-level GlobeParams: each top field is itself a dataclass
+        # section (currently just `elevation`). We render it inline rather than
+        # nested under an extra "GlobeParams" header.
+        for f in dataclasses.fields(params):
+            if f.metadata.get("hidden"):
+                continue
+            value = getattr(params, f.name)
+            if dataclasses.is_dataclass(value):
+                section = _CollapsibleSection(f.metadata.get("label") or _humanize(f.name))
+                self._build_dataclass(value, (f.name,), section.content_layout())
+                content_layout.addWidget(section)
+            else:
+                form = QFormLayout()
+                self._add_leaf(form, f, value, (f.name,))
+                wrapper = QWidget()
+                wrapper.setLayout(form)
+                content_layout.addWidget(wrapper)
 
         content_layout.addStretch()
         scroll.setWidget(content)
@@ -138,11 +117,128 @@ class GlobeParamsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         outer.addWidget(buttons)
 
+    def _build_dataclass(
+        self,
+        instance: Any,
+        path: tuple[str, ...],
+        parent_layout: QVBoxLayout,
+    ) -> None:
+        """Recursively build UI for a dataclass instance into parent_layout."""
+        # Separate leaves vs nested dataclasses so leaves group into a single form.
+        form: Optional[QFormLayout] = None
+        for f in dataclasses.fields(instance):
+            if f.metadata.get("hidden"):
+                continue
+            value = getattr(instance, f.name)
+            sub_path = path + (f.name,)
+            if dataclasses.is_dataclass(value):
+                form = None  # Break the current form group.
+                section = _CollapsibleSection(f.metadata.get("label") or _humanize(f.name))
+                self._build_dataclass(value, sub_path, section.content_layout())
+                parent_layout.addWidget(section)
+            else:
+                if form is None:
+                    form = QFormLayout()
+                    form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+                    wrapper = QWidget()
+                    wrapper.setLayout(form)
+                    parent_layout.addWidget(wrapper)
+                self._add_leaf(form, f, value, sub_path)
+
+    def _add_leaf(
+        self,
+        form: QFormLayout,
+        f: dataclasses.Field,
+        value: Any,
+        path: tuple[str, ...],
+    ) -> None:
+        meta = f.metadata
+        label = meta.get("label") or _humanize(f.name)
+        kind = meta.get("kind")
+        fmin = meta.get("min", 0)
+        fmax = meta.get("max", 10_000)
+        step = meta.get("step")
+
+        if kind == "optional_int":
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            check = QCheckBox("Fixed")
+            spin = QSpinBox()
+            spin.setRange(int(fmin), int(fmax))
+            if value is None:
+                check.setChecked(False)
+                spin.setEnabled(False)
+            else:
+                check.setChecked(True)
+                spin.setValue(int(value))
+            check.toggled.connect(spin.setEnabled)
+            row_layout.addWidget(check)
+            row_layout.addWidget(spin, stretch=1)
+            form.addRow(label + ":", row)
+            self._leaves[path] = _LeafBinding(kind="optional_int", widget=spin, check=check)
+            return
+
+        # Plain int/float field.
+        if isinstance(value, bool):
+            # Bool would slip through isinstance(value, int); explicit case for safety.
+            check = QCheckBox()
+            check.setChecked(bool(value))
+            form.addRow(label + ":", check)
+            self._leaves[path] = _LeafBinding(kind="bool", widget=check)
+            return
+
+        widget: QSpinBox | QDoubleSpinBox
+        if isinstance(value, int):
+            widget = QSpinBox()
+            widget.setRange(int(fmin), int(fmax))
+            if step is not None:
+                widget.setSingleStep(int(step))
+            widget.setValue(int(value))
+            self._leaves[path] = _LeafBinding(kind="int", widget=widget)
+        else:
+            widget = QDoubleSpinBox()
+            widget.setRange(float(fmin), float(fmax))
+            widget.setDecimals(3)
+            widget.setSingleStep(float(step) if step is not None else 0.05)
+            widget.setValue(float(value))
+            self._leaves[path] = _LeafBinding(kind="float", widget=widget)
+
+        form.addRow(label + ":", widget)
+
     def result_params(self, base: GlobeParams) -> GlobeParams:
-        """Return a new GlobeParams with widget values applied over base."""
-        ep = dataclasses.replace(base.elevation)
-        for field_name, widget in self._widgets.items():
-            field_type = type(getattr(ep, field_name))
-            setattr(ep, field_name, field_type(widget.value()))
-        ep.seed = self._seed_spin.value() if self._seed_check.isChecked() else None
-        return dataclasses.replace(base, elevation=ep)
+        """Return a new GlobeParams with widget values applied over `base`."""
+        return self._apply(base, ())
+
+    def _apply(self, instance: Any, path: tuple[str, ...]) -> Any:
+        """Return a new dataclass instance with leaf widgets applied recursively."""
+        updates: dict[str, Any] = {}
+        for f in dataclasses.fields(instance):
+            sub_path = path + (f.name,)
+            value = getattr(instance, f.name)
+            if dataclasses.is_dataclass(value):
+                updates[f.name] = self._apply(value, sub_path)
+                continue
+            binding = self._leaves.get(sub_path)
+            if binding is None:
+                # Hidden or otherwise not exposed — keep current value.
+                continue
+            updates[f.name] = binding.read()
+        return dataclasses.replace(instance, **updates)
+
+
+@dataclasses.dataclass
+class _LeafBinding:
+    kind: str  # "int" | "float" | "bool" | "optional_int"
+    widget: Any
+    check: Optional[QCheckBox] = None
+
+    def read(self) -> Any:
+        if self.kind == "optional_int":
+            assert self.check is not None
+            return self.widget.value() if self.check.isChecked() else None
+        if self.kind == "bool":
+            return self.widget.isChecked()
+        if self.kind == "int":
+            return int(self.widget.value())
+        return float(self.widget.value())

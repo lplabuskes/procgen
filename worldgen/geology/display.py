@@ -89,7 +89,7 @@ def apply_geology_display(window: MapWindow, builder: ElevationBuilder) -> None:
     """Wire elevation-textured display and all geology color schemes into the window."""
     mesh = builder.mesh
     assert mesh is not None, "ElevationBuilder.build() must be called before apply_geology_display"
-    palette = _plate_palette(builder.params.n_plates)
+    palette = _plate_palette(builder.params.plates.n_plates)
     max_speed = builder.max_speed
 
     mesh.set_face_colors(palette[np.array(builder.plate_ids, dtype=np.int32)])
