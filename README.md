@@ -46,7 +46,7 @@ On construction it fan-triangulates every face and pre-builds flat `render_verti
 - `face_metadata` — `List[dict]` of per-face key-value stores for downstream annotation.
 - `face_textures` — `Optional[(N, H, W, 4) float32]`; `None` until set.
 
-`set_face_colors(colors)` replaces `face_colors` and rebuilds the render arrays. `set_face_metadata(face_idx, **kwargs)` merges kwargs into that face's metadata dict. `apply_metadata_channel(key, values)` bulk-writes a single key across all faces at once; raises `ValueError` if `len(values)` doesn't match the face count. `set_face_textures(textures)` attaches a `(N, H, W, 4) float32` RGBA texture array (one per face).
+`set_face_colors(colors)` replaces `face_colors` and rebuilds the render arrays. `set_face_metadata(face_idx, **kwargs)` merges kwargs into that face's metadata dict. `apply_metadata_channel(key, values)` bulk-writes a single key across all faces at once; raises `ValueError` if `len(values)` doesn't match the face count. `set_face_textures(name, textures, n_channels=4)` attaches a named `(N, H, W, n_channels)` float32 texture array; use `n_channels=4` for RGBA display textures and `n_channels=1` for single-channel data layers (elevation, lake mask, etc.).
 
 **`Mesh(vertices, faces)`** — subclass of `PolygonMesh`
 
@@ -127,6 +127,8 @@ PolygonMesh (dual from mesh pipeline)
                     └─ MapWindow with color schemes
 ```
 
+Elevation textures produced by `elevation.py` are single-channel `(N, H, W, 1)` float32 (channel 0 = elevation in km).
+
 ### `elevation.py`
 
 **`compute_face_elevations(mesh, plate_types_by_face, boundary_data, decay_rate, max_hops, rate_norm)`**
@@ -157,4 +159,14 @@ Returns `List[dict]` (one per face) with keys `boundary_type` (`'interior'|'conv
 
 ### `main.py`
 
-Builds an `icosphere(4)` dual, runs the full tectonics and elevation pipeline, then opens `MapWindow` with five color schemes: **Elevation** (multi-stop gradient from abyssal blues through lowlands to snow peaks), **Plates** (evenly-spaced HSV hues), **Plate Type** (blue for oceanic, tan for continental), **Speed** (warm-to-cool by surface speed), and **Boundary** (color-coded by type). Registers a Re-run button so the world can be regenerated in place.
+Builds an `icosphere(4)` dual, runs the full tectonics, elevation, and hydrology pipeline via `GlobeBuilder`, then opens `MapWindow` with six color schemes: **Elevation** (multi-stop gradient from abyssal blues through lowlands to snow peaks; lake pixels in lake blue), **Plates** (evenly-spaced HSV hues), **Plate Type** (blue for oceanic, tan for continental), **Speed** (warm-to-cool by surface speed), **Boundary** (color-coded by type), and **Volcanic Activity**. Registers a Re-run button so the world can be regenerated in place.
+
+## `worldgen/hydrology`
+
+### Overview
+
+Hydrology stage: river routing and lake detection on top of the elevation textures produced by the geology stage.
+
+- **`HydrologyParams`** (dataclass): `river_flow_threshold` — minimum flow accumulation for a headwater node (default 200.0).
+- **`HydrologyBuilder`**: `build(mesh, elevation_textures, progress=...)` runs `RiverGenerator`, stores `rivers` and `lake_polygons`, and attaches `"filled_height"` and `"lake_mask"` as single-channel `(N, H, W, 1)` face textures on the mesh.
+- **`rivers.py`**: Per-face Priority-Flood + D-infinity routing + sub-pixel gradient walk. Public API: `RiverGenerator(mesh, elevation_textures, ...).generate() -> list[River]`, plus `get_lake_polygons()`, `get_filled_height_texture()`, `get_lake_mask_texture()`. See [docs/river_generation_spec.md](docs/river_generation_spec.md) for design rationale.

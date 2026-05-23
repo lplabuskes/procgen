@@ -12,7 +12,6 @@ from worldgen.geology.elevation import (
     compute_noise_elevation_deltas,
     face_elevations_from_texture,
 )
-from worldgen.geology.rivers import River, RiverGenerator
 from worldgen.geology.volcanism import compute_volcanism
 from worldgen.geology.tectonics import (
     assign_plate_types,
@@ -95,11 +94,6 @@ class VolcanismParams:
 
 
 @dataclass
-class RiverParams:
-    river_flow_threshold: float = _f(200.0, label="Flow threshold (faces)", min=1.0, max=1000.0)
-
-
-@dataclass
 class ElevationParams:
     mesh: MeshParams = field(default_factory=MeshParams, metadata={"label": "Mesh Generation"})
     plates: PlateParams = field(default_factory=PlateParams, metadata={"label": "Plate Layout"})
@@ -108,7 +102,6 @@ class ElevationParams:
     noise: NoiseParams = field(default_factory=NoiseParams, metadata={"label": "Elevation Noise"})
     face_erosion: FaceErosionParams = field(default_factory=FaceErosionParams, metadata={"label": "Face Erosion", "hidden": True})
     volcanism: VolcanismParams = field(default_factory=VolcanismParams, metadata={"label": "Volcanism"})
-    rivers: RiverParams = field(default_factory=RiverParams, metadata={"label": "Rivers"})
     # Reproducibility — None means random each run
     seed: Optional[int] = field(default=None, metadata={"label": "Seed", "kind": "optional_int", "min": 0, "max": 2**31 - 1})
 
@@ -130,9 +123,8 @@ class ElevationBuilder:
         self.boundary_types: Optional[List[str]] = None
         self.boundary_data: Optional[List[dict]] = None
         self.elevations: Optional[np.ndarray] = None
+        self.elevation_textures: Optional[np.ndarray] = None
         self.volcanism: Optional[np.ndarray] = None
-        self.rivers: Optional[List[River]] = None
-        self.lake_polygons: Optional[List[np.ndarray]] = None
         self.max_speed: float = 1.0
 
     def _sub_seed(self, offset: int) -> Optional[int]:
@@ -256,17 +248,7 @@ class ElevationBuilder:
         # Derive per-face elevations from the final texture for land/ocean masking.
         final_elevations = face_elevations_from_texture(elevation_textures)
 
-        _report("Computing rivers…")
-        river_gen = RiverGenerator(
-            dual,
-            elevation_textures,
-            min_flow=p.rivers.river_flow_threshold,
-            sea_level=0.0,
-        )
-        rivers = river_gen.generate()
-        lake_polygons = river_gen.get_lake_polygons()
-
-        dual.set_face_textures("elevation", elevation_textures)
+        dual.set_face_textures("elevation", elevation_textures, n_channels=1)
 
         self.mesh = dual
         self.plate_ids = plate_ids
@@ -275,9 +257,8 @@ class ElevationBuilder:
         self.boundary_types = boundary_types
         self.boundary_data = boundary_data
         self.elevations = final_elevations
+        self.elevation_textures = elevation_textures
         self.volcanism = volcanism
-        self.rivers = rivers
-        self.lake_polygons = lake_polygons
         self.max_speed = float(speeds.max()) or 1.0
 
         _report("Done.")

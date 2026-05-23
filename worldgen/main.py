@@ -4,7 +4,6 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
-from worldgen.geology.display import apply_geology_display
 from worldgen.globe import GlobeBuilder, GlobeParams
 from worldgen.mapview.mapview import MapWindow
 from worldgen.params_dialog import GlobeParamsDialog
@@ -37,7 +36,7 @@ def main() -> None:
         globe = builder.build(progress=_progress)
 
         window.set_globe(globe)
-        apply_geology_display(window, builder.elevation_builder)
+        builder.apply_display(window)
 
         window.set_status("")
         window.set_rebuild_enabled(True)

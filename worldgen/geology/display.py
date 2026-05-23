@@ -1,13 +1,8 @@
 from __future__ import annotations
 
 import colorsys
-from typing import Callable, Sequence
 
 import numpy as np
-
-from worldgen.geology.elevation_builder import ElevationBuilder
-from worldgen.mapview.mapview import MapWindow
-from worldgen.mesh.mymesh import PolygonMesh
 
 
 OCEAN_COLOR = (0.25, 0.55, 0.85, 1.0)
@@ -77,53 +72,3 @@ def _elevation_color_vec(elevs: np.ndarray) -> np.ndarray:
     result[elevs <= _ELEVATION_STOPS[0][0]] = np.array(_ELEVATION_STOPS[0][1], dtype=np.float32)
     result[elevs >= _ELEVATION_STOPS[-1][0]] = np.array(_ELEVATION_STOPS[-1][1], dtype=np.float32)
     return result
-
-
-def build_elevation_display_texture(mesh: PolygonMesh) -> np.ndarray:
-    """Convert elevation face textures to smooth RGBA elevation colors."""
-    elev_tex = mesh.face_textures["elevation"]                 # (N, H, W, 4)
-    return _elevation_color_vec(elev_tex[:, :, :, 0])         # (N, H, W, 4)
-
-
-def apply_geology_display(window: MapWindow, builder: ElevationBuilder) -> None:
-    """Wire elevation-textured display and all geology color schemes into the window."""
-    mesh = builder.mesh
-    assert mesh is not None, "ElevationBuilder.build() must be called before apply_geology_display"
-    palette = _plate_palette(builder.params.plates.n_plates)
-    max_speed = builder.max_speed
-
-    mesh.set_face_colors(palette[np.array(builder.plate_ids, dtype=np.int32)])
-
-    elevation_rgba = build_elevation_display_texture(mesh)
-    mesh.set_face_textures("elevation_rgba", elevation_rgba)
-
-    def _speed_color(meta: dict) -> tuple:
-        t = meta["surface_speed"] / max_speed
-        return (t, 0.2 + 0.3 * (1.0 - t), 1.0 - t, 1.0)
-
-    def _volcanic_color(meta: dict) -> tuple:
-        t = meta["volcanic_activity"]
-        if t <= 0.0:
-            return (0.35, 0.35, 0.35, 1.0)
-        elif t < 0.5:
-            s = t / 0.5
-            return (0.35 + 0.60 * s, 0.35 - 0.10 * s, 0.35 - 0.35 * s, 1.0)
-        else:
-            s = (t - 0.5) / 0.5
-            return (0.95, 0.25 - 0.20 * s, 0.0, 1.0)
-
-    schemes: dict[str, Callable[[dict], Sequence[float]]] = {
-        "Elevation": _elevation_color,
-        "Plates": lambda meta: tuple(palette[meta["plate_id"]]),
-        "Plate Type": lambda meta: OCEAN_COLOR if meta["plate_type"] == "oceanic" else LAND_COLOR,
-        "Speed": _speed_color,
-        "Boundary": lambda meta: BOUNDARY_COLORS[meta["boundary_type"]],
-        "Volcanic Activity": _volcanic_color,
-    }
-
-    window.set_color_schemes(schemes)
-    window.associate_scheme_texture("Elevation", "elevation_rgba")
-    if builder.rivers:
-        window.add_overlay("rivers", label="Rivers")
-    if builder.lake_polygons:
-        window.add_overlay("lakes", label="Lakes")

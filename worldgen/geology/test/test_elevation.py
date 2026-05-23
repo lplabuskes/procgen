@@ -51,35 +51,26 @@ def _edge_uvs(mesh, face_idx: int, v_i: int, v_j: int):
 
 class TestFaceElevationsFromTexture:
     def test_output_shape_and_dtype(self):
-        tex = np.zeros((5, 8, 8, 4), dtype=np.float32)
+        tex = np.zeros((5, 8, 8, 1), dtype=np.float32)
         result = face_elevations_from_texture(tex)
         assert result.shape == (5,)
         assert result.dtype == np.float64
 
     def test_constant_texture_returns_that_value(self):
-        tex = np.full((3, 4, 4, 4), 0.0, dtype=np.float32)
-        tex[:, :, :, 0] = 2.5
+        tex = np.full((3, 4, 4, 1), 2.5, dtype=np.float32)
         result = face_elevations_from_texture(tex)
         np.testing.assert_allclose(result, 2.5)
 
     def test_mean_across_spatial_dims(self):
-        tex = np.zeros((2, 2, 2, 4), dtype=np.float32)
+        tex = np.zeros((2, 2, 2, 1), dtype=np.float32)
         tex[0, :, :, 0] = [[1.0, 3.0], [5.0, 7.0]]  # mean = 4.0
         tex[1, :, :, 0] = [[0.0, 0.0], [0.0, 2.0]]  # mean = 0.5
         result = face_elevations_from_texture(tex)
         np.testing.assert_allclose(result, [4.0, 0.5])
 
-    def test_only_channel_0_is_used(self):
-        tex = np.zeros((2, 4, 4, 4), dtype=np.float32)
-        tex[0, :, :, 0] = 1.0
-        tex[1, :, :, 0] = -3.0
-        tex[:, :, :, 1:] = 999.0  # other channels should not affect output
-        result = face_elevations_from_texture(tex)
-        np.testing.assert_allclose(result, [1.0, -3.0])
-
     def test_per_face_values_are_independent(self):
         rng = np.random.default_rng(0)
-        tex = rng.standard_normal((10, 6, 6, 4)).astype(np.float32)
+        tex = rng.standard_normal((10, 6, 6, 1)).astype(np.float32)
         result = face_elevations_from_texture(tex)
         for i in range(10):
             expected = float(tex[i, :, :, 0].mean())
@@ -90,15 +81,12 @@ class TestNoiseShape:
     def test_shape_and_dtype(self):
         mesh = Mesh.icosphere(1).mesh_dual()
         result = compute_noise_elevation_deltas(mesh, tex_size=8, seed=42)
-        assert result.shape == (len(mesh.faces), 8, 8, 4)
+        assert result.shape == (len(mesh.faces), 8, 8, 1)
         assert result.dtype == np.float32
 
-    def test_only_r_channel_populated(self):
+    def test_channel_populated(self):
         mesh = Mesh.icosphere(1).mesh_dual()
         result = compute_noise_elevation_deltas(mesh, tex_size=8, seed=0)
-        assert np.all(result[:, :, :, 1] == 0.0)
-        assert np.all(result[:, :, :, 2] == 0.0)
-        assert np.all(result[:, :, :, 3] == 0.0)
         assert np.any(result[:, :, :, 0] != 0.0)
 
 

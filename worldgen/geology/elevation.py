@@ -256,8 +256,8 @@ def compute_noise_elevation_deltas(
     than ~4 samples per cycle.
 
     Returns:
-        float32 array of shape (N_faces, tex_size, tex_size, 4).
-        R channel = noise delta in km; G, B, A = 0.
+        float32 array of shape (N_faces, tex_size, tex_size, 1).
+        Channel 0 = noise delta in km.
     """
     n_faces = len(mesh.faces)
     positions = mesh.face_texture_positions(tex_size, tex_size)  # (N, H, W, 3)
@@ -291,7 +291,7 @@ def compute_noise_elevation_deltas(
     if per_pixel_elevations is not None:
         noise_delta *= np.exp(-np.abs(per_pixel_elevations) / coast_sigma)
 
-    result = np.zeros((n_faces, tex_size, tex_size, 4), dtype=np.float32)
+    result = np.zeros((n_faces, tex_size, tex_size, 1), dtype=np.float32)
     result[:, :, :, 0] = noise_delta
     return result
 
@@ -300,7 +300,7 @@ def face_elevations_from_texture(elevation_textures: np.ndarray) -> np.ndarray:
     """Derive per-face elevation by averaging the elevation channel over each face's texture pixels.
 
     Args:
-        elevation_textures: float32 (N, H, W, 4); channel 0 is elevation in km.
+        elevation_textures: float32 (N, H, W, 1); channel 0 is elevation in km.
 
     Returns:
         float64 array of shape (N,) with mean elevation per face.
@@ -319,12 +319,12 @@ def compute_elevation_textures(
     elevation of vertices shared with neighboring faces.
 
     Returns:
-        float32 array of shape (N_faces, tex_size, tex_size, 4).
-        R channel = elevation in km; G, B, A = 0.
+        float32 array of shape (N_faces, tex_size, tex_size, 1).
+        Channel 0 = elevation in km.
     """
     n_faces = len(mesh.faces)
     n_verts = len(mesh.vertices)
-    textures = np.zeros((n_faces, tex_size, tex_size, 4), dtype=np.float32)
+    textures = np.zeros((n_faces, tex_size, tex_size, 1), dtype=np.float32)
 
     # Scatter-add to compute mean face elevation at each vertex (no Python loop).
     face_sizes = np.array([len(f) for f in mesh.faces])
@@ -474,7 +474,7 @@ def measure_boundary_elevation_jumps(
 
     Args:
         mesh: PolygonMesh (must have face_adjacency and face_tangent_frames).
-        elevation_textures: float32 (N, H, W, 4); channel 0 is elevation in km.
+        elevation_textures: float32 (N, H, W, 1); channel 0 is elevation in km.
 
     Returns:
         dict with keys mean_km, median_km, max_km, rms_km, n_pairs.

@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 from worldgen.geology.elevation import compute_elevation_textures
-from worldgen.geology.rivers import (
+from worldgen.hydrology.rivers import (
     River,
     RiverGenerator,
     RiverNode,

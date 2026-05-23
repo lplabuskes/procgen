@@ -125,10 +125,21 @@ class PolygonMesh:
     def set_face_metadata(self, face_idx: int, **metadata: Any) -> None:
         self.face_metadata[face_idx].update(metadata)
 
-    def set_face_textures(self, name: str, textures: np.ndarray) -> None:
-        """Add or replace a named texture layer. Shape must be (N_faces, H, W, 4), float32 in [0, 1]."""
+    def set_face_textures(self, name: str, textures: np.ndarray, n_channels: int = 4) -> None:
+        """Add or replace a named texture layer.
+
+        Shape must be (N_faces, H, W, n_channels), float32.  Use n_channels=4
+        for display textures (RGBA); use n_channels=1 for single-channel data
+        layers (elevation, lake mask, etc.).
+        """
+        if textures.ndim != 4:
+            raise ValueError(f"textures must be 4-D (N, H, W, C), got shape {textures.shape}")
         if textures.shape[0] != len(self.faces):
             raise ValueError(f"textures count {textures.shape[0]} != face count {len(self.faces)}")
+        if textures.shape[3] != n_channels:
+            raise ValueError(
+                f"textures channel count {textures.shape[3]} != n_channels={n_channels}"
+            )
         self.face_textures[name] = textures.astype(np.float32)
 
     def apply_metadata_channel(self, key: str, values: List[Any]) -> None:

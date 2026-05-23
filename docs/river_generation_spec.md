@@ -1,6 +1,6 @@
 # River Generation — As-Built Design
 
-**Module:** `worldgen/geology/rivers.py`
+**Module:** `worldgen/hydrology/rivers.py`
 **Purpose:** Produce flow-weighted river polylines on a globe whose terrain lives in per-face elevation textures.
 
 This document describes the system as currently implemented. Earlier drafts of the spec (D4 routing, Catmull-Rom smoothing, grid-snapped traces) are preserved only in git history; the algorithms below superseded them after measuring directional-bias artifacts and runaway loops.

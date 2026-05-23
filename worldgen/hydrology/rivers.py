@@ -737,13 +737,17 @@ class RiverGenerator:
             if norm <= 0.0:
                 break
             new_pos = new_pos / norm
-            positions.append(new_pos)
 
-            # Use the nearest grid node for stop conditions and flow-rate
-            # display (the only places we still consult the discrete grid).
+            # Resolve the nearest grid node before appending so a lake boundary
+            # terminates the river without including the lake-interior point.
             col_n = int(round(u * n_minus_1))
             row_n = int(round(v * n_minus_1))
             nearest = self._node_idx(current_face, row_n, col_n)
+            if self._was_raised[nearest]:
+                break  # reached lake edge; river ends at lake boundary
+
+            positions.append(new_pos)
+
             if step >= loop_check_start:
                 if nearest in visited_cells:
                     break  # loop detected
@@ -752,8 +756,6 @@ class RiverGenerator:
             if self.elevations[nearest] <= self.sea_level:
                 terminated_at_sea = True
                 break
-            if self._was_raised[nearest]:
-                break  # entered a lake body; stop at its edge
             # NOTE: do not threshold on flow_accum mid-trace — with D-inf
             # multi-receiver, accumulation can dip below threshold at branch
             # points yet recover further downstream. Headwater selection
@@ -1096,3 +1098,20 @@ class RiverGenerator:
             polygons.append(self.positions[np.array(ordered)].astype(np.float32))
 
         return polygons
+
+    def get_filled_height_texture(self) -> np.ndarray:
+        """Return the filled DEM as a (N_faces, H, W, 1) float32 texture.
+
+        Must be called after `generate()`.
+        """
+        res = self.resolution
+        return self._eff.reshape(self.n_faces, res, res, 1).astype(np.float32)
+
+    def get_lake_mask_texture(self) -> np.ndarray:
+        """Return the lake mask as a (N_faces, H, W, 1) float32 texture.
+
+        Pixels with value 1.0 are inside a lake (above sea level and filled
+        by Priority-Flood). Must be called after `generate()`.
+        """
+        res = self.resolution
+        return self._was_raised.reshape(self.n_faces, res, res, 1).astype(np.float32)
