@@ -651,14 +651,20 @@ class RiverGenerator:
                 attempted_pos /= max(float(np.linalg.norm(attempted_pos)), 1e-12)
                 next_face = -1
                 next_uv: Optional[Tuple[float, float]] = None
+                best_out = float('inf')
                 for nb_face in self.mesh.face_adjacency[current_face]:
                     nu, nv = self.mesh.face_3d_to_uv(nb_face, attempted_pos)
-                    if -1e-3 <= nu <= 1.0 + 1e-3 and -1e-3 <= nv <= 1.0 + 1e-3:
+                    # L1 distance outside [0,1]²; 0 means the point is inside.
+                    out = max(0.0, -nu, nu - 1.0) + max(0.0, -nv, nv - 1.0)
+                    if out < best_out:
+                        best_out = out
                         next_face = nb_face
                         next_uv = (max(0.0, min(1.0, nu)),
                                    max(0.0, min(1.0, nv)))
-                        break
-                if next_face < 0 or next_uv is None:
+                # Reject if the best match is implausibly far outside any face
+                # (guards against degenerate geometry; 0.5 is well above the
+                # ~0.14 max overshoot for a single UV-grid step).
+                if best_out > 0.5 or next_face < 0 or next_uv is None:
                     break
                 old_face = current_face
                 current_face = next_face
@@ -692,7 +698,11 @@ class RiverGenerator:
             if step >= loop_check_start:
                 if nearest in visited_cells:
                     break  # loop detected
-                visited_cells.add(nearest)
+                # Seam nodes (face boundaries) can be re-visited briefly due to
+                # gradient discontinuities at face edges; only interior nodes
+                # count toward loop detection.
+                if nearest not in self._inter_adj:
+                    visited_cells.add(nearest)
             flow_history.append(max(flow_history[-1], float(flow_accum[nearest])))
             if self.elevations[nearest] <= self.sea_level:
                 terminated_at_sea = True
