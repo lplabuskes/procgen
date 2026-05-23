@@ -54,6 +54,7 @@ class RiverGenerator:
         elevation_textures: np.ndarray,
         min_flow: float = 50.0,
         sea_level: float = 0.0,
+        min_lake_pixels: int = 50,
         smoothing_iterations: int = 8,
         smoothing_alpha: float = 0.5,
     ) -> None:
@@ -66,6 +67,10 @@ class RiverGenerator:
             min_flow: Minimum flow accumulation for a node to belong to a river.
             sea_level: Elevation threshold; nodes at or below this drain to the
                 ocean (treated as Priority-Flood seeds).
+            min_lake_pixels: Minimum connected-component size (in pixels) for a
+                flooded region to be treated as a lake. Smaller regions are
+                ignored — rivers pass through them and they are excluded from the
+                lake mask texture.
             smoothing_iterations: Laplacian smoothing passes per river polyline.
             smoothing_alpha: Per-iteration pull strength toward neighbour midpoint
                 in [0, 1]. Larger values smooth more aggressively per pass.
@@ -97,6 +102,7 @@ class RiverGenerator:
         self._r2 = h * h
         self.min_flow = min_flow
         self.sea_level = sea_level
+        self.min_lake_pixels = min_lake_pixels
         self.smoothing_iterations = smoothing_iterations
         self.smoothing_alpha = smoothing_alpha
 
@@ -290,10 +296,19 @@ class RiverGenerator:
         eff, was_raised = self._priority_flood()
         self._eff = eff
         self._was_raised = was_raised
+        self._lake_mask = self._build_lake_mask(was_raised)
         r1, r2, f1, f2, ang = self._compute_dinf_flow(eff)
         self._inter_face_fallback(r1, r2, f1, f2, ang, eff)
         accum = self._accumulate_flow(r1, r2, f1, f2, eff)
         return r1, r2, f1, f2, ang, accum
+
+    def _build_lake_mask(self, was_raised: np.ndarray) -> np.ndarray:
+        """Return a bool mask containing only flooded land components >= min_lake_pixels."""
+        raw = was_raised & (self.elevations > self.sea_level)
+        mask = np.zeros(self.n_nodes, dtype=bool)
+        for comp in self._find_connected_components(raw, min_size=self.min_lake_pixels):
+            mask[np.array(comp)] = True
+        return mask
 
     def _priority_flood(self) -> Tuple[np.ndarray, np.ndarray]:
         """Planchon-Darboux depression filling.
@@ -528,7 +543,7 @@ class RiverGenerator:
         # Lake-interior nodes are excluded from river routing: they are not
         # river nodes themselves, so the outlet (which receives all their
         # accumulated flow) appears as a headwater and starts a post-lake river.
-        lake_nodes = self._was_raised & (self.elevations > self.sea_level)
+        lake_nodes = self._lake_mask
         is_above = (flow_accum >= threshold) & ~lake_nodes
         above_idx = np.where(is_above)[0]
 
@@ -669,7 +684,7 @@ class RiverGenerator:
             col_n = int(round(u * n_minus_1))
             row_n = int(round(v * n_minus_1))
             nearest = self._node_idx(current_face, row_n, col_n)
-            if self._was_raised[nearest]:
+            if self._lake_mask[nearest]:
                 break  # reached lake edge; river ends at lake boundary
 
             positions.append(new_pos)
@@ -839,15 +854,14 @@ class RiverGenerator:
         for any lake shape without self-intersections. Must be called after
         `generate()`.
         """
-        lake_mask = (self.elevations > self.sea_level) & self._was_raised
-        if not lake_mask.any():
+        if not self._lake_mask.any():
             return []
 
         polygons: List[np.ndarray] = []
-        for comp in self._find_connected_components(lake_mask, min_size=16):
+        for comp in self._find_connected_components(self._lake_mask, min_size=1):
             boundary = [
                 node for node in comp
-                if any(not lake_mask[nb] for nb in self._neighbors(node))
+                if any(not self._lake_mask[nb] for nb in self._neighbors(node))
             ]
             if len(boundary) < 3:
                 continue
@@ -891,4 +905,4 @@ class RiverGenerator:
         by Priority-Flood). Must be called after `generate()`.
         """
         res = self.resolution
-        return self._was_raised.reshape(self.n_faces, res, res, 1).astype(np.float32)
+        return self._lake_mask.reshape(self.n_faces, res, res, 1).astype(np.float32)

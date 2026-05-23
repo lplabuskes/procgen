@@ -11,6 +11,7 @@ from worldgen.geology.elevation import (
     compute_face_elevations,
     compute_noise_elevation_deltas,
     face_elevations_from_texture,
+    smooth_elevation_seams,
 )
 from worldgen.geology.volcanism import compute_volcanism
 from worldgen.geology.tectonics import (
@@ -69,7 +70,7 @@ class ElevationFieldParams:
 
 @dataclass
 class NoiseParams:
-    noise_amplitude: float = _f(1.5, label="Amplitude (km)", min=0.0, max=20.0)
+    noise_amplitude: float = _f(0.5, label="Amplitude (km)", min=0.0, max=20.0)
     noise_coast_sigma: float = _f(3.0, label="Coast sigma (km)", min=0.1, max=10.0)
 
 
@@ -244,6 +245,9 @@ class ElevationBuilder:
             coast_sigma=p.noise.noise_coast_sigma,
         )
         elevation_textures[:, :, :, 0] += noise_deltas[:, :, :, 0]
+
+        _report("Smoothing elevation seams…")
+        smooth_elevation_seams(dual, elevation_textures)
 
         # Derive per-face elevations from the final texture for land/ocean masking.
         final_elevations = face_elevations_from_texture(elevation_textures)

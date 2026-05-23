@@ -466,6 +466,43 @@ def _iter_boundary_pixel_pairs(mesh: PolygonMesh, tex_size: int):
                 yield face_a, face_b, r_a, c_a, r_b, c_b
 
 
+def smooth_elevation_seams(
+    mesh: PolygonMesh,
+    elevation_textures: np.ndarray,
+    n_passes: int = 1,
+) -> np.ndarray:
+    """Reduce elevation discontinuities at face boundaries by averaging matched seam pixels.
+
+    For each adjacent face pair, finds pixels along the shared edge in both faces'
+    UV grids and replaces each matched pixel with the weighted mean of itself and all
+    its cross-face partners. One pass fully closes the gap at the boundary pixels;
+    additional passes propagate the smoothing one pixel inward per pass.
+
+    Args:
+        mesh: PolygonMesh (must have face_adjacency and face_tangent_frames).
+        elevation_textures: float32 (N, H, W, 1); modified in place.
+        n_passes: Number of averaging passes.
+
+    Returns:
+        The modified elevation_textures array (same object, modified in place).
+    """
+    tex_size = elevation_textures.shape[1]
+    elev = elevation_textures[:, :, :, 0]  # view into channel 0, shape (N, H, W)
+
+    for _ in range(n_passes):
+        partner_sum = np.zeros_like(elev)
+        partner_count = np.zeros(elev.shape, dtype=np.int32)
+        for face_a, face_b, r_a, c_a, r_b, c_b in _iter_boundary_pixel_pairs(mesh, tex_size):
+            partner_sum[face_a, r_a, c_a] += elev[face_b, r_b, c_b]
+            partner_count[face_a, r_a, c_a] += 1
+            partner_sum[face_b, r_b, c_b] += elev[face_a, r_a, c_a]
+            partner_count[face_b, r_b, c_b] += 1
+        mask = partner_count > 0
+        elev[mask] = (elev[mask] + partner_sum[mask]) / (1 + partner_count[mask])
+
+    return elevation_textures
+
+
 def measure_boundary_elevation_jumps(
     mesh: PolygonMesh,
     elevation_textures: np.ndarray,

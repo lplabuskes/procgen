@@ -25,6 +25,7 @@ def _f(default, *, label: str, min: float, max: float, step: float | None = None
 @dataclass
 class HydrologyParams:
     river_flow_threshold: float = _f(200.0, label="Flow threshold (faces)", min=1.0, max=1000.0)
+    min_lake_pixels: int = _f(50, label="Min lake pixels", min=1, max=500)
 
 
 class HydrologyBuilder:
@@ -64,6 +65,7 @@ class HydrologyBuilder:
             elevation_textures,
             min_flow=self.params.river_flow_threshold,
             sea_level=0.0,
+            min_lake_pixels=self.params.min_lake_pixels,
         )
         self.rivers = river_gen.generate()
         self.lake_polygons = river_gen.get_lake_polygons()
