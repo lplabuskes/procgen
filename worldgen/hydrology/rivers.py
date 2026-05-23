@@ -678,7 +678,7 @@ class RiverGenerator:
                 if nearest in visited_cells:
                     break  # loop detected
                 visited_cells.add(nearest)
-            flow_history.append(float(flow_accum[nearest]))
+            flow_history.append(max(flow_history[-1], float(flow_accum[nearest])))
             if self.elevations[nearest] <= self.sea_level:
                 terminated_at_sea = True
                 break

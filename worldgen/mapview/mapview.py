@@ -358,7 +358,9 @@ class MapWidget(QWidget):
             for j in range(1, len(positions)):
                 if abs(lon[j] - lon[j - 1]) > np.pi:
                     continue
-                w = min_width + (max_width - min_width) * (flows[j - 1] / max_flow) ** 0.5
+                w = (min_width + (max_width - min_width) * (flows[j - 1] / max_flow) ** 0.5) * self._zoom ** 0.5
+                if w <= 1.0:
+                    continue
                 if active_pen is None or abs(active_pen.widthF() - w) > 0.05:
                     pen = QPen(QColor(100, 180, 255, 200))
                     pen.setWidthF(w)
