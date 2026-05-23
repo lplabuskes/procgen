@@ -1,6 +1,6 @@
 import math
 from collections import defaultdict, deque
-from typing import List
+from typing import Dict, List, Tuple
 
 import heapq
 
@@ -400,3 +400,99 @@ def compute_elevation_textures(
         textures[fidx, :, :, 0] = delta_vals.reshape(B, tex_size, tex_size).astype(np.float32)
 
     return textures
+
+
+def _edge_pixels(
+    u_grid: np.ndarray,
+    v_grid: np.ndarray,
+    uv0: np.ndarray,
+    uv1: np.ndarray,
+    tol_sq: float,
+) -> List[Tuple[float, int, int]]:
+    """Return (t, row, col) for grid pixels within tol of the UV segment uv0->uv1."""
+    edge = uv1 - uv0
+    edge_len_sq = float(edge @ edge)
+    if edge_len_sq < 1e-12:
+        return []
+    du = u_grid - uv0[0]
+    dv = v_grid - uv0[1]
+    t = (du * edge[0] + dv * edge[1]) / edge_len_sq
+    proj_u = uv0[0] + t * edge[0]
+    proj_v = uv0[1] + t * edge[1]
+    dist_sq = (u_grid - proj_u) ** 2 + (v_grid - proj_v) ** 2
+    mask = (t >= 0.0) & (t <= 1.0) & (dist_sq < tol_sq)
+    rows, cols = np.where(mask)
+    if len(rows) == 0:
+        return []
+    ts = t[rows, cols]
+    order = np.argsort(ts)
+    return [(float(ts[i]), int(rows[i]), int(cols[i])) for i in order]
+
+
+def _iter_boundary_pixel_pairs(mesh: PolygonMesh, tex_size: int):
+    """Yield (face_a, face_b, r_a, c_a, r_b, c_b) for every matched seam pixel pair."""
+    coords = np.linspace(0.0, 1.0, tex_size)
+    u_grid, v_grid = np.meshgrid(coords, coords)
+    tol_sq = (0.75 / (tex_size - 1)) ** 2
+    t_tol = 1.5 / (tex_size - 1)
+    _, _, _, _, _, _, vertex_uvs = mesh.face_tangent_frames()
+
+    for face_a, neighbors in enumerate(mesh.face_adjacency):
+        verts_a = mesh.faces[face_a]
+        verts_a_set = set(verts_a)
+        for face_b in neighbors:
+            if face_b <= face_a:
+                continue
+            verts_b = mesh.faces[face_b]
+            shared = list(verts_a_set & set(verts_b))
+            if len(shared) != 2:
+                continue
+            v0, v1 = shared
+            uv_a0 = np.asarray(vertex_uvs[face_a][verts_a.index(v0)], dtype=np.float64)
+            uv_a1 = np.asarray(vertex_uvs[face_a][verts_a.index(v1)], dtype=np.float64)
+            uv_b0 = np.asarray(vertex_uvs[face_b][verts_b.index(v0)], dtype=np.float64)
+            uv_b1 = np.asarray(vertex_uvs[face_b][verts_b.index(v1)], dtype=np.float64)
+            pixels_a = _edge_pixels(u_grid, v_grid, uv_a0, uv_a1, tol_sq)
+            pixels_b = _edge_pixels(u_grid, v_grid, uv_b0, uv_b1, tol_sq)
+            if not pixels_a or not pixels_b:
+                continue
+            tb = np.array([p[0] for p in pixels_b])
+            for t_a, r_a, c_a in pixels_a:
+                diffs = np.abs(tb - t_a)
+                k_b = int(np.argmin(diffs))
+                if diffs[k_b] > t_tol:
+                    continue
+                _, r_b, c_b = pixels_b[k_b]
+                yield face_a, face_b, r_a, c_a, r_b, c_b
+
+
+def measure_boundary_elevation_jumps(
+    mesh: PolygonMesh,
+    elevation_textures: np.ndarray,
+) -> Dict[str, float]:
+    """Measure elevation discontinuities at face-to-face boundaries.
+
+    Args:
+        mesh: PolygonMesh (must have face_adjacency and face_tangent_frames).
+        elevation_textures: float32 (N, H, W, 4); channel 0 is elevation in km.
+
+    Returns:
+        dict with keys mean_km, median_km, max_km, rms_km, n_pairs.
+    """
+    tex_size = elevation_textures.shape[1]
+    all_jumps: List[float] = []
+    for face_a, face_b, r_a, c_a, r_b, c_b in _iter_boundary_pixel_pairs(mesh, tex_size):
+        all_jumps.append(abs(
+            float(elevation_textures[face_a, r_a, c_a, 0])
+            - float(elevation_textures[face_b, r_b, c_b, 0])
+        ))
+    if not all_jumps:
+        return {"mean_km": 0.0, "median_km": 0.0, "max_km": 0.0, "rms_km": 0.0, "n_pairs": 0}
+    jumps = np.array(all_jumps)
+    return {
+        "mean_km": float(np.mean(jumps)),
+        "median_km": float(np.median(jumps)),
+        "max_km": float(np.max(jumps)),
+        "rms_km": float(np.sqrt(np.mean(jumps ** 2))),
+        "n_pairs": int(len(jumps)),
+    }

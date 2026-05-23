@@ -28,6 +28,17 @@ python3 -m pytest worldgen/mapview/test/test_mapview.py -v
 
 `mapview/test/test_mapview.py` covers all four projections (equator/meridian anchors, N/S and E/W symmetry, projection-specific bounds, `project` vs `project_lonlat` consistency) and `_split_at_antimeridian` (no-crossing passthrough, two-polygon split, boundary latitude continuity).
 
+## Diagnostic Scripts
+
+```bash
+python3 scripts/measure_seam_quality.py              # default seeds 42, 137, 999
+python3 scripts/measure_seam_quality.py 1 2 3        # specific seeds
+python3 scripts/measure_seam_quality.py --random 5   # N random seeds
+python3 scripts/measure_seam_quality.py --pre-noise 42  # base texture before noise
+```
+
+`scripts/measure_seam_quality.py` — reports mean / median / RMS / max elevation jump (in metres) across all ~350 k matched boundary pixel pairs per seed. Used to quantify face-seam discontinuities in the elevation texture pipeline. The underlying function is `measure_boundary_elevation_jumps` in `worldgen/geology/elevation.py`.
+
 ## Architecture
 
 This is a procedural world generation project. The core pipeline is: generate a mesh → deregularize it → compute its dual → run stage-specific generation (geology, etc.) → wrap in a `Globe` → display it.
