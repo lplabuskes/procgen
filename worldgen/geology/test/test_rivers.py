@@ -13,13 +13,9 @@ import numpy as np
 import pytest
 
 from worldgen.geology.elevation import compute_elevation_textures
-from worldgen.hydrology.rivers import (
-    River,
-    RiverGenerator,
-    RiverNode,
-    RiverSegment,
-    _arc_param,
-)
+from worldgen.hydrology.crossings import _arc_param, crossing_pairs, resolve_crossings
+from worldgen.hydrology.rivers import RiverGenerator
+from worldgen.hydrology.types import River, RiverNode, RiverSegment
 from worldgen.mesh.mymesh import Mesh
 
 
@@ -148,17 +144,6 @@ def _intra_river_loops(river: River) -> list[tuple]:
 # Fixtures
 # ---------------------------------------------------------------------------
 
-@pytest.fixture(scope="module")
-def minimal_rg() -> RiverGenerator:
-    """Tiny RiverGenerator instance used to access _crossing_pairs."""
-    mesh = Mesh.icosphere(1).mesh_dual()
-    n = len(mesh.faces)
-    # All land at uniform elevation — no rivers form, we just need the instance.
-    tex = np.full((n, 4, 4, 4), 0.0, dtype=np.float32)
-    tex[:, :, :, 0] = 1.0
-    return RiverGenerator(mesh, tex, min_flow=1e12)
-
-
 def _make_rivers_for_seed(seed: int) -> list[River]:
     """Run a minimal but realistic pipeline and return generated rivers."""
     mesh = Mesh.icosphere(3).mesh_dual()
@@ -183,7 +168,7 @@ def generated_rivers(request) -> list[River]:
 # ---------------------------------------------------------------------------
 
 class TestCrossingPairs:
-    """Unit tests for the _crossing_pairs primitive using synthetic arc data."""
+    """Unit tests for the crossing_pairs primitive using synthetic arc data."""
 
     # Two diagonals of a small spherical square near the north pole cross in
     # the centre of the square.  Pick corners 10° from the pole at four
@@ -202,35 +187,35 @@ class TestCrossingPairs:
             np.cos(ar),
         ]))
 
-    def _run(self, rg, p1_a, p2_a, p1_b, p2_b):
+    def _run(self, p1_a, p2_a, p1_b, p2_b):
         a1 = np.array([p1_a], dtype=np.float64)
         a2 = np.array([p2_a], dtype=np.float64)
         b1 = np.array([p1_b], dtype=np.float64)
         b2 = np.array([p2_b], dtype=np.float64)
-        return rg._crossing_pairs(a1, a2, b1, b2)
+        return crossing_pairs(a1, a2, b1, b2)
 
-    def test_crossing_diagonals_detected(self, minimal_rg):
+    def test_crossing_diagonals_detected(self):
         # NE↔SW diagonal and NW↔SE diagonal of a small spherical square.
         ne = self._pole_corner(45)
         sw = self._pole_corner(225)
         nw = self._pole_corner(135)
         se = self._pole_corner(315)
-        hits = self._run(minimal_rg, ne, sw, nw, se)
+        hits = self._run(ne, sw, nw, se)
         assert len(hits) >= 1, "diagonals of spherical square must cross"
 
-    def test_crossing_point_lies_on_both_arcs(self, minimal_rg):
+    def test_crossing_point_lies_on_both_arcs(self):
         ne = self._pole_corner(45)
         sw = self._pole_corner(225)
         nw = self._pole_corner(135)
         se = self._pole_corner(315)
-        hits = self._run(minimal_rg, ne, sw, nw, se)
+        hits = self._run(ne, sw, nw, se)
         si_a, si_b, t_a, t_b, cp = hits[0]
         assert 0.0 <= t_a <= 1.0
         assert 0.0 <= t_b <= 1.0
         # cp must be unit-length and lie between the arc endpoints
         assert abs(float(np.linalg.norm(cp)) - 1.0) < 1e-8
 
-    def test_parallel_arcs_not_detected(self, minimal_rg):
+    def test_parallel_arcs_not_detected(self):
         # Two arcs at the same latitude (different great circles far apart).
         lat = np.deg2rad(60)
         p1 = _unit(np.array([np.cos(lat), 0.0, np.sin(lat)]))
@@ -238,21 +223,21 @@ class TestCrossingPairs:
         # Second arc at the same latitude circle but offset ~90° — parallel, no crossing.
         q1 = _unit(np.array([-np.cos(lat), 0.0, np.sin(lat)]))
         q2 = _unit(np.array([0.0, -np.cos(lat), np.sin(lat)]))
-        hits = self._run(minimal_rg, p1, p2, q1, q2)
+        hits = self._run(p1, p2, q1, q2)
         assert len(hits) == 0, "non-crossing arcs should produce no hits"
 
-    def test_adjacent_arcs_sharing_endpoint_not_reported(self, minimal_rg):
+    def test_adjacent_arcs_sharing_endpoint_not_reported(self):
         # Two arcs that share an endpoint should not produce an interior crossing.
         p1 = _unit(np.array([1.0, 0.0, 0.0]))
         mid = _unit(np.array([0.0, 1.0, 0.0]))
         p2 = _unit(np.array([-1.0, 0.0, 0.3]))
         # Arc A: p1 → mid; Arc B: mid → p2; they share `mid` but don't cross.
-        hits = self._run(minimal_rg, p1, mid, mid, p2)
+        hits = self._run(p1, mid, mid, p2)
         # If a hit is detected, it must be at t≈0 or t≈1 (endpoint touch), not interior.
         for _, _, t_a, t_b, _ in hits:
             assert t_a < 1e-4 or t_b < 1e-4 or t_a > 1 - 1e-4 or t_b > 1 - 1e-4
 
-    def test_vectorized_multiple_arcs(self, minimal_rg):
+    def test_vectorized_multiple_arcs(self):
         # Pass two segments for river A and two for river B; exactly one crossing pair.
         ne = self._pole_corner(45)
         sw = self._pole_corner(225)
@@ -263,7 +248,7 @@ class TestCrossingPairs:
         b1 = np.array([nw, _unit(nw + np.array([0.0, 0.01, 0.0]))], dtype=np.float64)
         b2 = np.array([se, _unit(se + np.array([0.0, 0.01, 0.0]))], dtype=np.float64)
 
-        hits = minimal_rg._crossing_pairs(a1, a2, b1, b2)
+        hits = crossing_pairs(a1, a2, b1, b2)
         # The first segment pair (ne→sw) × (nw→se) must be in the results.
         crossing_indices = {(h[0], h[1]) for h in hits}
         assert (0, 0) in crossing_indices
@@ -288,15 +273,7 @@ def _make_river(positions: list[np.ndarray], flow_rate: float) -> River:
 
 
 class TestResolveCrossings:
-    """Unit tests for _resolve_crossings with hand-crafted crossing rivers."""
-
-    @pytest.fixture
-    def rg(self):
-        mesh = Mesh.icosphere(1).mesh_dual()
-        n = len(mesh.faces)
-        tex = np.full((n, 4, 4, 4), 0.0, dtype=np.float32)
-        tex[:, :, :, 0] = 1.0
-        return RiverGenerator(mesh, tex, min_flow=1e12)
+    """Unit tests for resolve_crossings with hand-crafted crossing rivers."""
 
     def _crossing_pair(self):
         """Two rivers whose first segments cross; river B has higher flow."""
@@ -319,35 +296,35 @@ class TestResolveCrossings:
         )
         return river_a, river_b
 
-    def test_lower_flow_river_truncated(self, rg):
+    def test_lower_flow_river_truncated(self):
         river_a, river_b = self._crossing_pair()
-        result = rg._resolve_crossings([river_a, river_b])
+        result = resolve_crossings([river_a, river_b])
         # River B (higher flow) must survive intact.
         b_in_result = any(
             abs(s.flow_rate - 100.0) < 1e-6 for r in result for s in r.segments
         )
         assert b_in_result, "higher-flow river must be kept"
 
-    def test_no_crossings_after_resolve(self, rg):
+    def test_no_crossings_after_resolve(self):
         river_a, river_b = self._crossing_pair()
-        result = rg._resolve_crossings([river_a, river_b])
+        result = resolve_crossings([river_a, river_b])
         crossings = _inter_river_crossings(result)
         assert crossings == [], (
-            f"rivers still cross after _resolve_crossings: {crossings}"
+            f"rivers still cross after resolve_crossings: {crossings}"
         )
 
-    def test_single_river_unchanged(self, rg):
+    def test_single_river_unchanged(self):
         p1 = _unit(np.array([0.5, 0.0, 0.866]))
         p2 = _unit(np.array([0.0, 0.5, 0.866]))
         p3 = _unit(np.array([-0.5, 0.0, 0.866]))
         p4 = _unit(np.array([0.0, -0.5, 0.866]))
         river = _make_river([p1, p2, p3, p4], flow_rate=10.0)
-        result = rg._resolve_crossings([river])
+        result = resolve_crossings([river])
         assert len(result) == 1
         assert len(result[0].segments) == len(river.segments)
 
-    def test_empty_list_unchanged(self, rg):
-        assert rg._resolve_crossings([]) == []
+    def test_empty_list_unchanged(self):
+        assert resolve_crossings([]) == []
 
 
 # ---------------------------------------------------------------------------
