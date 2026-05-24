@@ -1,0 +1,136 @@
+"""Color schemes and display-texture builders for the climate stage."""
+from __future__ import annotations
+
+import numpy as np
+
+from worldgen.geology.display import OCEAN_COLOR
+
+_OCEAN_RGBA = np.array(OCEAN_COLOR, dtype=np.float32)
+
+
+# 9 biome palette, indexed by BIOME_NAMES order in classification.py.
+BIOME_PALETTE = np.array([
+    [0.95, 0.97, 0.99, 1.0],   # 0 Icecap
+    [0.78, 0.82, 0.78, 1.0],   # 1 Tundra
+    [0.30, 0.45, 0.30, 1.0],   # 2 Taiga
+    [0.45, 0.70, 0.30, 1.0],   # 3 Temperate
+    [0.78, 0.78, 0.45, 1.0],   # 4 Steppe
+    [0.85, 0.78, 0.35, 1.0],   # 5 Savannah
+    [0.10, 0.55, 0.20, 1.0],   # 6 Tropical
+    [0.85, 0.65, 0.32, 1.0],   # 7 Semi-Arid
+    [0.92, 0.85, 0.55, 1.0],   # 8 Desert
+], dtype=np.float32)
+
+
+# Temperature diverging palette anchored at 0 °C.
+# Stops as (°C, RGBA).
+_TEMP_STOPS = [
+    (-40.0, (0.05, 0.05, 0.35, 1.0)),
+    (-20.0, (0.10, 0.30, 0.65, 1.0)),
+    (-5.0,  (0.45, 0.65, 0.92, 1.0)),
+    (0.0,   (0.95, 0.95, 0.95, 1.0)),
+    (10.0,  (0.95, 0.90, 0.55, 1.0)),
+    (20.0,  (0.95, 0.65, 0.35, 1.0)),
+    (30.0,  (0.85, 0.25, 0.20, 1.0)),
+    (40.0,  (0.55, 0.05, 0.10, 1.0)),
+]
+
+# Precipitation sequential palette in annual mm (log-spaced anchors).
+_PRECIP_STOPS_MM = [
+    (50.0,   (0.95, 0.92, 0.55, 1.0)),
+    (250.0,  (0.85, 0.85, 0.40, 1.0)),
+    (600.0,  (0.55, 0.78, 0.40, 1.0)),
+    (1200.0, (0.30, 0.65, 0.55, 1.0)),
+    (2400.0, (0.20, 0.45, 0.75, 1.0)),
+    (4000.0, (0.10, 0.20, 0.55, 1.0)),
+]
+
+
+def _interp_stops(values: np.ndarray, stops) -> np.ndarray:
+    """Linear interpolation through a list of (anchor, RGBA) stops."""
+    shape = values.shape
+    result = np.empty((*shape, 4), dtype=np.float32)
+    result[...] = stops[-1][1]
+    for i in range(len(stops) - 1):
+        a0, c0 = stops[i]
+        a1, c1 = stops[i + 1]
+        mask = (values >= a0) & (values < a1)
+        t = np.where(mask, (values - a0) / max(a1 - a0, 1e-9), 0.0)
+        for ch in range(4):
+            result[..., ch] = np.where(mask, c0[ch] + t * (c1[ch] - c0[ch]), result[..., ch])
+    result[values <= stops[0][0]] = np.array(stops[0][1], dtype=np.float32)
+    result[values >= stops[-1][0]] = np.array(stops[-1][1], dtype=np.float32)
+    return result
+
+
+def _is_ocean_face(meta: dict) -> bool:
+    return float(meta.get("elevation", 0.0)) < 0.0
+
+
+def temperature_color(meta: dict, key: str = "temperature_annual") -> tuple:
+    """Per-face temperature color scheme, anchored at 0 °C."""
+    if _is_ocean_face(meta):
+        return OCEAN_COLOR
+    t = float(meta.get(key, 0.0))
+    return tuple(_interp_stops(np.array(t, dtype=np.float32), _TEMP_STOPS).tolist())
+
+
+def precipitation_color(meta: dict) -> tuple:
+    """Per-face annual precipitation color scheme (linear on log mm)."""
+    if _is_ocean_face(meta):
+        return OCEAN_COLOR
+    p = max(float(meta.get("precipitation_annual", 0.0)), 1.0)
+    log_stops = [(np.log10(a), c) for a, c in _PRECIP_STOPS_MM]
+    return tuple(_interp_stops(np.array(np.log10(p), dtype=np.float32), log_stops).tolist())
+
+
+def biome_color(meta: dict) -> tuple:
+    """Per-face biome color (categorical)."""
+    if _is_ocean_face(meta):
+        return OCEAN_COLOR
+    idx = int(meta.get("biome", 0))
+    if 0 <= idx < len(BIOME_PALETTE):
+        return tuple(BIOME_PALETTE[idx].tolist())
+    return (0.5, 0.5, 0.5, 1.0)
+
+
+def _apply_ocean_mask(rgba: np.ndarray, elevation_tex: np.ndarray | None) -> np.ndarray:
+    if elevation_tex is None:
+        return rgba
+    ocean = elevation_tex[..., 0] < 0.0
+    rgba[ocean] = _OCEAN_RGBA
+    return rgba
+
+
+def build_temperature_display_texture(temperature_tex: np.ndarray,
+                                      season: int | None = None,
+                                      elevation_tex: np.ndarray | None = None) -> np.ndarray:
+    """Convert (N, H, W, K) °C texture to (N, H, W, 4) RGBA.
+
+    season=None returns annual mean across all K channels; otherwise picks one.
+    Sub-sea-level pixels (elevation_tex < 0) are overwritten with the ocean color.
+    """
+    if season is None:
+        values = temperature_tex.mean(axis=-1)
+    else:
+        values = temperature_tex[..., season]
+    rgba = _interp_stops(values, _TEMP_STOPS)
+    return _apply_ocean_mask(rgba, elevation_tex)
+
+
+def build_precipitation_display_texture(precipitation_tex: np.ndarray,
+                                        elevation_tex: np.ndarray | None = None) -> np.ndarray:
+    """Convert (N, H, W, K) mm/season texture to (N, H, W, 4) RGBA (annual log scale)."""
+    annual = np.maximum(precipitation_tex.sum(axis=-1), 1.0)
+    log_stops = [(np.log10(a), c) for a, c in _PRECIP_STOPS_MM]
+    rgba = _interp_stops(np.log10(annual), log_stops)
+    return _apply_ocean_mask(rgba, elevation_tex)
+
+
+def build_biome_display_texture(biome_tex: np.ndarray,
+                                elevation_tex: np.ndarray | None = None) -> np.ndarray:
+    """Look up (N, H, W, 1) uint8 indices in BIOME_PALETTE → (N, H, W, 4) RGBA."""
+    idx = biome_tex[..., 0].astype(np.int32)
+    idx = np.clip(idx, 0, len(BIOME_PALETTE) - 1)
+    rgba = BIOME_PALETTE[idx].copy()
+    return _apply_ocean_mask(rgba, elevation_tex)

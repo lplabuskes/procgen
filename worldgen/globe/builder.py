@@ -13,9 +13,22 @@ from worldgen.geology.display import (
     _plate_palette,
 )
 
+from worldgen.climate.builder import ClimateBuilder, ClimateParams
+from worldgen.climate.display import (
+    BIOME_PALETTE,
+    biome_color,
+    build_biome_display_texture,
+    build_precipitation_display_texture,
+    build_temperature_display_texture,
+    precipitation_color,
+    temperature_color,
+)
 from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams
 from worldgen.hydrology.builder import HydrologyBuilder, HydrologyParams, LAKE_COLOR
 from worldgen.globe.globe import Globe
+
+
+SEASON_LABELS = ["Spring", "Summer", "Autumn", "Winter"]
 
 
 def build_elevation_display_texture(mesh) -> np.ndarray:
@@ -35,6 +48,7 @@ class GlobeParams:
     dataclass as a new field here.
     """
     elevation: ElevationParams = field(default_factory=ElevationParams)
+    climate: ClimateParams = field(default_factory=ClimateParams, metadata={"label": "Climate"})
     hydrology: HydrologyParams = field(default_factory=HydrologyParams, metadata={"label": "Hydrology"})
 
 
@@ -42,13 +56,15 @@ class GlobeBuilder:
     """Orchestrates every stage of globe generation.
 
     Each stage's builder is stored as an attribute (`elevation_builder`,
-    `hydrology_builder`) so callers can read intermediate results without
-    re-running work. `build()` returns a `Globe` wrapping the resulting mesh.
+    `climate_builder`, `hydrology_builder`) so callers can read intermediate
+    results without re-running work. `build()` returns a `Globe` wrapping the
+    resulting mesh.
     """
 
     def __init__(self, params: GlobeParams | None = None) -> None:
         self.params: GlobeParams = params or GlobeParams()
         self.elevation_builder: ElevationBuilder = ElevationBuilder(self.params.elevation)
+        self.climate_builder: ClimateBuilder = ClimateBuilder(self.params.climate)
         self.hydrology_builder: HydrologyBuilder = HydrologyBuilder(self.params.hydrology)
         self.globe: Optional[Globe] = None
 
@@ -56,10 +72,12 @@ class GlobeBuilder:
         mesh = self.elevation_builder.build(progress=progress)
 
         elevation_textures = mesh.face_textures["elevation"]  # (N, H, W, 1)
+        self.climate_builder.build(mesh, elevation_textures, progress=progress)
         self.hydrology_builder.build(mesh, elevation_textures, progress=progress)
 
         globe = Globe(mesh=mesh)
         hb = self.hydrology_builder
+        cb = self.climate_builder
 
         if hb.rivers:
             paths_with_flow = []
@@ -76,6 +94,13 @@ class GlobeBuilder:
         if hb.lake_polygons:
             globe.add_feature("lakes", hb.lake_polygons)
 
+        if cb.winds is not None:
+            centroids = mesh.face_centroids.astype(np.float32)
+            winds_feature = []
+            for season_idx in range(cb.winds.shape[1]):
+                winds_feature.append((centroids.copy(), cb.winds[:, season_idx, :].astype(np.float32)))
+            globe.add_feature("winds", winds_feature)
+
         self.globe = globe
         return globe
 
@@ -83,6 +108,7 @@ class GlobeBuilder:
         """Wire color schemes and overlays into a MapWindow after build()."""
         eb = self.elevation_builder
         hb = self.hydrology_builder
+        cb = self.climate_builder
         assert eb.mesh is not None, "GlobeBuilder.build() must be called before apply_display"
 
         mesh = eb.mesh
@@ -118,7 +144,50 @@ class GlobeBuilder:
             "Volcanic Activity": _volcanic_color,
         }
 
+        # Climate schemes — only registered if the climate stage ran.
+        if "temperature" in mesh.face_textures:
+            temp_tex = mesh.face_textures["temperature"]
+            precip_tex = mesh.face_textures["precipitation"]
+            biome_tex = mesh.face_textures["biome"]
+            elev_tex = mesh.face_textures["elevation"]
+            mesh.set_face_textures(
+                "temperature_annual_rgba",
+                build_temperature_display_texture(temp_tex, elevation_tex=elev_tex),
+            )
+            mesh.set_face_textures(
+                "temperature_summer_rgba",
+                build_temperature_display_texture(temp_tex, season=1, elevation_tex=elev_tex),
+            )
+            mesh.set_face_textures(
+                "temperature_winter_rgba",
+                build_temperature_display_texture(temp_tex, season=3, elevation_tex=elev_tex),
+            )
+            mesh.set_face_textures(
+                "precipitation_rgba",
+                build_precipitation_display_texture(precip_tex, elevation_tex=elev_tex),
+            )
+            mesh.set_face_textures(
+                "biome_rgba",
+                build_biome_display_texture(biome_tex, elevation_tex=elev_tex),
+            )
+
+            schemes["Annual Temperature"] = temperature_color
+            schemes["Summer Temperature"] = lambda meta: temperature_color(meta, key="temperature_warmest")
+            schemes["Winter Temperature"] = lambda meta: temperature_color(meta, key="temperature_coldest")
+            schemes["Annual Precipitation"] = precipitation_color
+            schemes["Biome"] = biome_color
+
         window.set_color_schemes(schemes)
         window.associate_scheme_texture("Elevation", "elevation_rgba")
+        if "temperature" in mesh.face_textures:
+            window.associate_scheme_texture("Annual Temperature", "temperature_annual_rgba")
+            window.associate_scheme_texture("Summer Temperature", "temperature_summer_rgba")
+            window.associate_scheme_texture("Winter Temperature", "temperature_winter_rgba")
+            window.associate_scheme_texture("Annual Precipitation", "precipitation_rgba")
+            window.associate_scheme_texture("Biome", "biome_rgba")
         if hb.rivers:
             window.add_overlay("rivers", label="Rivers")
+        if cb.winds is not None:
+            for i, label in enumerate(SEASON_LABELS):
+                window.add_overlay(f"winds_season_{i}", label=f"Winds — {label}", checked=False)
+        _ = BIOME_PALETTE  # re-exported for downstream consumers

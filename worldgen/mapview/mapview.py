@@ -306,6 +306,12 @@ class MapWidget(QWidget):
             self._draw_rivers_overlay(painter, W, H, cx, cy, scale_x, scale_y)
         if self._overlay_visible.get("lakes") and self._globe is not None:
             self._draw_lakes_overlay(painter, W, H, cx, cy, scale_x, scale_y)
+        if self._globe is not None and self._globe.has_feature("winds"):
+            for season_idx in range(len(self._globe.get_feature("winds") or [])):
+                if self._overlay_visible.get(f"winds_season_{season_idx}"):
+                    self._draw_winds_overlay(
+                        painter, W, H, cx, cy, scale_x, scale_y, season_idx
+                    )
 
     def _draw_lakes_overlay(
         self,
@@ -327,6 +333,57 @@ class MapWidget(QWidget):
                 painter.drawPolygon(
                     QPolygonF([QPointF(float(x), float(y)) for x, y in zip(sx, sy)])
                 )
+
+    def _draw_winds_overlay(
+        self,
+        painter: QPainter,
+        W: float, H: float,
+        cx: float, cy: float,
+        scale_x: float, scale_y: float,
+        season_idx: int,
+    ) -> None:
+        winds_feature = self._globe.get_feature("winds")  # type: ignore[union-attr]
+        if not winds_feature or season_idx >= len(winds_feature):
+            return
+        positions, vectors = winds_feature[season_idx]
+        if len(positions) == 0:
+            return
+
+        speeds = np.linalg.norm(vectors, axis=1)
+        max_speed = float(speeds.max()) if speeds.size else 0.0
+        if max_speed <= 1e-6:
+            return
+
+        # Arc-length per arrow on the unit sphere; tunable via zoom.
+        step = 0.025 / self._zoom ** 0.5
+        unit = vectors / np.maximum(speeds[:, None], 1e-12)
+        end_positions = positions + step * unit
+        end_positions /= np.maximum(np.linalg.norm(end_positions, axis=1, keepdims=True), 1e-12)
+
+        lon0 = np.arctan2(positions[:, 1], positions[:, 0])
+        lat0 = np.arcsin(np.clip(positions[:, 2], -1.0, 1.0))
+        lon1 = np.arctan2(end_positions[:, 1], end_positions[:, 0])
+        lat1 = np.arcsin(np.clip(end_positions[:, 2], -1.0, 1.0))
+
+        proj0 = self._projection.project_lonlat(np.column_stack([lon0, lat0]))
+        proj1 = self._projection.project_lonlat(np.column_stack([lon1, lat1]))
+        sx0 = (proj0[:, 0] - cx) * scale_x + W * 0.5
+        sy0 = -(proj0[:, 1] - cy) * scale_y + H * 0.5
+        sx1 = (proj1[:, 0] - cx) * scale_x + W * 0.5
+        sy1 = -(proj1[:, 1] - cy) * scale_y + H * 0.5
+
+        crosses = np.abs(lon1 - lon0) > np.pi
+
+        pen = QPen(QColor(40, 40, 40, 200))
+        pen.setWidthF(1.2)
+        painter.setPen(pen)
+        for i in range(len(positions)):
+            if crosses[i]:
+                continue
+            painter.drawLine(
+                QPointF(float(sx0[i]), float(sy0[i])),
+                QPointF(float(sx1[i]), float(sy1[i])),
+            )
 
     def _draw_rivers_overlay(
         self,
