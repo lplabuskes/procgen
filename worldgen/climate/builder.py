@@ -69,12 +69,12 @@ class WindParams:
 
 @dataclass
 class PrecipitationParams:
-    itcz_mm_annual: float = _f(2200.0, label="ITCZ baseline (mm/yr)", min=0.0, max=5000.0)
+    itcz_mm_annual: float = _f(4000.0, label="ITCZ baseline (mm/yr)", min=0.0, max=5000.0)
     horse_mm_annual: float = _f(250.0, label="Horse latitudes (mm/yr)", min=0.0, max=2000.0)
     midlat_mm_annual: float = _f(900.0, label="Mid-latitude (mm/yr)", min=0.0, max=3000.0)
     polar_mm_annual: float = _f(200.0, label="Polar (mm/yr)", min=0.0, max=2000.0)
     orographic_k: float = _f(0.4, label="Orographic K", min=0.0, max=2.0)
-    continentality_decay_km: float = _f(1200.0, label="Continentality decay (km)", min=100.0, max=5000.0)
+    continentality_decay_km: float = _f(3000.0, label="Continentality decay (km)", min=100.0, max=5000.0)
 
 
 @dataclass
