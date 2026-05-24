@@ -26,7 +26,7 @@ from worldgen.climate.temperature import (
     per_pixel_temperatures,
     surface_temperatures,
 )
-from worldgen.climate.winds import SEASON_PHASES, zonal_winds
+from worldgen.climate.winds import SEASON_PHASES, pressure_winds, zonal_winds
 from worldgen.mesh.mymesh import PolygonMesh
 
 
@@ -61,6 +61,9 @@ class WindParams:
     westerly_speed: float = _f(10.0, label="Westerlies (m/s)", min=0.0, max=30.0)
     polar_speed: float = _f(5.0, label="Polar easterlies (m/s)", min=0.0, max=30.0)
     itcz_shift_deg: float = _f(10.0, label="ITCZ shift (°)", min=0.0, max=30.0)
+    pressure_wind_scale: float = _f(
+        600.0, label="Pressure wind scale (m·s⁻¹·km/°C)", min=0.0, max=1000.0
+    )
 
 
 @dataclass
@@ -230,6 +233,16 @@ class ClimateBuilder:
             westerly_speed=wp.westerly_speed,
             polar_speed=wp.polar_speed,
             itcz_shift_deg=wp.itcz_shift_deg,
+        )
+        # Land/sea thermal contrast → seasonal pressure systems → cross-isobar
+        # flow. Added on top of the zonal base; ocean inertia damps the anomaly
+        # so the contribution is largest on continental coasts.
+        winds = winds + pressure_winds(
+            mesh.face_centroids.astype(np.float64),
+            mesh.face_adjacency,
+            t_face,
+            pressure_wind_scale=wp.pressure_wind_scale,
+            earth_radius_km=EARTH_RADIUS_KM,
         )
 
         _report("Computing precipitation…")

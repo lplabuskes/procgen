@@ -191,6 +191,35 @@ then `wind_3d = u_east · east_hat + v_north · north_hat`. The sign of `u_east`
 
 The mesh is rigid (no deflection around landmasses in MVP). This is the single largest concession to the article's model and is the obvious next thing to add when currents go in: a divergence-free correction that routes winds around mountains and coastlines.
 
+### Pressure-gradient wind from land/sea contrast
+
+A second wind component is added on top of the zonal base to capture seasonal
+pressure systems (continental highs in winter, lows in summer → monsoonal
+reversal). It is a cookbook proxy, not a real pressure-tendency model: the
+seasonal temperature anomaly itself is treated as a (sign-flipped) pressure
+field, and wind blows from high to low.
+
+```
+anomaly[f, j]   = T_face[f, j] − T_annual[f]                  # °C, near-zero over ocean
+∇a[f, j]        = least-squares tangent-plane gradient of anomaly on the face graph
+                 (neighbour offsets in km, RHS = anomaly differences)
+W_pressure[f,j] = pressure_wind_scale · ∇a[f, j]              # m/s, blows toward warm/low
+W_total[f, j]   = W_zonal[f, j] + W_pressure[f, j]
+```
+
+The wind is **pure cross-isobar** — no Coriolis rotation. Geostrophic balance
+would put air on circulation around highs/lows but produce no mass flux toward
+warm continents in summer; cross-isobar flow is what reproduces the monsoonal
+intuition the cookbook describes. The tradeoff is no anticyclonic gyre around
+the Siberian high; for that, blend a rotated component on top in a future revision.
+
+Because the ocean's thermal inertia is much lower than land's (`ocean_inertia
+≈ 0.3` vs `land_inertia ≈ 1.0`), the anomaly is near-zero offshore, so the
+contribution is largest on continental coasts and inland. This automatically
+breaks hemispheric symmetry on worlds with strong land/ocean asymmetry.
+
+Tunable on `WindParams.pressure_wind_scale` (m·s⁻¹·km/°C, default 200, set to 0 to disable).
+
 ---
 
 ## Stage 4 — Precipitation
@@ -458,6 +487,7 @@ Sub-dataclasses mirror `ElevationParams` style (`_f(default, label=..., min=...,
 | | `westerly_speed` | 10.0 m/s | 0, 30 |
 | | `polar_speed` | 5.0 m/s | 0, 30 |
 | | `itcz_shift_deg` | 10.0 | 0, 30 |
+| | `pressure_wind_scale` | 200.0 m·s⁻¹·km/°C | 0, 1000 |
 | `PrecipitationParams` | `itcz_mm_annual` | 2200 | 0, 5000 |
 | | `horse_mm_annual` | 250 | 0, 2000 |
 | | `midlat_mm_annual` | 900 | 0, 3000 |
@@ -496,8 +526,7 @@ Four wind overlays (`Winds — Spring/Summer/Autumn/Winter`) draw as line segmen
 ## Known limitations / future work
 
 - **Currents are a coarse Markov-diffusion advection** of insolation, not a real fluid simulation. The model captures west-coast vs east-coast asymmetry but its peak anomalies are ~±3 °C rather than the ~±10 °C real western boundary currents produce. See the "Ocean currents" section above.
-- **Zonal winds only.** No deflection around mountains or continents, no monsoonal reversal beyond the ITCZ shift, no continental low/high cells.
-- **Hemispheric symmetry in the wind model.** A real world has hemispheric asymmetry because land/sea distribution is asymmetric. MVP winds are purely zonal so any seed with strong land/ocean asymmetry will look "too clean".
+- **No deflection around mountains or continents.** Surface winds pass straight through terrain rather than being routed around it. The pressure-anomaly wind component does capture continental highs/lows and monsoonal reversal, but only via cross-isobar mass flux — no anticyclonic/cyclonic rotation around them.
 - **Per-face wind, per-pixel everything else.** Orographic precipitation uses the per-face wind vector even when sampling the per-pixel elevation gradient. Cross-face wind variation inside a single face is below the modelling resolution.
 - **No snowpack, no humidity, no clouds.** Precipitation is the only hydrological output; the temperature field does not distinguish rain from snow (the classifier infers it from temperature).
 - **Lapse rate is uniform.** Wet vs dry adiabatic distinction is ignored; coastal humidity does not damp the lapse rate.

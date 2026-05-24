@@ -1,10 +1,13 @@
 """Zonal Hadley/Ferrel/Polar surface winds with seasonal ITCZ shift."""
 from __future__ import annotations
 
+from typing import Sequence
+
 import numpy as np
 
 
 SEASON_PHASES = np.array([0.0, np.pi / 2, np.pi, 3 * np.pi / 2], dtype=np.float64)
+EARTH_RADIUS_KM = 6371.0
 
 
 def _tangent_frames(face_centroids: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -74,4 +77,84 @@ def zonal_winds(face_centroids: np.ndarray,
         (speed * u_east)[..., None] * east[:, None, :]
         + (speed * v_north)[..., None] * north[:, None, :]
     )                                                                    # (N, K, 3)
+    return winds.astype(np.float32)
+
+
+def pressure_winds(face_centroids: np.ndarray,
+                   face_adjacency: Sequence[Sequence[int]],
+                   temperature_face: np.ndarray,
+                   *,
+                   pressure_wind_scale: float,
+                   earth_radius_km: float = EARTH_RADIUS_KM) -> np.ndarray:
+    """Cookbook pressure-gradient wind contribution from land/sea thermal contrast.
+
+    Uses a temperature-anomaly proxy for pressure: cold anomaly = high pressure,
+    warm anomaly = low pressure. The wind is purely cross-isobar (no Coriolis
+    rotation), so air flows from high to low — i.e. ``wind = K * grad(T - T_annual)``,
+    which yields ocean→land flow in summer and land→ocean flow in winter at
+    monsoonal latitudes. The ocean's larger thermal inertia means its anomaly is
+    near-zero, so the strongest contributions arise on coasts of large landmasses.
+
+    Args:
+        face_centroids: (N, 3) unit-sphere face positions.
+        face_adjacency: per-face neighbour index lists (from ``PolygonMesh``).
+        temperature_face: (N, K) °C, the seasonal surface temperatures.
+        pressure_wind_scale: m/s per (°C/km) of anomaly gradient.
+        earth_radius_km: sphere radius used to convert unit-sphere distances to km.
+
+    Returns:
+        (N, K, 3) float32 wind velocity vectors (m/s) tangent to the sphere.
+    """
+    n_faces = face_centroids.shape[0]
+    n_seasons = temperature_face.shape[1]
+    if pressure_wind_scale <= 0.0:
+        return np.zeros((n_faces, n_seasons, 3), dtype=np.float32)
+
+    east, north = _tangent_frames(face_centroids.astype(np.float64))
+
+    anomaly = (
+        temperature_face.astype(np.float64)
+        - temperature_face.astype(np.float64).mean(axis=1, keepdims=True)
+    )                                                                   # (N, K) °C
+
+    # Flatten adjacency into (src, dst) edge arrays.
+    src_list: list[int] = []
+    dst_list: list[int] = []
+    for i, neighbours in enumerate(face_adjacency):
+        for j in neighbours:
+            src_list.append(i)
+            dst_list.append(int(j))
+    if not src_list:
+        return np.zeros((n_faces, n_seasons, 3), dtype=np.float32)
+    src = np.asarray(src_list, dtype=np.int64)
+    dst = np.asarray(dst_list, dtype=np.int64)
+
+    # Tangent-plane displacement of each neighbour from its src face, in km.
+    rel = face_centroids[dst].astype(np.float64) - face_centroids[src].astype(np.float64)
+    u_e = np.sum(rel * east[src], axis=1) * earth_radius_km             # (E,) km
+    v_e = np.sum(rel * north[src], axis=1) * earth_radius_km
+    r = np.stack([u_e, v_e], axis=1)                                    # (E, 2)
+
+    # Per-face normal-equations matrix M[i] = Σ_e outer(r_e, r_e).
+    M = np.zeros((n_faces, 2, 2), dtype=np.float64)
+    np.add.at(M, src, r[:, :, None] * r[:, None, :])
+
+    # Per-face RHS b[i, :, k] = Σ_e r_e * (a[dst,k] − a[src,k]).
+    da = anomaly[dst, :] - anomaly[src, :]                              # (E, K)
+    b = np.zeros((n_faces, 2, n_seasons), dtype=np.float64)
+    np.add.at(b, src, r[:, :, None] * da[:, None, :])
+
+    # pinv (rather than solve) tolerates degenerate neighbourhoods — isolated
+    # faces or collinear neighbours yield rank-deficient M; pinv returns the
+    # minimum-norm gradient (zero when there's no signal to fit).
+    grad_a = np.linalg.pinv(M) @ b                                      # (N, 2, K) °C/km
+
+    # Wind = K · ∇(T_anomaly): blows toward warm anomaly (low pressure).
+    wind_u = pressure_wind_scale * grad_a[:, 0, :]                      # (N, K)
+    wind_v = pressure_wind_scale * grad_a[:, 1, :]
+
+    winds = (
+        wind_u[..., None] * east[:, None, :]
+        + wind_v[..., None] * north[:, None, :]
+    )                                                                   # (N, K, 3)
     return winds.astype(np.float32)
