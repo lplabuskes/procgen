@@ -29,7 +29,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from worldgen.hydrology.crossings import resolve_crossings
+from worldgen.hydrology.crossings import resolve_crossings, resolve_self_crossings
 from worldgen.hydrology.types import (
     River,
     RiverNode,
@@ -828,6 +828,7 @@ class RiverGenerator:
             for i, seg in enumerate(river.segments):
                 seg.start.position = smoothed[i]
                 seg.end.position = smoothed[i + 1]
+        rivers = resolve_self_crossings(rivers)
         rivers = resolve_crossings(rivers)
         return rivers
 

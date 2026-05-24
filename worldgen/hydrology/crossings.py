@@ -2,11 +2,12 @@
 
 Public API:
     crossing_pairs(p1_a, p2_a, p1_b, p2_b) -> list of (si_a, si_b, t_a, t_b, cross_pt)
+    resolve_self_crossings(rivers) -> List[River]
     resolve_crossings(rivers) -> List[River]
 """
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -77,6 +78,71 @@ def crossing_pairs(
                 continue
             hits.append((i, j, t_a, t_b, cp))
     return hits
+
+
+def resolve_self_crossings(rivers: List[River]) -> List[River]:
+    """Repair rivers that fold back on themselves after Laplacian smoothing.
+
+    For each river, finds the earliest non-adjacent segment pair (i, j) whose
+    great-circle arcs cross at point C, then excises the loop by reconnecting
+    upstream (segments 0..i up to C) directly to downstream (from C through
+    segments j+1..N), skipping the detour i+1..j.  Applied iteratively until
+    no self-crossings remain; each splice removes at least one segment so
+    iteration always terminates.
+    """
+    result: List[River] = []
+    for river in rivers:
+        for _ in range(len(river.segments)):
+            n = len(river.segments)
+            if n <= 2:
+                break
+
+            p1 = np.array([s.start.position for s in river.segments], dtype=np.float64)
+            p2 = np.array([s.end.position for s in river.segments], dtype=np.float64)
+            p1 /= np.maximum(np.linalg.norm(p1, axis=1, keepdims=True), 1e-12)
+            p2 /= np.maximum(np.linalg.norm(p2, axis=1, keepdims=True), 1e-12)
+
+            best: Optional[Tuple[int, int, float, float, np.ndarray]] = None
+            for i in range(n - 2):
+                for _si_a, si_b, t_i, t_j, cp in crossing_pairs(
+                    p1[i:i+1], p2[i:i+1], p1[i+2:], p2[i+2:]
+                ):
+                    j = i + 2 + si_b
+                    if best is None or i < best[0] or (i == best[0] and t_i < best[1]):
+                        best = (i, j, t_i, t_j, cp)
+
+            if best is None:
+                break
+
+            i, j, t_i, t_j, cp = best
+            junction = RiverNode(
+                position=cp.astype(np.float32),
+                elevation=0.0,
+                face_id=river.segments[i].start.face_id,
+                uv=(0.0, 0.0),
+            )
+            new_segs: List[RiverSegment] = list(river.segments[:i])
+            if t_i > 1e-3:
+                new_segs.append(RiverSegment(
+                    start=river.segments[i].start,
+                    end=junction,
+                    flow_rate=river.segments[i].flow_rate,
+                ))
+            if t_j < 1 - 1e-3:
+                new_segs.append(RiverSegment(
+                    start=junction,
+                    end=river.segments[j].end,
+                    flow_rate=river.segments[j].flow_rate,
+                ))
+            new_segs.extend(river.segments[j + 1:])
+            river.segments = new_segs
+            if new_segs:
+                river.source = new_segs[0].start
+                river.mouth = new_segs[-1].end
+
+        if len(river.segments) > 2:
+            result.append(river)
+    return result
 
 
 def resolve_crossings(rivers: List[River]) -> List[River]:
