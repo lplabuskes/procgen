@@ -1,11 +1,12 @@
 """Climate stage orchestrator — ClimateParams and ClimateBuilder."""
 from __future__ import annotations
 
-import heapq
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 import numpy as np
+import scipy.sparse as sp
+from scipy.sparse.csgraph import dijkstra as sp_dijkstra
 
 from worldgen.climate.classification import (
     N_BIOMES,
@@ -111,25 +112,27 @@ def _distance_to_coast_km(mesh: PolygonMesh, face_elev_km: np.ndarray,
     n = len(mesh.faces)
     centroids = mesh.face_centroids.astype(np.float64)
     is_ocean = face_elev_km <= sea_level
-    dist = np.full(n, np.inf, dtype=np.float64)
 
-    heap: list[tuple[float, int]] = []
-    for i in np.flatnonzero(is_ocean):
-        dist[i] = 0.0
-        heapq.heappush(heap, (0.0, int(i)))
-
-    while heap:
-        d, u = heapq.heappop(heap)
-        if d > dist[u]:
-            continue
+    # Build face-distance graph + virtual multi-source node at index n (weight 0
+    # to every ocean face) for single-call multi-source Dijkstra.
+    rows: list[int] = []
+    cols: list[int] = []
+    data: list[float] = []
+    for u in range(n):
         for v in mesh.face_adjacency[u]:
             cos_ang = float(np.clip(centroids[u] @ centroids[v], -1.0, 1.0))
-            edge = EARTH_RADIUS_KM * np.arccos(cos_ang)
-            nd = d + edge
-            if nd < dist[v]:
-                dist[v] = nd
-                heapq.heappush(heap, (nd, int(v)))
+            rows.append(u)
+            cols.append(int(v))
+            data.append(EARTH_RADIUS_KM * np.arccos(cos_ang))
+    ocean_idx = np.flatnonzero(is_ocean)
+    virt = n
+    for i in ocean_idx:
+        rows.append(virt)
+        cols.append(int(i))
+        data.append(0.0)
 
+    graph = sp.csr_matrix((data, (rows, cols)), shape=(n + 1, n + 1))
+    dist = sp_dijkstra(graph, directed=True, indices=virt)[:n]
     dist[~np.isfinite(dist)] = 0.0  # land with no ocean reachable: treat as coast
     return dist.astype(np.float32)
 

@@ -20,11 +20,13 @@ exposed by `surface_temperatures` and `surface_precipitation`.
 """
 from __future__ import annotations
 
-import heapq
 from dataclasses import dataclass
 from typing import Sequence
 
 import numpy as np
+import scipy.sparse as sp
+import scipy.sparse.linalg as spla
+from scipy.sparse.csgraph import dijkstra as sp_dijkstra
 
 from worldgen.climate.winds import _tangent_frames
 from worldgen.mesh.mymesh import PolygonMesh
@@ -60,55 +62,6 @@ def _build_voronoi_weights(mesh, is_ocean: np.ndarray) -> dict:
             )
             weights[(f, nb)] = edge_len / max(d_km, 1e-6)
     return weights
-
-
-def _gmres(matvec, b: np.ndarray, tol: float = 1e-6, max_iter: int = 200) -> np.ndarray:
-    """GMRES (no restart) for Ax = b starting from x = 0."""
-    n = len(b)
-    b_norm = float(np.linalg.norm(b))
-    if b_norm < 1e-30:
-        return np.zeros(n, dtype=np.float64)
-    x = np.zeros(n, dtype=np.float64)
-    r = b.copy()
-    r_norm = float(np.linalg.norm(r))
-    if r_norm / b_norm < tol:
-        return x
-
-    Q = np.zeros((n, max_iter + 1), dtype=np.float64)
-    H = np.zeros((max_iter + 1, max_iter), dtype=np.float64)
-    Q[:, 0] = r / r_norm
-    cs = np.zeros(max_iter, dtype=np.float64)
-    sn = np.zeros(max_iter, dtype=np.float64)
-    g = np.zeros(max_iter + 1, dtype=np.float64)
-    g[0] = r_norm
-    m = 0
-    for j in range(max_iter):
-        w = matvec(Q[:, j])
-        for i in range(j + 1):
-            H[i, j] = float(Q[:, i] @ w)
-            w -= H[i, j] * Q[:, i]
-        H[j + 1, j] = float(np.linalg.norm(w))
-        if H[j + 1, j] > 1e-12:
-            Q[:, j + 1] = w / H[j + 1, j]
-        for i in range(j):
-            h_ij = H[i, j]
-            H[i, j] = cs[i] * h_ij + sn[i] * H[i + 1, j]
-            H[i + 1, j] = -sn[i] * h_ij + cs[i] * H[i + 1, j]
-        denom = float(np.sqrt(H[j, j] ** 2 + H[j + 1, j] ** 2))
-        if denom > 1e-12:
-            cs[j] = H[j, j] / denom
-            sn[j] = H[j + 1, j] / denom
-        else:
-            cs[j], sn[j] = 1.0, 0.0
-        H[j, j] = cs[j] * H[j, j] + sn[j] * H[j + 1, j]
-        H[j + 1, j] = 0.0
-        g[j + 1] = -sn[j] * g[j]
-        g[j] = cs[j] * g[j]
-        m = j + 1
-        if abs(g[j + 1]) / b_norm < tol:
-            break
-    y = np.linalg.solve(H[:m, :m], g[:m])
-    return x + Q[:, :m] @ y
 
 
 @dataclass
@@ -228,28 +181,30 @@ def _solve_streamfunction(mesh: PolygonMesh,
     dst = np.asarray(dst_list, dtype=np.int64)
     w = np.asarray(w_list, dtype=np.float64)
 
-    diag = np.zeros(n, dtype=np.float64)
-    np.add.at(diag, src, w)
-    diag[~is_ocean] = 1.0
+    # Laplacian: diagonal − off-diagonal ocean→ocean entries; identity for land.
+    diag_vals = np.zeros(n, dtype=np.float64)
+    np.add.at(diag_vals, src, w)
+    diag_vals[~is_ocean] = 1.0
 
     ocean_dst_mask = is_ocean[dst]
     src_o = src[ocean_dst_mask]
     dst_o = dst[ocean_dst_mask]
     w_o = w[ocean_dst_mask]
 
-    def L_matvec(psi: np.ndarray) -> np.ndarray:
-        out = diag * psi
-        if src_o.size:
-            np.subtract.at(out, src_o, w_o * psi[dst_o])
-        return out
+    idx_n = np.arange(n, dtype=np.int64)
+    L = sp.csr_matrix(
+        (np.concatenate([diag_vals, -w_o]),
+         (np.concatenate([idx_n, src_o]), np.concatenate([idx_n, dst_o]))),
+        shape=(n, n),
+    )
 
     # β-plane east-derivative: finite difference to nearest-east neighbour
     lat = np.arcsin(np.clip(centroids[:, 2], -1.0, 1.0))
     beta_arr = beta_scale * 2.0 * EARTH_ROTATION_RAD_S * np.cos(lat) / EARTH_RADIUS_KM
 
     east_axes, _ = _tangent_frames(centroids)
-    east_proj = np.zeros(n, dtype=np.float64)
     east_dst = np.full(n, -1, dtype=np.int64)
+    east_proj = np.ones(n, dtype=np.float64)
     for f in range(n):
         if not is_ocean[f]:
             continue
@@ -259,17 +214,21 @@ def _solve_streamfunction(mesh: PolygonMesh,
             if proj > best_proj:
                 best_proj = proj
                 east_dst[f] = nb
-        east_proj[f] = best_proj if east_dst[f] >= 0 else 1.0
+        if east_dst[f] >= 0:
+            east_proj[f] = best_proj
 
     has_east = (east_dst >= 0) & is_ocean
+    he_idx = np.where(has_east)[0].astype(np.int64)
+    inv_ep = 1.0 / east_proj[he_idx]
+    D_east = sp.csr_matrix(
+        (np.concatenate([-inv_ep, inv_ep]),
+         (np.concatenate([he_idx, he_idx]),
+          np.concatenate([he_idx, east_dst[he_idx]]))),
+        shape=(n, n),
+    )
 
-    def d_east_matvec(psi: np.ndarray) -> np.ndarray:
-        out = np.zeros(n, dtype=np.float64)
-        out[has_east] = (psi[east_dst[has_east]] - psi[has_east]) / east_proj[has_east]
-        return out
-
-    def matvec_stommel(psi: np.ndarray) -> np.ndarray:
-        return L_matvec(psi) - beta_arr * d_east_matvec(psi)
+    # Stommel operator: A = L - diag(β) · D_east
+    A = L - sp.diags(beta_arr) @ D_east
 
     # Scale rhs by EARTH_RADIUS_KM so that ψ has the same magnitude as the
     # old 1/d Laplacian (which had units 1/km, making L*ψ match curl(τ) in
@@ -277,7 +236,7 @@ def _solve_streamfunction(mesh: PolygonMesh,
     b = np.zeros(n, dtype=np.float64)
     b[is_ocean] = rhs[is_ocean] * EARTH_RADIUS_KM
 
-    psi = _gmres(matvec_stommel, b, tol=tol, max_iter=max_iter)
+    psi, _ = spla.gmres(A, b, rtol=tol, restart=min(max_iter, n), maxiter=max_iter)
     psi[~is_ocean] = 0.0
     return psi
 
@@ -363,18 +322,22 @@ def _advect_field(local: np.ndarray,
     advected = local.copy().astype(np.float64)
     base = (1.0 - alpha) * local
 
+    if src.size == 0:
+        return advected
+
     inflow_total = np.zeros(n, dtype=np.float64)
-    if src.size:
-        np.add.at(inflow_total, dst, weights)
+    np.add.at(inflow_total, dst, weights)
     has_inflow = inflow_total > 0.0
     inv_inflow = np.zeros(n, dtype=np.float64)
     inv_inflow[has_inflow] = 1.0 / inflow_total[has_inflow]
 
+    # Normalise weights by destination inflow total and build a sparse
+    # row-stochastic matrix W so each iteration is a single sparse matvec.
+    norm_w = weights * inv_inflow[dst]
+    W = sp.csr_matrix((norm_w, (dst, src)), shape=(n, n))
+
     for _ in range(iterations):
-        contribution = np.zeros(n, dtype=np.float64)
-        if src.size:
-            np.add.at(contribution, dst, weights * advected[src])
-        avg_inflow = contribution * inv_inflow
+        avg_inflow = W @ advected
         new = np.where(has_inflow, base + alpha * avg_inflow, local)
         new[~is_ocean] = local[~is_ocean]
         advected = new
@@ -393,32 +356,49 @@ def _propagate_inland(ocean_delta: np.ndarray,
     """
     n = len(mesh.faces)
     centroids = mesh.face_centroids.astype(np.float64)
-    dist = np.full(n, np.inf, dtype=np.float64)
-    parent = np.full(n, -1, dtype=np.int64)
-    heap: list[tuple[float, int]] = []
-    for i in np.flatnonzero(is_ocean):
-        dist[i] = 0.0
-        parent[i] = int(i)
-        heapq.heappush(heap, (0.0, int(i)))
-    while heap:
-        d, u = heapq.heappop(heap)
-        if d > dist[u]:
-            continue
+
+    # Build face-distance graph + virtual multi-source node at index n (weight 0
+    # to every ocean face) for single-call multi-source Dijkstra.
+    rows: list[int] = []
+    cols: list[int] = []
+    data: list[float] = []
+    for u in range(n):
         for v in mesh.face_adjacency[u]:
             cos_ang = float(np.clip(centroids[u] @ centroids[v], -1.0, 1.0))
-            edge = EARTH_RADIUS_KM * np.arccos(cos_ang)
-            nd = d + edge
-            if nd < dist[v]:
-                dist[v] = nd
-                parent[v] = parent[u]
-                heapq.heappush(heap, (nd, int(v)))
-    dist[~np.isfinite(dist)] = 0.0
+            rows.append(u)
+            cols.append(int(v))
+            data.append(EARTH_RADIUS_KM * np.arccos(cos_ang))
+    ocean_idx = np.flatnonzero(is_ocean)
+    virt = n
+    for i in ocean_idx:
+        rows.append(virt)
+        cols.append(int(i))
+        data.append(0.0)
 
-    delta_full = np.zeros(n, dtype=np.float64)
-    has_parent = parent >= 0
+    graph = sp.csr_matrix((data, (rows, cols)), shape=(n + 1, n + 1))
+    dist_full, pred_full = sp_dijkstra(
+        graph, directed=True, indices=virt, return_predecessors=True
+    )
+    dist = dist_full[:n]
+    pred = pred_full[:n]
+
+    # Walk the predecessor tree in distance order to assign each face the
+    # nearest ocean face as its parent (ocean faces are their own parents).
+    ocean_parent = np.full(n, -1, dtype=np.int64)
+    for f in np.argsort(dist):
+        if is_ocean[f]:
+            ocean_parent[f] = f
+        else:
+            p = int(pred[f])
+            if 0 <= p < n:
+                ocean_parent[f] = ocean_parent[p]
+
+    dist[~np.isfinite(dist)] = 0.0
     decay = max(float(decay_km), 1e-6)
+    delta_full = np.zeros(n, dtype=np.float64)
+    has_parent = ocean_parent >= 0
     delta_full[has_parent] = (
-        ocean_delta[parent[has_parent]] * np.exp(-dist[has_parent] / decay)
+        ocean_delta[ocean_parent[has_parent]] * np.exp(-dist[has_parent] / decay)
     )
     return delta_full, dist
 

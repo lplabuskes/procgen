@@ -2,8 +2,6 @@ import math
 from collections import defaultdict, deque
 from typing import Dict, List, Tuple
 
-import heapq
-
 import numpy as np
 
 from worldgen.geology.simplex import make_perm, simplex3_vec

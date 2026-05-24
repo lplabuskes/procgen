@@ -2,3 +2,4 @@ numpy
 PyOpenGL
 pyside6
 pytest
+scipy
