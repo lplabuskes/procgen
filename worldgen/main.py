@@ -10,6 +10,7 @@ from worldgen.params_dialog import GlobeParamsDialog
 
 
 def main() -> None:
+    debug = "--debug" in sys.argv
     app = QApplication(sys.argv)
 
     window = MapWindow()
@@ -36,7 +37,7 @@ def main() -> None:
         globe = builder.build(progress=_progress)
 
         window.set_globe(globe)
-        builder.apply_display(window)
+        builder.apply_display(window, debug=debug)
 
         window.set_status("")
         window.set_rebuild_enabled(True)

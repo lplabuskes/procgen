@@ -104,7 +104,7 @@ class GlobeBuilder:
         self.globe = globe
         return globe
 
-    def apply_display(self, window) -> None:
+    def apply_display(self, window, debug: bool = False) -> None:
         """Wire color schemes and overlays into a MapWindow after build()."""
         eb = self.elevation_builder
         hb = self.hydrology_builder
@@ -120,71 +120,76 @@ class GlobeBuilder:
         elevation_rgba = build_elevation_display_texture(mesh)
         mesh.set_face_textures("elevation_rgba", elevation_rgba)
 
-        def _speed_color(meta: dict) -> tuple:
-            t = meta["surface_speed"] / max_speed
-            return (t, 0.2 + 0.3 * (1.0 - t), 1.0 - t, 1.0)
-
-        def _volcanic_color(meta: dict) -> tuple:
-            t = meta["volcanic_activity"]
-            if t <= 0.0:
-                return (0.35, 0.35, 0.35, 1.0)
-            elif t < 0.5:
-                s = t / 0.5
-                return (0.35 + 0.60 * s, 0.35 - 0.10 * s, 0.35 - 0.35 * s, 1.0)
-            else:
-                s = (t - 0.5) / 0.5
-                return (0.95, 0.25 - 0.20 * s, 0.0, 1.0)
-
         schemes: dict[str, Callable[[dict], tuple]] = {
             "Elevation": _elevation_color,
-            "Plates": lambda meta: tuple(palette[meta["plate_id"]]),
-            "Plate Type": lambda meta: OCEAN_COLOR if meta["plate_type"] == "oceanic" else LAND_COLOR,
-            "Speed": _speed_color,
-            "Boundary": lambda meta: BOUNDARY_COLORS[meta["boundary_type"]],
-            "Volcanic Activity": _volcanic_color,
         }
 
-        # Climate schemes — only registered if the climate stage ran.
+        if debug:
+            def _speed_color(meta: dict) -> tuple:
+                t = meta["surface_speed"] / max_speed
+                return (t, 0.2 + 0.3 * (1.0 - t), 1.0 - t, 1.0)
+
+            def _volcanic_color(meta: dict) -> tuple:
+                t = meta["volcanic_activity"]
+                if t <= 0.0:
+                    return (0.35, 0.35, 0.35, 1.0)
+                elif t < 0.5:
+                    s = t / 0.5
+                    return (0.35 + 0.60 * s, 0.35 - 0.10 * s, 0.35 - 0.35 * s, 1.0)
+                else:
+                    s = (t - 0.5) / 0.5
+                    return (0.95, 0.25 - 0.20 * s, 0.0, 1.0)
+
+            schemes.update({
+                "Plates": lambda meta: tuple(palette[meta["plate_id"]]),
+                "Plate Type": lambda meta: OCEAN_COLOR if meta["plate_type"] == "oceanic" else LAND_COLOR,
+                "Speed": _speed_color,
+                "Boundary": lambda meta: BOUNDARY_COLORS[meta["boundary_type"]],
+                "Volcanic Activity": _volcanic_color,
+            })
+
         if "temperature" in mesh.face_textures:
-            temp_tex = mesh.face_textures["temperature"]
-            precip_tex = mesh.face_textures["precipitation"]
             biome_tex = mesh.face_textures["biome"]
             elev_tex = mesh.face_textures["elevation"]
-            mesh.set_face_textures(
-                "temperature_annual_rgba",
-                build_temperature_display_texture(temp_tex, elevation_tex=elev_tex),
-            )
-            mesh.set_face_textures(
-                "temperature_summer_rgba",
-                build_temperature_display_texture(temp_tex, season=1, elevation_tex=elev_tex),
-            )
-            mesh.set_face_textures(
-                "temperature_winter_rgba",
-                build_temperature_display_texture(temp_tex, season=3, elevation_tex=elev_tex),
-            )
-            mesh.set_face_textures(
-                "precipitation_rgba",
-                build_precipitation_display_texture(precip_tex, elevation_tex=elev_tex),
-            )
             mesh.set_face_textures(
                 "biome_rgba",
                 build_biome_display_texture(biome_tex, elevation_tex=elev_tex),
             )
-
-            schemes["Annual Temperature"] = temperature_color
-            schemes["Summer Temperature"] = lambda meta: temperature_color(meta, key="temperature_warmest")
-            schemes["Winter Temperature"] = lambda meta: temperature_color(meta, key="temperature_coldest")
-            schemes["Annual Precipitation"] = precipitation_color
             schemes["Biome"] = biome_color
+
+            if debug:
+                temp_tex = mesh.face_textures["temperature"]
+                precip_tex = mesh.face_textures["precipitation"]
+                mesh.set_face_textures(
+                    "temperature_annual_rgba",
+                    build_temperature_display_texture(temp_tex, elevation_tex=elev_tex),
+                )
+                mesh.set_face_textures(
+                    "temperature_summer_rgba",
+                    build_temperature_display_texture(temp_tex, season=1, elevation_tex=elev_tex),
+                )
+                mesh.set_face_textures(
+                    "temperature_winter_rgba",
+                    build_temperature_display_texture(temp_tex, season=3, elevation_tex=elev_tex),
+                )
+                mesh.set_face_textures(
+                    "precipitation_rgba",
+                    build_precipitation_display_texture(precip_tex, elevation_tex=elev_tex),
+                )
+                schemes["Annual Temperature"] = temperature_color
+                schemes["Summer Temperature"] = lambda meta: temperature_color(meta, key="temperature_warmest")
+                schemes["Winter Temperature"] = lambda meta: temperature_color(meta, key="temperature_coldest")
+                schemes["Annual Precipitation"] = precipitation_color
 
         window.set_color_schemes(schemes)
         window.associate_scheme_texture("Elevation", "elevation_rgba")
         if "temperature" in mesh.face_textures:
-            window.associate_scheme_texture("Annual Temperature", "temperature_annual_rgba")
-            window.associate_scheme_texture("Summer Temperature", "temperature_summer_rgba")
-            window.associate_scheme_texture("Winter Temperature", "temperature_winter_rgba")
-            window.associate_scheme_texture("Annual Precipitation", "precipitation_rgba")
             window.associate_scheme_texture("Biome", "biome_rgba")
+            if debug:
+                window.associate_scheme_texture("Annual Temperature", "temperature_annual_rgba")
+                window.associate_scheme_texture("Summer Temperature", "temperature_summer_rgba")
+                window.associate_scheme_texture("Winter Temperature", "temperature_winter_rgba")
+                window.associate_scheme_texture("Annual Precipitation", "precipitation_rgba")
         if hb.rivers:
             window.add_overlay("rivers", label="Rivers")
         if cb.winds is not None:

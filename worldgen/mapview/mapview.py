@@ -618,6 +618,7 @@ class MapWindow(QMainWindow):
         self._map.set_overlay_visible(name, checked)
 
     def set_color_schemes(self, schemes: dict[str, Callable[[dict], Sequence[float]]]) -> None:
+        prev_scheme = self._color_combo.currentText()
         self._color_combo.blockSignals(True)
         self._color_combo.clear()
         for name in schemes:
@@ -627,3 +628,5 @@ class MapWindow(QMainWindow):
         self._color_label.setVisible(visible)
         self._color_combo.setVisible(visible)
         self._map.set_color_schemes(schemes)
+        if prev_scheme and prev_scheme in schemes:
+            self._color_combo.setCurrentText(prev_scheme)
