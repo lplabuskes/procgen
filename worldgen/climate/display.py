@@ -94,6 +94,27 @@ def biome_color(meta: dict) -> tuple:
     return (0.5, 0.5, 0.5, 1.0)
 
 
+def temperature_legend_entries() -> list[tuple[str, tuple]]:
+    """Ordered (label, rgba) entries for a gradient legend, cold→hot."""
+    result = []
+    for t, c in _TEMP_STOPS:
+        label = "0 °C" if t == 0 else f"{int(t):+d} °C"
+        result.append((label, c))
+    return result
+
+
+def precipitation_legend_entries() -> list[tuple[str, tuple]]:
+    """Ordered (label, rgba) entries for a gradient legend, dry→wet (annual mm)."""
+    labels = ["50 mm", "250 mm", "600 mm", "1200 mm", "2400 mm", "4000 mm"]
+    return [(lbl, c) for lbl, (_, c) in zip(labels, _PRECIP_STOPS_MM)]
+
+
+def biome_legend_entries() -> list[tuple[str, tuple]]:
+    """(name, rgba) pairs for all biomes in index order."""
+    from worldgen.climate.classification import BIOME_NAMES
+    return [(name, tuple(BIOME_PALETTE[i].tolist())) for i, name in enumerate(BIOME_NAMES)]
+
+
 def _apply_ocean_mask(rgba: np.ndarray, elevation_tex: np.ndarray | None) -> np.ndarray:
     if elevation_tex is None:
         return rgba

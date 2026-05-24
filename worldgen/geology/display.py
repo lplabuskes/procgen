@@ -56,6 +56,19 @@ def _elevation_color(meta: dict) -> tuple:
     return stops[-1][1]
 
 
+def elevation_legend_entries() -> list[tuple[str, tuple]]:
+    """Ordered (label, rgba) entries for a gradient legend, low→high elevation."""
+    return [
+        ("-8 km",   _ELEVATION_STOPS[0][1]),
+        ("-3.5 km", _ELEVATION_STOPS[1][1]),
+        ("-0.5 km", _ELEVATION_STOPS[2][1]),
+        ("0 km",    _ELEVATION_STOPS[4][1]),  # land side of sea level
+        ("0.8 km",  _ELEVATION_STOPS[5][1]),
+        ("2.5 km",  _ELEVATION_STOPS[6][1]),
+        ("5.5 km",  _ELEVATION_STOPS[7][1]),
+    ]
+
+
 def _elevation_color_vec(elevs: np.ndarray) -> np.ndarray:
     """Vectorized elevation color scheme. Returns (..., 4) float32."""
     shape = elevs.shape

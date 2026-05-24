@@ -11,17 +11,21 @@ from worldgen.geology.display import (
     _elevation_color,
     _elevation_color_vec,
     _plate_palette,
+    elevation_legend_entries,
 )
 
 from worldgen.climate.builder import ClimateBuilder, ClimateParams
 from worldgen.climate.display import (
     BIOME_PALETTE,
     biome_color,
+    biome_legend_entries,
     build_biome_display_texture,
     build_precipitation_display_texture,
     build_temperature_display_texture,
     precipitation_color,
+    precipitation_legend_entries,
     temperature_color,
+    temperature_legend_entries,
 )
 from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams
 from worldgen.hydrology.builder import HydrologyBuilder, HydrologyParams, LAKE_COLOR
@@ -194,13 +198,19 @@ class GlobeBuilder:
 
         window.set_color_schemes(schemes)
         window.associate_scheme_texture("Elevation", "elevation_rgba")
+        window.register_legend("Elevation", "gradient", elevation_legend_entries())
         if "temperature" in mesh.face_textures:
             window.associate_scheme_texture("Biome", "biome_rgba")
+            window.register_legend("Biome", "categorical", biome_legend_entries())
             if debug:
                 window.associate_scheme_texture("Annual Temperature", "temperature_annual_rgba")
                 window.associate_scheme_texture("Summer Temperature", "temperature_summer_rgba")
                 window.associate_scheme_texture("Winter Temperature", "temperature_winter_rgba")
                 window.associate_scheme_texture("Annual Precipitation", "precipitation_rgba")
+                window.register_legend("Annual Temperature", "gradient", temperature_legend_entries())
+                window.register_legend("Summer Temperature", "gradient", temperature_legend_entries())
+                window.register_legend("Winter Temperature", "gradient", temperature_legend_entries())
+                window.register_legend("Annual Precipitation", "gradient", precipitation_legend_entries())
         if hb.rivers:
             window.add_overlay("rivers", label="Rivers")
         if debug and cb.winds is not None:

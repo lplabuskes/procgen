@@ -4,8 +4,8 @@ from typing import TYPE_CHECKING, Callable, Optional, Sequence
 
 import numpy as np
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QBrush, QColor, QImage, QPainter, QPen, QPolygonF, QTransform
-from PySide6.QtCore import QPointF
+from PySide6.QtGui import QAction, QBrush, QColor, QImage, QLinearGradient, QPainter, QPen, QPolygonF, QTransform
+from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -119,6 +119,7 @@ class MapWidget(QWidget):
 
         self._globe: Optional["Globe"] = None
         self._overlay_visible: dict[str, bool] = {}
+        self._legends: dict[str, tuple[str, list]] = {}  # scheme → (kind, entries)
 
         self._zoom: float = 1.0
         self._center: np.ndarray = np.zeros(2, dtype=np.float64)
@@ -316,6 +317,8 @@ class MapWidget(QWidget):
                 and self._globe is not None
                 and self._globe.has_feature("currents")):
             self._draw_currents_overlay(painter, W, H, cx, cy, scale_x, scale_y)
+
+        self._draw_legend(painter, W, H)
 
     def _draw_lakes_overlay(
         self,
@@ -529,6 +532,103 @@ class MapWidget(QWidget):
                     QPointF(float(sx[j]), float(sy[j])),
                 )
 
+    def register_legend(self, scheme_name: str, kind: str, entries: list) -> None:
+        """Register legend data for a color scheme.
+
+        kind: 'gradient' or 'categorical'
+        entries: list of (label, rgba) where rgba is (r,g,b,a) floats in [0,1].
+        For 'gradient', order from lowest value (bottom of bar) to highest (top).
+        """
+        self._legends[scheme_name] = (kind, entries)
+        self.update()
+
+    def _draw_legend(self, painter: QPainter, W: float, H: float) -> None:
+        if self._active_scheme is None:
+            return
+        legend = self._legends.get(self._active_scheme)
+        if legend is None:
+            return
+        kind, entries = legend
+        if len(entries) < 2:
+            return
+        painter.save()
+        if kind == "gradient":
+            self._draw_gradient_legend(painter, W, H, entries)
+        else:
+            self._draw_categorical_legend(painter, W, H, entries)
+        painter.restore()
+
+    def _draw_gradient_legend(self, painter: QPainter, W: float, H: float, entries: list) -> None:
+        font = painter.font()
+        font.setPointSizeF(9.0)
+        painter.setFont(font)
+        fm = painter.fontMetrics()
+
+        margin = 12
+        pad = 6
+        bar_w = 18
+        bar_h = min(220, max(120, int(H * 0.38)))
+        lx_gap = 6
+
+        max_lw = max(fm.horizontalAdvance(lbl) for lbl, _ in entries)
+
+        x0 = margin + pad
+        y_bot = int(H) - margin - pad
+        y_top = y_bot - bar_h
+
+        bg_w = pad + bar_w + lx_gap + max_lw + pad
+        bg_h = pad + bar_h + pad
+        painter.fillRect(margin, y_top - pad, bg_w, bg_h, QColor(20, 20, 20, 160))
+
+        gradient = QLinearGradient(x0, y_top, x0, y_bot)
+        n = len(entries)
+        for i, (_, rgba) in enumerate(entries):
+            # entries[0] = lowest = bottom (pos 1.0); entries[-1] = highest = top (pos 0.0)
+            pos = 1.0 - i / (n - 1)
+            gradient.setColorAt(pos, QColor(int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255), 255))
+        painter.fillRect(QRectF(x0, y_top, bar_w, bar_h), QBrush(gradient))
+        painter.setPen(QPen(QColor(120, 120, 120, 180), 0.5))
+        painter.drawRect(QRectF(x0, y_top, bar_w, bar_h))
+
+        painter.setPen(QColor(240, 240, 240))
+        for i, (label, _) in enumerate(entries):
+            frac = i / (n - 1)
+            cy = y_bot - frac * bar_h
+            ty = int(cy + (fm.ascent() - fm.descent()) // 2)
+            painter.drawText(int(x0 + bar_w + lx_gap), ty, label)
+
+    def _draw_categorical_legend(self, painter: QPainter, W: float, H: float, entries: list) -> None:
+        font = painter.font()
+        font.setPointSizeF(9.0)
+        painter.setFont(font)
+        fm = painter.fontMetrics()
+
+        margin = 12
+        pad = 6
+        swatch = 13
+        swatch_gap = 5
+        row_h = max(swatch, fm.height()) + 3
+
+        max_lw = max(fm.horizontalAdvance(lbl) for lbl, _ in entries)
+        total_h = pad + len(entries) * row_h + pad
+        total_w = pad + swatch + swatch_gap + max_lw + pad
+
+        x0 = margin
+        y0 = int(H) - margin - total_h
+        painter.fillRect(x0, y0, total_w, total_h, QColor(20, 20, 20, 160))
+
+        for i, (label, rgba) in enumerate(entries):
+            row_y = y0 + pad + i * row_h
+            sw_x = x0 + pad
+            sw_y = row_y + (row_h - swatch) // 2
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(QColor(int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255))))
+            painter.drawRect(sw_x, sw_y, swatch, swatch)
+            painter.setPen(QColor(240, 240, 240))
+            cy = row_y + row_h / 2
+            ty = int(cy + (fm.ascent() - fm.descent()) // 2)
+            painter.drawText(x0 + pad + swatch + swatch_gap, ty, label)
+
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_start = (float(event.position().x()), float(event.position().y()))
@@ -703,6 +803,9 @@ class MapWindow(QMainWindow):
 
     def associate_scheme_texture(self, scheme_name: str, texture_key: str) -> None:
         self._map.associate_scheme_texture(scheme_name, texture_key)
+
+    def register_legend(self, scheme_name: str, kind: str, entries: list) -> None:
+        self._map.register_legend(scheme_name, kind, entries)
 
     def add_overlay(self, name: str, label: Optional[str] = None, checked: bool = True) -> None:
         """Register a named overlay toggle. Safe to call on every re-run (idempotent)."""
