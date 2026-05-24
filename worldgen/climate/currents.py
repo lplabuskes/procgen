@@ -1,20 +1,17 @@
 """Annually-averaged surface ocean currents and their climate feedback.
 
-Cookbook-level barotropic streamfunction model (no β, no western
-intensification yet):
+Barotropic Stommel streamfunction model (with β-plane western intensification):
 
 - A scalar streamfunction ψ is defined per ocean face, with ψ=0 on the
   ocean–land boundary so each basin is naturally closed.
-- The streamfunction satisfies Δψ = −curl(τ), where τ is taken as the
-  annual-mean surface wind directly (linear drag). The discrete
-  Laplacian is a 1/d-weighted graph Laplacian on the dual face graph;
-  the linear system is solved by Conjugate Gradient.
-- Velocity is recovered from ψ via the tangent-plane curl identity
-  u = k̂ × ∇ψ on each ocean face, giving a divergence-free flow that
-  closes into gyres inside each basin.
+- The streamfunction satisfies L·ψ − β·∂ψ/∂e = −curl(τ), where τ is the
+  quadratic-drag wind stress (C_D·|u|·u), L is the Voronoi-weighted graph
+  Laplacian (FVM approximation of −∇²), and β = 2Ω·cos(φ)/R is the
+  planetary vorticity gradient. The non-symmetric system is solved by GMRES.
+- Velocity is recovered from ψ via u = k̂ × ∇ψ on each ocean face, giving
+  a divergence-free flow with western-boundary intensification.
 - The advection step (insolation → SST anomaly) and the inland-decay
-  step are unchanged: they only consume the velocity vector, so they
-  work the same whether the field came from Ekman or from ψ.
+  step are unchanged: they only consume the velocity vector.
 
 No seasonal breakdown — the model produces a single per-face (N,)
 anomaly that the climate builder broadcasts across seasons via the
@@ -34,6 +31,84 @@ from worldgen.mesh.mymesh import PolygonMesh
 
 
 EARTH_RADIUS_KM = 6371.0
+EARTH_ROTATION_RAD_S = 7.292e-5
+
+
+def _build_voronoi_weights(mesh, is_ocean: np.ndarray) -> dict:
+    """For each directed ocean→any edge, compute w = edge_len / centroid_dist.
+
+    Returns dict (f, nb) -> float for ocean faces only. Edges with degenerate
+    topology (shared vertex count != 2) are skipped.
+    """
+    verts = np.array(mesh.vertices, dtype=np.float64)
+    face_vert_sets = [set(f) for f in mesh.faces]
+    centroids = mesh.face_centroids.astype(np.float64)
+    weights: dict = {}
+    for f in range(len(mesh.faces)):
+        if not is_ocean[f]:
+            continue
+        fverts = face_vert_sets[f]
+        for nb in mesh.face_adjacency[f]:
+            shared = list(fverts & face_vert_sets[nb])
+            if len(shared) != 2:
+                continue
+            edge_len = EARTH_RADIUS_KM * np.arccos(
+                float(np.clip(verts[shared[0]] @ verts[shared[1]], -1.0, 1.0))
+            )
+            d_km = EARTH_RADIUS_KM * np.arccos(
+                float(np.clip(centroids[f] @ centroids[nb], -1.0, 1.0))
+            )
+            weights[(f, nb)] = edge_len / max(d_km, 1e-6)
+    return weights
+
+
+def _gmres(matvec, b: np.ndarray, tol: float = 1e-6, max_iter: int = 200) -> np.ndarray:
+    """GMRES (no restart) for Ax = b starting from x = 0."""
+    n = len(b)
+    b_norm = float(np.linalg.norm(b))
+    if b_norm < 1e-30:
+        return np.zeros(n, dtype=np.float64)
+    x = np.zeros(n, dtype=np.float64)
+    r = b.copy()
+    r_norm = float(np.linalg.norm(r))
+    if r_norm / b_norm < tol:
+        return x
+
+    Q = np.zeros((n, max_iter + 1), dtype=np.float64)
+    H = np.zeros((max_iter + 1, max_iter), dtype=np.float64)
+    Q[:, 0] = r / r_norm
+    cs = np.zeros(max_iter, dtype=np.float64)
+    sn = np.zeros(max_iter, dtype=np.float64)
+    g = np.zeros(max_iter + 1, dtype=np.float64)
+    g[0] = r_norm
+    m = 0
+    for j in range(max_iter):
+        w = matvec(Q[:, j])
+        for i in range(j + 1):
+            H[i, j] = float(Q[:, i] @ w)
+            w -= H[i, j] * Q[:, i]
+        H[j + 1, j] = float(np.linalg.norm(w))
+        if H[j + 1, j] > 1e-12:
+            Q[:, j + 1] = w / H[j + 1, j]
+        for i in range(j):
+            h_ij = H[i, j]
+            H[i, j] = cs[i] * h_ij + sn[i] * H[i + 1, j]
+            H[i + 1, j] = -sn[i] * h_ij + cs[i] * H[i + 1, j]
+        denom = float(np.sqrt(H[j, j] ** 2 + H[j + 1, j] ** 2))
+        if denom > 1e-12:
+            cs[j] = H[j, j] / denom
+            sn[j] = H[j + 1, j] / denom
+        else:
+            cs[j], sn[j] = 1.0, 0.0
+        H[j, j] = cs[j] * H[j, j] + sn[j] * H[j + 1, j]
+        H[j + 1, j] = 0.0
+        g[j + 1] = -sn[j] * g[j]
+        g[j] = cs[j] * g[j]
+        m = j + 1
+        if abs(g[j + 1]) / b_norm < tol:
+            break
+    y = np.linalg.solve(H[:m, :m], g[:m])
+    return x + Q[:, :m] @ y
 
 
 @dataclass
@@ -100,10 +175,14 @@ def _tangent_gradient(face_centroids: np.ndarray,
 def _wind_stress_curl(face_centroids: np.ndarray,
                       face_adjacency: Sequence[Sequence[int]],
                       annual_winds: np.ndarray) -> np.ndarray:
-    """Curl of the (linear-drag) wind stress, per face, in (m/s)/km."""
+    """Curl of the quadratic-drag wind stress, per face, in (m²/s²)/km."""
     east, north = _tangent_frames(face_centroids)
-    tau_e = np.sum(annual_winds * east, axis=1)
-    tau_n = np.sum(annual_winds * north, axis=1)
+    C_D = 1.3e-3
+    we = np.sum(annual_winds * east, axis=1)
+    wn = np.sum(annual_winds * north, axis=1)
+    speed = np.sqrt(we ** 2 + wn ** 2)
+    tau_e = C_D * speed * we
+    tau_n = C_D * speed * wn
     tau_en = np.stack([tau_e, tau_n], axis=1)                           # (N, 2)
     grad = _tangent_gradient(face_centroids, face_adjacency, tau_en)    # (N, 2, 2)
     # grad[:, :, 0] = ∇τ_e = [∂τ_e/∂e, ∂τ_e/∂n]
@@ -116,20 +195,20 @@ def _solve_streamfunction(mesh: PolygonMesh,
                           is_ocean: np.ndarray,
                           rhs: np.ndarray,
                           *,
+                          beta_scale: float = 1.0,
                           tol: float = 1e-6,
-                          max_iter: int = 2000) -> np.ndarray:
-    """CG solve of L·ψ = rhs on the ocean face graph, ψ=0 on land.
+                          max_iter: int = 200) -> np.ndarray:
+    """GMRES solve of (L - β·D_east)·ψ = rhs on the ocean face graph, ψ=0 on land.
 
-    Uses a 1/d-weighted graph Laplacian: for an ocean face f, the diagonal
-    sums weights to *all* neighbours (so land neighbours pin the Dirichlet
-    BC by their absence from the off-diagonal sum), and land rows are the
-    identity. L is SPD on the ocean subspace and approximates -∇² in the
-    continuous limit (sign convention matters — callers pass -curl(τ) for
-    the Sverdrup-friction streamfunction).
+    L is the Voronoi-weighted graph Laplacian (w = edge_len / centroid_dist).
+    The β·D_east term (Stommel planetary vorticity gradient) breaks symmetry,
+    producing western-boundary intensification. Land rows are identity.
     """
     n = len(mesh.faces)
     centroids = face_centroids.astype(np.float64)
 
+    # Voronoi-weighted Laplacian
+    voronoi_weights = _build_voronoi_weights(mesh, is_ocean)
     src_list: list[int] = []
     dst_list: list[int] = []
     w_list: list[float] = []
@@ -137,12 +216,12 @@ def _solve_streamfunction(mesh: PolygonMesh,
         if not is_ocean[f]:
             continue
         for nb in mesh.face_adjacency[f]:
-            d_km = float(np.linalg.norm(centroids[nb] - centroids[f]) * EARTH_RADIUS_KM)
-            if d_km < 1e-6:
+            wt = voronoi_weights.get((f, nb))
+            if wt is None:
                 continue
             src_list.append(f)
             dst_list.append(int(nb))
-            w_list.append(1.0 / d_km)
+            w_list.append(wt)
     if not src_list:
         return np.zeros(n, dtype=np.float64)
     src = np.asarray(src_list, dtype=np.int64)
@@ -158,36 +237,47 @@ def _solve_streamfunction(mesh: PolygonMesh,
     dst_o = dst[ocean_dst_mask]
     w_o = w[ocean_dst_mask]
 
-    def matvec(psi: np.ndarray) -> np.ndarray:
+    def L_matvec(psi: np.ndarray) -> np.ndarray:
         out = diag * psi
         if src_o.size:
             np.subtract.at(out, src_o, w_o * psi[dst_o])
         return out
 
+    # β-plane east-derivative: finite difference to nearest-east neighbour
+    lat = np.arcsin(np.clip(centroids[:, 2], -1.0, 1.0))
+    beta_arr = beta_scale * 2.0 * EARTH_ROTATION_RAD_S * np.cos(lat) / EARTH_RADIUS_KM
+
+    east_axes, _ = _tangent_frames(centroids)
+    east_proj = np.zeros(n, dtype=np.float64)
+    east_dst = np.full(n, -1, dtype=np.int64)
+    for f in range(n):
+        if not is_ocean[f]:
+            continue
+        best_proj = -np.inf
+        for nb in mesh.face_adjacency[f]:
+            proj = float((centroids[nb] - centroids[f]) @ east_axes[f]) * EARTH_RADIUS_KM
+            if proj > best_proj:
+                best_proj = proj
+                east_dst[f] = nb
+        east_proj[f] = best_proj if east_dst[f] >= 0 else 1.0
+
+    has_east = (east_dst >= 0) & is_ocean
+
+    def d_east_matvec(psi: np.ndarray) -> np.ndarray:
+        out = np.zeros(n, dtype=np.float64)
+        out[has_east] = (psi[east_dst[has_east]] - psi[has_east]) / east_proj[has_east]
+        return out
+
+    def matvec_stommel(psi: np.ndarray) -> np.ndarray:
+        return L_matvec(psi) - beta_arr * d_east_matvec(psi)
+
+    # Scale rhs by EARTH_RADIUS_KM so that ψ has the same magnitude as the
+    # old 1/d Laplacian (which had units 1/km, making L*ψ match curl(τ) in
+    # (m²/s²)/km; here L is dimensionless so we restore the km factor explicitly).
     b = np.zeros(n, dtype=np.float64)
-    b[is_ocean] = rhs[is_ocean]
+    b[is_ocean] = rhs[is_ocean] * EARTH_RADIUS_KM
 
-    psi = np.zeros(n, dtype=np.float64)
-    r = b - matvec(psi)
-    p = r.copy()
-    rsold = float(r @ r)
-    if rsold < 1e-30:
-        return psi
-    b_norm = max(float(np.sqrt(b @ b)), 1e-30)
-    for _ in range(max_iter):
-        Ap = matvec(p)
-        denom = float(p @ Ap)
-        if abs(denom) < 1e-30:
-            break
-        alpha = rsold / denom
-        psi += alpha * p
-        r -= alpha * Ap
-        rsnew = float(r @ r)
-        if np.sqrt(rsnew) / b_norm < tol:
-            break
-        p = r + (rsnew / rsold) * p
-        rsold = rsnew
-
+    psi = _gmres(matvec_stommel, b, tol=tol, max_iter=max_iter)
     psi[~is_ocean] = 0.0
     return psi
 
@@ -340,7 +430,7 @@ def compute_currents(mesh: PolygonMesh,
                      face_insolation: np.ndarray,
                      *,
                      sea_level: float = 0.0,
-                     current_scale: float = 1.0,
+                     beta_scale: float = 1.0,
                      advection_alpha: float = 1.0,
                      advection_iterations: int = 400,
                      temperature_scale: float = 0.06,
@@ -356,10 +446,8 @@ def compute_currents(mesh: PolygonMesh,
         face_insolation: (N,) annual-mean insolation in W/m² (mean of the
             seasonal `seasonal_insolation` output along the season axis).
         sea_level: elevation threshold defining the ocean mask.
-        current_scale: multiplicative gain on the streamfunction-derived
-            current vector. The discrete Laplacian's weight choice leaves
-            an overall scale ambiguity; tune so typical mid-basin speeds
-            land near 0.1–1 m/s.
+        beta_scale: scale factor on the planetary vorticity gradient β. Set
+            to 0 for symmetric gyres, ~1 for Stommel western intensification.
         advection_alpha: per-iteration mixing fraction in the Jacobi advection.
         advection_iterations: number of Jacobi sweeps; ~400 is plenty for
             current depths/icosphere sizes used in this project.
@@ -374,12 +462,12 @@ def compute_currents(mesh: PolygonMesh,
     annual_winds = winds_per_season.astype(np.float64).mean(axis=1)         # (N, 3)
     centroids = face_centroids.astype(np.float64)
 
-    # Sverdrup-friction balance: ∇²ψ = +curl(τ). The discrete graph Laplacian L
-    # approximates -∇², so L·ψ = -curl(τ).
+    # Stommel balance: L·ψ − β·∂ψ/∂e = −curl(τ), where L is the Voronoi
+    # Laplacian (≈ −∇²) and the β term drives western-boundary intensification.
     curl_tau = _wind_stress_curl(centroids, mesh.face_adjacency, annual_winds)
-    psi = _solve_streamfunction(mesh, centroids, is_ocean, -curl_tau)
+    psi = _solve_streamfunction(mesh, centroids, is_ocean, -curl_tau,
+                                beta_scale=beta_scale)
     currents = _streamfunction_currents(centroids, mesh.face_adjacency, psi, is_ocean)
-    currents *= current_scale
 
     src, dst, w = _build_advection_edges(mesh, currents, is_ocean)
     advected = _advect_field(face_insolation.astype(np.float64),

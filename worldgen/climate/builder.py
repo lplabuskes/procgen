@@ -79,7 +79,7 @@ class PrecipitationParams:
 @dataclass
 class CurrentsParams:
     enabled: bool = _f(True, label="Enable currents", min=0, max=1)
-    current_scale: float = _f(1.0, label="Current scale", min=0.0, max=100.0)
+    beta_scale: float = _f(1.0, label="β scale (western intensification)", min=0.0, max=5.0)
     advection_alpha: float = _f(1.0, label="Advection mixing α", min=0.0, max=1.0)
     advection_iterations: int = _f(400, label="Advection iterations", min=10, max=2000)
     temperature_scale: float = _f(0.06, label="Current ΔT scale (°C / (W/m²))", min=0.0, max=0.5)
@@ -270,7 +270,7 @@ class ClimateBuilder:
                 mesh.face_centroids.astype(np.float64),
                 winds,
                 insolation.mean(axis=1),
-                current_scale=cp.current_scale,
+                beta_scale=cp.beta_scale,
                 advection_alpha=cp.advection_alpha,
                 advection_iterations=cp.advection_iterations,
                 temperature_scale=cp.temperature_scale,
