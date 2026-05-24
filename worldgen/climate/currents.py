@@ -1,23 +1,20 @@
 """Annually-averaged surface ocean currents and their climate feedback.
 
-Intentionally simple (Climate-Cookbook level, not a GCM):
+Cookbook-level barotropic streamfunction model (no β, no western
+intensification yet):
 
-- The surface current at an ocean face is `ekman_coupling` times the
-  annual-mean wind, rotated 45° via Ekman drift (right in the northern
-  hemisphere, left in the southern).
-- The current vector is projected onto outgoing edges of the face graph
-  and restricted to ocean neighbours; land blocks flow and the remaining
-  ocean neighbours absorb the redistributed weight. Faces whose current
-  points entirely into land become natural pile-up sinks.
-- The local annual-mean insolation is used as the water's "thermal
-  payload" and advected through the resulting sub-stochastic Markov
-  field with a per-iteration mixing factor `advection_alpha`.
-- The departure of advected vs local insolation, scaled to °C, is the
-  per-ocean-face temperature anomaly. A coast-tracking Dijkstra carries
-  that anomaly inland with exponential decay over `inland_decay_km`.
-- The precipitation delta is proportional to the temperature anomaly
-  (warm current → wet, cold current → dry). It is passed back as a
-  multiplicative `(1 + delta)` correction.
+- A scalar streamfunction ψ is defined per ocean face, with ψ=0 on the
+  ocean–land boundary so each basin is naturally closed.
+- The streamfunction satisfies Δψ = −curl(τ), where τ is taken as the
+  annual-mean surface wind directly (linear drag). The discrete
+  Laplacian is a 1/d-weighted graph Laplacian on the dual face graph;
+  the linear system is solved by Conjugate Gradient.
+- Velocity is recovered from ψ via the tangent-plane curl identity
+  u = k̂ × ∇ψ on each ocean face, giving a divergence-free flow that
+  closes into gyres inside each basin.
+- The advection step (insolation → SST anomaly) and the inland-decay
+  step are unchanged: they only consume the velocity vector, so they
+  work the same whether the field came from Ekman or from ψ.
 
 No seasonal breakdown — the model produces a single per-face (N,)
 anomaly that the climate builder broadcasts across seasons via the
@@ -28,6 +25,7 @@ from __future__ import annotations
 
 import heapq
 from dataclasses import dataclass
+from typing import Sequence
 
 import numpy as np
 
@@ -41,32 +39,171 @@ EARTH_RADIUS_KM = 6371.0
 @dataclass
 class CurrentsResult:
     currents: np.ndarray              # (N, 3) m/s tangent vectors (0 on land)
+    streamfunction: np.ndarray        # (N,) ψ in raw solver units (0 on land)
     temperature_delta: np.ndarray     # (N,) °C
     precipitation_delta: np.ndarray   # (N,) multiplicative wet delta
     advected_insolation: np.ndarray   # (N,) W/m² post-advection (for inspection)
 
 
-def _ekman_currents(face_centroids: np.ndarray,
-                    annual_winds: np.ndarray,
-                    is_ocean: np.ndarray,
-                    ekman_coupling: float) -> np.ndarray:
-    """Annual-mean wind → annual-mean surface current via 45° Ekman deflection."""
+def _tangent_gradient(face_centroids: np.ndarray,
+                      face_adjacency: Sequence[Sequence[int]],
+                      face_field: np.ndarray,
+                      earth_radius_km: float = EARTH_RADIUS_KM) -> np.ndarray:
+    """Per-face least-squares gradient of a scalar (or vector) face field.
+
+    Args:
+        face_centroids: (N, 3) unit-sphere face positions.
+        face_adjacency: per-face neighbour index lists.
+        face_field: (N,) for a scalar, or (N, K) for K independent scalar
+            fields (e.g. the east/north components of a vector field).
+
+    Returns:
+        (N, 2) or (N, 2, K) gradient in the per-face (east, north) basis,
+        in units of (field-unit) / km. Faces with degenerate neighbourhoods
+        get the minimum-norm pinv solution (typically zero).
+    """
+    n = face_centroids.shape[0]
     east, north = _tangent_frames(face_centroids)
-    we = (annual_winds * east).sum(axis=1)
-    wn = (annual_winds * north).sum(axis=1)
 
-    # "Right of wind" (NH) is clockwise in the (east, north) plane viewed from
-    # outside the sphere with north up — i.e. a negative-angle rotation.
-    hemi_sign = np.where(face_centroids[:, 2] >= 0.0, 1.0, -1.0)
-    angle = -0.25 * np.pi * hemi_sign
-    cos_a = np.cos(angle)
-    sin_a = np.sin(angle)
-    ce = ekman_coupling * (cos_a * we - sin_a * wn)
-    cn = ekman_coupling * (sin_a * we + cos_a * wn)
+    src_list: list[int] = []
+    dst_list: list[int] = []
+    for i, nbrs in enumerate(face_adjacency):
+        for j in nbrs:
+            src_list.append(i)
+            dst_list.append(int(j))
+    if not src_list:
+        out_shape = (n, 2) if face_field.ndim == 1 else (n, 2, face_field.shape[1])
+        return np.zeros(out_shape, dtype=np.float64)
+    src = np.asarray(src_list, dtype=np.int64)
+    dst = np.asarray(dst_list, dtype=np.int64)
 
-    ce = np.where(is_ocean, ce, 0.0)
-    cn = np.where(is_ocean, cn, 0.0)
-    return ce[:, None] * east + cn[:, None] * north
+    rel = face_centroids[dst].astype(np.float64) - face_centroids[src].astype(np.float64)
+    u_e = np.sum(rel * east[src], axis=1) * earth_radius_km
+    v_e = np.sum(rel * north[src], axis=1) * earth_radius_km
+    r = np.stack([u_e, v_e], axis=1)                                    # (E, 2)
+
+    M = np.zeros((n, 2, 2), dtype=np.float64)
+    np.add.at(M, src, r[:, :, None] * r[:, None, :])
+    M_inv = np.linalg.pinv(M)
+
+    if face_field.ndim == 1:
+        df = face_field[dst] - face_field[src]                          # (E,)
+        b = np.zeros((n, 2), dtype=np.float64)
+        np.add.at(b, src, r * df[:, None])
+        return (M_inv @ b[..., None])[..., 0]
+    df = face_field[dst] - face_field[src]                              # (E, K)
+    b = np.zeros((n, 2, face_field.shape[1]), dtype=np.float64)
+    np.add.at(b, src, r[:, :, None] * df[:, None, :])
+    return M_inv @ b
+
+
+def _wind_stress_curl(face_centroids: np.ndarray,
+                      face_adjacency: Sequence[Sequence[int]],
+                      annual_winds: np.ndarray) -> np.ndarray:
+    """Curl of the (linear-drag) wind stress, per face, in (m/s)/km."""
+    east, north = _tangent_frames(face_centroids)
+    tau_e = np.sum(annual_winds * east, axis=1)
+    tau_n = np.sum(annual_winds * north, axis=1)
+    tau_en = np.stack([tau_e, tau_n], axis=1)                           # (N, 2)
+    grad = _tangent_gradient(face_centroids, face_adjacency, tau_en)    # (N, 2, 2)
+    # grad[:, :, 0] = ∇τ_e = [∂τ_e/∂e, ∂τ_e/∂n]
+    # grad[:, :, 1] = ∇τ_n = [∂τ_n/∂e, ∂τ_n/∂n]
+    return grad[:, 0, 1] - grad[:, 1, 0]
+
+
+def _solve_streamfunction(mesh: PolygonMesh,
+                          face_centroids: np.ndarray,
+                          is_ocean: np.ndarray,
+                          rhs: np.ndarray,
+                          *,
+                          tol: float = 1e-6,
+                          max_iter: int = 2000) -> np.ndarray:
+    """CG solve of L·ψ = rhs on the ocean face graph, ψ=0 on land.
+
+    Uses a 1/d-weighted graph Laplacian: for an ocean face f, the diagonal
+    sums weights to *all* neighbours (so land neighbours pin the Dirichlet
+    BC by their absence from the off-diagonal sum), and land rows are the
+    identity. L is SPD on the ocean subspace and approximates -∇² in the
+    continuous limit (sign convention matters — callers pass -curl(τ) for
+    the Sverdrup-friction streamfunction).
+    """
+    n = len(mesh.faces)
+    centroids = face_centroids.astype(np.float64)
+
+    src_list: list[int] = []
+    dst_list: list[int] = []
+    w_list: list[float] = []
+    for f in range(n):
+        if not is_ocean[f]:
+            continue
+        for nb in mesh.face_adjacency[f]:
+            d_km = float(np.linalg.norm(centroids[nb] - centroids[f]) * EARTH_RADIUS_KM)
+            if d_km < 1e-6:
+                continue
+            src_list.append(f)
+            dst_list.append(int(nb))
+            w_list.append(1.0 / d_km)
+    if not src_list:
+        return np.zeros(n, dtype=np.float64)
+    src = np.asarray(src_list, dtype=np.int64)
+    dst = np.asarray(dst_list, dtype=np.int64)
+    w = np.asarray(w_list, dtype=np.float64)
+
+    diag = np.zeros(n, dtype=np.float64)
+    np.add.at(diag, src, w)
+    diag[~is_ocean] = 1.0
+
+    ocean_dst_mask = is_ocean[dst]
+    src_o = src[ocean_dst_mask]
+    dst_o = dst[ocean_dst_mask]
+    w_o = w[ocean_dst_mask]
+
+    def matvec(psi: np.ndarray) -> np.ndarray:
+        out = diag * psi
+        if src_o.size:
+            np.subtract.at(out, src_o, w_o * psi[dst_o])
+        return out
+
+    b = np.zeros(n, dtype=np.float64)
+    b[is_ocean] = rhs[is_ocean]
+
+    psi = np.zeros(n, dtype=np.float64)
+    r = b - matvec(psi)
+    p = r.copy()
+    rsold = float(r @ r)
+    if rsold < 1e-30:
+        return psi
+    b_norm = max(float(np.sqrt(b @ b)), 1e-30)
+    for _ in range(max_iter):
+        Ap = matvec(p)
+        denom = float(p @ Ap)
+        if abs(denom) < 1e-30:
+            break
+        alpha = rsold / denom
+        psi += alpha * p
+        r -= alpha * Ap
+        rsnew = float(r @ r)
+        if np.sqrt(rsnew) / b_norm < tol:
+            break
+        p = r + (rsnew / rsold) * p
+        rsold = rsnew
+
+    psi[~is_ocean] = 0.0
+    return psi
+
+
+def _streamfunction_currents(face_centroids: np.ndarray,
+                             face_adjacency: Sequence[Sequence[int]],
+                             psi: np.ndarray,
+                             is_ocean: np.ndarray) -> np.ndarray:
+    """Recover u = k̂ × ∇ψ in each face's tangent plane."""
+    east, north = _tangent_frames(face_centroids)
+    grad = _tangent_gradient(face_centroids, face_adjacency, psi)       # (N, 2)
+    u_east = -grad[:, 1]
+    u_north = grad[:, 0]
+    u_3d = u_east[:, None] * east + u_north[:, None] * north
+    u_3d[~is_ocean] = 0.0
+    return u_3d
 
 
 def _build_advection_edges(mesh: PolygonMesh,
@@ -203,11 +340,11 @@ def compute_currents(mesh: PolygonMesh,
                      face_insolation: np.ndarray,
                      *,
                      sea_level: float = 0.0,
-                     ekman_coupling: float = 0.03,
-                     advection_alpha: float = 0.7,
-                     advection_iterations: int = 200,
-                     temperature_scale: float = 0.04,
-                     precipitation_scale: float = 0.02,
+                     current_scale: float = 1.0,
+                     advection_alpha: float = 1.0,
+                     advection_iterations: int = 400,
+                     temperature_scale: float = 0.06,
+                     precipitation_scale: float = 0.03,
                      inland_decay_km: float = 600.0) -> CurrentsResult:
     """Run the annual-mean ocean current model and return per-face deltas.
 
@@ -219,9 +356,12 @@ def compute_currents(mesh: PolygonMesh,
         face_insolation: (N,) annual-mean insolation in W/m² (mean of the
             seasonal `seasonal_insolation` output along the season axis).
         sea_level: elevation threshold defining the ocean mask.
-        ekman_coupling: surface-current speed as a fraction of wind speed.
+        current_scale: multiplicative gain on the streamfunction-derived
+            current vector. The discrete Laplacian's weight choice leaves
+            an overall scale ambiguity; tune so typical mid-basin speeds
+            land near 0.1–1 m/s.
         advection_alpha: per-iteration mixing fraction in the Jacobi advection.
-        advection_iterations: number of Jacobi sweeps; ~200 is plenty for
+        advection_iterations: number of Jacobi sweeps; ~400 is plenty for
             current depths/icosphere sizes used in this project.
         temperature_scale: °C per (W/m² of advected-vs-local insolation gap).
         precipitation_scale: multiplicative wet-delta per °C of anomaly.
@@ -231,11 +371,15 @@ def compute_currents(mesh: PolygonMesh,
     n = len(mesh.faces)
     is_ocean = face_elev_km <= sea_level
 
-    annual_winds = winds_per_season.astype(np.float64).mean(axis=1)        # (N, 3)
-    currents = _ekman_currents(face_centroids.astype(np.float64),
-                               annual_winds,
-                               is_ocean,
-                               ekman_coupling)                              # (N, 3)
+    annual_winds = winds_per_season.astype(np.float64).mean(axis=1)         # (N, 3)
+    centroids = face_centroids.astype(np.float64)
+
+    # Sverdrup-friction balance: ∇²ψ = +curl(τ). The discrete graph Laplacian L
+    # approximates -∇², so L·ψ = -curl(τ).
+    curl_tau = _wind_stress_curl(centroids, mesh.face_adjacency, annual_winds)
+    psi = _solve_streamfunction(mesh, centroids, is_ocean, -curl_tau)
+    currents = _streamfunction_currents(centroids, mesh.face_adjacency, psi, is_ocean)
+    currents *= current_scale
 
     src, dst, w = _build_advection_edges(mesh, currents, is_ocean)
     advected = _advect_field(face_insolation.astype(np.float64),
@@ -253,6 +397,7 @@ def compute_currents(mesh: PolygonMesh,
 
     return CurrentsResult(
         currents=currents.astype(np.float32),
+        streamfunction=psi.astype(np.float32),
         temperature_delta=temp_delta.astype(np.float32),
         precipitation_delta=precip_delta.astype(np.float32),
         advected_insolation=advected.astype(np.float32),
