@@ -312,6 +312,10 @@ class MapWidget(QWidget):
                     self._draw_winds_overlay(
                         painter, W, H, cx, cy, scale_x, scale_y, season_idx
                     )
+        if (self._overlay_visible.get("currents")
+                and self._globe is not None
+                and self._globe.has_feature("currents")):
+            self._draw_currents_overlay(painter, W, H, cx, cy, scale_x, scale_y)
 
     def _draw_lakes_overlay(
         self,
@@ -333,6 +337,103 @@ class MapWidget(QWidget):
                 painter.drawPolygon(
                     QPolygonF([QPointF(float(x), float(y)) for x, y in zip(sx, sy)])
                 )
+
+    def _draw_currents_overlay(
+        self,
+        painter: QPainter,
+        W: float, H: float,
+        cx: float, cy: float,
+        scale_x: float, scale_y: float,
+    ) -> None:
+        currents_feature = self._globe.get_feature("currents")  # type: ignore[union-attr]
+        if not currents_feature:
+            return
+        entry = currents_feature[0]
+        if len(entry) >= 3:
+            positions, vectors, temp_delta = entry[0], entry[1], entry[2]
+        else:
+            positions, vectors = entry[0], entry[1]
+            temp_delta = np.zeros(len(positions), dtype=np.float32)
+        if len(positions) == 0:
+            return
+
+        speeds = np.linalg.norm(vectors, axis=1)
+        max_speed = float(speeds.max()) if speeds.size else 0.0
+        if max_speed <= 1e-6:
+            return
+
+        keep = speeds > max_speed * 0.05
+        if not np.any(keep):
+            return
+        positions = positions[keep]
+        vectors = vectors[keep]
+        speeds = speeds[keep]
+        temp_delta = temp_delta[keep]
+
+        step_max = 0.025 / self._zoom ** 0.5
+        step = step_max * (speeds / max_speed)
+        unit = vectors / np.maximum(speeds[:, None], 1e-12)
+        end_positions = positions + step[:, None] * unit
+        end_positions /= np.maximum(np.linalg.norm(end_positions, axis=1, keepdims=True), 1e-12)
+
+        lon0 = np.arctan2(positions[:, 1], positions[:, 0])
+        lat0 = np.arcsin(np.clip(positions[:, 2], -1.0, 1.0))
+        lon1 = np.arctan2(end_positions[:, 1], end_positions[:, 0])
+        lat1 = np.arcsin(np.clip(end_positions[:, 2], -1.0, 1.0))
+
+        proj0 = self._projection.project_lonlat(np.column_stack([lon0, lat0]))
+        proj1 = self._projection.project_lonlat(np.column_stack([lon1, lat1]))
+        sx0 = (proj0[:, 0] - cx) * scale_x + W * 0.5
+        sy0 = -(proj0[:, 1] - cy) * scale_y + H * 0.5
+        sx1 = (proj1[:, 0] - cx) * scale_x + W * 0.5
+        sy1 = -(proj1[:, 1] - cy) * scale_y + H * 0.5
+
+        crosses = np.abs(lon1 - lon0) > np.pi
+
+        # Diverging blue → neutral → red palette, quantised to keep QPen churn low.
+        max_abs = float(np.max(np.abs(temp_delta))) if temp_delta.size else 0.0
+        if max_abs > 1e-6:
+            norm = np.clip(temp_delta / max_abs, -1.0, 1.0)
+        else:
+            norm = np.zeros_like(temp_delta)
+        bucket_count = 17
+        buckets = np.clip(
+            np.round((norm + 1.0) * 0.5 * (bucket_count - 1)).astype(np.int32),
+            0, bucket_count - 1,
+        )
+        bucket_pens: dict[int, QPen] = {}
+
+        def _pen_for(bucket: int) -> QPen:
+            pen = bucket_pens.get(bucket)
+            if pen is not None:
+                return pen
+            t = (bucket / (bucket_count - 1)) * 2.0 - 1.0  # in [-1, 1]
+            # Blue at t=-1, light gray near 0, red at t=+1.
+            if t >= 0.0:
+                r = int(200 + 30 * t)
+                g = int(200 - 130 * t)
+                b = int(200 - 150 * t)
+            else:
+                r = int(200 + 150 * t)
+                g = int(200 + 130 * t)
+                b = int(200 - 30 * t)
+            pen = QPen(QColor(r, g, b, 230))
+            pen.setWidthF(1.4)
+            bucket_pens[bucket] = pen
+            return pen
+
+        active: int = -1
+        for i in range(len(positions)):
+            if crosses[i]:
+                continue
+            b = int(buckets[i])
+            if b != active:
+                painter.setPen(_pen_for(b))
+                active = b
+            painter.drawLine(
+                QPointF(float(sx0[i]), float(sy0[i])),
+                QPointF(float(sx1[i]), float(sy1[i])),
+            )
 
     def _draw_winds_overlay(
         self,

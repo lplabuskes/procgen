@@ -101,6 +101,17 @@ class GlobeBuilder:
                 winds_feature.append((centroids.copy(), cb.winds[:, season_idx, :].astype(np.float32)))
             globe.add_feature("winds", winds_feature)
 
+        if cb.currents is not None:
+            centroids = mesh.face_centroids.astype(np.float32)
+            globe.add_feature(
+                "currents",
+                [(
+                    centroids.copy(),
+                    cb.currents.currents.astype(np.float32),
+                    cb.currents.temperature_delta.astype(np.float32),
+                )],
+            )
+
         self.globe = globe
         return globe
 
@@ -192,7 +203,9 @@ class GlobeBuilder:
                 window.associate_scheme_texture("Annual Precipitation", "precipitation_rgba")
         if hb.rivers:
             window.add_overlay("rivers", label="Rivers")
-        if cb.winds is not None:
+        if debug and cb.winds is not None:
             for i, label in enumerate(SEASON_LABELS):
                 window.add_overlay(f"winds_season_{i}", label=f"Winds — {label}", checked=False)
+        if debug and cb.currents is not None:
+            window.add_overlay("currents", label="Currents", checked=False)
         _ = BIOME_PALETTE  # re-exported for downstream consumers

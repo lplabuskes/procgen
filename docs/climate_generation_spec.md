@@ -304,7 +304,7 @@ worldgen/climate/
     winds.py              # zonal_winds(centroids, season_phases, params) -> W[face, season, 3]
     precipitation.py      # surface_precipitation(...) -> (P_face, P_pixel)
     classification.py     # BIOME_NAMES, default_biome, classify_textures
-    currents.py           # stub: compute_currents(...) -> None  (raises NotImplementedError)
+    currents.py           # CurrentsResult + compute_currents(mesh, ..., winds, insolation) → annual ΔT and ΔP deltas
     display.py            # color schemes for T/P/biome + wind overlay rendering helpers
 ```
 
@@ -337,7 +337,7 @@ Attaches `temperature`, `precipitation`, and `biome` textures to the mesh and st
 | `temperature_face` | `(N, 4) float32` | °C |
 | `precipitation_face` | `(N, 4) float32` | mm/season |
 | `winds` | `(N, 4, 3) float32` | m/s tangent |
-| `currents` | `None` | reserved; set by future currents stage |
+| `currents` | `CurrentsResult \| None` | populated when `params.currents.enabled`; holds `currents (N,3) m/s`, `temperature_delta (N,) °C`, `precipitation_delta (N,)`, `advected_insolation (N,) W/m²` |
 
 ---
 
@@ -357,18 +357,87 @@ Hydrology does not consume climate output in this iteration — the river networ
 
 ---
 
-## Currents-later seams
+## Ocean currents (annual mean)
 
-Three explicit hooks let currents drop in without re-shaping the public API:
+Currents are implemented as an annual-mean second pass on top of the
+first-pass temperature/precipitation fields. They incorporate the three
+inputs that move surface ocean heat around at the resolution we model:
 
-1. **`temperature.surface_temperatures(...)` signature** accepts an optional `coastal_current_temp_delta: np.ndarray | None = None` of shape `(N, 4)`. In MVP this is `None` and adds zero. Currents will populate it from advected SST anomalies.
-2. **`precipitation.surface_precipitation(...)` signature** accepts an optional `current_wet_delta: np.ndarray | None = None` of shape `(N, 4)`, treated as a multiplicative correction `(1 + delta)`. MVP passes `None`. Warm currents → positive delta on downwind coasts; cold currents → negative.
-3. **`ClimateParams.currents: CurrentsParams`** dataclass exists with `enabled: bool = False`. `ClimateBuilder.build` early-returns the currents stage when disabled; the attribute `self.currents` stays `None`.
+1. **Wind** — surface current ≈ `ekman_coupling` × annual-mean wind,
+   rotated 45° via Ekman drift (right in NH, left in SH).
+2. **Insolation** — the local annual-mean insolation acts as the water's
+   thermal payload; we advect this scalar along the resulting flow
+   network.
+3. **Blockage by land** — current edges on the face graph are restricted
+   to ocean neighbours. Land neighbours receive zero outflow weight; the
+   remaining ocean neighbours absorb the redistributed flow. A face
+   whose current points entirely into land becomes a natural sink.
 
-Future currents work will:
-- Add `worldgen/climate/currents.py::compute_currents(mesh, temperature_face, winds) -> CurrentsResult`
-- Populate `self.currents` and derive the two delta arrays
-- Re-call temperature & precipitation with the deltas (a second pass), or carry them through the first call if the dependency order can be untangled
+No seasonal breakdown — a single (N,) °C / multiplicative-precip delta
+is produced per face and broadcast across the four seasons via the
+existing hooks below.
+
+### Pipeline (`worldgen/climate/currents.py`)
+
+```
+annual-mean wind ──▶ Ekman 45° rotation ──▶ per-face current vector (ocean only)
+                                                │
+                                                ▼
+                                  build sparse (src, dst, w) edges
+                                  w = max(0, current[src] · dir(src→dst))
+                                                │
+                                                ▼
+                       damped Jacobi: advected = (1-α)·local + α·avg_inflow
+                       (per-destination averaging keeps it bounded)
+                                                │
+                                                ▼
+                            ΔT_ocean = scale_T · (advected_Q − local_Q)
+                                                │
+                                                ▼
+                Dijkstra from ocean faces → ΔT_land = ΔT_parent · exp(-d/decay)
+                                                │
+                                                ▼
+                              ΔP_delta = scale_W · ΔT  (multiplicative)
+```
+
+### Hooks (unchanged)
+
+1. **`temperature.surface_temperatures(...)`** accepts an optional
+   `coastal_current_temp_delta: (N, K) | None`. The builder broadcasts the
+   per-face annual ΔT via shape `(N, 1)`.
+2. **`precipitation.surface_precipitation(...)`** accepts an optional
+   `current_wet_delta: (N, K) | None`, treated as a multiplicative
+   `(1 + delta)`. Same broadcast.
+3. **`ClimateParams.currents: CurrentsParams`** has `enabled: bool = True`
+   and the tunables in the table below. When disabled the second pass is
+   skipped and `self.currents` stays `None`.
+
+### Tunables (`CurrentsParams`)
+
+| Field | Default | Effect |
+|---|---|---|
+| `enabled` | `True` | Master switch for the second pass |
+| `ekman_coupling` | `0.03` | Current speed as a fraction of wind speed |
+| `advection_alpha` | `1.0` | Per-iter inflow mixing (1.0 = pure Lagrangian) |
+| `advection_iterations` | `400` | Jacobi sweeps; ~400 is enough for depth-4 |
+| `temperature_scale` | `0.06` | °C per W/m² of advected-vs-local insolation gap |
+| `precipitation_scale` | `0.03` | Multiplicative wet delta per °C of anomaly |
+| `inland_decay_km` | `600.0` | e-folding distance for coastal → inland decay |
+
+### Known shortcomings vs the spec's original ambitions
+
+- **No proper Lagrangian particle tracking.** The advection is a Markov
+  diffusion on the face graph, which dilutes signal at convergence
+  points compared to real currents.
+- **No gyre structure beyond what falls out of Ekman + wind curl.** The
+  model captures western-vs-eastern coast asymmetry from the prevailing
+  winds, but not the boundary-current intensification that produces
+  Gulf-Stream-class warm anomalies (5–10 °C). Effective range is ~ ±3 °C
+  ocean, ~ ±2 °C land in our defaults.
+- **Inland propagation is great-circle Dijkstra from the nearest ocean
+  face**, not upwind-traced. A coastal face's parent ocean is the
+  closest ocean face, not the ocean face the prevailing wind would
+  carry air from.
 
 ---
 
@@ -395,7 +464,13 @@ Sub-dataclasses mirror `ElevationParams` style (`_f(default, label=..., min=...,
 | | `polar_mm_annual` | 200 | 0, 2000 |
 | | `orographic_k` | 0.4 | 0, 2 |
 | | `continentality_decay_km` | 1200 | 100, 5000 |
-| `CurrentsParams` | `enabled` | `False` | bool (MVP placeholder) |
+| `CurrentsParams` | `enabled` | `True` | Master switch for the currents pass |
+| | `ekman_coupling` | `0.03` | 0, 0.2 |
+| | `advection_alpha` | `1.0` | 0, 1 |
+| | `advection_iterations` | `400` | 10, 2000 |
+| | `temperature_scale` | `0.06` | °C per W/m² |
+| | `precipitation_scale` | `0.03` | wet delta per °C |
+| | `inland_decay_km` | `600` | 50, 5000 |
 | (root) | `seed` | `None` | Optional[int] |
 
 ---
@@ -420,7 +495,7 @@ Four wind overlays (`Winds — Spring/Summer/Autumn/Winter`) draw as line segmen
 
 ## Known limitations / future work
 
-- **No coastal current effects.** Coastal climate asymmetry (e.g. west-coast vs east-coast at the same latitude) is absent until the currents stage lands.
+- **Currents are a coarse Markov-diffusion advection** of insolation, not a real fluid simulation. The model captures west-coast vs east-coast asymmetry but its peak anomalies are ~±3 °C rather than the ~±10 °C real western boundary currents produce. See the "Ocean currents" section above.
 - **Zonal winds only.** No deflection around mountains or continents, no monsoonal reversal beyond the ITCZ shift, no continental low/high cells.
 - **Hemispheric symmetry in the wind model.** A real world has hemispheric asymmetry because land/sea distribution is asymmetric. MVP winds are purely zonal so any seed with strong land/ocean asymmetry will look "too clean".
 - **Per-face wind, per-pixel everything else.** Orographic precipitation uses the per-face wind vector even when sampling the per-pixel elevation gradient. Cross-face wind variation inside a single face is below the modelling resolution.

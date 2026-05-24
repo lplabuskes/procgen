@@ -12,6 +12,7 @@ from worldgen.climate.classification import (
     classify_textures,
     default_biome,
 )
+from worldgen.climate.currents import CurrentsResult, compute_currents
 from worldgen.climate.insolation import (
     SEASON_DECLINATIONS_DEG,
     face_latitudes,
@@ -74,7 +75,13 @@ class PrecipitationParams:
 
 @dataclass
 class CurrentsParams:
-    enabled: bool = _f(False, label="Enable currents", min=0, max=1, hidden=True)
+    enabled: bool = _f(True, label="Enable currents", min=0, max=1)
+    ekman_coupling: float = _f(0.03, label="Ekman coupling (current/wind)", min=0.0, max=0.2)
+    advection_alpha: float = _f(1.0, label="Advection mixing α", min=0.0, max=1.0)
+    advection_iterations: int = _f(400, label="Advection iterations", min=10, max=2000)
+    temperature_scale: float = _f(0.06, label="Current ΔT scale (°C / (W/m²))", min=0.0, max=0.5)
+    precipitation_scale: float = _f(0.03, label="Current wet scale (per °C)", min=0.0, max=0.2)
+    inland_decay_km: float = _f(600.0, label="Inland decay (km)", min=50.0, max=5000.0)
 
 
 @dataclass
@@ -87,7 +94,7 @@ class ClimateParams:
         default_factory=PrecipitationParams, metadata={"label": "Precipitation"}
     )
     currents: CurrentsParams = field(
-        default_factory=CurrentsParams, metadata={"label": "Currents", "hidden": True}
+        default_factory=CurrentsParams, metadata={"label": "Currents"}
     )
     seed: Optional[int] = field(
         default=None,
@@ -176,7 +183,7 @@ class ClimateBuilder:
         self.temperature_face: Optional[np.ndarray] = None       # (N, K) °C
         self.precipitation_face: Optional[np.ndarray] = None     # (N, K) mm/season
         self.winds: Optional[np.ndarray] = None                  # (N, K, 3) m/s
-        self.currents: Optional[object] = None                   # reserved for future stage
+        self.currents: Optional[CurrentsResult] = None           # populated when params.currents.enabled
 
     def build(self,
               mesh: PolygonMesh,
@@ -187,7 +194,7 @@ class ClimateBuilder:
                 progress(msg)
 
         p = self.params
-        tp, wp, pp = p.temperature, p.wind, p.precipitation
+        tp, wp, pp, cp = p.temperature, p.wind, p.precipitation, p.currents
 
         elev_tex = elevation_textures[:, :, :, 0]                              # (N, H, W) km
         face_elev = elev_tex.mean(axis=(1, 2)).astype(np.float64)              # (N,) km
@@ -241,6 +248,55 @@ class ClimateBuilder:
             itcz_shift_deg=wp.itcz_shift_deg,
         )
 
+        currents_result: Optional[CurrentsResult] = None
+        if cp.enabled:
+            _report("Computing ocean currents…")
+            currents_result = compute_currents(
+                mesh,
+                face_elev,
+                mesh.face_centroids.astype(np.float64),
+                winds,
+                insolation.mean(axis=1),
+                ekman_coupling=cp.ekman_coupling,
+                advection_alpha=cp.advection_alpha,
+                advection_iterations=cp.advection_iterations,
+                temperature_scale=cp.temperature_scale,
+                precipitation_scale=cp.precipitation_scale,
+                inland_decay_km=cp.inland_decay_km,
+            )
+
+            # Second-pass T and P with the current-driven deltas broadcast across seasons.
+            temp_delta = currents_result.temperature_delta[:, None].astype(np.float64)
+            wet_delta = currents_result.precipitation_delta[:, None].astype(np.float64)
+            t_face = surface_temperatures(
+                latitudes_rad,
+                insolation,
+                face_elev,
+                dist_coast.astype(np.float64),
+                equator_annual_c=tp.equator_annual_c,
+                pole_annual_c=tp.pole_annual_c,
+                anomaly_scale=tp.anomaly_scale,
+                lapse_rate_c_per_km=tp.lapse_rate_c_per_km,
+                ocean_inertia=tp.ocean_inertia,
+                land_inertia=tp.land_inertia,
+                inertia_distance_km=tp.inertia_distance_km,
+                coastal_current_temp_delta=temp_delta,
+            )
+            p_face = surface_precipitation(
+                latitudes_rad,
+                winds.astype(np.float64),
+                face_grad,
+                dist_coast.astype(np.float64),
+                itcz_mm_annual=pp.itcz_mm_annual,
+                horse_mm_annual=pp.horse_mm_annual,
+                midlat_mm_annual=pp.midlat_mm_annual,
+                polar_mm_annual=pp.polar_mm_annual,
+                orographic_k=pp.orographic_k,
+                continentality_decay_km=pp.continentality_decay_km,
+                itcz_shift_deg=wp.itcz_shift_deg,
+                current_wet_delta=wet_delta,
+            )
+
         _report("Rasterising temperature texture…")
         elev_pixel = elev_tex.astype(np.float64)                                # (N, H, W) km
         t_pixel = per_pixel_temperatures(
@@ -293,6 +349,7 @@ class ClimateBuilder:
         self.temperature_face = t_face
         self.precipitation_face = p_face
         self.winds = winds
+        self.currents = currents_result
 
         _report("Climate done.")
 
