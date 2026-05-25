@@ -10,6 +10,7 @@ from worldgen.geology.elevation import (
     compute_erosion,
     compute_face_elevations,
     compute_noise_elevation_deltas,
+    compute_ocean_mask_texture,
     face_elevations_from_texture,
     smooth_elevation_seams,
 )
@@ -125,6 +126,7 @@ class ElevationBuilder:
         self.boundary_data: Optional[List[dict]] = None
         self.elevations: Optional[np.ndarray] = None
         self.elevation_textures: Optional[np.ndarray] = None
+        self.ocean_mask: Optional[np.ndarray] = None
         self.volcanism: Optional[np.ndarray] = None
         self.max_speed: float = 1.0
 
@@ -254,6 +256,12 @@ class ElevationBuilder:
 
         dual.set_face_textures("elevation", elevation_textures, n_channels=1)
 
+        _report("Computing ocean mask…")
+        ocean_mask = compute_ocean_mask_texture(dual, elevation_textures)
+        dual.set_face_textures("ocean_mask", ocean_mask, n_channels=1)
+        is_ocean_per_face = ocean_mask[:, :, :, 0].mean(axis=(1, 2)) > 0.5
+        dual.apply_metadata_channel("is_ocean", is_ocean_per_face.tolist())
+
         self.mesh = dual
         self.plate_ids = plate_ids
         self.plate_omegas = plate_omegas
@@ -262,6 +270,7 @@ class ElevationBuilder:
         self.boundary_data = boundary_data
         self.elevations = final_elevations
         self.elevation_textures = elevation_textures
+        self.ocean_mask = ocean_mask
         self.volcanism = volcanism
         self.max_speed = float(speeds.max()) or 1.0
 

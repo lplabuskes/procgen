@@ -23,6 +23,7 @@ def evaporation_source(
     face_elev_km: np.ndarray,
     evaporation_scale: float = 1.0,
     sea_level: float = 0.0,
+    is_ocean: np.ndarray | None = None,
 ) -> np.ndarray:
     """Moisture emission rate for ocean faces; zero on land.
 
@@ -34,11 +35,14 @@ def evaporation_source(
         face_temps_c:     (N, K) seasonal face temperatures in °C.
         face_elev_km:     (N,) mean face elevation in km.
         evaporation_scale: Global wetness multiplier (1.0 = Earth-like default).
+        is_ocean:         Optional (N,) bool override. When provided, replaces
+                          the elevation-based ocean test.
 
     Returns:
         (N, K) float32 dimensionless moisture availability in [0, evaporation_scale].
     """
-    is_ocean = face_elev_km <= sea_level                          # (N,)
+    if is_ocean is None:
+        is_ocean = face_elev_km <= sea_level                      # (N,)
     t_factor = np.clip((face_temps_c + 25.0) / 52.0, 0.0, 1.0)  # (N, K)
     source = (t_factor * evaporation_scale).astype(np.float32)
     source[~is_ocean] = 0.0

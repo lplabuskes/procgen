@@ -76,6 +76,8 @@ _HUMIDITY_STOPS = [
 
 
 def _is_ocean_face(meta: dict) -> bool:
+    if "is_ocean" in meta:
+        return bool(meta["is_ocean"])
     return float(meta.get("elevation", 0.0)) < 0.0
 
 
@@ -135,36 +137,44 @@ def biome_legend_entries() -> list[tuple[str, tuple]]:
     return [(name, tuple(BIOME_PALETTE[i].tolist())) for i, name in enumerate(BIOME_NAMES)]
 
 
-def _apply_ocean_mask(rgba: np.ndarray, elevation_tex: np.ndarray | None) -> np.ndarray:
-    if elevation_tex is None:
+def _apply_ocean_mask(rgba: np.ndarray,
+                      elevation_tex: np.ndarray | None,
+                      ocean_mask_tex: np.ndarray | None = None) -> np.ndarray:
+    if ocean_mask_tex is not None:
+        ocean = ocean_mask_tex[..., 0] > 0.5
+    elif elevation_tex is not None:
+        ocean = elevation_tex[..., 0] < 0.0
+    else:
         return rgba
-    ocean = elevation_tex[..., 0] < 0.0
     rgba[ocean] = _OCEAN_RGBA
     return rgba
 
 
 def build_temperature_display_texture(temperature_tex: np.ndarray,
                                       season: int | None = None,
-                                      elevation_tex: np.ndarray | None = None) -> np.ndarray:
+                                      elevation_tex: np.ndarray | None = None,
+                                      ocean_mask_tex: np.ndarray | None = None) -> np.ndarray:
     """Convert (N, H, W, K) °C texture to (N, H, W, 4) RGBA.
 
     season=None returns annual mean across all K channels; otherwise picks one.
-    Sub-sea-level pixels (elevation_tex < 0) are overwritten with the ocean color.
+    Ocean pixels (per ocean_mask_tex, or elevation < 0 as fallback) are overwritten
+    with the ocean color.
     """
     if season is None:
         values = temperature_tex.mean(axis=-1)
     else:
         values = temperature_tex[..., season]
     rgba = _interp_stops(values, _TEMP_STOPS)
-    return _apply_ocean_mask(rgba, elevation_tex)
+    return _apply_ocean_mask(rgba, elevation_tex, ocean_mask_tex)
 
 
 def build_precipitation_display_texture(precipitation_tex: np.ndarray,
-                                        elevation_tex: np.ndarray | None = None) -> np.ndarray:
+                                        elevation_tex: np.ndarray | None = None,
+                                        ocean_mask_tex: np.ndarray | None = None) -> np.ndarray:
     """Convert (N, H, W, K) mm/season texture to (N, H, W, 4) RGBA (annual log scale)."""
     annual = np.maximum(precipitation_tex.sum(axis=-1), 1.0)
     log_stops = [(np.log10(a), c) for a, c in _PRECIP_STOPS_MM]
     rgba = _interp_stops(np.log10(annual), log_stops)
-    return _apply_ocean_mask(rgba, elevation_tex)
+    return _apply_ocean_mask(rgba, elevation_tex, ocean_mask_tex)
 
 

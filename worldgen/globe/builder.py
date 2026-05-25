@@ -37,7 +37,10 @@ SEASON_LABELS = ["Spring", "Summer", "Autumn", "Winter"]
 
 def build_elevation_display_texture(mesh) -> np.ndarray:
     elev_tex = mesh.face_textures["elevation"]          # (N, H, W, 1)
-    rgba = _elevation_color_vec(elev_tex[:, :, :, 0])   # (N, H, W, 4)
+    ocean_mask = None
+    if "ocean_mask" in mesh.face_textures:
+        ocean_mask = mesh.face_textures["ocean_mask"][:, :, :, 0] > 0.5  # (N, H, W) bool
+    rgba = _elevation_color_vec(elev_tex[:, :, :, 0], ocean_mask=ocean_mask)  # (N, H, W, 4)
     if "lake_mask" in mesh.face_textures:
         lake_tex = mesh.face_textures["lake_mask"]       # (N, H, W, 1)
         rgba[lake_tex[:, :, :, 0] > 0.5] = LAKE_COLOR
@@ -47,15 +50,18 @@ def build_elevation_display_texture(mesh) -> np.ndarray:
 def build_biome_display_texture(mesh) -> np.ndarray:
     """Look up `"biome"` indices in BIOME_PALETTE → (N, H, W, 4) RGBA.
 
-    Ocean pixels (elevation < 0) are overpainted with OCEAN_COLOR and inland
-    lake pixels are overpainted with LAKE_COLOR, matching the elevation layer
-    so both schemes agree on where water is.
+    Ocean pixels are overpainted with OCEAN_COLOR (using the ocean_mask texture
+    if present, otherwise falling back to elevation < 0). Inland lake pixels are
+    overpainted with LAKE_COLOR.
     """
     biome_tex = mesh.face_textures["biome"]              # (N, H, W, 1) uint8
     idx = biome_tex[..., 0].astype(np.int32)
     idx = np.clip(idx, 0, len(BIOME_PALETTE) - 1)
     rgba = BIOME_PALETTE[idx].copy()
-    if "elevation" in mesh.face_textures:
+    if "ocean_mask" in mesh.face_textures:
+        ocean = mesh.face_textures["ocean_mask"][..., 0] > 0.5
+        rgba[ocean] = np.asarray(OCEAN_COLOR, dtype=rgba.dtype)
+    elif "elevation" in mesh.face_textures:
         elev_tex = mesh.face_textures["elevation"]       # (N, H, W, 1)
         ocean = elev_tex[..., 0] < 0.0
         rgba[ocean] = np.asarray(OCEAN_COLOR, dtype=rgba.dtype)
@@ -198,21 +204,22 @@ class GlobeBuilder:
             if debug:
                 temp_tex = mesh.face_textures["temperature"]
                 precip_tex = mesh.face_textures["precipitation"]
+                ocean_mask_tex = mesh.face_textures["ocean_mask"] if "ocean_mask" in mesh.face_textures else None
                 mesh.set_face_textures(
                     "temperature_annual_rgba",
-                    build_temperature_display_texture(temp_tex, elevation_tex=elev_tex),
+                    build_temperature_display_texture(temp_tex, elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex),
                 )
                 mesh.set_face_textures(
                     "temperature_summer_rgba",
-                    build_temperature_display_texture(temp_tex, season=1, elevation_tex=elev_tex),
+                    build_temperature_display_texture(temp_tex, season=1, elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex),
                 )
                 mesh.set_face_textures(
                     "temperature_winter_rgba",
-                    build_temperature_display_texture(temp_tex, season=3, elevation_tex=elev_tex),
+                    build_temperature_display_texture(temp_tex, season=3, elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex),
                 )
                 mesh.set_face_textures(
                     "precipitation_rgba",
-                    build_precipitation_display_texture(precip_tex, elevation_tex=elev_tex),
+                    build_precipitation_display_texture(precip_tex, elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex),
                 )
                 schemes["Annual Temperature"] = temperature_color
                 schemes["Summer Temperature"] = lambda meta: temperature_color(meta, key="temperature_warmest")

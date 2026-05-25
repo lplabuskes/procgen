@@ -501,6 +501,106 @@ def smooth_elevation_seams(
     return elevation_textures
 
 
+def compute_ocean_mask_texture(
+    mesh: PolygonMesh,
+    elevation_textures: np.ndarray,
+    sea_level: float = 0.0,
+) -> np.ndarray:
+    """Three-phase pixel-level ocean flood fill.
+
+    Phase 1 — core ocean: faces whose MAXIMUM pixel elevation is at or below
+    `sea_level` are wholly submerged and provide definitive flood-fill seeds.
+
+    Phase 2 — potential ocean: face-graph BFS outward from core ocean, expanding
+    to any adjacent face whose MINIMUM pixel elevation is at or below `sea_level`.
+    These faces straddle the coastline; only pixels genuinely connected to core
+    ocean should be marked.
+
+    Phase 3 — pixel BFS: seeds all pixels of core ocean faces, then propagates
+    via two edge types:
+      • Intra-face: 4-connected moves to pixels at or below `sea_level`.
+      • Cross-face: when a pixel in face i lies in the Voronoi cell of adjacent
+        potential face j (closer to j's centroid than to i's centroid), it seeds
+        all of j's boundary pixels that lie in i's Voronoi cell.  This transfers
+        ocean connectivity across face boundaries without sub-pixel stitching.
+        Isolated sub-sea-level depressions unreachable from any core ocean face
+        remain land.
+
+    Returns:
+        float32 (N, H, W, 1) with 1.0 = ocean pixel, 0.0 = land pixel.
+    """
+    N, H, W, _ = elevation_textures.shape
+    elevs = elevation_textures[:, :, :, 0]    # (N, H, W)
+    elev_max = elevs.max(axis=(1, 2))          # (N,)
+    elev_min = elevs.min(axis=(1, 2))          # (N,)
+
+    # ---- Phase 1: core ocean -----------------------------------------------
+    is_core = elev_max <= sea_level            # entirely submerged
+
+    # ---- Phase 2: potential ocean ------------------------------------------
+    is_potential = is_core.copy()
+    q_face: deque[int] = deque(np.where(is_core)[0].tolist())
+    while q_face:
+        f = q_face.popleft()
+        for nb in mesh.face_adjacency[f]:
+            if not is_potential[nb] and elev_min[nb] <= sea_level:
+                is_potential[nb] = True
+                q_face.append(nb)
+
+    # ---- Phase 3: pixel BFS ------------------------------------------------
+    # Precompute Voronoi boundary masks for every adjacent potential-face pair.
+    # voronoi[(i, j)] = bool (H, W): pixels in face i closer to face j's centroid.
+    pixel_pos = mesh.face_texture_positions(H, W)  # (N, H, W, 3)
+    centroids = mesh.face_centroids                 # (N, 3)
+
+    voronoi: dict[tuple[int, int], np.ndarray] = {}
+    for i in np.where(is_potential)[0]:
+        ppos = pixel_pos[i]                         # (H, W, 3)
+        dist_self = np.sqrt(((ppos - centroids[i]) ** 2).sum(-1))  # (H, W)
+        for nb in mesh.face_adjacency[i]:
+            if is_potential[nb]:
+                dist_nb = np.sqrt(((ppos - centroids[nb]) ** 2).sum(-1))
+                voronoi[(i, nb)] = dist_nb < dist_self
+
+    ocean_mask = np.zeros((N, H, W), dtype=bool)
+    pixel_queue: deque[tuple[int, int, int]] = deque()
+
+    # Seed: all pixels of core ocean faces (max_elev ≤ sea_level ⟹ all ≤ sea_level).
+    for i in np.where(is_core)[0]:
+        ocean_mask[i] = True
+        for r, c in zip(*np.where(elevs[i] <= sea_level)):
+            pixel_queue.append((i, int(r), int(c)))
+
+    # BFS with intra- and cross-face propagation.
+    while pixel_queue:
+        fi, r, c = pixel_queue.popleft()
+
+        # Intra-face: 4-connected neighbours at or below sea level.
+        for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < H and 0 <= nc < W:
+                if not ocean_mask[fi, nr, nc] and elevs[fi, nr, nc] <= sea_level:
+                    ocean_mask[fi, nr, nc] = True
+                    pixel_queue.append((fi, int(nr), int(nc)))
+
+        # Cross-face: pixel is in neighbour nb's Voronoi region →
+        # seed nb's boundary pixels toward fi.
+        for nb in mesh.face_adjacency[fi]:
+            fwd = (fi, nb)
+            if fwd not in voronoi or not voronoi[fwd][r, c]:
+                continue
+            rev = (nb, fi)
+            if rev not in voronoi:
+                continue
+            seed_mask = voronoi[rev] & (elevs[nb] <= sea_level) & ~ocean_mask[nb]
+            if seed_mask.any():
+                ocean_mask[nb] |= seed_mask
+                for r2, c2 in zip(*np.where(seed_mask)):
+                    pixel_queue.append((nb, int(r2), int(c2)))
+
+    return ocean_mask[:, :, :, np.newaxis].astype(np.float32)
+
+
 def measure_boundary_elevation_jumps(
     mesh: PolygonMesh,
     elevation_textures: np.ndarray,

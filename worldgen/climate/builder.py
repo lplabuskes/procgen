@@ -111,11 +111,13 @@ class ClimateParams:
 
 
 def _distance_to_coast_km(mesh: PolygonMesh, face_elev_km: np.ndarray,
-                          sea_level: float = 0.0) -> np.ndarray:
+                          sea_level: float = 0.0,
+                          is_ocean: np.ndarray | None = None) -> np.ndarray:
     """Dijkstra on the face graph from ocean seeds; edge weight = great-circle km."""
     n = len(mesh.faces)
     centroids = mesh.face_centroids.astype(np.float64)
-    is_ocean = face_elev_km <= sea_level
+    if is_ocean is None:
+        is_ocean = face_elev_km <= sea_level
 
     # Build face-distance graph + virtual multi-source node at index n (weight 0
     # to every ocean face) for single-call multi-source Dijkstra.
@@ -139,7 +141,6 @@ def _distance_to_coast_km(mesh: PolygonMesh, face_elev_km: np.ndarray,
     dist = sp_dijkstra(graph, directed=True, indices=virt)[:n]
     dist[~np.isfinite(dist)] = 0.0  # land with no ocean reachable: treat as coast
     return dist.astype(np.float32)
-
 
 
 def _dominant_biome_per_face(biome_tex: np.ndarray) -> np.ndarray:
@@ -198,7 +199,11 @@ class ClimateBuilder:
         insolation = seasonal_insolation(latitudes_rad, decls)                 # (N, K)
 
         _report("Computing distance to coast…")
-        dist_coast = _distance_to_coast_km(mesh, face_elev)                    # (N,)
+        is_ocean_face: np.ndarray | None = None
+        if "ocean_mask" in mesh.face_textures:
+            omask = mesh.face_textures["ocean_mask"]
+            is_ocean_face = omask[:, :, :, 0].mean(axis=(1, 2)) > 0.5
+        dist_coast = _distance_to_coast_km(mesh, face_elev, is_ocean=is_ocean_face)  # (N,)
 
         _report("Computing surface temperatures…")
         t_face = surface_temperatures(
@@ -236,7 +241,7 @@ class ClimateBuilder:
         )
 
         _report("Computing atmospheric moisture transport…")
-        evap = evaporation_source(t_face, face_elev, pp.evaporation_scale)
+        evap = evaporation_source(t_face, face_elev, pp.evaporation_scale, is_ocean=is_ocean_face)
         q_air = advect_moisture(
             evap,
             mesh.face_centroids.astype(np.float64),
@@ -258,6 +263,7 @@ class ClimateBuilder:
                 mesh.face_centroids.astype(np.float64),
                 winds,
                 insolation.mean(axis=1),
+                is_ocean=is_ocean_face,
                 beta_scale=cp.beta_scale,
                 advection_alpha=cp.advection_alpha,
                 advection_iterations=cp.advection_iterations,
@@ -284,7 +290,7 @@ class ClimateBuilder:
                 coastal_current_temp_delta=temp_delta,
             )
             # Second-pass humidity: updated SST → more evaporation from warm currents.
-            evap = evaporation_source(t_face, face_elev, pp.evaporation_scale)
+            evap = evaporation_source(t_face, face_elev, pp.evaporation_scale, is_ocean=is_ocean_face)
             q_air = advect_moisture(
                 evap,
                 mesh.face_centroids.astype(np.float64),

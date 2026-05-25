@@ -14,17 +14,22 @@ BOUNDARY_COLORS = {
     "transform":  (0.60, 0.20, 0.80, 1.0),
 }
 
-# Elevation color stops: (elevation_km, RGBA)
-# Two stops at 0.0 create a hard break between ocean (blue) and land (sand/green).
-_ELEVATION_STOPS = [
+# Separate elevation color scales for ocean and land pixels.
+# Ocean pixels are colored by depth; land pixels by elevation (including
+# below-sea-level depressions that are not ocean-connected).
+_OCEAN_ELEVATION_STOPS = [
     (-8.0, (0.02, 0.06, 0.35, 1.0)),  # abyssal plain
     (-3.5, (0.06, 0.22, 0.62, 1.0)),  # deep ocean
     (-0.5, (0.16, 0.48, 0.82, 1.0)),  # continental shelf
-    (0.0, (0.20, 0.52, 0.88, 1.0)),  # sea level (ocean side)
-    (0.0, (0.78, 0.70, 0.42, 1.0)),  # sea level (land side — beach/sand)
-    (0.8, (0.33, 0.60, 0.20, 1.0)),  # lowland / plains
-    (2.5, (0.50, 0.38, 0.18, 1.0)),  # highland
-    (5.5, (0.92, 0.92, 0.92, 1.0)),  # snow-capped peaks
+    (0.0,  (0.20, 0.52, 0.88, 1.0)),  # sea level
+]
+
+_LAND_ELEVATION_STOPS = [
+    (-0.5, (0.62, 0.52, 0.28, 1.0)),  # below-sea-level land (arid depression)
+    (0.0,  (0.78, 0.70, 0.42, 1.0)),  # beach / sand
+    (0.8,  (0.33, 0.60, 0.20, 1.0)),  # lowland / plains
+    (2.5,  (0.50, 0.38, 0.18, 1.0)),  # highland
+    (5.5,  (0.92, 0.92, 0.92, 1.0)),  # snow-capped peaks
 ]
 
 
@@ -38,9 +43,8 @@ def _plate_palette(n: int) -> np.ndarray:
     return rgba
 
 
-def _elevation_color(meta: dict) -> tuple:
-    e = meta["elevation"]
-    stops = _ELEVATION_STOPS
+def _interp_stops_scalar(e: float, stops: list) -> tuple:
+    """Interpolate a scalar elevation through a stops list."""
     if e <= stops[0][0]:
         return stops[0][1]
     if e >= stops[-1][0]:
@@ -56,32 +60,60 @@ def _elevation_color(meta: dict) -> tuple:
     return stops[-1][1]
 
 
+def _elevation_color(meta: dict) -> tuple:
+    e = meta["elevation"]
+    is_ocean = bool(meta.get("is_ocean", e < 0.0))
+    stops = _OCEAN_ELEVATION_STOPS if is_ocean else _LAND_ELEVATION_STOPS
+    return _interp_stops_scalar(e, stops)
+
+
 def elevation_legend_entries() -> list[tuple[str, tuple]]:
-    """Ordered (label, rgba) entries for a gradient legend, low→high elevation."""
+    """Ordered (label, rgba) entries for a land-elevation gradient legend, low→high."""
     return [
-        ("-8 km",   _ELEVATION_STOPS[0][1]),
-        ("-3.5 km", _ELEVATION_STOPS[1][1]),
-        ("-0.5 km", _ELEVATION_STOPS[2][1]),
-        ("0 km",    _ELEVATION_STOPS[4][1]),  # land side of sea level
-        ("0.8 km",  _ELEVATION_STOPS[5][1]),
-        ("2.5 km",  _ELEVATION_STOPS[6][1]),
-        ("5.5 km",  _ELEVATION_STOPS[7][1]),
+        ("-0.5 km", _LAND_ELEVATION_STOPS[0][1]),
+        ("0 km",    _LAND_ELEVATION_STOPS[1][1]),
+        ("0.8 km",  _LAND_ELEVATION_STOPS[2][1]),
+        ("2.5 km",  _LAND_ELEVATION_STOPS[3][1]),
+        ("5.5 km",  _LAND_ELEVATION_STOPS[4][1]),
     ]
 
 
-def _elevation_color_vec(elevs: np.ndarray) -> np.ndarray:
-    """Vectorized elevation color scheme. Returns (..., 4) float32."""
+def _apply_stops_vec(elevs: np.ndarray, stops: list) -> np.ndarray:
+    """Linear interpolation through stops for an arbitrary-shape elevation array.
+
+    Returns (..., 4) float32.
+    """
     shape = elevs.shape
-    result = np.full((*shape, 4), _ELEVATION_STOPS[-1][1], dtype=np.float32)
-    for i in range(len(_ELEVATION_STOPS) - 2, -1, -1):
-        e0, c0 = _ELEVATION_STOPS[i]
-        e1, c1 = _ELEVATION_STOPS[i + 1]
+    result = np.full((*shape, 4), stops[-1][1], dtype=np.float32)
+    for i in range(len(stops) - 2, -1, -1):
+        e0, c0 = stops[i]
+        e1, c1 = stops[i + 1]
         if e0 == e1:
             continue
         mask = (elevs >= e0) & (elevs <= e1)
         t = np.where(mask, (elevs - e0) / (e1 - e0), 0.0)
         for ch in range(4):
             result[..., ch] = np.where(mask, c0[ch] + t * (c1[ch] - c0[ch]), result[..., ch])
-    result[elevs <= _ELEVATION_STOPS[0][0]] = np.array(_ELEVATION_STOPS[0][1], dtype=np.float32)
-    result[elevs >= _ELEVATION_STOPS[-1][0]] = np.array(_ELEVATION_STOPS[-1][1], dtype=np.float32)
+    result[elevs <= stops[0][0]] = np.array(stops[0][1], dtype=np.float32)
+    result[elevs >= stops[-1][0]] = np.array(stops[-1][1], dtype=np.float32)
+    return result
+
+
+def _elevation_color_vec(elevs: np.ndarray, ocean_mask: np.ndarray | None = None) -> np.ndarray:
+    """Vectorized elevation coloring with separate ocean and land scales.
+
+    Args:
+        elevs: (...) float array of elevations in km.
+        ocean_mask: optional bool array, same shape as elevs. True = ocean pixel.
+            Falls back to elevs < 0 when not provided (backward-compatible).
+
+    Returns:
+        (..., 4) float32 RGBA array.
+    """
+    if ocean_mask is None:
+        ocean_mask = elevs < 0.0
+    is_ocean = ocean_mask.astype(bool)
+    result = np.empty((*elevs.shape, 4), dtype=np.float32)
+    result[is_ocean] = _apply_stops_vec(elevs[is_ocean], _OCEAN_ELEVATION_STOPS)
+    result[~is_ocean] = _apply_stops_vec(elevs[~is_ocean], _LAND_ELEVATION_STOPS)
     return result

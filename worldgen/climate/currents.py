@@ -410,6 +410,7 @@ def compute_currents(mesh: PolygonMesh,
                      face_insolation: np.ndarray,
                      *,
                      sea_level: float = 0.0,
+                     is_ocean: np.ndarray | None = None,
                      beta_scale: float = 1.0,
                      advection_alpha: float = 1.0,
                      advection_iterations: int = 400,
@@ -437,7 +438,8 @@ def compute_currents(mesh: PolygonMesh,
             ocean anomaly.
     """
     n = len(mesh.faces)
-    is_ocean = face_elev_km <= sea_level
+    if is_ocean is None:
+        is_ocean = face_elev_km <= sea_level
 
     annual_winds = winds_per_season.astype(np.float64).mean(axis=1)         # (N, 3)
     centroids = face_centroids.astype(np.float64)
