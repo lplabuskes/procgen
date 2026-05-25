@@ -62,6 +62,7 @@ class RiverGenerator:
         pet_baseline_mm_yr: float = 100.0,
         pet_per_degree_mm_yr: float = 60.0,
         pet_max_mm_yr: float = 2500.0,
+        ocean_mask_textures: np.ndarray | None = None,
     ) -> None:
         """
         Args:
@@ -70,8 +71,14 @@ class RiverGenerator:
                 `(N, H, W, C)` where channel 0 holds the elevation in km.
                 H and W must be equal.
             min_flow: Minimum flow accumulation for a node to belong to a river.
-            sea_level: Elevation threshold; nodes at or below this drain to the
-                ocean (treated as Priority-Flood seeds).
+            sea_level: Elevation threshold used as a fallback ocean mask when
+                `ocean_mask_textures` is not provided; nodes at or below this
+                drain to the ocean (treated as Priority-Flood seeds).
+            ocean_mask_textures: Optional `(N, H, W, 1)` float32 array where
+                values > 0.5 mark ocean pixels. When provided, these pixels
+                are used as Priority-Flood seeds and river-trace sinks instead
+                of the `sea_level` elevation threshold. Necessary when
+                sub-sea-level land basins exist that should not drain freely.
             min_lake_pixels: Minimum connected-component size (in pixels) for a
                 flooded region to be treated as a lake. Smaller regions are
                 ignored — rivers pass through them and they are excluded from the
@@ -150,6 +157,12 @@ class RiverGenerator:
         self._pet_baseline_mm_yr = float(pet_baseline_mm_yr)
         self._pet_per_degree_mm_yr = float(pet_per_degree_mm_yr)
         self._pet_max_mm_yr = float(pet_max_mm_yr)
+
+        if ocean_mask_textures is not None:
+            omask = ocean_mask_textures[:, :, :, 0] if ocean_mask_textures.ndim == 4 else ocean_mask_textures
+            self._ocean_mask: np.ndarray = omask.reshape(-1).astype(bool)
+        else:
+            self._ocean_mask = self.elevations <= sea_level
 
         # Populated by compute_flow / water-balance shrinking.
         self._lake_mask_full: np.ndarray = np.zeros(self.n_nodes, dtype=bool)
@@ -423,7 +436,7 @@ class RiverGenerator:
 
     def _build_lake_mask(self, was_raised: np.ndarray) -> np.ndarray:
         """Return a bool mask containing only flooded land components >= min_lake_pixels."""
-        raw = was_raised & (self.elevations > self.sea_level)
+        raw = was_raised & ~self._ocean_mask
         mask = np.zeros(self.n_nodes, dtype=bool)
         for comp in self._find_connected_components(raw, min_size=self.min_lake_pixels):
             mask[np.array(comp)] = True
@@ -444,15 +457,13 @@ class RiverGenerator:
         """
         elev = self.elevations
         n = self.n_nodes
-        sea = self.sea_level
         eff = elev.astype(np.float32, copy=True)
         visited = np.zeros(n, dtype=bool)
         was_raised = np.zeros(n, dtype=bool)
         eps = 1e-6
 
         heap: List[Tuple[float, int]] = []
-        ocean_idx = np.where(elev <= sea)[0]
-        for idx in ocean_idx.tolist():
+        for idx in np.where(self._ocean_mask)[0].tolist():
             heapq.heappush(heap, (float(elev[idx]), idx))
             visited[idx] = True
 
@@ -592,7 +603,7 @@ class RiverGenerator:
             if receiver1[src] != -1:
                 continue
             e0 = float(eff[src])
-            if e0 <= self.sea_level:
+            if self._ocean_mask[src]:
                 continue
             best_slope = 0.0
             best_nb = -1
@@ -846,7 +857,7 @@ class RiverGenerator:
                 # count toward loop detection.
                 if nearest not in self._inter_adj:
                     visited_cells.add(nearest)
-            if self.elevations[nearest] <= self.sea_level:
+            if self._ocean_mask[nearest]:
                 terminated_at_sea = True
                 break
             # NOTE: do not threshold on flow_accum mid-trace — with D-inf

@@ -65,6 +65,7 @@ class HydrologyBuilder:
         _report("Computing rivers and lakes…")
         precip_tex = mesh.face_textures.get("precipitation")
         temperature_tex = mesh.face_textures.get("temperature")
+        ocean_mask_tex = mesh.face_textures.get("ocean_mask")
         river_gen = RiverGenerator(
             mesh,
             elevation_textures,
@@ -76,6 +77,7 @@ class HydrologyBuilder:
             pet_baseline_mm_yr=self.params.pet_baseline_mm_yr,
             pet_per_degree_mm_yr=self.params.pet_per_degree_mm_yr,
             pet_max_mm_yr=self.params.pet_max_mm_yr,
+            ocean_mask_textures=ocean_mask_tex,
         )
         self.rivers = river_gen.generate()
         self.lake_polygons = river_gen.get_lake_polygons()
