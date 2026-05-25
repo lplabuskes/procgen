@@ -505,13 +505,18 @@ def compute_ocean_mask_texture(
     mesh: PolygonMesh,
     elevation_textures: np.ndarray,
     sea_level: float = 0.0,
+    seed_level: float = -0.5,
 ) -> np.ndarray:
     """Pixel-level ocean flood fill using exact cross-face pixel pairs.
 
-    Phase 1 — core ocean: faces whose MAXIMUM pixel elevation is at or below
-    `sea_level` are wholly submerged and provide definitive flood-fill seeds.
+    Phase 1 — seed faces: faces whose MAXIMUM pixel elevation is at or below
+    `seed_level` are unambiguously ocean and seed the face BFS.
 
-    Phase 2 — pixel BFS: seeds all pixels of core ocean faces, then propagates
+    Phase 2 — face BFS: expands from seed faces to adjacent faces whose max
+    elevation is at or below `sea_level`.  This connects marginal faces to the
+    open ocean without allowing isolated sub-sea-level depressions to qualify.
+
+    Phase 3 — pixel BFS: seeds all pixels of core ocean faces, then propagates
     via two edge types:
       • Intra-face: 4-connected moves to pixels at or below `sea_level`.
       • Cross-face: matched pixel pairs from `_iter_boundary_pixel_pairs` whose
@@ -525,8 +530,17 @@ def compute_ocean_mask_texture(
     elevs = elevation_textures[:, :, :, 0]    # (N, H, W)
     elev_max = elevs.max(axis=(1, 2))          # (N,)
 
-    # ---- Phase 1: core ocean -----------------------------------------------
-    is_core = elev_max <= sea_level            # entirely submerged
+    # ---- Phase 1: seed faces ------------------------------------------------
+    is_core = elev_max <= seed_level           # unambiguously ocean
+
+    # ---- Phase 2: face BFS --------------------------------------------------
+    face_queue: deque[int] = deque(int(i) for i in np.where(is_core)[0])
+    while face_queue:
+        fi = face_queue.popleft()
+        for fj in mesh.face_adjacency[fi]:
+            if not is_core[fj] and elev_max[fj] <= sea_level:
+                is_core[fj] = True
+                face_queue.append(fj)
 
     # Build cross-face pixel-pair adjacency, indexed by flat pixel id.
     cross_adj: List[List[int]] = [[] for _ in range(N * H * W)]
@@ -539,7 +553,8 @@ def compute_ocean_mask_texture(
     ocean_mask = np.zeros((N, H, W), dtype=bool)
     pixel_queue: deque[int] = deque()
 
-    # Seed: all pixels of core ocean faces (max_elev ≤ sea_level ⟹ all ≤ sea_level).
+    # ---- Phase 3: pixel BFS -------------------------------------------------
+    # Seed: all pixels of core ocean faces.
     for i in np.where(is_core)[0]:
         ocean_mask[i] = True
         base = i * H * W
