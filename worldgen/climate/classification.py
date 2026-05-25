@@ -75,26 +75,20 @@ def classify_textures(temperature_tex: np.ndarray,
     p_max = precipitation_tex.max(axis=-1)
     p_seasonality = (p_max - p_min) / np.maximum(p_annual, 1e-6)
 
-    biome = np.full(t_warmest.shape, 3, dtype=np.uint8)  # default = Temperate
-
-    # Apply rules in REVERSE priority order (last assignment wins), then flip,
-    # OR use forward order with a "decided" mask. Use the mask approach so the
-    # logic exactly mirrors default_biome's first-match-wins ordering.
-    decided = np.zeros(t_warmest.shape, dtype=bool)
-
-    def _assign(mask: np.ndarray, value: int) -> None:
-        m = mask & ~decided
-        biome[m] = value
-        decided[m] = True
-
-    _assign(t_warmest < 0.0, 0)                                          # Icecap
-    _assign(t_warmest < 10.0, 1)                                          # Tundra
-    _assign(t_coldest < -10.0, 2)                                         # Taiga
-    _assign((p_annual < 300.0) & (t_warmest > 18.0), 8)                   # Desert
-    _assign((p_annual < 500.0) & (t_warmest > 18.0), 7)                   # Semi-Arid
-    _assign(p_annual < 400.0, 4)                                          # Steppe
-    _assign((t_warmest > 22.0) & (p_annual > 750.0) & (p_seasonality < 0.50), 6)  # Tropical
-    _assign((t_warmest > 21.0) & (p_annual > 350.0), 5)                           # Savannah
-    # Fallthrough already initialised to Temperate (3).
+    hot = t_warmest > 18.0
+    biome = np.select(
+        [
+            t_warmest < 0.0,
+            t_warmest < 10.0,
+            t_coldest < -10.0,
+            (p_annual < 300.0) & hot,                                    # Desert
+            (p_annual < 500.0) & hot,                                    # Semi-Arid
+            p_annual < 400.0,                                            # Steppe
+            (t_warmest > 22.0) & (p_annual > 750.0) & (p_seasonality < 0.50),  # Tropical
+            (t_warmest > 21.0) & (p_annual > 350.0),                    # Savannah
+        ],
+        [0, 1, 2, 8, 7, 4, 6, 5],
+        default=3,  # Temperate
+    ).astype(np.uint8)
 
     return biome[..., None]
