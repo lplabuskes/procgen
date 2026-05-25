@@ -501,13 +501,18 @@ class MapWidget(QWidget):
             return
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
-        max_flow = max((flows[-1] for _, flows in river_paths if flows), default=0.0)
+        max_flow = max(
+            (entry[1][-1] for entry in river_paths if entry[1]),
+            default=0.0,
+        )
         if max_flow <= 0.0:
             return
         min_width, max_width = 0.5, 4.0
 
         active_pen: QPen | None = None
-        for positions, flows in river_paths:
+        for entry in river_paths:
+            positions, flows = entry[0], entry[1]
+            in_lake = entry[2] if len(entry) > 2 else None
             if len(positions) < 2:
                 continue
             lon = np.arctan2(positions[:, 1], positions[:, 0])
@@ -517,6 +522,8 @@ class MapWidget(QWidget):
             sx = (proj[:, 0] - cx) * scale_x + W * 0.5
             sy = -(proj[:, 1] - cy) * scale_y + H * 0.5
             for j in range(1, len(positions)):
+                if in_lake is not None and j - 1 < len(in_lake) and in_lake[j - 1]:
+                    continue  # segment lies inside a lake — hide it
                 if abs(lon[j] - lon[j - 1]) > np.pi:
                     continue
                 w = (min_width + (max_width - min_width) * (flows[j - 1] / max_flow) ** 0.5) * self._zoom ** 0.5

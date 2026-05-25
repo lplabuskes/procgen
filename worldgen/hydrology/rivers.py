@@ -58,6 +58,10 @@ class RiverGenerator:
         smoothing_iterations: int = 8,
         smoothing_alpha: float = 0.5,
         precipitation_textures: np.ndarray | None = None,
+        temperature_textures: np.ndarray | None = None,
+        pet_baseline_mm_yr: float = 100.0,
+        pet_per_degree_mm_yr: float = 60.0,
+        pet_max_mm_yr: float = 2500.0,
     ) -> None:
         """
         Args:
@@ -78,7 +82,20 @@ class RiverGenerator:
             precipitation_textures: Optional `(N, H, W, K)` float32 mm/season.
                 When provided, each node's initial flow contribution is scaled by
                 its annual precipitation divided by the global mean, so wetter
-                pixels source more runoff than drier ones.
+                pixels source more runoff than drier ones. Required (alongside
+                temperature_textures) to enable water-balance lake shrinking.
+            temperature_textures: Optional `(N, H, W, K)` float32 °C. The annual
+                mean is used to estimate per-pixel potential evapotranspiration
+                (PET) for water-balance lake shrinking. When both this and
+                precipitation_textures are provided, closed basins where
+                inflow < total PET shrink to their equilibrium size; otherwise
+                lakes remain at their full Priority-Flood fill level.
+            pet_baseline_mm_yr: PET at T = 0 °C, before clamping. Acts as the
+                cold-region floor (default 100 mm/yr).
+            pet_per_degree_mm_yr: Linear slope of PET vs T for T > 0 °C
+                (default 60 mm/yr per °C; PET ≈ 1000 mm/yr at 15 °C).
+            pet_max_mm_yr: Upper clamp on PET to keep hot-desert values bounded
+                (default 2500 mm/yr).
         """
         if elevation_textures.ndim == 4:
             elev = elevation_textures[:, :, :, 0]
@@ -119,9 +136,24 @@ class RiverGenerator:
             annual = precipitation_textures.sum(axis=-1).astype(np.float32)  # (N, H, W)
             flat = annual.reshape(-1)
             mean = float(flat.mean())
-            self._precip_weights: np.ndarray | None = flat / max(mean, 1e-6)
+            self._mean_precip: float | None = max(mean, 1e-6)
+            self._precip_weights: np.ndarray | None = flat / self._mean_precip
         else:
+            self._mean_precip = None
             self._precip_weights = None
+
+        if temperature_textures is not None:
+            t_annual = temperature_textures.mean(axis=-1).astype(np.float32)  # (N, H, W)
+            self._t_annual_flat: np.ndarray | None = t_annual.reshape(-1)
+        else:
+            self._t_annual_flat = None
+        self._pet_baseline_mm_yr = float(pet_baseline_mm_yr)
+        self._pet_per_degree_mm_yr = float(pet_per_degree_mm_yr)
+        self._pet_max_mm_yr = float(pet_max_mm_yr)
+
+        # Populated by compute_flow / water-balance shrinking.
+        self._lake_mask_full: np.ndarray = np.zeros(self.n_nodes, dtype=bool)
+        self._endorheic_mask: np.ndarray = np.zeros(self.n_nodes, dtype=bool)
 
         # Cache per-face tangent frame data for sub-pixel walks.
         frames = mesh.face_tangent_frames()
@@ -310,10 +342,84 @@ class RiverGenerator:
         self._eff = eff
         self._was_raised = was_raised
         self._lake_mask = self._build_lake_mask(was_raised)
+        # Snapshot the full Priority-Flood lake mask before water-balance shrinking.
+        # The full mask is used to gate headwater detection (so dry-bed pixels
+        # uncovered by shrinking don't become spurious headwaters); the shrunken
+        # mask drives visual rendering and trace termination.
+        self._lake_mask_full = self._lake_mask.copy()
+        self._endorheic_mask = np.zeros(self.n_nodes, dtype=bool)
         r1, r2, f1, f2, ang = self._compute_dinf_flow(eff)
         self._inter_face_fallback(r1, r2, f1, f2, ang, eff)
         accum = self._accumulate_flow(r1, r2, f1, f2, eff)
+        self._shrink_endorheic_lakes(accum)
         return r1, r2, f1, f2, ang, accum
+
+    def _shrink_endorheic_lakes(self, flow_accum: np.ndarray) -> None:
+        """Water-balance lake shrinking.
+
+        For each connected component of `self._lake_mask`, compare inflow
+        (max `flow_accum` over the component, in normalized-precipitation
+        units) against the total potential evaporation at the current
+        Priority-Flood fill level.  If inflow ≥ total PET the lake overflows
+        and is left untouched (exorheic).  Otherwise the lake is shrunk to
+        the equilibrium fill level where partial-coverage evaporation
+        balances inflow, and:
+
+        - `self._lake_mask` has the dry-bed pixels cleared (visual / polygon
+          footprint becomes the equilibrium lake).
+        - `self._endorheic_mask` is set on the remaining lake pixels so the
+          trace walk can terminate when entering an endorheic sink.
+        - `self._eff` is rewritten over the affected basin: kept pixels are
+          pinned to the equilibrium elevation (flat lake surface), dry-bed
+          pixels are restored to their natural elevation so external traces
+          descend into the new lake instead of routing to the original rim
+          spill.
+
+        No-op when precipitation or temperature inputs were not supplied.
+        """
+        if self._t_annual_flat is None or self._precip_weights is None or self._mean_precip is None:
+            return
+
+        components = self._find_connected_components(self._lake_mask, min_size=1)
+        if not components:
+            return
+
+        pet_mm_yr = np.clip(
+            self._pet_baseline_mm_yr + self._pet_per_degree_mm_yr * np.maximum(0.0, self._t_annual_flat),
+            0.0,
+            self._pet_max_mm_yr,
+        ).astype(np.float32)
+        pet_norm = pet_mm_yr / self._mean_precip  # normalized to mean-precip units
+
+        for comp in components:
+            comp_arr = np.asarray(comp, dtype=np.int64)
+            # Inflow proxy: max flow_accum across the basin equals total upstream
+            # contribution at the spill pixel (the lake pixel that exits the basin).
+            inflow = float(flow_accum[comp_arr].max())
+            total_pet_norm = float(pet_norm[comp_arr].sum())
+            if inflow >= total_pet_norm:
+                continue  # exorheic — lake overflows, keep at full Priority-Flood fill
+
+            elevs = self.elevations[comp_arr]
+            order = np.argsort(elevs, kind='stable')
+            sorted_pixels = comp_arr[order]
+            cum_pet = np.cumsum(pet_norm[sorted_pixels])
+            # Find the smallest prefix whose cumulative PET reaches the inflow.
+            k = int(np.searchsorted(cum_pet, inflow, side='left')) + 1
+            k = max(1, min(k, len(comp_arr)))
+
+            keep = sorted_pixels[:k]
+            leave = sorted_pixels[k:]
+            equilibrium_elev = float(self.elevations[sorted_pixels[k - 1]])
+
+            self._lake_mask[leave] = False
+            self._endorheic_mask[keep] = True
+            # Flat lake surface at equilibrium so external traces see the lake as
+            # a sink relative to the dry bed.
+            self._eff[keep] = equilibrium_elev
+            # Restore dry-bed pixels to their natural elevation; the OLD eff (rim+eps)
+            # would route walks out the old spill instead of into the new lake.
+            self._eff[leave] = self.elevations[leave]
 
     def _build_lake_mask(self, was_raised: np.ndarray) -> np.ndarray:
         """Return a bool mask containing only flooded land components >= min_lake_pixels."""
@@ -556,11 +662,26 @@ class RiverGenerator:
     ) -> List[River]:
         """Identify headwaters and trace each downstream via sub-pixel walk."""
         threshold = self.min_flow
-        # Lake-interior nodes are excluded from river routing: they are not
-        # river nodes themselves, so the outlet (which receives all their
-        # accumulated flow) appears as a headwater and starts a post-lake river.
-        lake_nodes = self._lake_mask
+        # Use the FULL Priority-Flood lake mask (pre-shrinking) for headwater
+        # filtering: dry-bed pixels uncovered by water-balance shrinking still
+        # have their flow direction pointing at the old rim spill, so without
+        # this they'd appear as orphan headwaters in the eps-gradient field.
+        lake_nodes = self._lake_mask_full
         is_above = (flow_accum >= threshold) & ~lake_nodes
+        # Also exclude pixels immediately downstream of any lake outlet. Without
+        # this, the lake's external rim pixel would be flagged as a headwater
+        # (since its only upstream sources are lake-interior pixels, which are
+        # masked out above), spawning a duplicate post-lake river that overlaps
+        # the upstream trace now that traces pass continuously through lakes.
+        is_post_lake = np.zeros(self.n_nodes, dtype=bool)
+        for p in np.where(lake_nodes)[0].tolist():
+            r1i = int(receiver1[p])
+            if r1i >= 0 and not lake_nodes[r1i]:
+                is_post_lake[r1i] = True
+            r2i = int(receiver2[p])
+            if r2i >= 0 and not lake_nodes[r2i]:
+                is_post_lake[r2i] = True
+        is_above &= ~is_post_lake
         above_idx = np.where(is_above)[0]
 
         # Headwater = above-threshold node receiving no above-threshold inflow.
@@ -604,6 +725,9 @@ class RiverGenerator:
         current_pos = self.mesh.face_uv_to_3d(current_face, u, v)
         positions: List[np.ndarray] = [current_pos.copy()]
         flow_history: List[float] = [float(flow_accum[start])]
+        # Track per-polyline-point lake membership so segments can be tagged
+        # for visual hiding without truncating the river data at lake edges.
+        in_lake_flags: List[bool] = [bool(self._lake_mask[start])]
 
         # Momentum carry-over: per-face textures aren't continuous across face
         # boundaries, so the bilinear gradient can flip direction the instant
@@ -701,15 +825,18 @@ class RiverGenerator:
                 break
             new_pos = new_pos / norm
 
-            # Resolve the nearest grid node before appending so a lake boundary
-            # terminates the river without including the lake-interior point.
             col_n = int(round(u * n_minus_1))
             row_n = int(round(v * n_minus_1))
             nearest = self._node_idx(current_face, row_n, col_n)
-            if self._lake_mask[nearest]:
-                break  # reached lake edge; river ends at lake boundary
 
             positions.append(new_pos)
+            in_lake_flags.append(bool(self._lake_mask[nearest]))
+            flow_history.append(max(flow_history[-1], float(flow_accum[nearest])))
+
+            # Endorheic basins are real sinks — terminate here so the river
+            # doesn't appear to flow out of a closed depression.
+            if self._endorheic_mask[nearest]:
+                break
 
             if step >= loop_check_start:
                 if nearest in visited_cells:
@@ -719,7 +846,6 @@ class RiverGenerator:
                 # count toward loop detection.
                 if nearest not in self._inter_adj:
                     visited_cells.add(nearest)
-            flow_history.append(max(flow_history[-1], float(flow_accum[nearest])))
             if self.elevations[nearest] <= self.sea_level:
                 terminated_at_sea = True
                 break
@@ -764,10 +890,12 @@ class RiverGenerator:
                 position=positions[k].astype(np.float32),
                 elevation=0.0, face_id=current_face, uv=(0.0, 0.0),
             )
+            seg_in_lake = in_lake_flags[k - 1] or in_lake_flags[k]
             river.segments.append(RiverSegment(
                 start=seg_start,
                 end=seg_end,
                 flow_rate=flow_history[k - 1],
+                in_lake=seg_in_lake,
             ))
         _ = terminated_at_sea  # for future use; mouth-at-sea info if needed
         return river

@@ -127,12 +127,14 @@ def resolve_self_crossings(rivers: List[River]) -> List[River]:
                     start=river.segments[i].start,
                     end=junction,
                     flow_rate=river.segments[i].flow_rate,
+                    in_lake=river.segments[i].in_lake,
                 ))
             if t_j < 1 - 1e-3:
                 new_segs.append(RiverSegment(
                     start=junction,
                     end=river.segments[j].end,
                     flow_rate=river.segments[j].flow_rate,
+                    in_lake=river.segments[j].in_lake,
                 ))
             new_segs.extend(river.segments[j + 1:])
             river.segments = new_segs
@@ -222,6 +224,7 @@ def resolve_crossings(rivers: List[River]) -> List[River]:
                 start=orig.start,
                 end=junction,
                 flow_rate=orig.flow_rate,
+                in_lake=orig.in_lake,
             ))
         if len(new_segs) > 2:
             river.segments = new_segs

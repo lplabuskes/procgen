@@ -92,7 +92,10 @@ class GlobeBuilder:
                     continue
                 positions = np.stack(polyline).astype(np.float32)  # (M, 3)
                 flows = river.flow_rates()                          # length M-1
-                paths_with_flow.append((positions, flows))
+                in_lake = np.array(
+                    [s.in_lake for s in river.segments], dtype=bool
+                )                                                    # length M-1
+                paths_with_flow.append((positions, flows, in_lake))
             if paths_with_flow:
                 globe.add_feature("rivers", paths_with_flow)
 

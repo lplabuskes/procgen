@@ -21,6 +21,7 @@ class RiverSegment:
     end: RiverNode
     flow_rate: float              # accumulated upstream count at segment start
     tributary_count: int = 0
+    in_lake: bool = False         # True when this segment lies inside a lake mask
 
 
 @dataclass
