@@ -800,22 +800,48 @@ class RiverGenerator:
                 # position falls into and switch frames.
                 attempted_pos = self.mesh.face_uv_to_3d(current_face, new_u, new_v)
                 attempted_pos /= max(float(np.linalg.norm(attempted_pos)), 1e-12)
-                next_face = -1
-                next_uv: Optional[Tuple[float, float]] = None
-                best_out = float('inf')
+                # Collect all neighbour candidates sorted by L1 overflow.
+                candidates: List[Tuple[float, int, float, float]] = []
                 for nb_face in self.mesh.face_adjacency[current_face]:
                     nu, nv = self.mesh.face_3d_to_uv(nb_face, attempted_pos)
                     # L1 distance outside [0,1]²; 0 means the point is inside.
                     out = max(0.0, -nu, nu - 1.0) + max(0.0, -nv, nv - 1.0)
-                    if out < best_out:
-                        best_out = out
-                        next_face = nb_face
-                        next_uv = (max(0.0, min(1.0, nu)),
-                                   max(0.0, min(1.0, nv)))
+                    candidates.append((out, nb_face, nu, nv))
+                candidates.sort()
+                best_out = candidates[0][0] if candidates else float('inf')
                 # Reject if the best match is implausibly far outside any face
                 # (guards against degenerate geometry; 0.5 is well above the
                 # ~0.14 max overshoot for a single UV-grid step).
-                if best_out > 0.5 or next_face < 0 or next_uv is None:
+                if best_out > 0.5 or not candidates:
+                    break
+
+                # At triple-point vertices two neighbours tie at out≈0. Break
+                # the tie with the face whose UV frame the current momentum
+                # direction points most "into" (toward centre from corner).
+                vertex_tol = 1.5 * uv_step
+                tied = [c for c in candidates if c[0] <= best_out + vertex_tol]
+                next_face = -1
+                next_uv: Optional[Tuple[float, float]] = None
+                if has_prev and len(tied) > 1:
+                    d_3d = (prev_du * self._u_axes[current_face]
+                            + prev_dv * self._v_axes[current_face])
+                    best_score = -float('inf')
+                    for out, nb_face, nu, nv in tied:
+                        mdu = float(d_3d @ self._u_axes[nb_face])
+                        mdv = float(d_3d @ self._v_axes[nb_face])
+                        # "Into" = momentum component pointing toward face centre.
+                        cu = max(0.0, min(1.0, nu))
+                        cv = max(0.0, min(1.0, nv))
+                        score = mdu * (0.5 - cu) + mdv * (0.5 - cv)
+                        if score > best_score:
+                            best_score = score
+                            next_face = nb_face
+                            next_uv = (cu, cv)
+                else:
+                    _, next_face, nu0, nv0 = candidates[0]
+                    next_uv = (max(0.0, min(1.0, nu0)), max(0.0, min(1.0, nv0)))
+
+                if next_face < 0 or next_uv is None:
                     break
                 old_face = current_face
                 current_face = next_face
