@@ -7,7 +7,7 @@ Public API:
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 
@@ -150,14 +150,19 @@ def resolve_self_crossings(rivers: List[River]) -> List[River]:
 def resolve_crossings(rivers: List[River]) -> List[River]:
     """Terminate lower-flow rivers at crossing points with higher-flow rivers.
 
-    For each river pair whose axis-aligned bounding boxes overlap, runs a
-    fully vectorized great-circle arc intersection test across all segment
-    pairs simultaneously. The lower-flow river at each crossing is truncated
-    at the crossing point; the higher-flow river is unchanged.
+    Crossings are processed sequentially in descending order of the lower-flow
+    river's flow rate, so that rivers which serve as terminus targets for other
+    rivers are finalized before those other rivers need to terminate on them.
+
+    Whenever a crossing involves a river that has already been truncated, the
+    pair is re-checked against current geometry: the original recorded crossing
+    point may no longer lie on the (now-shorter) river, so we find the new
+    earliest crossing (if any) before deciding whether to truncate.
     """
     if len(rivers) < 2:
         return rivers
 
+    # Mutable per-river segment arrays; updated in-place as rivers are truncated.
     r_p1: List[np.ndarray] = []
     r_p2: List[np.ndarray] = []
     r_fr: List[np.ndarray] = []
@@ -170,50 +175,83 @@ def resolve_crossings(rivers: List[River]) -> List[River]:
         r_p2.append(p2)
         r_fr.append(np.array([s.flow_rate for s in river.segments], dtype=np.float64))
 
-    bounds: List[Tuple[np.ndarray, np.ndarray]] = []
-    for p1, p2 in zip(r_p1, r_p2):
-        pts = np.vstack([p1, p2])
-        bounds.append((pts.min(axis=0), pts.max(axis=0)))
+    def _aabb(ri: int) -> Tuple[np.ndarray, np.ndarray]:
+        pts = np.vstack([r_p1[ri], r_p2[ri]])
+        return pts.min(axis=0), pts.max(axis=0)
 
-    truncations: Dict[int, Tuple[int, float, np.ndarray]] = {}
+    def _update_arrays(ri: int) -> None:
+        segs = rivers[ri].segments
+        p1 = np.array([s.start.position for s in segs], dtype=np.float64)
+        p2 = np.array([s.end.position for s in segs], dtype=np.float64)
+        p1 /= np.maximum(np.linalg.norm(p1, axis=1, keepdims=True), 1e-12)
+        p2 /= np.maximum(np.linalg.norm(p2, axis=1, keepdims=True), 1e-12)
+        r_p1[ri] = p1
+        r_p2[ri] = p2
+        r_fr[ri] = np.array([s.flow_rate for s in segs], dtype=np.float64)
 
+    # Collect every crossing: (flow_low, si_low, t_low, ri_low, ri_high, cross_pt).
+    all_crossings: List[Tuple] = []
     for ri_a in range(len(rivers)):
+        lo_a, hi_a = _aabb(ri_a)
         for ri_b in range(ri_a + 1, len(rivers)):
-            lo_a, hi_a = bounds[ri_a]
-            lo_b, hi_b = bounds[ri_b]
+            lo_b, hi_b = _aabb(ri_b)
             if np.any(lo_a > hi_b) or np.any(lo_b > hi_a):
-                continue  # bounding boxes are disjoint
-
+                continue
             for si_a, si_b, t_a, t_b, cross_pt in crossing_pairs(
-                r_p1[ri_a], r_p2[ri_a],
-                r_p1[ri_b], r_p2[ri_b],
+                r_p1[ri_a], r_p2[ri_a], r_p1[ri_b], r_p2[ri_b],
             ):
-                fr_at_a = float(r_fr[ri_a][si_a])
-                fr_at_b = float(r_fr[ri_b][si_b])
-                if fr_at_a <= fr_at_b:
-                    low_ri, low_si, low_t = ri_a, si_a, t_a
+                fr_a = float(r_fr[ri_a][si_a])
+                fr_b = float(r_fr[ri_b][si_b])
+                if fr_a <= fr_b:
+                    all_crossings.append((fr_a, si_a, t_a, ri_a, ri_b, cross_pt))
                 else:
-                    low_ri, low_si, low_t = ri_b, si_b, t_b
-                prev = truncations.get(low_ri)
-                if (prev is None
-                        or low_si < prev[0]
-                        or (low_si == prev[0] and low_t < prev[1])):
-                    truncations[low_ri] = (low_si, low_t, cross_pt)
+                    all_crossings.append((fr_b, si_b, t_b, ri_b, ri_a, cross_pt))
 
-    if not truncations:
+    if not all_crossings:
         return rivers
 
-    kept: List[River] = []
-    for ri, river in enumerate(rivers):
-        if ri not in truncations:
-            kept.append(river)
+    # Process in descending flow order so higher-flow rivers that act as
+    # terminus targets for others are finalized before the lower-flow rivers
+    # that need to terminate on them.  Ties broken upstream-first.
+    all_crossings.sort(key=lambda x: (-x[0], x[1], x[2]))
+
+    truncated: set = set()
+    dropped: set = set()
+
+    for _flow_low, si_low, t_low, ri_low, ri_high, cross_pt in all_crossings:
+        if ri_low in dropped:
             continue
-        seg_idx, t, cross_pt = truncations[ri]
-        new_segs = list(river.segments[:seg_idx])
-        # Include a partial segment up to the crossing point when the
-        # crossing isn't right at the start of that segment.
-        if seg_idx < len(river.segments) and t > 1e-3:
-            orig = river.segments[seg_idx]
+
+        # If either river was modified since initial detection, re-verify the
+        # crossing against current geometry before committing to a truncation.
+        if ri_low in truncated or ri_high in truncated:
+            if ri_high in dropped:
+                continue
+            lo_low, hi_low = _aabb(ri_low)
+            lo_high, hi_high = _aabb(ri_high)
+            if np.any(lo_low > hi_high) or np.any(lo_high > hi_low):
+                continue
+            best: Optional[Tuple] = None
+            for new_si_a, new_si_b, new_t_a, _new_t_b, new_cp in crossing_pairs(
+                r_p1[ri_low], r_p2[ri_low], r_p1[ri_high], r_p2[ri_high],
+            ):
+                fr_low2 = float(r_fr[ri_low][new_si_a])
+                fr_high2 = float(r_fr[ri_high][new_si_b])
+                if fr_low2 > fr_high2:
+                    continue  # roles flipped; skip
+                if (best is None
+                        or new_si_a < best[0]
+                        or (new_si_a == best[0] and new_t_a < best[1])):
+                    best = (new_si_a, new_t_a, new_cp)
+            if best is None:
+                continue
+            si_low, t_low, cross_pt = best
+
+        # Truncate rivers[ri_low] at (si_low, t_low).
+        river = rivers[ri_low]
+        new_segs = list(river.segments[:si_low])
+        if si_low < len(river.segments) and t_low > 1e-3:
+            orig = river.segments[si_low]
             junction = RiverNode(
                 position=cross_pt.astype(np.float32),
                 elevation=0.0,
@@ -226,8 +264,12 @@ def resolve_crossings(rivers: List[River]) -> List[River]:
                 flow_rate=orig.flow_rate,
                 in_lake=orig.in_lake,
             ))
-        if len(new_segs) > 2:
-            river.segments = new_segs
-            river.mouth = new_segs[-1].end
-            kept.append(river)
-    return kept
+        if len(new_segs) <= 2:
+            dropped.add(ri_low)
+            continue
+        river.segments = new_segs
+        river.mouth = new_segs[-1].end
+        _update_arrays(ri_low)
+        truncated.add(ri_low)
+
+    return [r for i, r in enumerate(rivers) if i not in dropped]
