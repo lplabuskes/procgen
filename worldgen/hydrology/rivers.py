@@ -178,6 +178,9 @@ class RiverGenerator:
         # Sparse inter-face adjacency: node_idx -> list[node_idx].
         # Intra-face neighbours are derived on the fly in `_neighbors`.
         self._inter_adj: Dict[int, List[int]] = {}
+        # Maps headwater node index -> termination reason string for each
+        # river trace.  Populated by _trace_river_subpixel.
+        self._trace_reasons: Dict[int, str] = {}
         self._stitch_face_boundaries()
 
     # ------------------------------------------------------------------
@@ -760,6 +763,7 @@ class RiverGenerator:
 
         max_steps = 4 * res * res
         terminated_at_sea = False
+        reason = 'max_steps'
         # Track visited grid cells to catch loops that the stall-window check
         # would miss (loops whose circumference exceeds `stall_window` steps).
         # Skip checking the first few steps so normal sub-pixel jitter at the
@@ -776,6 +780,7 @@ class RiverGenerator:
                     dv = (1.0 - momentum) * dv + momentum * prev_dv
                     mag = (du * du + dv * dv) ** 0.5
                     if mag < 1e-12:
+                        reason = 'no_direction'
                         break
                     du /= mag
                     dv /= mag
@@ -784,6 +789,7 @@ class RiverGenerator:
                 du = prev_du
                 dv = prev_dv
             else:
+                reason = 'no_gradient'
                 break
             prev_du = du
             prev_dv = dv
@@ -813,6 +819,7 @@ class RiverGenerator:
                 # (guards against degenerate geometry; 0.5 is well above the
                 # ~0.14 max overshoot for a single UV-grid step).
                 if best_out > 0.5 or not candidates:
+                    reason = 'bad_crossing'
                     break
 
                 # At triple-point vertices two neighbours tie at out≈0. Break
@@ -842,6 +849,7 @@ class RiverGenerator:
                     next_uv = (max(0.0, min(1.0, nu0)), max(0.0, min(1.0, nv0)))
 
                 if next_face < 0 or next_uv is None:
+                    reason = 'bad_crossing'
                     break
                 old_face = current_face
                 current_face = next_face
@@ -859,6 +867,7 @@ class RiverGenerator:
 
             norm = float(np.linalg.norm(new_pos))
             if norm <= 0.0:
+                reason = 'degenerate'
                 break
             new_pos = new_pos / norm
 
@@ -873,10 +882,12 @@ class RiverGenerator:
             # Endorheic basins are real sinks — terminate here so the river
             # doesn't appear to flow out of a closed depression.
             if self._endorheic_mask[nearest]:
+                reason = 'endorheic'
                 break
 
             if step >= loop_check_start:
                 if nearest in visited_cells:
+                    reason = 'loop'
                     break  # loop detected
                 # Seam nodes (face boundaries) can be re-visited briefly due to
                 # gradient discontinuities at face edges; only interior nodes
@@ -884,6 +895,7 @@ class RiverGenerator:
                 if nearest not in self._inter_adj:
                     visited_cells.add(nearest)
             if self._ocean_mask[nearest]:
+                reason = 'ocean'
                 terminated_at_sea = True
                 break
             # NOTE: do not threshold on flow_accum mid-trace — with D-inf
@@ -897,7 +909,10 @@ class RiverGenerator:
             if len(recent_positions) > stall_window:
                 oldest = recent_positions.pop(0)
                 if float(np.linalg.norm(new_pos - oldest)) < stall_threshold:
+                    reason = 'stall'
                     break
+
+        self._trace_reasons[start] = reason
 
         if len(positions) < 2:
             return None

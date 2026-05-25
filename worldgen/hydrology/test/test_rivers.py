@@ -359,3 +359,172 @@ class TestRiverProperties:
             assert loops == [], (
                 f"river {ri} self-intersects at segment pairs {loops[:5]}"
             )
+
+
+# ---------------------------------------------------------------------------
+# TestRiverMouthTermination — every mouth must reach a physical destination
+# ---------------------------------------------------------------------------
+
+def _min_chord_dist_to_polyline(q: np.ndarray, river: River) -> float:
+    """Minimum chord distance from unit-sphere point q to any segment of river.
+
+    Uses the standard parametric nearest-point-on-segment formula in 3-space.
+    For short arcs (< ~5°) the chord vs. great-circle approximation error is
+    < 0.002, which is well within the junction detection tolerance.
+    """
+    pts = river.as_polyline()
+    if len(pts) < 2:
+        return float('inf')
+    arr = np.array(pts, dtype=np.float64)
+    p1 = arr[:-1]
+    p2 = arr[1:]
+    d = p2 - p1
+    dlen2 = np.einsum('ni,ni->n', d, d).clip(min=1e-30)
+    t = np.clip(np.einsum('ni,ni->n', q[None] - p1, d) / dlen2, 0.0, 1.0)
+    closest = p1 + t[:, None] * d
+    return float(np.linalg.norm(closest - q[None], axis=1).min())
+
+
+def _classify_river_mouth(river: River, all_rivers: list, gen: RiverGenerator) -> str:
+    """Return 'ocean', 'lake', 'junction', or 'unknown' for a river's mouth.
+
+    - ocean: nearest grid node is in the ocean mask, or the mouth is within
+      OCEAN_TOL chord distance of any ocean node (covers traces that reached the
+      ocean but whose mouth drifted slightly inland after Laplacian smoothing).
+    - lake: nearest grid node is in the endorheic basin mask (closed sink).
+    - junction: mouth lies on another river's polyline within JUNCTION_TOL;
+      this is how resolve_crossings terminates lower-flow tributaries.
+    - unknown: none of the above; indicates a stall, loop, or geometry failure.
+    """
+    q = river.mouth.position.astype(np.float64)
+    nearest = int(np.argmin(np.linalg.norm(gen.positions - q[None], axis=1)))
+
+    if gen._ocean_mask[nearest]:
+        return 'ocean'
+    if gen._endorheic_mask[nearest]:
+        return 'lake'
+
+    # Near-ocean check: Laplacian smoothing pins polyline endpoints but
+    # resolve_self_crossings can overwrite river.mouth with a segment-end node
+    # that drifted slightly inland. Accept any mouth within ~1-2 pixel widths
+    # of an ocean node.
+    OCEAN_TOL = 0.025
+    ocean_idxs = np.where(gen._ocean_mask)[0]
+    if ocean_idxs.size > 0:
+        if np.linalg.norm(gen.positions[ocean_idxs] - q[None], axis=1).min() < OCEAN_TOL:
+            return 'ocean'
+
+    # After resolve_crossings, a truncated river's mouth is placed at the exact
+    # great-circle crossing point, which lies on the other river's arc. The
+    # chord approximation error is < 0.002 for 5° segments, so 0.01 is safe.
+    # A slightly larger tolerance (0.03) also handles cases where smoothing
+    # moved the junction point away from the arc.
+    JUNCTION_TOL = 0.03
+    for other in all_rivers:
+        if other is river:
+            continue
+        if _min_chord_dist_to_polyline(q, other) < JUNCTION_TOL:
+            return 'junction'
+
+    return 'unknown'
+
+
+def _make_gen_and_rivers_mouth_test(seed: int):
+    mesh = Mesh.icosphere(3).mesh_dual()
+    rng = np.random.default_rng(seed)
+    centroids = mesh.face_centroids
+    z = centroids[:, 2]
+    elevations = 4.0 * z + 0.5 * rng.standard_normal(len(mesh.faces))
+    textures = compute_elevation_textures(mesh, elevations, tex_size=8)
+    rg = RiverGenerator(mesh, textures, min_flow=100.0, sea_level=0.0)
+    rivers = rg.generate()
+    return rg, rivers
+
+
+@pytest.fixture(scope="module", params=[0, 7, 42], ids=["seed0", "seed7", "seed42"])
+def gen_and_rivers_mouths(request):
+    return _make_gen_and_rivers_mouth_test(request.param)
+
+
+def _termination_reason_for_river(river: River, gen: RiverGenerator) -> str:
+    """Look up the trace termination reason for a river by matching its source node."""
+    src = river.source
+    if src is None:
+        return 'unknown_source'
+    face = src.face_id
+    res = gen.resolution
+    u, v = src.uv
+    col = int(round(u * (res - 1)))
+    row = int(round(v * (res - 1)))
+    hw = face * res * res + row * res + col
+    return gen._trace_reasons.get(hw, 'not_found')
+
+
+class TestRiverMouthTermination:
+    """Every river mouth must terminate at the ocean, an endorheic lake, or as
+    a tributary joining a higher-flow river (junction created by resolve_crossings).
+
+    The test is intentionally diagnostic: the error message reports the full
+    category breakdown so the awkward-ending fraction is visible at a glance.
+    """
+
+    def test_rivers_generated(self, gen_and_rivers_mouths):
+        _, rivers = gen_and_rivers_mouths
+        assert len(rivers) > 0, "no rivers generated — mouth tests would be vacuous"
+
+    def test_termination_reason_breakdown(self, gen_and_rivers_mouths):
+        """Diagnostic: show trace-reason and mouth context for unknown-mouth rivers.
+
+        This test always passes — it prints the breakdown so we can see which
+        termination conditions remain and what the mouth positions look like.
+        """
+        gen, rivers = gen_and_rivers_mouths
+        unknown_details: list[str] = []
+        reason_counts: dict[str, int] = {}
+        for river in rivers:
+            cat = _classify_river_mouth(river, rivers, gen)
+            if cat != 'unknown':
+                continue
+            reason = _termination_reason_for_river(river, gen)
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            q = river.mouth.position.astype(np.float64)
+            nearest = int(np.argmin(np.linalg.norm(gen.positions - q[None], axis=1)))
+            near_elev = float(gen.elevations[nearest])
+            ocean_idxs = np.where(gen._ocean_mask)[0]
+            if ocean_idxs.size:
+                min_ocean_d = float(np.min(np.linalg.norm(gen.positions[ocean_idxs] - q[None], axis=1)))
+            else:
+                min_ocean_d = float('inf')
+            min_river_d = min(
+                (_min_chord_dist_to_polyline(q, r) for r in rivers if r is not river),
+                default=float('inf'),
+            )
+            unknown_details.append(
+                f"    trace={reason} near_elev={near_elev:.3f} "
+                f"d_ocean={min_ocean_d:.4f} d_river={min_river_d:.4f}"
+            )
+        if reason_counts:
+            breakdown_str = ', '.join(f'{r}={n}' for r, n in sorted(reason_counts.items()))
+            print(f"\n  Unknown mouths by trace reason: {breakdown_str}")
+            for d in unknown_details[:8]:
+                print(d)
+
+    def test_all_mouths_have_valid_termination(self, gen_and_rivers_mouths):
+        gen, rivers = gen_and_rivers_mouths
+        breakdown: dict[str, list[int]] = {
+            'ocean': [], 'lake': [], 'junction': [], 'unknown': [],
+        }
+        for i, river in enumerate(rivers):
+            cat = _classify_river_mouth(river, rivers, gen)
+            breakdown[cat].append(i)
+
+        unknown = breakdown['unknown']
+        assert not unknown, (
+            f"{len(unknown)}/{len(rivers)} river(s) have unclassified mouth termination "
+            f"(not ocean, lake, or junction). "
+            f"ocean={len(breakdown['ocean'])}, "
+            f"lake={len(breakdown['lake'])}, "
+            f"junction={len(breakdown['junction'])}, "
+            f"unknown={len(unknown)}. "
+            f"Unknown river indices: {unknown[:10]}"
+        )
