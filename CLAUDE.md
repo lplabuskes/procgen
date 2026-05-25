@@ -40,13 +40,13 @@ python3 scripts/measure_seam_quality.py --pre-noise 42  # base texture before no
 `scripts/measure_seam_quality.py` — reports mean / median / RMS / max elevation jump (in metres) across all ~350 k matched boundary pixel pairs per seed. Used to quantify face-seam discontinuities in the elevation texture pipeline. The underlying function is `measure_boundary_elevation_jumps` in `worldgen/geology/elevation.py`.
 
 ```bash
-python3 scripts/measure_tropical_biome.py              # default seeds 42, 137, 999
-python3 scripts/measure_tropical_biome.py 1 2 3        # specific seeds
-python3 scripts/measure_tropical_biome.py --random 5   # N random seeds
-python3 scripts/measure_tropical_biome.py --detail     # include per-seed biome breakdown
+python3 scripts/measure_zone_biomes.py              # default seeds 42, 137, 999
+python3 scripts/measure_zone_biomes.py 1 2 3        # specific seeds
+python3 scripts/measure_zone_biomes.py --random 5   # N random seeds
+python3 scripts/measure_zone_biomes.py --detail     # include per-seed biome breakdown
 ```
 
-`scripts/measure_tropical_biome.py` — reports the fraction of tropical-latitude land classified as Tropical biome, compared against Earth reference values (~9% of global land, ~30% of ±23.5° land, ~22% of ±30° land). Runs elevation + climate (no hydrology). Results are appended to `scripts/results/tropical_biome_results.json` and a human-readable summary is regenerated at `scripts/results/tropical_biome_results.md` for longitudinal comparison across parameter tuning sessions.
+`scripts/measure_zone_biomes.py` — reports Tropical, Savannah, and Desert biome fractions within tropical latitudes, compared against Earth reference values (~30% of ±23.5° land tropical, ~22% of ±30° land tropical, ~20% savannah, ~18% hot desert). Runs elevation + climate (no hydrology). Results are appended to `scripts/results/zone_biome_results.json` and a human-readable summary is regenerated at `scripts/results/zone_biome_results.md` for longitudinal comparison across parameter tuning sessions.
 
 ## Architecture
 
