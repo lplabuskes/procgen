@@ -57,6 +57,7 @@ class RiverGenerator:
         min_lake_pixels: int = 50,
         smoothing_iterations: int = 8,
         smoothing_alpha: float = 0.5,
+        precipitation_textures: np.ndarray | None = None,
     ) -> None:
         """
         Args:
@@ -74,6 +75,10 @@ class RiverGenerator:
             smoothing_iterations: Laplacian smoothing passes per river polyline.
             smoothing_alpha: Per-iteration pull strength toward neighbour midpoint
                 in [0, 1]. Larger values smooth more aggressively per pass.
+            precipitation_textures: Optional `(N, H, W, K)` float32 mm/season.
+                When provided, each node's initial flow contribution is scaled by
+                its annual precipitation divided by the global mean, so wetter
+                pixels source more runoff than drier ones.
         """
         if elevation_textures.ndim == 4:
             elev = elevation_textures[:, :, :, 0]
@@ -109,6 +114,14 @@ class RiverGenerator:
         # Per-node flat arrays.
         self.elevations: np.ndarray = elev.astype(np.float32).reshape(-1)
         self.positions: np.ndarray = mesh.face_texture_positions(h, h).reshape(-1, 3)
+
+        if precipitation_textures is not None:
+            annual = precipitation_textures.sum(axis=-1).astype(np.float32)  # (N, H, W)
+            flat = annual.reshape(-1)
+            mean = float(flat.mean())
+            self._precip_weights: np.ndarray | None = flat / max(mean, 1e-6)
+        else:
+            self._precip_weights = None
 
         # Cache per-face tangent frame data for sub-pixel walks.
         frames = mesh.face_tangent_frames()
@@ -511,7 +524,10 @@ class RiverGenerator:
     ) -> np.ndarray:
         """Multi-receiver accumulation in `eff`-descending order."""
         n = self.n_nodes
-        flow_accum = np.ones(n, dtype=np.float32)
+        if self._precip_weights is not None:
+            flow_accum = self._precip_weights.copy()
+        else:
+            flow_accum = np.ones(n, dtype=np.float32)
         order = np.argsort(-eff)
         for key in order.tolist():
             r1 = int(receiver1[key])

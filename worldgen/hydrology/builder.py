@@ -60,12 +60,14 @@ class HydrologyBuilder:
                 progress(msg)
 
         _report("Computing rivers and lakes…")
+        precip_tex = mesh.face_textures.get("precipitation")
         river_gen = RiverGenerator(
             mesh,
             elevation_textures,
             min_flow=self.params.river_flow_threshold,
             sea_level=0.0,
             min_lake_pixels=self.params.min_lake_pixels,
+            precipitation_textures=precip_tex,
         )
         self.rivers = river_gen.generate()
         self.lake_polygons = river_gen.get_lake_polygons()
