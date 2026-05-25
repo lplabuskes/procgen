@@ -19,15 +19,18 @@ from worldgen.climate.insolation import (
     face_latitudes,
     seasonal_insolation,
 )
-from worldgen.climate.precipitation import (
-    per_pixel_precipitation,
-    surface_precipitation,
+from worldgen.climate.humidity import (
+    advect_moisture,
+    evaporation_source,
+    per_pixel_humidity,
+    smooth_humidity,
 )
+from worldgen.climate.precipitation import per_pixel_precipitation
 from worldgen.climate.temperature import (
     per_pixel_temperatures,
     surface_temperatures,
 )
-from worldgen.climate.winds import SEASON_PHASES, pressure_winds, zonal_winds
+from worldgen.climate.winds import pressure_winds, zonal_winds
 from worldgen.mesh.mymesh import PolygonMesh
 
 
@@ -69,12 +72,13 @@ class WindParams:
 
 @dataclass
 class PrecipitationParams:
-    itcz_mm_annual: float = _f(4000.0, label="ITCZ baseline (mm/yr)", min=0.0, max=5000.0)
-    horse_mm_annual: float = _f(250.0, label="Horse latitudes (mm/yr)", min=0.0, max=2000.0)
-    midlat_mm_annual: float = _f(900.0, label="Mid-latitude (mm/yr)", min=0.0, max=3000.0)
-    polar_mm_annual: float = _f(200.0, label="Polar (mm/yr)", min=0.0, max=2000.0)
+    evaporation_scale: float = _f(1.0, label="Evaporation scale", min=0.1, max=5.0)
+    precipitation_scale: float = _f(2000.0, label="Precipitation scale (mm/yr)", min=100.0, max=10000.0)
+    moisture_advection_iter: int = _f(200, label="Moisture transport steps", min=50, max=600)
+    moisture_decay_rate: float = _f(0.025, label="Moisture decay rate", min=0.005, max=0.2)
     orographic_k: float = _f(0.4, label="Orographic K", min=0.0, max=2.0)
-    continentality_decay_km: float = _f(3000.0, label="Continentality decay (km)", min=100.0, max=5000.0)
+    humidity_smoothing_passes: int = _f(10, label="Humidity smoothing passes", min=0, max=30, hidden=True)
+    humidity_smoothing_alpha: float = _f(0.4, label="Humidity smoothing α", min=0.0, max=1.0, hidden=True)
 
 
 @dataclass
@@ -137,24 +141,6 @@ def _distance_to_coast_km(mesh: PolygonMesh, face_elev_km: np.ndarray,
     return dist.astype(np.float32)
 
 
-def _face_elevation_gradient(mesh: PolygonMesh,
-                             face_elev_km: np.ndarray) -> np.ndarray:
-    """Least-squares 3-D elevation gradient (km/km) projected onto each face's tangent plane."""
-    n = len(mesh.faces)
-    centroids = mesh.face_centroids.astype(np.float64)
-    grad = np.zeros((n, 3), dtype=np.float64)
-    for i in range(n):
-        neighbours = mesh.face_adjacency[i]
-        if not neighbours:
-            continue
-        nbrs = np.asarray(neighbours, dtype=np.int64)
-        delta_pos = (centroids[nbrs] - centroids[i]) * EARTH_RADIUS_KM      # (k, 3) km
-        delta_h = face_elev_km[nbrs] - face_elev_km[i]                       # (k,) km
-        g, *_ = np.linalg.lstsq(delta_pos, delta_h, rcond=None)
-        n_hat = centroids[i]
-        grad[i] = g - (g @ n_hat) * n_hat
-    return grad.astype(np.float64)
-
 
 def _dominant_biome_per_face(biome_tex: np.ndarray) -> np.ndarray:
     """Mode of the (N, H, W, 1) uint8 biome texture over each face."""
@@ -188,6 +174,7 @@ class ClimateBuilder:
         self.distance_to_coast: Optional[np.ndarray] = None      # (N,) km
         self.temperature_face: Optional[np.ndarray] = None       # (N, K) °C
         self.precipitation_face: Optional[np.ndarray] = None     # (N, K) mm/season
+        self.humidity_face: Optional[np.ndarray] = None          # (N, K) dimensionless q_air
         self.winds: Optional[np.ndarray] = None                  # (N, K, 3) m/s
         self.currents: Optional[CurrentsResult] = None           # populated when params.currents.enabled
 
@@ -248,21 +235,19 @@ class ClimateBuilder:
             earth_radius_km=EARTH_RADIUS_KM,
         )
 
-        _report("Computing precipitation…")
-        face_grad = _face_elevation_gradient(mesh, face_elev)
-        p_face = surface_precipitation(
-            latitudes_rad,
+        _report("Computing atmospheric moisture transport…")
+        evap = evaporation_source(t_face, face_elev, pp.evaporation_scale)
+        q_air = advect_moisture(
+            evap,
+            mesh.face_centroids.astype(np.float64),
+            mesh.face_adjacency,
             winds.astype(np.float64),
-            face_grad,
-            dist_coast.astype(np.float64),
-            itcz_mm_annual=pp.itcz_mm_annual,
-            horse_mm_annual=pp.horse_mm_annual,
-            midlat_mm_annual=pp.midlat_mm_annual,
-            polar_mm_annual=pp.polar_mm_annual,
-            orographic_k=pp.orographic_k,
-            continentality_decay_km=pp.continentality_decay_km,
-            itcz_shift_deg=wp.itcz_shift_deg,
+            n_iter=pp.moisture_advection_iter,
+            decay_rate=pp.moisture_decay_rate,
         )
+        q_air = smooth_humidity(q_air, mesh.face_adjacency,
+                                n_passes=pp.humidity_smoothing_passes,
+                                alpha=pp.humidity_smoothing_alpha)
 
         currents_result: Optional[CurrentsResult] = None
         if cp.enabled:
@@ -298,20 +283,19 @@ class ClimateBuilder:
                 inertia_distance_km=tp.inertia_distance_km,
                 coastal_current_temp_delta=temp_delta,
             )
-            p_face = surface_precipitation(
-                latitudes_rad,
+            # Second-pass humidity: updated SST → more evaporation from warm currents.
+            evap = evaporation_source(t_face, face_elev, pp.evaporation_scale)
+            q_air = advect_moisture(
+                evap,
+                mesh.face_centroids.astype(np.float64),
+                mesh.face_adjacency,
                 winds.astype(np.float64),
-                face_grad,
-                dist_coast.astype(np.float64),
-                itcz_mm_annual=pp.itcz_mm_annual,
-                horse_mm_annual=pp.horse_mm_annual,
-                midlat_mm_annual=pp.midlat_mm_annual,
-                polar_mm_annual=pp.polar_mm_annual,
-                orographic_k=pp.orographic_k,
-                continentality_decay_km=pp.continentality_decay_km,
-                itcz_shift_deg=wp.itcz_shift_deg,
-                current_wet_delta=wet_delta,
+                n_iter=pp.moisture_advection_iter,
+                decay_rate=pp.moisture_decay_rate,
             )
+            q_air = smooth_humidity(q_air, mesh.face_adjacency,
+                                    n_passes=pp.humidity_smoothing_passes,
+                                    alpha=pp.humidity_smoothing_alpha)
 
         _report("Rasterising temperature texture…")
         elev_pixel = elev_tex.astype(np.float64)                                # (N, H, W) km
@@ -319,10 +303,20 @@ class ClimateBuilder:
             t_face, face_elev, elev_pixel, tp.lapse_rate_c_per_km
         )                                                                       # (N, H, W, K)
 
+        n_h, n_w = elev_tex.shape[1], elev_tex.shape[2]
+        _report("Rasterising humidity texture…")
+        pixel_pos = mesh.face_texture_positions(n_h, n_w)
+        h_pixel = per_pixel_humidity(
+            q_air.astype(np.float32), pixel_pos, mesh.face_centroids, mesh.face_adjacency
+        )                                                                       # (N, H, W, K)
+        if currents_result is not None:
+            wet_delta = currents_result.precipitation_delta[:, None, None, None].astype(np.float32)
+            h_pixel = h_pixel * (1.0 + wet_delta)
+
         _report("Rasterising precipitation texture…")
         u_axes, v_axes, _, _, u_ranges, v_ranges, _ = mesh.face_tangent_frames()
         p_pixel = per_pixel_precipitation(
-            p_face,
+            h_pixel,
             winds,
             u_axes.astype(np.float64),
             v_axes.astype(np.float64),
@@ -330,6 +324,7 @@ class ClimateBuilder:
             v_ranges.astype(np.float64) * EARTH_RADIUS_KM,
             elev_pixel,
             orographic_k=pp.orographic_k,
+            precipitation_scale=pp.precipitation_scale,
         )                                                                       # (N, H, W, K)
 
         _report("Classifying biomes…")
@@ -341,9 +336,11 @@ class ClimateBuilder:
 
         mesh.set_face_textures("temperature", t_pixel, n_channels=N_SEASONS)
         mesh.set_face_textures("precipitation", p_pixel, n_channels=N_SEASONS)
+        mesh.set_face_textures("humidity", h_pixel, n_channels=N_SEASONS)
         mesh.set_face_textures("biome", biome_tex, n_channels=1)
 
-        # Per-face metadata aggregates.
+        # Per-face metadata aggregates — p_face derived from pixel averages for consistency.
+        p_face = p_pixel.mean(axis=(1, 2))                                      # (N, K) mm/season
         t_annual = t_face.mean(axis=1)
         t_warmest = t_face.max(axis=1)
         t_coldest = t_face.min(axis=1)
@@ -359,16 +356,17 @@ class ClimateBuilder:
         mesh.apply_metadata_channel("precipitation_seasonality", p_seasonality.tolist())
         mesh.apply_metadata_channel("biome", [int(b) for b in biome_face])
         mesh.apply_metadata_channel("distance_to_coast", dist_coast.tolist())
+        mesh.apply_metadata_channel("humidity_annual", q_air.mean(axis=1).tolist())
 
         self.insolation = insolation
         self.distance_to_coast = dist_coast
         self.temperature_face = t_face
         self.precipitation_face = p_face
+        self.humidity_face = q_air
         self.winds = winds
         self.currents = currents_result
 
         _report("Climate done.")
 
 
-# Silence the unused-import warning while keeping the constant accessible.
-_ = (SEASON_PHASES, default_biome)
+_ = default_biome  # keep accessible for downstream imports

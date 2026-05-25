@@ -22,6 +22,7 @@ from worldgen.climate.display import (
     build_biome_display_texture,
     build_precipitation_display_texture,
     build_temperature_display_texture,
+    humidity_color,
     precipitation_color,
     precipitation_legend_entries,
     temperature_color,
@@ -195,6 +196,7 @@ class GlobeBuilder:
                 schemes["Summer Temperature"] = lambda meta: temperature_color(meta, key="temperature_warmest")
                 schemes["Winter Temperature"] = lambda meta: temperature_color(meta, key="temperature_coldest")
                 schemes["Annual Precipitation"] = precipitation_color
+                schemes["Humidity"] = humidity_color
 
         window.set_color_schemes(schemes)
         window.associate_scheme_texture("Elevation", "elevation_rgba")

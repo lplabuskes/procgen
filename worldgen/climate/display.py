@@ -63,6 +63,18 @@ def _interp_stops(values: np.ndarray, stops) -> np.ndarray:
     return result
 
 
+# Humidity sequential palette: arid tan → moist blue-green.
+# Anchors are in dimensionless q_air units (evaporation_scale=1 gives
+# source values ~[0.3, 1.0]; ITCZ convergence can reach ~2.0).
+_HUMIDITY_STOPS = [
+    (0.05, (0.95, 0.90, 0.65, 1.0)),
+    (0.3,  (0.80, 0.75, 0.45, 1.0)),
+    (0.7,  (0.50, 0.78, 0.45, 1.0)),
+    (1.2,  (0.20, 0.60, 0.65, 1.0)),
+    (1.8,  (0.10, 0.30, 0.65, 1.0)),
+]
+
+
 def _is_ocean_face(meta: dict) -> bool:
     return float(meta.get("elevation", 0.0)) < 0.0
 
@@ -82,6 +94,14 @@ def precipitation_color(meta: dict) -> tuple:
     p = max(float(meta.get("precipitation_annual", 0.0)), 1.0)
     log_stops = [(np.log10(a), c) for a, c in _PRECIP_STOPS_MM]
     return tuple(_interp_stops(np.array(np.log10(p), dtype=np.float32), log_stops).tolist())
+
+
+def humidity_color(meta: dict) -> tuple:
+    """Per-face annual mean humidity color scheme."""
+    if _is_ocean_face(meta):
+        return OCEAN_COLOR
+    h = float(meta.get("humidity_annual", 0.0))
+    return tuple(_interp_stops(np.array(h, dtype=np.float32), _HUMIDITY_STOPS).tolist())
 
 
 def biome_color(meta: dict) -> tuple:
