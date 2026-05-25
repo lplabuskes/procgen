@@ -204,9 +204,10 @@ def _save_history(history: list) -> None:
 def _params_summary(cp: ClimateParams) -> str:
     p = cp.precipitation
     return (
-        f"itcz={p.itcz_mm_annual:.0f}mm "
-        f"decay={p.continentality_decay_km:.0f}km "
-        f"horse={p.horse_mm_annual:.0f}mm"
+        f"scale={p.precipitation_scale:.0f}mm "
+        f"decay={p.moisture_decay_rate:.3f} "
+        f"evap={p.evaporation_scale:.2f} "
+        f"oro_k={p.orographic_k:.2f}"
     )
 
 

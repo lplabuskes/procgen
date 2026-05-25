@@ -75,7 +75,7 @@ class PrecipitationParams:
     evaporation_scale: float = _f(1.0, label="Evaporation scale", min=0.1, max=5.0)
     precipitation_scale: float = _f(2000.0, label="Precipitation scale (mm/yr)", min=100.0, max=10000.0)
     moisture_advection_iter: int = _f(200, label="Moisture transport steps", min=50, max=600)
-    moisture_decay_rate: float = _f(0.025, label="Moisture decay rate", min=0.005, max=0.2)
+    moisture_decay_rate: float = _f(0.03, label="Moisture decay rate", min=0.005, max=0.2)
     orographic_k: float = _f(0.4, label="Orographic K", min=0.0, max=2.0)
     humidity_smoothing_passes: int = _f(10, label="Humidity smoothing passes", min=0, max=30, hidden=True)
     humidity_smoothing_alpha: float = _f(0.4, label="Humidity smoothing α", min=0.0, max=1.0, hidden=True)

@@ -36,15 +36,15 @@ def default_biome(temperature_c: np.ndarray,
         return 1  # Tundra
     if t_coldest < -10.0:
         return 2  # Taiga
-    if p_annual < 250.0 and t_warmest > 18.0:
+    if p_annual < 300.0 and t_warmest > 18.0:
         return 8  # Desert
     if p_annual < 500.0 and t_warmest > 18.0:
         return 7  # Semi-Arid
     if p_annual < 400.0:
         return 4  # Steppe
-    if t_warmest > 22.0 and p_annual > 1500.0 and p_seasonality < 0.4:
+    if t_warmest > 22.0 and p_annual > 750.0 and p_seasonality < 0.50:
         return 6  # Tropical
-    if t_warmest > 22.0 and p_seasonality >= 0.4:
+    if t_warmest > 21.0 and p_annual > 350.0:
         return 5  # Savannah
     return 3      # Temperate
 
@@ -90,11 +90,11 @@ def classify_textures(temperature_tex: np.ndarray,
     _assign(t_warmest < 0.0, 0)                                          # Icecap
     _assign(t_warmest < 10.0, 1)                                          # Tundra
     _assign(t_coldest < -10.0, 2)                                         # Taiga
-    _assign((p_annual < 250.0) & (t_warmest > 18.0), 8)                   # Desert
+    _assign((p_annual < 300.0) & (t_warmest > 18.0), 8)                   # Desert
     _assign((p_annual < 500.0) & (t_warmest > 18.0), 7)                   # Semi-Arid
     _assign(p_annual < 400.0, 4)                                          # Steppe
-    _assign((t_warmest > 22.0) & (p_annual > 1500.0) & (p_seasonality < 0.4), 6)  # Tropical
-    _assign((t_warmest > 22.0) & (p_seasonality >= 0.4), 5)                # Savannah
+    _assign((t_warmest > 22.0) & (p_annual > 750.0) & (p_seasonality < 0.50), 6)  # Tropical
+    _assign((t_warmest > 21.0) & (p_annual > 350.0), 5)                           # Savannah
     # Fallthrough already initialised to Temperate (3).
 
     return biome[..., None]
