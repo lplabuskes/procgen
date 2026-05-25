@@ -2,10 +2,12 @@ import numpy as np
 import pytest
 
 from worldgen.geology.elevation import (
+    _iter_boundary_pixel_pairs,
     compute_elevation_textures,
     compute_noise_elevation_deltas,
     face_elevations_from_texture,
 )
+from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams
 from worldgen.mesh.mymesh import Mesh
 
 
@@ -294,3 +296,98 @@ class TestElevationTextureContinuity:
         assert max_diff < self.EDGE_TOL_KM, (
             f"elevation mismatch along shared edge: {max_diff:.4f} km at {worst}"
         )
+
+
+class _UnionFind:
+    def __init__(self, n: int):
+        self.parent = list(range(n))
+        self.rank = [0] * n
+
+    def find(self, x: int) -> int:
+        while self.parent[x] != x:
+            self.parent[x] = self.parent[self.parent[x]]
+            x = self.parent[x]
+        return x
+
+    def union(self, a: int, b: int) -> None:
+        ra, rb = self.find(a), self.find(b)
+        if ra == rb:
+            return
+        if self.rank[ra] < self.rank[rb]:
+            ra, rb = rb, ra
+        self.parent[rb] = ra
+        if self.rank[ra] == self.rank[rb]:
+            self.rank[ra] += 1
+
+
+class TestOceanMaskComponents:
+    """Verify every connected component of the ocean mask reaches genuine ocean depth.
+
+    Rationale: the flood-fill in compute_ocean_mask_texture seeds from faces whose
+    max pixel elevation is at or below sea level (0 km). A correctly-functioning
+    mask should therefore contain no spurious component that exists entirely in
+    the [-0.5, 0] km shallow band — every real ocean component must include at
+    least one pixel below -0.5 km. The connectivity used here is independent of
+    the flood-fill implementation: intra-face 4-connectivity plus exact
+    pixel-pixel cross-face matching from _iter_boundary_pixel_pairs.
+    """
+
+    def test_each_component_reaches_deep_ocean(self):
+        params = ElevationParams()
+        params.seed = 72264827
+        builder = ElevationBuilder(params)
+        builder.build()
+
+        mesh = builder.mesh
+        elev = builder.elevation_textures[:, :, :, 0]   # (N, H, W)
+        ocean = builder.ocean_mask[:, :, :, 0] > 0.5     # (N, H, W) bool
+        N, H, W = ocean.shape
+        tex_size = H
+
+        def node_id(f: int, r: int, c: int) -> int:
+            return (f * H + r) * W + c
+
+        uf = _UnionFind(N * H * W)
+
+        # Intra-face 4-connectivity over ocean pixels.
+        ocean_f, ocean_r, ocean_c = np.where(ocean)
+        for f, r, c in zip(ocean_f.tolist(), ocean_r.tolist(), ocean_c.tolist()):
+            if r + 1 < H and ocean[f, r + 1, c]:
+                uf.union(node_id(f, r, c), node_id(f, r + 1, c))
+            if c + 1 < W and ocean[f, r, c + 1]:
+                uf.union(node_id(f, r, c), node_id(f, r, c + 1))
+
+        # Cross-face: exact pixel-pixel partners along shared mesh edges.
+        for fa, fb, ra, ca, rb, cb in _iter_boundary_pixel_pairs(mesh, tex_size):
+            if ocean[fa, ra, ca] and ocean[fb, rb, cb]:
+                uf.union(node_id(fa, ra, ca), node_id(fb, rb, cb))
+
+        # Bucket ocean pixels by component root and track min elevation per root.
+        component_min_elev: dict[int, float] = {}
+        component_size: dict[int, int] = {}
+        component_example: dict[int, tuple[int, int, int]] = {}
+        for f, r, c in zip(ocean_f.tolist(), ocean_r.tolist(), ocean_c.tolist()):
+            root = uf.find(node_id(f, r, c))
+            e = float(elev[f, r, c])
+            if root not in component_min_elev or e < component_min_elev[root]:
+                component_min_elev[root] = e
+                component_example[root] = (f, r, c)
+            component_size[root] = component_size.get(root, 0) + 1
+
+        # Every component must contain at least one pixel below -0.5 km.
+        SEED_ELEVATION = -0.5
+        offenders = [
+            (root, component_min_elev[root], component_size[root], component_example[root])
+            for root in component_min_elev
+            if component_min_elev[root] >= SEED_ELEVATION
+        ]
+        if offenders:
+            lines = [
+                f"{len(offenders)} ocean component(s) never drop below {SEED_ELEVATION} km:"
+            ]
+            for root, min_e, size, (f, r, c) in offenders[:10]:
+                lines.append(
+                    f"  component @ face={f} (r={r},c={c}) size={size} px "
+                    f"min_elev={min_e:.3f} km"
+                )
+            pytest.fail("\n".join(lines))
