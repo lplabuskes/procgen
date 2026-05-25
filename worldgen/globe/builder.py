@@ -211,15 +211,21 @@ class GlobeBuilder:
                 )
                 mesh.set_face_textures(
                     "temperature_summer_rgba",
-                    build_temperature_display_texture(temp_tex, season=1, elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex),
+                    build_temperature_display_texture(
+                        temp_tex, season=1, elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex
+                    ),
                 )
                 mesh.set_face_textures(
                     "temperature_winter_rgba",
-                    build_temperature_display_texture(temp_tex, season=3, elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex),
+                    build_temperature_display_texture(
+                        temp_tex, season=3, elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex
+                    ),
                 )
                 mesh.set_face_textures(
                     "precipitation_rgba",
-                    build_precipitation_display_texture(precip_tex, elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex),
+                    build_precipitation_display_texture(
+                        precip_tex, elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex
+                    ),
                 )
                 schemes["Annual Temperature"] = temperature_color
                 schemes["Summer Temperature"] = lambda meta: temperature_color(meta, key="temperature_warmest")
@@ -249,4 +255,39 @@ class GlobeBuilder:
                 window.add_overlay(f"winds_season_{i}", label=f"Winds — {label}", checked=False)
         if debug and cb.currents is not None:
             window.add_overlay("currents", label="Currents", checked=False)
+
+        if debug:
+            from worldgen.climate.classification import BIOME_NAMES
+
+            def _hover_cb(face_src: Optional[int], uv: Optional[np.ndarray]) -> None:
+                if face_src is None:
+                    window.set_status("")
+                    return
+                meta = mesh.face_metadata[face_src]
+                parts: list[str] = [f"Face {face_src}"]
+                if "elevation" in meta:
+                    parts.append(f"Elev: {meta['elevation']:.2f} km")
+                if "plate_type" in meta:
+                    parts.append(str(meta["plate_type"]))
+                if "boundary_type" in meta:
+                    bt = str(meta["boundary_type"])
+                    if bt != "interior":
+                        parts.append(bt)
+                if "biome" in meta:
+                    parts.append(BIOME_NAMES[int(meta["biome"])])
+                if "temperature_annual" in meta:
+                    parts.append(f"T: {meta['temperature_annual']:.1f}°C")
+                if "precipitation_annual" in meta:
+                    parts.append(f"P: {meta['precipitation_annual']:.0f} mm/yr")
+                if uv is not None and "elevation" in mesh.face_textures:
+                    elev_tex = mesh.face_textures["elevation"]
+                    H_t, W_t = elev_tex.shape[1:3]
+                    tx = int(np.clip(uv[0] * W_t, 0, W_t - 1))
+                    ty = int(np.clip(uv[1] * H_t, 0, H_t - 1))
+                    px_elev = float(elev_tex[face_src, ty, tx, 0])
+                    parts.append(f"[px: {px_elev:.2f} km]")
+                window.set_status("  |  ".join(parts))
+
+            window.set_hover_callback(_hover_cb)
+
         _ = BIOME_PALETTE  # re-exported for downstream consumers

@@ -24,6 +24,40 @@ if TYPE_CHECKING:
     from worldgen.globe.globe import Globe
 
 
+def _pip_polygon(pu: float, pv: float, poly: np.ndarray) -> bool:
+    """Ray-casting point-in-polygon test. poly is (N, 2) in map coordinates."""
+    n = len(poly)
+    inside = False
+    j = n - 1
+    for i in range(n):
+        xi, yi = float(poly[i, 0]), float(poly[i, 1])
+        xj, yj = float(poly[j, 0]), float(poly[j, 1])
+        if ((yi > pv) != (yj > pv)) and pu < (xj - xi) * (pv - yi) / (yj - yi) + xi:
+            inside = not inside
+        j = i
+    return inside
+
+
+def _bary_in_fan(
+    pu: float, pv: float, poly_proj: np.ndarray, uvs: np.ndarray
+) -> Optional[np.ndarray]:
+    """Barycentric UV at (pu, pv) inside a fan-triangulated polygon. Returns None if outside all triangles."""
+    n = len(poly_proj)
+    ax, ay = float(poly_proj[0, 0]), float(poly_proj[0, 1])
+    for k in range(1, n - 1):
+        bx, by = float(poly_proj[k, 0]), float(poly_proj[k, 1])
+        cx, cy = float(poly_proj[k + 1, 0]), float(poly_proj[k + 1, 1])
+        denom = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy)
+        if abs(denom) < 1e-14:
+            continue
+        w0 = ((by - cy) * (pu - cx) + (cx - bx) * (pv - cy)) / denom
+        w1 = ((cy - ay) * (pu - cx) + (ax - cx) * (pv - cy)) / denom
+        w2 = 1.0 - w0 - w1
+        if w0 >= -0.02 and w1 >= -0.02 and w2 >= -0.02:
+            return w0 * uvs[0] + w1 * uvs[k] + w2 * uvs[k + 1]
+    return None
+
+
 def _split_at_antimeridian(face_ecef: np.ndarray, face_uv: Optional[np.ndarray] = None) -> list:
     """
     face_ecef: (N, 3) ECEF unit-sphere vertices of a polygon.
@@ -110,6 +144,8 @@ class MapWidget(QWidget):
 
         # Projected (u, v) polygons, rebuilt on projection change
         self._proj_faces: list[np.ndarray] = []    # each (N, 2)
+        self._face_bbox_min: np.ndarray = np.empty((0, 2), dtype=np.float64)  # (N, 2)
+        self._face_bbox_max: np.ndarray = np.empty((0, 2), dtype=np.float64)  # (N, 2)
 
         self._texture_qimages: dict[int, QImage] = {}  # face_src → QImage, when textured
 
@@ -121,12 +157,15 @@ class MapWidget(QWidget):
         self._overlay_visible: dict[str, bool] = {}
         self._legends: dict[str, tuple[str, list]] = {}  # scheme → (kind, entries)
 
+        self._hover_callback: Optional[Callable[[Optional[int], Optional[np.ndarray]], None]] = None
+
         self._zoom: float = 1.0
         self._center: np.ndarray = np.zeros(2, dtype=np.float64)
         self._drag_start: Optional[tuple[float, float]] = None
         self._drag_start_center: np.ndarray = np.zeros(2, dtype=np.float64)
         self.setFocusPolicy(Qt.FocusPolicy.WheelFocus)
         self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.setMouseTracking(True)
 
     def set_mesh(self, mesh: PolygonMesh) -> None:
         self._mesh = mesh
@@ -180,11 +219,8 @@ class MapWidget(QWidget):
         self._faces_lonlat = []
         self._face_src = []
         self._face_uvs = []
-        if self._scheme_texture_key and self._active_scheme is not None:
-            tex_key = self._scheme_texture_key.get(self._active_scheme)
-            has_textures = tex_key is not None and tex_key in self._mesh.face_textures
-        else:
-            has_textures = bool(self._mesh.face_textures)
+        # Always compute UVs when any textures exist — needed for both rendering and hover hit-testing.
+        has_textures = bool(self._mesh.face_textures)
         vertex_uvs: Optional[list[np.ndarray]] = None
         if has_textures:
             *_, vertex_uvs = self._mesh.face_tangent_frames()
@@ -238,6 +274,12 @@ class MapWidget(QWidget):
         self._proj_faces = [
             self._projection.project_lonlat(poly) for poly in self._faces_lonlat
         ]
+        if self._proj_faces:
+            self._face_bbox_min = np.array([p.min(axis=0) for p in self._proj_faces], dtype=np.float64)
+            self._face_bbox_max = np.array([p.max(axis=0) for p in self._proj_faces], dtype=np.float64)
+        else:
+            self._face_bbox_min = np.empty((0, 2), dtype=np.float64)
+            self._face_bbox_max = np.empty((0, 2), dtype=np.float64)
 
     def paintEvent(self, _) -> None:
         painter = QPainter(self)
@@ -642,18 +684,59 @@ class MapWidget(QWidget):
             self._drag_start_center = self._center.copy()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
 
-    def mouseMoveEvent(self, event) -> None:
-        if self._drag_start is None:
-            return
+    def set_hover_callback(
+        self, cb: Optional[Callable[[Optional[int], Optional[np.ndarray]], None]]
+    ) -> None:
+        self._hover_callback = cb
+
+    def _hit_face(self, mx: float, my: float) -> tuple[Optional[int], Optional[np.ndarray]]:
+        """Return (face_src, face_uv) for the face under screen point (mx, my)."""
+        if not self._proj_faces or self._face_bbox_min.size == 0:
+            return None, None
         W, H = float(self.width()), float(self.height())
-        dx = float(event.position().x()) - self._drag_start[0]
-        dy = float(event.position().y()) - self._drag_start[1]
         scale_x = self._zoom * 0.5 * W
         scale_y = self._zoom * 0.5 * H
-        self._center[0] = self._drag_start_center[0] - dx / scale_x
-        self._center[1] = self._drag_start_center[1] + dy / scale_y
-        self._clamp_center()
-        self.update()
+        cx, cy = self._center[0], self._center[1]
+        mu = (mx - W * 0.5) / scale_x + cx
+        mv = -(my - H * 0.5) / scale_y + cy
+
+        # Bounding-box prefilter (vectorised) before per-polygon PIP test.
+        candidates = np.where(
+            (self._face_bbox_min[:, 0] <= mu) & (self._face_bbox_max[:, 0] >= mu)
+            & (self._face_bbox_min[:, 1] <= mv) & (self._face_bbox_max[:, 1] >= mv)
+        )[0]
+
+        hit_src: Optional[int] = None
+        hit_uv: Optional[np.ndarray] = None
+        for idx in candidates:
+            poly = self._proj_faces[idx]
+            if not _pip_polygon(mu, mv, poly):
+                continue
+            hit_src = self._face_src[idx]
+            if self._face_uvs:
+                hit_uv = _bary_in_fan(mu, mv, poly, self._face_uvs[idx])
+        return hit_src, hit_uv
+
+    def mouseMoveEvent(self, event) -> None:
+        pos = event.position()
+        mx, my = float(pos.x()), float(pos.y())
+        if self._drag_start is not None:
+            W, H = float(self.width()), float(self.height())
+            dx = mx - self._drag_start[0]
+            dy = my - self._drag_start[1]
+            scale_x = self._zoom * 0.5 * W
+            scale_y = self._zoom * 0.5 * H
+            self._center[0] = self._drag_start_center[0] - dx / scale_x
+            self._center[1] = self._drag_start_center[1] + dy / scale_y
+            self._clamp_center()
+            self.update()
+        if self._hover_callback is not None:
+            face_src, uv = self._hit_face(mx, my)
+            self._hover_callback(face_src, uv)
+
+    def leaveEvent(self, event) -> None:
+        if self._hover_callback is not None:
+            self._hover_callback(None, None)
 
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -813,6 +896,11 @@ class MapWindow(QMainWindow):
 
     def register_legend(self, scheme_name: str, kind: str, entries: list) -> None:
         self._map.register_legend(scheme_name, kind, entries)
+
+    def set_hover_callback(
+        self, cb: Optional[Callable[[Optional[int], Optional[np.ndarray]], None]]
+    ) -> None:
+        self._map.set_hover_callback(cb)
 
     def add_overlay(self, name: str, label: Optional[str] = None, checked: bool = True) -> None:
         """Register a named overlay toggle. Safe to call on every re-run (idempotent)."""

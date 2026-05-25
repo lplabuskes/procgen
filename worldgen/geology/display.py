@@ -67,15 +67,21 @@ def _elevation_color(meta: dict) -> tuple:
     return _interp_stops_scalar(e, stops)
 
 
-def elevation_legend_entries() -> list[tuple[str, tuple]]:
-    """Ordered (label, rgba) entries for a land-elevation gradient legend, low→high."""
-    return [
-        ("-0.5 km", _LAND_ELEVATION_STOPS[0][1]),
-        ("0 km",    _LAND_ELEVATION_STOPS[1][1]),
-        ("0.8 km",  _LAND_ELEVATION_STOPS[2][1]),
-        ("2.5 km",  _LAND_ELEVATION_STOPS[3][1]),
-        ("5.5 km",  _LAND_ELEVATION_STOPS[4][1]),
-    ]
+def elevation_legend_entries(n: int = 5) -> list[tuple[str, tuple]]:
+    """Ordered (label, rgba) entries for a land-elevation gradient legend, low→high.
+
+    Entries are evenly spaced in elevation across the full stop range, with
+    colors interpolated from _LAND_ELEVATION_STOPS.
+    """
+    e_min = _LAND_ELEVATION_STOPS[0][0]
+    e_max = _LAND_ELEVATION_STOPS[-1][0]
+    elevations = np.linspace(e_min, e_max, n)
+    entries = []
+    for e in elevations:
+        color = _interp_stops_scalar(e, _LAND_ELEVATION_STOPS)
+        label = f"{e:+.1f} km" if e != 0.0 else "0 km"
+        entries.append((label, color))
+    return entries
 
 
 def _apply_stops_vec(elevs: np.ndarray, stops: list) -> np.ndarray:
