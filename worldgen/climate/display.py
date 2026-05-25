@@ -168,10 +168,3 @@ def build_precipitation_display_texture(precipitation_tex: np.ndarray,
     return _apply_ocean_mask(rgba, elevation_tex)
 
 
-def build_biome_display_texture(biome_tex: np.ndarray,
-                                elevation_tex: np.ndarray | None = None) -> np.ndarray:
-    """Look up (N, H, W, 1) uint8 indices in BIOME_PALETTE → (N, H, W, 4) RGBA."""
-    idx = biome_tex[..., 0].astype(np.int32)
-    idx = np.clip(idx, 0, len(BIOME_PALETTE) - 1)
-    rgba = BIOME_PALETTE[idx].copy()
-    return _apply_ocean_mask(rgba, elevation_tex)

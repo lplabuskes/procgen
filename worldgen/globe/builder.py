@@ -19,7 +19,6 @@ from worldgen.climate.display import (
     BIOME_PALETTE,
     biome_color,
     biome_legend_entries,
-    build_biome_display_texture,
     build_precipitation_display_texture,
     build_temperature_display_texture,
     humidity_color,
@@ -39,6 +38,27 @@ SEASON_LABELS = ["Spring", "Summer", "Autumn", "Winter"]
 def build_elevation_display_texture(mesh) -> np.ndarray:
     elev_tex = mesh.face_textures["elevation"]          # (N, H, W, 1)
     rgba = _elevation_color_vec(elev_tex[:, :, :, 0])   # (N, H, W, 4)
+    if "lake_mask" in mesh.face_textures:
+        lake_tex = mesh.face_textures["lake_mask"]       # (N, H, W, 1)
+        rgba[lake_tex[:, :, :, 0] > 0.5] = LAKE_COLOR
+    return rgba
+
+
+def build_biome_display_texture(mesh) -> np.ndarray:
+    """Look up `"biome"` indices in BIOME_PALETTE → (N, H, W, 4) RGBA.
+
+    Ocean pixels (elevation < 0) are overpainted with OCEAN_COLOR and inland
+    lake pixels are overpainted with LAKE_COLOR, matching the elevation layer
+    so both schemes agree on where water is.
+    """
+    biome_tex = mesh.face_textures["biome"]              # (N, H, W, 1) uint8
+    idx = biome_tex[..., 0].astype(np.int32)
+    idx = np.clip(idx, 0, len(BIOME_PALETTE) - 1)
+    rgba = BIOME_PALETTE[idx].copy()
+    if "elevation" in mesh.face_textures:
+        elev_tex = mesh.face_textures["elevation"]       # (N, H, W, 1)
+        ocean = elev_tex[..., 0] < 0.0
+        rgba[ocean] = np.asarray(OCEAN_COLOR, dtype=rgba.dtype)
     if "lake_mask" in mesh.face_textures:
         lake_tex = mesh.face_textures["lake_mask"]       # (N, H, W, 1)
         rgba[lake_tex[:, :, :, 0] > 0.5] = LAKE_COLOR
@@ -168,11 +188,10 @@ class GlobeBuilder:
             })
 
         if "temperature" in mesh.face_textures:
-            biome_tex = mesh.face_textures["biome"]
             elev_tex = mesh.face_textures["elevation"]
             mesh.set_face_textures(
                 "biome_rgba",
-                build_biome_display_texture(biome_tex, elevation_tex=elev_tex),
+                build_biome_display_texture(mesh),
             )
             schemes["Biome"] = biome_color
 
