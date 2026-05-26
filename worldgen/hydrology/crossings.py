@@ -26,11 +26,7 @@ def crossing_pairs(
     p1_a: np.ndarray, p2_a: np.ndarray,
     p1_b: np.ndarray, p2_b: np.ndarray,
 ) -> List[Tuple[int, int, float, float, np.ndarray]]:
-    """Find all crossing segment pairs between two rivers using vectorized NumPy.
-
-    For each pair (i from river A, j from river B) the great-circle planes
-    intersect at two antipodal candidates; a candidate is a real crossing only
-    if it lies within both arcs. We test both candidates in one broadcast pass.
+    """Vectorized great-circle crossing detection.
 
     Returns list of (si_a, si_b, t_a, t_b, cross_pt).
     """
@@ -71,9 +67,7 @@ def crossing_pairs(
             cp = c[i, j].copy()
             t_a = _arc_param(p1_a[i], p2_a[i], cp)
             t_b = _arc_param(p1_b[j], p2_b[j], cp)
-            # Exclude endpoint touches: t ≈ 0 or t ≈ 1 on either arc means the
-            # candidate is a tributary junction (one river ends at the other),
-            # not a genuine interior crossing that needs truncation.
+            # Exclude endpoint touches (tributary junctions, not crossings).
             if not (1e-3 < t_a < 1 - 1e-3 and 1e-3 < t_b < 1 - 1e-3):
                 continue
             hits.append((i, j, t_a, t_b, cp))
@@ -81,14 +75,10 @@ def crossing_pairs(
 
 
 def resolve_self_crossings(rivers: List[River]) -> List[River]:
-    """Repair rivers that fold back on themselves after Laplacian smoothing.
+    """Remove loops caused by Laplacian smoothing.
 
-    For each river, finds the earliest non-adjacent segment pair (i, j) whose
-    great-circle arcs cross at point C, then excises the loop by reconnecting
-    upstream (segments 0..i up to C) directly to downstream (from C through
-    segments j+1..N), skipping the detour i+1..j.  Applied iteratively until
-    no self-crossings remain; each splice removes at least one segment so
-    iteration always terminates.
+    Finds the earliest crossing, excises the detour by splicing upstream of i
+    to downstream of j at the crossing point. Iterates until none remain.
     """
     result: List[River] = []
     for river in rivers:
@@ -148,16 +138,10 @@ def resolve_self_crossings(rivers: List[River]) -> List[River]:
 
 
 def resolve_crossings(rivers: List[River]) -> List[River]:
-    """Terminate lower-flow rivers at crossing points with higher-flow rivers.
+    """Terminate lower-flow rivers at their crossing point with higher-flow rivers.
 
-    Crossings are processed sequentially in descending order of the lower-flow
-    river's flow rate, so that rivers which serve as terminus targets for other
-    rivers are finalized before those other rivers need to terminate on them.
-
-    Whenever a crossing involves a river that has already been truncated, the
-    pair is re-checked against current geometry: the original recorded crossing
-    point may no longer lie on the (now-shorter) river, so we find the new
-    earliest crossing (if any) before deciding whether to truncate.
+    Processed in descending flow order so terminus targets are finalized first.
+    Already-truncated rivers are re-checked against current geometry.
     """
     if len(rivers) < 2:
         return rivers
@@ -210,9 +194,7 @@ def resolve_crossings(rivers: List[River]) -> List[River]:
     if not all_crossings:
         return rivers
 
-    # Process in descending flow order so higher-flow rivers that act as
-    # terminus targets for others are finalized before the lower-flow rivers
-    # that need to terminate on them.  Ties broken upstream-first.
+    # Descending flow: terminus targets finalized before the rivers that truncate on them.
     all_crossings.sort(key=lambda x: (-x[0], x[1], x[2]))
 
     truncated: set = set()
@@ -222,9 +204,7 @@ def resolve_crossings(rivers: List[River]) -> List[River]:
         if ri_low in dropped:
             continue
 
-        # If either river was modified since initial detection, re-verify the
-        # crossing against current geometry before committing to a truncation.
-        if ri_low in truncated or ri_high in truncated:
+        if ri_low in truncated or ri_high in truncated:  # re-verify against current geometry
             if ri_high in dropped:
                 continue
             lo_low, hi_low = _aabb(ri_low)

@@ -47,13 +47,9 @@ def laplacian_smooth_sphere(
     iterations: int = 8,
     alpha: float = 0.5,
 ) -> List[np.ndarray]:
-    """Approximating Laplacian smoothing on the unit sphere.
+    """Laplacian smoothing on the unit sphere; endpoints pinned.
 
-    Each interior point is pulled toward the midpoint of its two neighbours by
-    `alpha`, then re-projected to the sphere. Endpoints (source and mouth) are
-    pinned. Unlike an interpolating spline (Catmull-Rom), this displaces the
-    control points themselves, so grid-aligned staircases and sharp corners
-    are flattened out.
+    Interior points pulled toward neighbour midpoint by alpha and re-projected each iteration.
     """
     if len(polyline) < 3:
         return [p.astype(np.float32, copy=True) for p in polyline]

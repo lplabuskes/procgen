@@ -50,14 +50,7 @@ class HydrologyBuilder:
         elevation_textures: np.ndarray,
         progress: Optional[Callable[[str], None]] = None,
     ) -> None:
-        """Run the hydrology pipeline and attach results to the mesh.
-
-        Args:
-            mesh: The dual polygon mesh from the elevation stage.
-            elevation_textures: Single-channel (N, H, W, 1) float32 elevation
-                texture from the elevation stage; channel 0 = elevation in km.
-            progress: Optional callback for status messages.
-        """
+        """Run the hydrology pipeline and attach results to the mesh."""
         def _report(msg: str) -> None:
             if progress is not None:
                 progress(msg)
