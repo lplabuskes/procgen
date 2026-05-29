@@ -314,7 +314,8 @@ class RiverGenerator:
         rivers: List[River] = []
         for hw in headwaters:
             river = self._trace_river_subpixel(int(hw), flow_accum)
-            if river is not None and len(river.segments) > 2:
+            if (river is not None and len(river.segments) > 2
+                    and self._trace_reasons.get(int(hw)) != 'loop'):
                 rivers.append(river)
         return rivers
 
