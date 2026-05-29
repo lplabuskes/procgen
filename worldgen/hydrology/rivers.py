@@ -23,7 +23,6 @@ from worldgen.hydrology.types import (
     River,
     RiverNode,
     RiverSegment,
-    laplacian_smooth_sphere,
 )
 from worldgen.mesh.mymesh import PolygonMesh
 
@@ -41,8 +40,6 @@ class RiverGenerator:
         min_flow: float = 50.0,
         sea_level: float = 0.0,
         min_lake_pixels: int = 50,
-        smoothing_iterations: int = 8,
-        smoothing_alpha: float = 0.5,
         precipitation_textures: np.ndarray | None = None,
         temperature_textures: np.ndarray | None = None,
         pet_baseline_mm_yr: float = 100.0,
@@ -78,8 +75,6 @@ class RiverGenerator:
         self.min_flow = min_flow
         self.sea_level = sea_level
         self.min_lake_pixels = min_lake_pixels
-        self.smoothing_iterations = smoothing_iterations
-        self.smoothing_alpha = smoothing_alpha
 
         # Per-node flat arrays.
         self.elevations: np.ndarray = elev.astype(np.float32).reshape(-1)
@@ -113,6 +108,8 @@ class RiverGenerator:
         # Populated by compute_flow / water-balance shrinking.
         self._lake_mask_full: np.ndarray = np.zeros(self.n_nodes, dtype=bool)
         self._endorheic_mask: np.ndarray = np.zeros(self.n_nodes, dtype=bool)
+        self._flat_mask: np.ndarray = np.zeros(self.n_nodes, dtype=bool)  # all raised land, any size
+        self._lake_outlet_pos: np.ndarray | None = None  # (n_nodes, 3), NaN for non-flat nodes
 
         # Cache per-face tangent frame data for sub-pixel walks.
         frames = mesh.face_tangent_frames()
@@ -199,6 +196,7 @@ class RiverGenerator:
         )
         accum = accumulate_flow(r1, r2, f1, f2, eff, self._precip_weights)
         self._shrink_endorheic_lakes(accum)
+        self._build_lake_outlets(accum)
         return r1, r2, f1, f2, ang, accum
 
     def _shrink_endorheic_lakes(self, flow_accum: np.ndarray) -> None:
@@ -253,6 +251,25 @@ class RiverGenerator:
         for comp in find_connected_components(raw, self._neighbors, self.n_nodes, min_size=self.min_lake_pixels):
             mask[np.array(comp)] = True
         return mask
+
+    def _build_lake_outlets(self, flow_accum: np.ndarray) -> None:
+        """For each flat filled region (all Priority-Flood-raised land, any size), find the outlet
+        (highest-flow boundary node) and store its 3D position for every node in that region.
+        Used to steer river traces through flat areas regardless of whether they are large enough
+        to render as lakes."""
+        self._lake_outlet_pos = np.full((self.n_nodes, 3), np.nan, dtype=np.float64)
+        all_flat = self._was_raised & ~self._ocean_mask
+        self._flat_mask: np.ndarray = all_flat  # all raised land, any size
+        if not all_flat.any():
+            return
+        for comp in find_connected_components(all_flat, self._neighbors, self.n_nodes, min_size=1):
+            comp_set = set(comp)
+            boundary = [n for n in comp if any(nb not in comp_set for nb in self._neighbors(n))]
+            if not boundary:
+                boundary = comp
+            outlet = max(boundary, key=lambda n: flow_accum[n])
+            outlet_pos = self.positions[outlet].astype(np.float64)
+            self._lake_outlet_pos[np.array(comp)] = outlet_pos
 
     # ------------------------------------------------------------------
     # River extraction (sub-pixel walk)
@@ -344,9 +361,35 @@ class RiverGenerator:
         loop_check_start = 4
         for step in range(max_steps):
             ang = self._gradient_angle_at(current_face, u, v)
+
+            # Compute outlet pull when inside a (non-endorheic) lake flat.
+            outlet_du, outlet_dv = 0.0, 0.0
+            has_outlet_dir = False
+            if self._lake_outlet_pos is not None:
+                cur_row = int(round(v * n_minus_1))
+                cur_col = int(round(u * n_minus_1))
+                cur_node = self._node_idx(current_face, cur_row, cur_col)
+                if self._flat_mask[cur_node] and not self._endorheic_mask[cur_node]:
+                    outlet_xyz = self._lake_outlet_pos[cur_node]
+                    if not np.any(np.isnan(outlet_xyz)):
+                        delta = outlet_xyz - current_pos
+                        od_u = float(delta @ self._u_axes[current_face])
+                        od_v = float(delta @ self._v_axes[current_face])
+                        omag = (od_u * od_u + od_v * od_v) ** 0.5
+                        if omag > 1e-12:
+                            outlet_du = od_u / omag
+                            outlet_dv = od_v / omag
+                            has_outlet_dir = True
+
             if np.isfinite(ang):
                 du = float(np.cos(ang))
                 dv = float(np.sin(ang))
+                if has_outlet_dir:
+                    # Blend gradient with outlet pull; lake surface is nearly flat so
+                    # gradient is unreliable — outlet direction dominates.
+                    lake_bias = 0.7
+                    du = (1.0 - lake_bias) * du + lake_bias * outlet_du
+                    dv = (1.0 - lake_bias) * dv + lake_bias * outlet_dv
                 if has_prev:
                     du = (1.0 - momentum) * du + momentum * prev_du
                     dv = (1.0 - momentum) * dv + momentum * prev_dv
@@ -356,8 +399,22 @@ class RiverGenerator:
                         break
                     du /= mag
                     dv /= mag
+            elif has_outlet_dir:
+                # Flat lake with no gradient: steer toward outlet, blend lightly with momentum.
+                lake_bias = 0.85
+                if has_prev:
+                    du = lake_bias * outlet_du + (1.0 - lake_bias) * prev_du
+                    dv = lake_bias * outlet_dv + (1.0 - lake_bias) * prev_dv
+                    mag = (du * du + dv * dv) ** 0.5
+                    if mag > 1e-12:
+                        du /= mag
+                        dv /= mag
+                    else:
+                        du, dv = outlet_du, outlet_dv
+                else:
+                    du, dv = outlet_du, outlet_dv
             elif has_prev:
-                # No gradient (flat or boundary glitch) — coast on momentum.
+                # No gradient, no outlet (boundary glitch) — coast on momentum.
                 du = prev_du
                 dv = prev_dv
             else:
@@ -457,6 +514,7 @@ class RiverGenerator:
                 reason = 'ocean'
                 terminated_at_sea = True
                 break
+            current_pos = new_pos
             # Don't threshold on flow_accum mid-trace; D-inf accum can dip at branch points.
             recent_positions.append(new_pos)
             if len(recent_positions) > stall_window:
@@ -554,16 +612,6 @@ class RiverGenerator:
     def generate(self) -> List[River]:
         r1, r2, f1, f2, _ang, accum = self.compute_flow()
         rivers = self.extract_rivers(r1, r2, f1, f2, accum)
-        for river in rivers:
-            raw = river.as_polyline()
-            if len(raw) < 2:
-                continue
-            smoothed = laplacian_smooth_sphere(
-                raw, self.smoothing_iterations, self.smoothing_alpha
-            )
-            for i, seg in enumerate(river.segments):
-                seg.start.position = smoothed[i]
-                seg.end.position = smoothed[i + 1]
         rivers = resolve_self_crossings(rivers)
         rivers = resolve_crossings(rivers)
         return rivers
