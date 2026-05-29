@@ -105,6 +105,10 @@ class GlobeBuilder:
         elevation_textures = mesh.face_textures["elevation"]  # (N, H, W, 1)
         self.climate_builder.build(mesh, elevation_textures, progress=progress)
         self.hydrology_builder.build(mesh, elevation_textures, progress=progress)
+        if "lake_mask" in mesh.face_textures:
+            self.climate_builder.apply_lake_humidity_feedback(
+                mesh, mesh.face_textures["lake_mask"], progress=progress
+            )
 
         globe = Globe(mesh=mesh)
         hb = self.hydrology_builder

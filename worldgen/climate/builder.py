@@ -79,6 +79,8 @@ class PrecipitationParams:
     orographic_k: float = _f(0.4, label="Orographic K", min=0.0, max=2.0)
     humidity_smoothing_passes: int = _f(10, label="Humidity smoothing passes", min=0, max=30, hidden=True)
     humidity_smoothing_alpha: float = _f(0.4, label="Humidity smoothing α", min=0.0, max=1.0, hidden=True)
+    lake_evap_scale: float = _f(1.0, label="Lake evap scale", min=0.0, max=5.0, hidden=True)
+    lake_feedback_iter: int = _f(100, label="Lake feedback steps", min=0, max=600, hidden=True)
 
 
 @dataclass
@@ -373,6 +375,114 @@ class ClimateBuilder:
         self.currents = currents_result
 
         _report("Climate done.")
+
+    def apply_lake_humidity_feedback(
+        self,
+        mesh: PolygonMesh,
+        lake_mask_tex: np.ndarray,
+        progress: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        """Add lake evaporation as an extra moisture source, then refresh precipitation and biomes.
+
+        Lakes are open-water evaporation sources proportional to their area and
+        temperature. This single correction pass approximates the hydrology→climate
+        feedback without re-running the full pipeline.
+
+        Call after build() and after HydrologyBuilder.build() has attached the
+        lake_mask texture to the mesh.
+        """
+        assert self.humidity_face is not None, "ClimateBuilder.build() must be called first"
+        pp = self.params.precipitation
+
+        if pp.lake_feedback_iter <= 0 or pp.lake_evap_scale <= 0.0:
+            return
+
+        # Per-face lake area fraction.
+        lake_frac = lake_mask_tex[:, :, :, 0].mean(axis=(1, 2)).astype(np.float32)  # (N,)
+        if lake_frac.max() < 1e-6:
+            return
+
+        def _report(msg: str) -> None:
+            if progress is not None:
+                progress(msg)
+
+        _report("Applying lake humidity feedback…")
+
+        # Lake evaporation: same SST-driven formula as ocean, scaled by lake area fraction.
+        t_factor = np.clip(
+            (self.temperature_face.astype(np.float32) + 25.0) / 52.0, 0.0, 1.0
+        )                                                              # (N, K)
+        lake_evap = (
+            lake_frac[:, None] * t_factor * (pp.lake_evap_scale * pp.evaporation_scale)
+        ).astype(np.float32)                                           # (N, K)
+
+        # Advect lake-sourced moisture; fewer iterations than the main pass since
+        # lake sources are small and the effect is localized.
+        dq_lake = advect_moisture(
+            lake_evap,
+            mesh.face_centroids.astype(np.float64),
+            mesh.face_adjacency,
+            self.winds.astype(np.float64),
+            n_iter=pp.lake_feedback_iter,
+            decay_rate=pp.moisture_decay_rate,
+        ).astype(np.float32)                                           # (N, K)
+
+        # Smooth just the delta to soften face-boundary artefacts before adding.
+        dq_lake = smooth_humidity(dq_lake, mesh.face_adjacency,
+                                  n_passes=pp.humidity_smoothing_passes,
+                                  alpha=pp.humidity_smoothing_alpha)
+
+        q_updated = (self.humidity_face + dq_lake).astype(np.float32)
+        self.humidity_face = q_updated
+
+        # Re-rasterize humidity → precipitation → biomes.
+        elev_tex = mesh.face_textures["elevation"]                     # (N, H, W, 1)
+        n_h, n_w = elev_tex.shape[1], elev_tex.shape[2]
+        pixel_pos = mesh.face_texture_positions(n_h, n_w)
+        h_pixel = per_pixel_humidity(
+            q_updated, pixel_pos, mesh.face_centroids, mesh.face_adjacency
+        )                                                              # (N, H, W, K)
+        if self.currents is not None:
+            wet_delta = self.currents.precipitation_delta[:, None, None, None].astype(np.float32)
+            h_pixel = h_pixel * (1.0 + wet_delta)
+
+        u_axes, v_axes, _, _, u_ranges, v_ranges, _ = mesh.face_tangent_frames()
+        p_pixel = per_pixel_precipitation(
+            h_pixel,
+            self.winds,
+            u_axes.astype(np.float64),
+            v_axes.astype(np.float64),
+            u_ranges.astype(np.float64) * EARTH_RADIUS_KM,
+            v_ranges.astype(np.float64) * EARTH_RADIUS_KM,
+            elev_tex[:, :, :, 0].astype(np.float64),
+            orographic_k=pp.orographic_k,
+            precipitation_scale=pp.precipitation_scale,
+        )                                                              # (N, H, W, K)
+
+        latitudes_rad = face_latitudes(mesh.face_centroids).astype(np.float64)
+        biome_tex = self.classifier(
+            mesh.face_textures["temperature"], p_pixel, np.rad2deg(latitudes_rad)
+        )
+        if biome_tex.dtype != np.uint8:
+            biome_tex = biome_tex.astype(np.uint8)
+
+        mesh.set_face_textures("precipitation", p_pixel, n_channels=N_SEASONS)
+        mesh.set_face_textures("humidity", h_pixel, n_channels=N_SEASONS)
+        mesh.set_face_textures("biome", biome_tex, n_channels=1)
+
+        # Refresh per-face metadata aggregates.
+        p_face = p_pixel.mean(axis=(1, 2))                             # (N, K)
+        p_annual = p_face.sum(axis=1)
+        p_range = p_face.max(axis=1) - p_face.min(axis=1)
+        p_seasonality = p_range / np.maximum(p_annual, 1e-6)
+        biome_face = _dominant_biome_per_face(biome_tex)
+        mesh.apply_metadata_channel("precipitation_annual", p_annual.tolist())
+        mesh.apply_metadata_channel("precipitation_seasonality", p_seasonality.tolist())
+        mesh.apply_metadata_channel("biome", [int(b) for b in biome_face])
+        mesh.apply_metadata_channel("humidity_annual", q_updated.mean(axis=1).tolist())
+        self.precipitation_face = p_face
+
+        _report("Lake humidity feedback applied.")
 
 
 _ = default_biome  # keep accessible for downstream imports
