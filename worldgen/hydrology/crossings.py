@@ -194,6 +194,17 @@ def resolve_crossings(rivers: List[River]) -> List[River]:
     if not all_crossings:
         return rivers
 
+    # Deduplicate: for each unique river pair, keep only the crossing with the
+    # minimum flow_low. This gives each pair exactly one truncation event and
+    # eliminates role-flip double-truncations.
+    pair_best: dict = {}
+    for crossing in all_crossings:
+        ri_low, ri_high = crossing[3], crossing[4]
+        pair = (min(ri_low, ri_high), max(ri_low, ri_high))
+        if pair not in pair_best or crossing[0] < pair_best[pair][0]:
+            pair_best[pair] = crossing
+    all_crossings = list(pair_best.values())
+
     # Descending flow: terminus targets finalized before the rivers that truncate on them.
     all_crossings.sort(key=lambda x: (-x[0], x[1], x[2]))
 
