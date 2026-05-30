@@ -38,7 +38,6 @@ from worldgen.geology.elevation import (  # noqa: E402
     compute_elevation_textures,
     compute_face_elevations,
     compute_erosion,
-    measure_boundary_elevation_jumps,
 )
 from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams  # noqa: E402
 from worldgen.geology.tectonics import (  # noqa: E402
@@ -133,7 +132,7 @@ def measure_seed(seed: int, pre_noise: bool = False) -> dict:
         dual = builder.mesh
         textures = dual.face_textures["elevation"]
 
-    stats = measure_boundary_elevation_jumps(dual, textures)
+    stats = dual.measure_boundary_texture_jumps(textures)
     stats["seed"] = seed
     return stats
 
@@ -148,10 +147,10 @@ def print_table(rows: list[dict]) -> None:
     for r in rows:
         print(
             f"{r['seed']:>8}  "
-            f"{r['mean_km'] * 1000:>10.1f}  "
-            f"{r['median_km'] * 1000:>10.1f}  "
-            f"{r['rms_km'] * 1000:>10.1f}  "
-            f"{r['max_km'] * 1000:>10.1f}  "
+            f"{r['mean'] * 1000:>10.1f}  "
+            f"{r['median'] * 1000:>10.1f}  "
+            f"{r['rms'] * 1000:>10.1f}  "
+            f"{r['max'] * 1000:>10.1f}  "
             f"{r['n_pairs']:>8}"
         )
 

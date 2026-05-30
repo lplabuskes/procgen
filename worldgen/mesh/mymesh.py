@@ -4,6 +4,33 @@ from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 import numpy as np
 
 
+def _edge_pixels(
+    u_grid: np.ndarray,
+    v_grid: np.ndarray,
+    uv0: np.ndarray,
+    uv1: np.ndarray,
+    tol_sq: float,
+) -> List[Tuple[float, int, int]]:
+    """Return (t, row, col) for grid pixels within tol of the UV segment uv0->uv1."""
+    edge = uv1 - uv0
+    edge_len_sq = float(edge @ edge)
+    if edge_len_sq < 1e-12:
+        return []
+    du = u_grid - uv0[0]
+    dv = v_grid - uv0[1]
+    t = (du * edge[0] + dv * edge[1]) / edge_len_sq
+    proj_u = uv0[0] + t * edge[0]
+    proj_v = uv0[1] + t * edge[1]
+    dist_sq = (u_grid - proj_u) ** 2 + (v_grid - proj_v) ** 2
+    mask = (t >= 0.0) & (t <= 1.0) & (dist_sq < tol_sq)
+    rows, cols = np.where(mask)
+    if len(rows) == 0:
+        return []
+    ts = t[rows, cols]
+    order = np.argsort(ts)
+    return [(float(ts[i]), int(rows[i]), int(cols[i])) for i in order]
+
+
 class PolygonMesh:
     def __init__(self, vertices: np.ndarray, faces: List[Tuple[int, ...]]):
         self.vertices = vertices.astype(np.float32)
@@ -199,6 +226,76 @@ class PolygonMesh:
         u = (u_local - float(self._u_offsets[face])) / float(self._u_ranges[face])
         v = (v_local - float(self._v_offsets[face])) / float(self._v_ranges[face])
         return u, v
+
+    def iter_boundary_pixel_pairs(self, tex_size: int):
+        """Yield (face_a, face_b, r_a, c_a, r_b, c_b) for every matched seam pixel pair.
+
+        For each pair of adjacent faces sharing exactly 2 vertices, finds the
+        pixels in each face's UV grid that lie within ~0.75 pixel of the shared
+        edge, then matches them by their parameter t along that edge.  Yields
+        each matched pair exactly once (face_a < face_b always).
+        """
+        coords = np.linspace(0.0, 1.0, tex_size)
+        u_grid, v_grid = np.meshgrid(coords, coords)
+        tol_sq = (0.75 / (tex_size - 1)) ** 2
+        t_tol = 1.5 / (tex_size - 1)
+        _, _, _, _, _, _, vertex_uvs = self.face_tangent_frames()
+
+        for face_a, neighbors in enumerate(self.face_adjacency):
+            verts_a = self.faces[face_a]
+            verts_a_set = set(verts_a)
+            for face_b in neighbors:
+                if face_b <= face_a:
+                    continue
+                verts_b = self.faces[face_b]
+                shared = list(verts_a_set & set(verts_b))
+                if len(shared) != 2:
+                    continue
+                v0, v1 = shared
+                uv_a0 = np.asarray(vertex_uvs[face_a][verts_a.index(v0)], dtype=np.float64)
+                uv_a1 = np.asarray(vertex_uvs[face_a][verts_a.index(v1)], dtype=np.float64)
+                uv_b0 = np.asarray(vertex_uvs[face_b][verts_b.index(v0)], dtype=np.float64)
+                uv_b1 = np.asarray(vertex_uvs[face_b][verts_b.index(v1)], dtype=np.float64)
+                pixels_a = _edge_pixels(u_grid, v_grid, uv_a0, uv_a1, tol_sq)
+                pixels_b = _edge_pixels(u_grid, v_grid, uv_b0, uv_b1, tol_sq)
+                if not pixels_a or not pixels_b:
+                    continue
+                tb = np.array([p[0] for p in pixels_b])
+                for t_a, r_a, c_a in pixels_a:
+                    diffs = np.abs(tb - t_a)
+                    k_b = int(np.argmin(diffs))
+                    if diffs[k_b] > t_tol:
+                        continue
+                    _, r_b, c_b = pixels_b[k_b]
+                    yield face_a, face_b, r_a, c_a, r_b, c_b
+
+    def measure_boundary_texture_jumps(self, texture: np.ndarray) -> Dict[str, float]:
+        """Measure discontinuities in a (N, H, W, C) texture at face boundaries.
+
+        For each matched seam pixel pair the mean absolute difference across all
+        C channels is computed; summary statistics are returned over all pairs.
+
+        Returns:
+            dict with keys mean, median, max, rms, n_pairs (in texture units).
+        """
+        tex_size = texture.shape[1]
+        all_jumps: List[float] = []
+        for face_a, face_b, r_a, c_a, r_b, c_b in self.iter_boundary_pixel_pairs(tex_size):
+            diff = np.abs(
+                texture[face_a, r_a, c_a, :].astype(np.float64)
+                - texture[face_b, r_b, c_b, :].astype(np.float64)
+            )
+            all_jumps.append(float(diff.mean()))
+        if not all_jumps:
+            return {"mean": 0.0, "median": 0.0, "max": 0.0, "rms": 0.0, "n_pairs": 0}
+        jumps = np.array(all_jumps)
+        return {
+            "mean":    float(np.mean(jumps)),
+            "median":  float(np.median(jumps)),
+            "max":     float(np.max(jumps)),
+            "rms":     float(np.sqrt(np.mean(jumps ** 2))),
+            "n_pairs": int(len(jumps)),
+        }
 
     def face_texture_positions(self, h: int, w: int) -> np.ndarray:
         """Return unit-sphere 3D positions for an (H, W) texture grid over every face.

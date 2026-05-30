@@ -2,7 +2,6 @@ import numpy as np
 import pytest
 
 from worldgen.geology.elevation import (
-    _iter_boundary_pixel_pairs,
     compute_elevation_textures,
     compute_noise_elevation_deltas,
     face_elevations_from_texture,
@@ -358,7 +357,7 @@ class TestOceanMaskComponents:
                 uf.union(node_id(f, r, c), node_id(f, r, c + 1))
 
         # Cross-face: exact pixel-pixel partners along shared mesh edges.
-        for fa, fb, ra, ca, rb, cb in _iter_boundary_pixel_pairs(mesh, tex_size):
+        for fa, fb, ra, ca, rb, cb in mesh.iter_boundary_pixel_pairs(tex_size):
             if ocean[fa, ra, ca] and ocean[fb, rb, cb]:
                 uf.union(node_id(fa, ra, ca), node_id(fb, rb, cb))
 
