@@ -76,23 +76,54 @@ def surface_temperatures(latitudes_rad: np.ndarray,
 def per_pixel_temperatures(face_temperatures_c: np.ndarray,
                            face_elevations_km: np.ndarray,
                            pixel_elevations_km: np.ndarray,
-                           lapse_rate_c_per_km: float) -> np.ndarray:
-    """Broadcast per-face seasonal temperatures to per-pixel and re-apply lapse rate.
+                           lapse_rate_c_per_km: float,
+                           pixel_positions: np.ndarray,
+                           face_centroids: np.ndarray,
+                           face_adjacency: list) -> np.ndarray:
+    """IDW-interpolate per-face temperatures to per-pixel, then apply lapse rate.
 
-    Sub-sea-level pixels are pinned to the sea surface for lapse purposes — so
-    deep ocean reads the same temperature as the surrounding shelf.
+    Uses the same inverse-distance-weighting scheme as per_pixel_humidity so
+    temperatures blend smoothly across face boundaries rather than snapping to
+    the nearest face value.  The lapse-rate correction uses the IDW-blended
+    reference elevation so it stays consistent with the blended temperature.
+
+    Sub-sea-level pixels are pinned to sea level for lapse purposes.
 
     Args:
         face_temperatures_c: (N, K) per-face seasonal temperatures, °C.
         face_elevations_km: (N,) per-face elevation, km.
         pixel_elevations_km: (N, H, W) per-pixel elevation, km.
         lapse_rate_c_per_km: lapse rate Γ, °C/km.
+        pixel_positions: (N, H, W, 3) unit-sphere pixel positions.
+        face_centroids: (N, 3) unit-sphere face centroids.
+        face_adjacency: adjacency list from PolygonMesh.
 
     Returns:
         (N, H, W, K) float32 temperatures in °C.
     """
-    face_above = np.maximum(face_elevations_km, 0.0)[:, None, None]                # (N,1,1)
-    pixel_above = np.maximum(pixel_elevations_km, 0.0)                              # (N,H,W)
-    base = face_temperatures_c[:, None, None, :]                                    # (N,1,1,K)
-    correction = -lapse_rate_c_per_km * (pixel_above - face_above)[..., None]       # (N,H,W,1)
-    return (base + correction).astype(np.float32)
+    N, H, W = pixel_elevations_km.shape
+    K = face_temperatures_c.shape[1]
+    t = face_temperatures_c.astype(np.float32)
+    face_ref_elev = np.maximum(face_elevations_km, 0.0).astype(np.float32)
+
+    idw_temp = np.empty((N, H, W, K), dtype=np.float32)
+    idw_ref_elev = np.empty((N, H, W), dtype=np.float32)
+
+    for i in range(N):
+        all_idx = [i] + list(face_adjacency[i])
+        all_t = t[all_idx]                                   # (M, K)
+        all_e = face_ref_elev[all_idx]                       # (M,)
+        all_c = face_centroids[all_idx].astype(np.float32)   # (M, 3)
+
+        pix = pixel_positions[i].astype(np.float32)          # (H, W, 3)
+        diff = pix[None] - all_c[:, None, None, :]            # (M, H, W, 3)
+        dist = np.sqrt((diff * diff).sum(axis=-1))            # (M, H, W)
+        w = 1.0 / np.maximum(dist, 1e-9)                     # (M, H, W)
+        w_sum = w.sum(axis=0)                                 # (H, W)
+
+        idw_temp[i] = (w[:, :, :, None] * all_t[:, None, None, :]).sum(axis=0) / w_sum[:, :, None]
+        idw_ref_elev[i] = (w * all_e[:, None, None]).sum(axis=0) / w_sum
+
+    pixel_above = np.maximum(pixel_elevations_km, 0.0).astype(np.float32)
+    correction = -lapse_rate_c_per_km * (pixel_above - idw_ref_elev)[..., None]
+    return (idw_temp + correction).astype(np.float32)

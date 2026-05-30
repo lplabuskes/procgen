@@ -305,15 +305,17 @@ class ClimateBuilder:
                                     n_passes=pp.humidity_smoothing_passes,
                                     alpha=pp.humidity_smoothing_alpha)
 
+        n_h, n_w = elev_tex.shape[1], elev_tex.shape[2]
+        pixel_pos = mesh.face_texture_positions(n_h, n_w)
+
         _report("Rasterising temperature texture…")
         elev_pixel = elev_tex.astype(np.float64)                                # (N, H, W) km
         t_pixel = per_pixel_temperatures(
-            t_face, face_elev, elev_pixel, tp.lapse_rate_c_per_km
+            t_face, face_elev, elev_pixel, tp.lapse_rate_c_per_km,
+            pixel_pos, mesh.face_centroids, mesh.face_adjacency,
         )                                                                       # (N, H, W, K)
 
-        n_h, n_w = elev_tex.shape[1], elev_tex.shape[2]
         _report("Rasterising humidity texture…")
-        pixel_pos = mesh.face_texture_positions(n_h, n_w)
         h_pixel = per_pixel_humidity(
             q_air.astype(np.float32), pixel_pos, mesh.face_centroids, mesh.face_adjacency
         )                                                                       # (N, H, W, K)
