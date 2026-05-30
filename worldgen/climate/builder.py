@@ -315,13 +315,13 @@ class ClimateBuilder:
             pixel_pos, mesh.face_centroids, mesh.face_adjacency,
         )                                                                       # (N, H, W, K)
 
+        if currents_result is not None:
+            q_air = q_air * (1.0 + currents_result.precipitation_delta[:, None])
+
         _report("Rasterising humidity texture…")
         h_pixel = per_pixel_humidity(
             q_air.astype(np.float32), pixel_pos, mesh.face_centroids, mesh.face_adjacency
         )                                                                       # (N, H, W, K)
-        if currents_result is not None:
-            wet_delta = currents_result.precipitation_delta[:, None, None, None].astype(np.float32)
-            h_pixel = h_pixel * (1.0 + wet_delta)
 
         _report("Rasterising precipitation texture…")
         u_axes, v_axes, _, _, u_ranges, v_ranges, _ = mesh.face_tangent_frames()
