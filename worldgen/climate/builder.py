@@ -441,12 +441,13 @@ class ClimateBuilder:
         elev_tex = mesh.face_textures["elevation"]                     # (N, H, W, 1)
         n_h, n_w = elev_tex.shape[1], elev_tex.shape[2]
         pixel_pos = mesh.face_texture_positions(n_h, n_w)
-        h_pixel = per_pixel_humidity(
-            q_updated, pixel_pos, mesh.face_centroids, mesh.face_adjacency
-        )                                                              # (N, H, W, K)
+
         if self.currents is not None:
-            wet_delta = self.currents.precipitation_delta[:, None, None, None].astype(np.float32)
-            h_pixel = h_pixel * (1.0 + wet_delta)
+            q_updated = q_updated * (1.0 + self.currents.precipitation_delta[:, None])
+
+        h_pixel = per_pixel_humidity(
+            q_updated.astype(np.float32), pixel_pos, mesh.face_centroids, mesh.face_adjacency
+        )                                                              # (N, H, W, K)
 
         u_axes, v_axes, _, _, u_ranges, v_ranges, _ = mesh.face_tangent_frames()
         p_pixel = per_pixel_precipitation(
