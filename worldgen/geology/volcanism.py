@@ -100,3 +100,30 @@ def compute_volcanism(
                         queue.append((nb, hops + 1))
 
     return activity
+
+
+def generate_volcano_positions(
+    mesh: PolygonMesh,
+    volcanism: np.ndarray,
+    elevations: np.ndarray,
+    threshold: float = 0.3,
+) -> np.ndarray:
+    """Return unit-sphere positions of above-sea-level volcano peaks.
+
+    A face qualifies if its activity exceeds `threshold`, its elevation is
+    above sea level, and no immediate neighbor has strictly higher activity.
+
+    Returns:
+        float32 (K, 3) array of unit-sphere positions (may be empty).
+    """
+    adjacency = mesh.face_adjacency
+    centroids = mesh.face_centroids  # (N, 3)
+    peaks = [
+        i for i, act in enumerate(volcanism)
+        if act >= threshold
+        and elevations[i] >= 0.0
+        and all(volcanism[nb] <= act for nb in adjacency[i])
+    ]
+    if not peaks:
+        return np.empty((0, 3), dtype=np.float32)
+    return centroids[np.array(peaks, dtype=np.int32)].astype(np.float32)

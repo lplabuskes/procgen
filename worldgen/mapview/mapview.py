@@ -363,6 +363,10 @@ class MapWidget(QWidget):
                 and self._globe is not None
                 and self._globe.has_feature("deltas")):
             self._draw_deltas_overlay(painter, W, H, cx, cy, scale_x, scale_y)
+        if (self._overlay_visible.get("volcanoes")
+                and self._globe is not None
+                and self._globe.has_feature("volcanoes")):
+            self._draw_volcanoes_overlay(painter, W, H, cx, cy, scale_x, scale_y)
 
         self._draw_legend(painter, W, H)
 
@@ -554,6 +558,29 @@ class MapWidget(QWidget):
         painter.save()
         painter.setPen(QPen(QColor(0, 100, 0, 220), 1.5))
         painter.setBrush(QBrush(QColor(0, 200, 80, 200)))
+        for i in range(len(positions)):
+            painter.drawEllipse(QPointF(float(sx[i]), float(sy[i])), r, r)
+        painter.restore()
+
+    def _draw_volcanoes_overlay(
+        self,
+        painter: QPainter,
+        W: float, H: float,
+        cx: float, cy: float,
+        scale_x: float, scale_y: float,
+    ) -> None:
+        positions = self._globe.get_feature("volcanoes")  # type: ignore[union-attr]
+        if positions is None or len(positions) == 0:
+            return
+        lon = np.arctan2(positions[:, 1], positions[:, 0])
+        lat = np.arcsin(np.clip(positions[:, 2], -1.0, 1.0))
+        proj = self._projection.project_lonlat(np.column_stack([lon, lat]))
+        sx = (proj[:, 0] - cx) * scale_x + W * 0.5
+        sy = -(proj[:, 1] - cy) * scale_y + H * 0.5
+        r = max(2.5, 4.0 * self._zoom ** 0.3)
+        painter.save()
+        painter.setPen(QPen(QColor(160, 30, 0, 220), 1.5))
+        painter.setBrush(QBrush(QColor(255, 80, 0, 200)))
         for i in range(len(positions)):
             painter.drawEllipse(QPointF(float(sx[i]), float(sy[i])), r, r)
         painter.restore()

@@ -135,6 +135,10 @@ class GlobeBuilder:
         if hb.delta_positions is not None and len(hb.delta_positions) > 0:
             globe.add_feature("deltas", hb.delta_positions)
 
+        if (self.elevation_builder.volcano_positions is not None
+                and len(self.elevation_builder.volcano_positions) > 0):
+            globe.add_feature("volcanoes", self.elevation_builder.volcano_positions)
+
         if cb.winds is not None:
             centroids = mesh.face_centroids.astype(np.float32)
             winds_feature = []
@@ -264,6 +268,8 @@ class GlobeBuilder:
             window.add_overlay("currents", label="Currents", checked=False)
         if debug and self.globe is not None and self.globe.has_feature("deltas"):
             window.add_overlay("deltas", label="River Deltas", checked=False)
+        if debug and self.globe is not None and self.globe.has_feature("volcanoes"):
+            window.add_overlay("volcanoes", label="Volcanoes", checked=False)
 
         if debug:
             from worldgen.climate.classification import BIOME_NAMES

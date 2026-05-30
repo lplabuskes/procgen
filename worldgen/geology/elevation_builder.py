@@ -14,7 +14,7 @@ from worldgen.geology.elevation import (
     face_elevations_from_texture,
     smooth_elevation_seams,
 )
-from worldgen.geology.volcanism import compute_volcanism
+from worldgen.geology.volcanism import compute_volcanism, generate_volcano_positions
 from worldgen.geology.tectonics import (
     assign_plate_types,
     classify_plate_boundaries,
@@ -128,6 +128,7 @@ class ElevationBuilder:
         self.elevation_textures: Optional[np.ndarray] = None
         self.ocean_mask: Optional[np.ndarray] = None
         self.volcanism: Optional[np.ndarray] = None
+        self.volcano_positions: Optional[np.ndarray] = None
         self.max_speed: float = 1.0
 
     def _sub_seed(self, offset: int) -> Optional[int]:
@@ -272,6 +273,7 @@ class ElevationBuilder:
         self.elevation_textures = elevation_textures
         self.ocean_mask = ocean_mask
         self.volcanism = volcanism
+        self.volcano_positions = generate_volcano_positions(dual, volcanism, final_elevations)
         self.max_speed = float(speeds.max()) or 1.0
 
         _report("Done.")
