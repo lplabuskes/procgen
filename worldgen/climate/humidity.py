@@ -194,47 +194,27 @@ def smooth_humidity(
 
 def per_pixel_humidity(
     q_air: np.ndarray,
-    pixel_positions: np.ndarray,
-    face_centroids: np.ndarray,
-    face_adjacency: list,
+    mesh,
+    tex_size: int,
 ) -> np.ndarray:
-    """Interpolate face-level humidity to per-pixel texture via inverse-distance weighting.
+    """Rasterize face-level humidity to per-pixel texture via shared-vertex barycentric interpolation.
 
-    Each pixel's humidity is a weighted blend of its own face's value and all
-    immediate-neighbour face values, weighted by 1/distance from the pixel's
-    3D position to each face centroid.  Pixels near a face boundary therefore
-    blend smoothly toward the adjacent face's humidity, analogous to how the
-    elevation texture varies continuously within each face.
+    Face humidity values are averaged onto shared vertices so adjacent faces
+    interpolate from the same boundary values, eliminating hard seams.
 
     Args:
-        q_air:           (N, K) smoothed humidity from smooth_humidity.
-        pixel_positions: (N, H, W, 3) unit-sphere positions from
-                         mesh.face_texture_positions(H, W).
-        face_centroids:  (N, 3) unit-sphere face centroids.
-        face_adjacency:  adjacency list from PolygonMesh.
+        q_air:    (N, K) smoothed humidity from smooth_humidity.
+        mesh:     PolygonMesh.
+        tex_size: Output texture resolution (H = W = tex_size).
 
     Returns:
         (N, H, W, K) float32.
     """
-    N, H, W, _ = pixel_positions.shape
-    K = q_air.shape[1]
-    q = q_air.astype(np.float32)
-    result = np.empty((N, H, W, K), dtype=np.float32)
+    from worldgen.geology.elevation import rasterize_face_values, smooth_texture_seams
 
-    for i in range(N):
-        all_idx = [i] + list(face_adjacency[i])
-        all_q = q[all_idx]                              # (M, K)
-        all_c = face_centroids[all_idx].astype(np.float32)  # (M, 3)
-
-        pix = pixel_positions[i].astype(np.float32)    # (H, W, 3)
-        diff = pix[None] - all_c[:, None, None, :]     # (M, H, W, 3)
-        dist = np.sqrt((diff * diff).sum(axis=-1))     # (M, H, W)
-        w = 1.0 / np.maximum(dist, 1e-9)               # (M, H, W)
-
-        weighted = (w[:, :, :, None] * all_q[:, None, None, :]).sum(axis=0)  # (H, W, K)
-        result[i] = weighted / w.sum(axis=0)[:, :, None]
-
-    return result
+    h_tex = rasterize_face_values(mesh, q_air.astype(np.float64), tex_size)  # (N, H, W, K)
+    smooth_texture_seams(mesh, h_tex, n_passes=1)
+    return h_tex
 
 
 def moisture_to_precipitation(

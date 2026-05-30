@@ -276,7 +276,6 @@ class ClimateBuilder:
 
             # Second-pass T and P with the current-driven deltas broadcast across seasons.
             temp_delta = currents_result.temperature_delta[:, None].astype(np.float64)
-            wet_delta = currents_result.precipitation_delta[:, None].astype(np.float64)
             t_face = surface_temperatures(
                 latitudes_rad,
                 insolation,
@@ -305,23 +304,19 @@ class ClimateBuilder:
                                     n_passes=pp.humidity_smoothing_passes,
                                     alpha=pp.humidity_smoothing_alpha)
 
-        n_h, n_w = elev_tex.shape[1], elev_tex.shape[2]
-        pixel_pos = mesh.face_texture_positions(n_h, n_w)
+        n_h = elev_tex.shape[1]
 
         _report("Rasterising temperature texture…")
         elev_pixel = elev_tex.astype(np.float64)                                # (N, H, W) km
         t_pixel = per_pixel_temperatures(
-            t_face, face_elev, elev_pixel, tp.lapse_rate_c_per_km,
-            pixel_pos, mesh.face_centroids, mesh.face_adjacency,
+            t_face, face_elev, elev_pixel, tp.lapse_rate_c_per_km, mesh,
         )                                                                       # (N, H, W, K)
 
         if currents_result is not None:
             q_air = q_air * (1.0 + currents_result.precipitation_delta[:, None])
 
         _report("Rasterising humidity texture…")
-        h_pixel = per_pixel_humidity(
-            q_air.astype(np.float32), pixel_pos, mesh.face_centroids, mesh.face_adjacency
-        )                                                                       # (N, H, W, K)
+        h_pixel = per_pixel_humidity(q_air.astype(np.float32), mesh, n_h)      # (N, H, W, K)
 
         _report("Rasterising precipitation texture…")
         u_axes, v_axes, _, _, u_ranges, v_ranges, _ = mesh.face_tangent_frames()
@@ -439,15 +434,12 @@ class ClimateBuilder:
 
         # Re-rasterize humidity → precipitation → biomes.
         elev_tex = mesh.face_textures["elevation"]                     # (N, H, W, 1)
-        n_h, n_w = elev_tex.shape[1], elev_tex.shape[2]
-        pixel_pos = mesh.face_texture_positions(n_h, n_w)
+        n_h = elev_tex.shape[1]
 
         if self.currents is not None:
             q_updated = q_updated * (1.0 + self.currents.precipitation_delta[:, None])
 
-        h_pixel = per_pixel_humidity(
-            q_updated.astype(np.float32), pixel_pos, mesh.face_centroids, mesh.face_adjacency
-        )                                                              # (N, H, W, K)
+        h_pixel = per_pixel_humidity(q_updated.astype(np.float32), mesh, n_h)  # (N, H, W, K)
 
         u_axes, v_axes, _, _, u_ranges, v_ranges, _ = mesh.face_tangent_frames()
         p_pixel = per_pixel_precipitation(

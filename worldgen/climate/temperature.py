@@ -77,53 +77,35 @@ def per_pixel_temperatures(face_temperatures_c: np.ndarray,
                            face_elevations_km: np.ndarray,
                            pixel_elevations_km: np.ndarray,
                            lapse_rate_c_per_km: float,
-                           pixel_positions: np.ndarray,
-                           face_centroids: np.ndarray,
-                           face_adjacency: list) -> np.ndarray:
-    """IDW-interpolate per-face temperatures to per-pixel, then apply lapse rate.
+                           mesh) -> np.ndarray:
+    """Rasterize per-face temperatures to per-pixel via shared-vertex barycentric interpolation.
 
-    Uses the same inverse-distance-weighting scheme as per_pixel_humidity so
-    temperatures blend smoothly across face boundaries rather than snapping to
-    the nearest face value.  The lapse-rate correction uses the IDW-blended
-    reference elevation so it stays consistent with the blended temperature.
-
-    Sub-sea-level pixels are pinned to sea level for lapse purposes.
+    Face temperatures are averaged onto shared vertices so adjacent faces
+    interpolate from the same boundary values, eliminating hard seams.
+    The lapse-rate correction is applied per-pixel using the same vertex-
+    averaged reference elevation, keeping it consistent with the temperature
+    field.  Sub-sea-level pixels are pinned to sea level for lapse purposes.
 
     Args:
         face_temperatures_c: (N, K) per-face seasonal temperatures, °C.
         face_elevations_km: (N,) per-face elevation, km.
-        pixel_elevations_km: (N, H, W) per-pixel elevation, km.
+        pixel_elevations_km: (N, H, W) per-pixel elevation from elevation texture.
         lapse_rate_c_per_km: lapse rate Γ, °C/km.
-        pixel_positions: (N, H, W, 3) unit-sphere pixel positions.
-        face_centroids: (N, 3) unit-sphere face centroids.
-        face_adjacency: adjacency list from PolygonMesh.
+        mesh: PolygonMesh.
 
     Returns:
         (N, H, W, K) float32 temperatures in °C.
     """
-    N, H, W = pixel_elevations_km.shape
-    K = face_temperatures_c.shape[1]
-    t = face_temperatures_c.astype(np.float32)
-    face_ref_elev = np.maximum(face_elevations_km, 0.0).astype(np.float32)
+    from worldgen.geology.elevation import rasterize_face_values, smooth_texture_seams
 
-    idw_temp = np.empty((N, H, W, K), dtype=np.float32)
-    idw_ref_elev = np.empty((N, H, W), dtype=np.float32)
+    _, H, _ = pixel_elevations_km.shape
+    tex_size = H
 
-    for i in range(N):
-        all_idx = [i] + list(face_adjacency[i])
-        all_t = t[all_idx]                                   # (M, K)
-        all_e = face_ref_elev[all_idx]                       # (M,)
-        all_c = face_centroids[all_idx].astype(np.float32)   # (M, 3)
+    t_tex = rasterize_face_values(mesh, face_temperatures_c, tex_size)   # (N, H, W, K)
+    ref_tex = rasterize_face_values(mesh, face_elevations_km, tex_size)  # (N, H, W, 1)
+    smooth_texture_seams(mesh, t_tex, n_passes=1)
 
-        pix = pixel_positions[i].astype(np.float32)          # (H, W, 3)
-        diff = pix[None] - all_c[:, None, None, :]            # (M, H, W, 3)
-        dist = np.sqrt((diff * diff).sum(axis=-1))            # (M, H, W)
-        w = 1.0 / np.maximum(dist, 1e-9)                     # (M, H, W)
-        w_sum = w.sum(axis=0)                                 # (H, W)
-
-        idw_temp[i] = (w[:, :, :, None] * all_t[:, None, None, :]).sum(axis=0) / w_sum[:, :, None]
-        idw_ref_elev[i] = (w * all_e[:, None, None]).sum(axis=0) / w_sum
-
-    pixel_above = np.maximum(pixel_elevations_km, 0.0).astype(np.float32)
-    correction = -lapse_rate_c_per_km * (pixel_above - idw_ref_elev)[..., None]
-    return (idw_temp + correction).astype(np.float32)
+    ref_elev = np.maximum(ref_tex[:, :, :, 0], 0.0).astype(np.float32)
+    pix_elev = np.maximum(pixel_elevations_km, 0.0).astype(np.float32)
+    t_tex -= (lapse_rate_c_per_km * (pix_elev - ref_elev)).astype(np.float32)[:, :, :, None]
+    return t_tex

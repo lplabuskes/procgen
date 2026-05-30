@@ -306,33 +306,40 @@ def face_elevations_from_texture(elevation_textures: np.ndarray) -> np.ndarray:
     return elevation_textures[:, :, :, 0].mean(axis=(1, 2)).astype(np.float64)
 
 
-def compute_elevation_textures(
+def rasterize_face_values(
     mesh: PolygonMesh,
-    elevations: np.ndarray,
-    tex_size: int = 32,
+    face_values: np.ndarray,
+    tex_size: int,
 ) -> np.ndarray:
-    """Per-face elevation textures for smooth cross-face gradients.
+    """Rasterize per-face scalar or multi-channel values to per-pixel textures.
 
-    Each pixel stores the interpolated elevation in km, blended from the mean
-    elevation of vertices shared with neighboring faces.
+    Average face values onto shared vertices, then barycentric-interpolate
+    within each face's fan triangles.  Adjacent faces share the same vertex
+    values, so rasterized values agree continuously across face boundaries.
+
+    Args:
+        mesh: PolygonMesh with _face_vertex_uvs populated.
+        face_values: (N,) or (N, K) float array.
+        tex_size: Output resolution; textures are tex_size × tex_size.
 
     Returns:
-        float32 array of shape (N_faces, tex_size, tex_size, 1).
-        Channel 0 = elevation in km.
+        float32 (N, tex_size, tex_size, K).  K=1 when face_values is 1-D.
     """
-    n_faces = len(mesh.faces)
+    values = np.asarray(face_values, dtype=np.float64)
+    if values.ndim == 1:
+        values = values[:, None]
+    N, K = values.shape
     n_verts = len(mesh.vertices)
-    textures = np.zeros((n_faces, tex_size, tex_size, 1), dtype=np.float32)
 
-    # Scatter-add to compute mean face elevation at each vertex (no Python loop).
+    # Scatter-add face values onto shared vertices, then average.
     face_sizes = np.array([len(f) for f in mesh.faces])
     all_verts = np.concatenate([np.asarray(f) for f in mesh.faces])
-    all_face_idx = np.repeat(np.arange(n_faces), face_sizes)
-    vertex_sum = np.zeros(n_verts, dtype=np.float64)
+    all_face_idx = np.repeat(np.arange(N), face_sizes)
+    vertex_sum = np.zeros((n_verts, K), dtype=np.float64)
     vertex_count = np.zeros(n_verts, dtype=np.float64)
-    np.add.at(vertex_sum, all_verts, elevations[all_face_idx])
+    np.add.at(vertex_sum, all_verts, values[all_face_idx])
     np.add.at(vertex_count, all_verts, 1.0)
-    vertex_elevations = vertex_sum / np.maximum(vertex_count, 1.0)
+    vertex_vals = vertex_sum / np.maximum(vertex_count[:, None], 1.0)  # (n_verts, K)
 
     # Pixel UV grid in [0, 1]^2 — identical for every face.
     u_coords = np.linspace(0.0, 1.0, tex_size, dtype=np.float64)
@@ -341,9 +348,10 @@ def compute_elevation_textures(
     pixel_uv = np.stack([uu.ravel(), vv.ravel()], axis=1)  # (P, 2)
     n_pix = pixel_uv.shape[0]
 
-    # Group faces by degree so every batch has the same fan-triangle structure,
-    # enabling fully vectorized barycentric solves across the batch.
-    # For an icosphere dual this is just 2 groups: ~12 pentagons + N hexagons.
+    textures = np.zeros((N, tex_size, tex_size, K), dtype=np.float32)
+
+    # Group faces by degree so every batch shares the same fan-triangle layout,
+    # enabling fully vectorised barycentric solves.
     degree_groups: dict[int, list[int]] = defaultdict(list)
     for i, face in enumerate(mesh.faces):
         degree_groups[len(face)].append(i)
@@ -352,29 +360,26 @@ def compute_elevation_textures(
         fidx = np.asarray(fidx_list)
         B = len(fidx)
 
-        # (B, degree, 2) vertex UVs; (B, degree) elevation deltas from face center.
         verts_uv = np.stack([
             mesh._face_vertex_uvs[i].astype(np.float64) for i in fidx_list
-        ])
-        batch_verts = np.array([mesh.faces[i] for i in fidx_list])  # (B, degree)
-        vert_elev = vertex_elevations[batch_verts]  # (B, degree)
+        ])                                                               # (B, degree, 2)
+        batch_verts = np.array([mesh.faces[i] for i in fidx_list])      # (B, degree)
+        vert_v = vertex_vals[batch_verts]                                # (B, degree, K)
 
-        # Fan-triangle edge vectors from apex (vertex 0).
-        v0_uv = verts_uv[:, 0, :]                                    # (B, 2)
-        e1_uv = verts_uv[:, 1:-1, :] - v0_uv[:, np.newaxis, :]      # (B, n_tris, 2)
-        e2_uv = verts_uv[:, 2:, :] - v0_uv[:, np.newaxis, :]        # (B, n_tris, 2)
+        v0_uv = verts_uv[:, 0, :]                                        # (B, 2)
+        e1_uv = verts_uv[:, 1:-1, :] - v0_uv[:, np.newaxis, :]          # (B, n_tris, 2)
+        e2_uv = verts_uv[:, 2:, :] - v0_uv[:, np.newaxis, :]            # (B, n_tris, 2)
         det = (
             e1_uv[:, :, 0] * e2_uv[:, :, 1]
             - e1_uv[:, :, 1] * e2_uv[:, :, 0]
-        )  # (B, n_tris)
+        )                                                                # (B, n_tris)
         det = np.where(np.abs(det) < 1e-12, 1.0, det)
 
-        # Barycentric coordinates for all pixels across all triangles: (B, P, n_tris).
-        pv = pixel_uv[np.newaxis, :, :] - v0_uv[:, np.newaxis, :]   # (B, P, 2)
+        pv = pixel_uv[np.newaxis, :, :] - v0_uv[:, np.newaxis, :]       # (B, P, 2)
         beta = (
             pv[:, :, 0:1] * e2_uv[:, np.newaxis, :, 1]
             - pv[:, :, 1:2] * e2_uv[:, np.newaxis, :, 0]
-        ) / det[:, np.newaxis, :]
+        ) / det[:, np.newaxis, :]                                        # (B, P, n_tris)
         gamma = (
             e1_uv[:, np.newaxis, :, 0] * pv[:, :, 1:2]
             - e1_uv[:, np.newaxis, :, 1] * pv[:, :, 0:1]
@@ -382,22 +387,72 @@ def compute_elevation_textures(
 
         best_tri = np.argmax(
             np.minimum(1.0 - beta - gamma, np.minimum(beta, gamma)), axis=2
-        )  # (B, P)
+        )                                                                # (B, P)
 
-        bi = np.arange(B)[:, np.newaxis]    # (B, 1)
-        pi = np.arange(n_pix)[np.newaxis, :]  # (1, P)
-        b_sel = beta[bi, pi, best_tri]      # (B, P)
-        g_sel = gamma[bi, pi, best_tri]     # (B, P)
+        bi = np.arange(B)[:, np.newaxis]
+        pi = np.arange(n_pix)[np.newaxis, :]
+        b_sel = beta[bi, pi, best_tri]                                   # (B, P)
+        g_sel = gamma[bi, pi, best_tri]
 
-        delta_vals = (
-            (1.0 - b_sel - g_sel) * vert_elev[:, 0:1]
-            + b_sel * vert_elev[bi, best_tri + 1]
-            + g_sel * vert_elev[bi, best_tri + 2]
-        )  # (B, P)
+        vals = (
+            (1.0 - b_sel - g_sel)[:, :, None] * vert_v[:, 0:1, :]
+            + b_sel[:, :, None] * vert_v[bi, best_tri + 1, :]
+            + g_sel[:, :, None] * vert_v[bi, best_tri + 2, :]
+        )                                                                # (B, P, K)
 
-        textures[fidx, :, :, 0] = delta_vals.reshape(B, tex_size, tex_size).astype(np.float32)
+        textures[fidx] = vals.reshape(B, tex_size, tex_size, K).astype(np.float32)
 
     return textures
+
+
+def smooth_texture_seams(
+    mesh: PolygonMesh,
+    textures: np.ndarray,
+    n_passes: int = 1,
+) -> np.ndarray:
+    """Average matched boundary pixel pairs across face edges to close seams.
+
+    Works on textures of any number of channels K.  One pass fully closes
+    the gap at boundary pixels; additional passes propagate smoothing one
+    pixel inward per pass.
+
+    Args:
+        mesh: PolygonMesh.
+        textures: float (N, H, W, K); modified in place.
+        n_passes: Number of averaging passes.
+
+    Returns:
+        The modified textures array (same object).
+    """
+    tex_size = textures.shape[1]
+
+    for _ in range(n_passes):
+        partner_sum = np.zeros_like(textures)
+        partner_count = np.zeros(textures.shape[:3], dtype=np.int32)
+        for face_a, face_b, r_a, c_a, r_b, c_b in mesh.iter_boundary_pixel_pairs(tex_size):
+            partner_sum[face_a, r_a, c_a] += textures[face_b, r_b, c_b]
+            partner_count[face_a, r_a, c_a] += 1
+            partner_sum[face_b, r_b, c_b] += textures[face_a, r_a, c_a]
+            partner_count[face_b, r_b, c_b] += 1
+        mask = partner_count > 0
+        cnt = (1 + partner_count[mask]).astype(np.float32)[:, None]
+        textures[mask] = (textures[mask] + partner_sum[mask]) / cnt
+
+    return textures
+
+
+def compute_elevation_textures(
+    mesh: PolygonMesh,
+    elevations: np.ndarray,
+    tex_size: int = 32,
+) -> np.ndarray:
+    """Per-face elevation textures for smooth cross-face gradients.
+
+    Returns:
+        float32 array of shape (N_faces, tex_size, tex_size, 1).
+        Channel 0 = elevation in km.
+    """
+    return rasterize_face_values(mesh, elevations, tex_size)
 
 
 def smooth_elevation_seams(
@@ -407,34 +462,15 @@ def smooth_elevation_seams(
 ) -> np.ndarray:
     """Reduce elevation discontinuities at face boundaries by averaging matched seam pixels.
 
-    For each adjacent face pair, finds pixels along the shared edge in both faces'
-    UV grids and replaces each matched pixel with the weighted mean of itself and all
-    its cross-face partners. One pass fully closes the gap at the boundary pixels;
-    additional passes propagate the smoothing one pixel inward per pass.
-
     Args:
-        mesh: PolygonMesh (must have face_adjacency and face_tangent_frames).
+        mesh: PolygonMesh.
         elevation_textures: float32 (N, H, W, 1); modified in place.
         n_passes: Number of averaging passes.
 
     Returns:
-        The modified elevation_textures array (same object, modified in place).
+        The modified elevation_textures array (same object).
     """
-    tex_size = elevation_textures.shape[1]
-    elev = elevation_textures[:, :, :, 0]  # view into channel 0, shape (N, H, W)
-
-    for _ in range(n_passes):
-        partner_sum = np.zeros_like(elev)
-        partner_count = np.zeros(elev.shape, dtype=np.int32)
-        for face_a, face_b, r_a, c_a, r_b, c_b in mesh.iter_boundary_pixel_pairs(tex_size):
-            partner_sum[face_a, r_a, c_a] += elev[face_b, r_b, c_b]
-            partner_count[face_a, r_a, c_a] += 1
-            partner_sum[face_b, r_b, c_b] += elev[face_a, r_a, c_a]
-            partner_count[face_b, r_b, c_b] += 1
-        mask = partner_count > 0
-        elev[mask] = (elev[mask] + partner_sum[mask]) / (1 + partner_count[mask])
-
-    return elevation_textures
+    return smooth_texture_seams(mesh, elevation_textures, n_passes)
 
 
 def compute_ocean_mask_texture(

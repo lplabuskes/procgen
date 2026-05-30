@@ -46,9 +46,11 @@ def measure_seed(seed: int) -> dict:
 
     t_tex = mesh.face_textures["temperature"]    # (N, H, W, K) °C
     p_tex = mesh.face_textures["precipitation"]  # (N, H, W, K) mm/season
+    h_tex = mesh.face_textures["humidity"]       # (N, H, W, K) dimensionless q_air
 
     t_stats = mesh.measure_boundary_texture_jumps(t_tex)
     p_stats = mesh.measure_boundary_texture_jumps(p_tex)
+    h_stats = mesh.measure_boundary_texture_jumps(h_tex)
 
     return {
         "seed": seed,
@@ -60,6 +62,10 @@ def measure_seed(seed: int) -> dict:
         "prec_median": p_stats["median"],
         "prec_rms":    p_stats["rms"],
         "prec_max":    p_stats["max"],
+        "hum_mean":    h_stats["mean"],
+        "hum_median":  h_stats["median"],
+        "hum_rms":     h_stats["rms"],
+        "hum_max":     h_stats["max"],
         "n_pairs":     t_stats["n_pairs"],
     }
 
@@ -69,12 +75,14 @@ def print_table(rows: list[dict]) -> None:
         f"{'seed':>8}  "
         f"{'T mean':>8}  {'T med':>8}  {'T RMS':>8}  {'T max':>8}  "
         f"{'P mean':>9}  {'P med':>9}  {'P RMS':>9}  {'P max':>9}  "
+        f"{'H mean':>8}  {'H med':>8}  {'H RMS':>8}  {'H max':>8}  "
         f"{'n_pairs':>8}"
     )
     units = (
         f"{'':>8}  "
         f"{'°C':>8}  {'°C':>8}  {'°C':>8}  {'°C':>8}  "
         f"{'mm/seas':>9}  {'mm/seas':>9}  {'mm/seas':>9}  {'mm/seas':>9}  "
+        f"{'q_air':>8}  {'q_air':>8}  {'q_air':>8}  {'q_air':>8}  "
         f"{'':>8}"
     )
     print(h)
@@ -87,6 +95,8 @@ def print_table(rows: list[dict]) -> None:
             f"{r['temp_rms']:>8.2f}  {r['temp_max']:>8.2f}  "
             f"{r['prec_mean']:>9.2f}  {r['prec_median']:>9.2f}  "
             f"{r['prec_rms']:>9.2f}  {r['prec_max']:>9.2f}  "
+            f"{r['hum_mean']:>8.4f}  {r['hum_median']:>8.4f}  "
+            f"{r['hum_rms']:>8.4f}  {r['hum_max']:>8.4f}  "
             f"{r['n_pairs']:>8}"
         )
 
@@ -119,7 +129,7 @@ def main() -> None:
         print(f"  building seed={seed}…", end="", flush=True)
         row = measure_seed(seed)
         rows.append(row)
-        print(f"  T_max={row['temp_max']:.2f}°C  P_max={row['prec_max']:.1f}mm/s")
+        print(f"  T_max={row['temp_max']:.2f}°C  P_max={row['prec_max']:.1f}mm/s  H_max={row['hum_max']:.4f}")
 
     print()
     print_table(rows)
