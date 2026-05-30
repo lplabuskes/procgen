@@ -1,0 +1,637 @@
+[
+  {
+    "timestamp": "2026-05-30T17:07:17.838491",
+    "params_summary": "opt_T=18\u00b0C opt_P=900mm rug_thr=2.5km flood=0.25 volc=0.20 treeline=3.0km",
+    "results": [
+      {
+        "seed": 42,
+        "overall": {
+          "fertility_mean": 0.278,
+          "forest_mean": 0.62,
+          "land_pixels": 266596
+        },
+        "per_biome": {
+          "Icecap": {
+            "fertility_mean": 0.001,
+            "forest_mean": 0.031,
+            "land_pixels": 34505
+          },
+          "Tundra": {
+            "fertility_mean": 0.071,
+            "forest_mean": 0.154,
+            "land_pixels": 54508
+          },
+          "Taiga": {
+            "fertility_mean": 0.362,
+            "forest_mean": 0.797,
+            "land_pixels": 1132
+          },
+          "Temperate": {
+            "fertility_mean": 0.443,
+            "forest_mean": 0.899,
+            "land_pixels": 141865
+          },
+          "Steppe": {
+            "fertility_mean": NaN,
+            "forest_mean": NaN,
+            "land_pixels": 0
+          },
+          "Savannah": {
+            "fertility_mean": 0.206,
+            "forest_mean": 0.673,
+            "land_pixels": 19171
+          },
+          "Tropical": {
+            "fertility_mean": 0.189,
+            "forest_mean": 0.945,
+            "land_pixels": 15415
+          },
+          "Semi-Arid": {
+            "fertility_mean": NaN,
+            "forest_mean": NaN,
+            "land_pixels": 0
+          },
+          "Desert": {
+            "fertility_mean": NaN,
+            "forest_mean": NaN,
+            "land_pixels": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "timestamp": "2026-05-30T17:25:48.439066",
+    "params_summary": "opt_T=18\u00b0C opt_P=900mm rug_thr=2.5km flood=0.25 volc=0.20 treeline=3.0km",
+    "results": [
+      {
+        "seed": 42,
+        "overall": {
+          "fertility_mean": 0.275,
+          "forest_mean": 0.63,
+          "land_pixels": 266596
+        },
+        "per_biome": {
+          "Icecap": {
+            "fertility_mean": 0.001,
+            "forest_mean": 0.033,
+            "land_pixels": 34505
+          },
+          "Tundra": {
+            "fertility_mean": 0.075,
+            "forest_mean": 0.187,
+            "land_pixels": 54508
+          },
+          "Taiga": {
+            "fertility_mean": 0.351,
+            "forest_mean": 0.755,
+            "land_pixels": 1132
+          },
+          "Temperate": {
+            "fertility_mean": 0.437,
+            "forest_mean": 0.897,
+            "land_pixels": 141865
+          },
+          "Steppe": {
+            "fertility_mean": NaN,
+            "forest_mean": NaN,
+            "land_pixels": 0
+          },
+          "Savannah": {
+            "fertility_mean": 0.207,
+            "forest_mean": 0.71,
+            "land_pixels": 19171
+          },
+          "Tropical": {
+            "fertility_mean": 0.185,
+            "forest_mean": 0.958,
+            "land_pixels": 15415
+          },
+          "Semi-Arid": {
+            "fertility_mean": NaN,
+            "forest_mean": NaN,
+            "land_pixels": 0
+          },
+          "Desert": {
+            "fertility_mean": NaN,
+            "forest_mean": NaN,
+            "land_pixels": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "timestamp": "2026-05-30T17:41:03.001984",
+    "params_summary": "opt_T=18\u00b0C opt_P=900mm rug_thr=2.5km flood=0.25 volc=0.20 treeline=3.0km",
+    "results": [
+      {
+        "seed": 42,
+        "overall": {
+          "fertility_mean": 0.23,
+          "forest_mean": 0.63,
+          "land_pixels": 266596
+        },
+        "per_biome": {
+          "Icecap": {
+            "fertility_mean": 0.001,
+            "forest_mean": 0.033,
+            "land_pixels": 34505
+          },
+          "Tundra": {
+            "fertility_mean": 0.071,
+            "forest_mean": 0.187,
+            "land_pixels": 54508
+          },
+          "Taiga": {
+            "fertility_mean": 0.295,
+            "forest_mean": 0.755,
+            "land_pixels": 1132
+          },
+          "Temperate": {
+            "fertility_mean": 0.362,
+            "forest_mean": 0.897,
+            "land_pixels": 141865
+          },
+          "Steppe": {
+            "fertility_mean": NaN,
+            "forest_mean": NaN,
+            "land_pixels": 0
+          },
+          "Savannah": {
+            "fertility_mean": 0.178,
+            "forest_mean": 0.71,
+            "land_pixels": 19171
+          },
+          "Tropical": {
+            "fertility_mean": 0.151,
+            "forest_mean": 0.958,
+            "land_pixels": 15415
+          },
+          "Semi-Arid": {
+            "fertility_mean": NaN,
+            "forest_mean": NaN,
+            "land_pixels": 0
+          },
+          "Desert": {
+            "fertility_mean": NaN,
+            "forest_mean": NaN,
+            "land_pixels": 0
+          }
+        }
+      },
+      {
+        "seed": 137,
+        "overall": {
+          "fertility_mean": 0.335,
+          "forest_mean": 0.558,
+          "land_pixels": 808809
+        },
+        "per_biome": {
+          "Icecap": {
+            "fertility_mean": 0.001,
+            "forest_mean": 0.042,
+            "land_pixels": 15103
+          },
+          "Tundra": {
+            "fertility_mean": 0.057,
+            "forest_mean": 0.199,
+            "land_pixels": 76438
+          },
+          "Taiga": {
+            "fertility_mean": NaN,
+            "forest_mean": NaN,
+            "land_pixels": 0
+          },
+          "Temperate": {
+            "fertility_mean": 0.489,
+            "forest_mean": 0.836,
+            "land_pixels": 313686
+          },
+          "Steppe": {
+            "fertility_mean": 0.081,
+            "forest_mean": 0.14,
+            "land_pixels": 60712
+          },
+          "Savannah": {
+            "fertility_mean": 0.525,
+            "forest_mean": 0.481,
+            "land_pixels": 107266
+          },
+          "Tropical": {
+            "fertility_mean": 0.375,
+            "forest_mean": 0.926,
+            "land_pixels": 110461
+          },
+          "Semi-Arid": {
+            "fertility_mean": 0.21,
+            "forest_mean": 0.177,
+            "land_pixels": 49138
+          },
+          "Desert": {
+            "fertility_mean": 0.009,
+            "forest_mean": 0.025,
+            "land_pixels": 76005
+          }
+        }
+      },
+      {
+        "seed": 999,
+        "overall": {
+          "fertility_mean": 0.238,
+          "forest_mean": 0.556,
+          "land_pixels": 344589
+        },
+        "per_biome": {
+          "Icecap": {
+            "fertility_mean": 0.0,
+            "forest_mean": 0.035,
+            "land_pixels": 36526
+          },
+          "Tundra": {
+            "fertility_mean": 0.051,
+            "forest_mean": 0.189,
+            "land_pixels": 68333
+          },
+          "Taiga": {
+            "fertility_mean": 0.13,
+            "forest_mean": 0.855,
+            "land_pixels": 4537
+          },
+          "Temperate": {
+            "fertility_mean": 0.319,
+            "forest_mean": 0.921,
+            "land_pixels": 132470
+          },
+          "Steppe": {
+            "fertility_mean": 0.149,
+            "forest_mean": 0.173,
+            "land_pixels": 6377
+          },
+          "Savannah": {
+            "fertility_mean": 0.455,
+            "forest_mean": 0.623,
+            "land_pixels": 33380
+          },
+          "Tropical": {
+            "fertility_mean": 0.543,
+            "forest_mean": 0.894,
+            "land_pixels": 29007
+          },
+          "Semi-Arid": {
+            "fertility_mean": 0.201,
+            "forest_mean": 0.176,
+            "land_pixels": 16603
+          },
+          "Desert": {
+            "fertility_mean": 0.018,
+            "forest_mean": 0.041,
+            "land_pixels": 17356
+          }
+        }
+      }
+    ]
+  },
+  {
+    "timestamp": "2026-05-30T17:45:44.949856",
+    "params_summary": "opt_T=18\u00b0C opt_P=900mm rug_thr=2.5km flood=0.25 volc=0.20 treeline=3.0km",
+    "results": [
+      {
+        "seed": 42,
+        "overall": {
+          "fertility_mean": 0.238,
+          "forest_mean": 0.525,
+          "land_pixels": 266596
+        },
+        "per_biome": {
+          "Icecap": {
+            "fertility_mean": 0.001,
+            "forest_mean": 0.027,
+            "land_pixels": 34505
+          },
+          "Tundra": {
+            "fertility_mean": 0.072,
+            "forest_mean": 0.119,
+            "land_pixels": 54508
+          },
+          "Taiga": {
+            "fertility_mean": 0.306,
+            "forest_mean": 0.603,
+            "land_pixels": 1132
+          },
+          "Temperate": {
+            "fertility_mean": 0.376,
+            "forest_mean": 0.752,
+            "land_pixels": 141865
+          },
+          "Steppe": {
+            "fertility_mean": NaN,
+            "forest_mean": NaN,
+            "land_pixels": 0
+          },
+          "Savannah": {
+            "fertility_mean": 0.184,
+            "forest_mean": 0.583,
+            "land_pixels": 19171
+          },
+          "Tropical": {
+            "fertility_mean": 0.153,
+            "forest_mean": 0.911,
+            "land_pixels": 15415
+          },
+          "Semi-Arid": {
+            "fertility_mean": NaN,
+            "forest_mean": NaN,
+            "land_pixels": 0
+          },
+          "Desert": {
+            "fertility_mean": NaN,
+            "forest_mean": NaN,
+            "land_pixels": 0
+          }
+        }
+      },
+      {
+        "seed": 137,
+        "overall": {
+          "fertility_mean": 0.345,
+          "forest_mean": 0.462,
+          "land_pixels": 808809
+        },
+        "per_biome": {
+          "Icecap": {
+            "fertility_mean": 0.001,
+            "forest_mean": 0.035,
+            "land_pixels": 15103
+          },
+          "Tundra": {
+            "fertility_mean": 0.058,
+            "forest_mean": 0.133,
+            "land_pixels": 76438
+          },
+          "Taiga": {
+            "fertility_mean": NaN,
+            "forest_mean": NaN,
+            "land_pixels": 0
+          },
+          "Temperate": {
+            "fertility_mean": 0.506,
+            "forest_mean": 0.692,
+            "land_pixels": 313686
+          },
+          "Steppe": {
+            "fertility_mean": 0.082,
+            "forest_mean": 0.093,
+            "land_pixels": 60712
+          },
+          "Savannah": {
+            "fertility_mean": 0.54,
+            "forest_mean": 0.35,
+            "land_pixels": 107266
+          },
+          "Tropical": {
+            "fertility_mean": 0.382,
+            "forest_mean": 0.857,
+            "land_pixels": 110461
+          },
+          "Semi-Arid": {
+            "fertility_mean": 0.212,
+            "forest_mean": 0.13,
+            "land_pixels": 49138
+          },
+          "Desert": {
+            "fertility_mean": 0.009,
+            "forest_mean": 0.021,
+            "land_pixels": 76005
+          }
+        }
+      },
+      {
+        "seed": 999,
+        "overall": {
+          "fertility_mean": 0.245,
+          "forest_mean": 0.469,
+          "land_pixels": 344589
+        },
+        "per_biome": {
+          "Icecap": {
+            "fertility_mean": 0.0,
+            "forest_mean": 0.031,
+            "land_pixels": 36526
+          },
+          "Tundra": {
+            "fertility_mean": 0.052,
+            "forest_mean": 0.118,
+            "land_pixels": 68333
+          },
+          "Taiga": {
+            "fertility_mean": 0.135,
+            "forest_mean": 0.69,
+            "land_pixels": 4537
+          },
+          "Temperate": {
+            "fertility_mean": 0.33,
+            "forest_mean": 0.795,
+            "land_pixels": 132470
+          },
+          "Steppe": {
+            "fertility_mean": 0.151,
+            "forest_mean": 0.118,
+            "land_pixels": 6377
+          },
+          "Savannah": {
+            "fertility_mean": 0.467,
+            "forest_mean": 0.508,
+            "land_pixels": 33380
+          },
+          "Tropical": {
+            "fertility_mean": 0.555,
+            "forest_mean": 0.815,
+            "land_pixels": 29007
+          },
+          "Semi-Arid": {
+            "fertility_mean": 0.203,
+            "forest_mean": 0.13,
+            "land_pixels": 16603
+          },
+          "Desert": {
+            "fertility_mean": 0.018,
+            "forest_mean": 0.036,
+            "land_pixels": 17356
+          }
+        }
+      }
+    ]
+  },
+  {
+    "timestamp": "2026-05-30T17:52:31.454744",
+    "params_summary": "opt_T=18\u00b0C opt_P=900mm rug_thr=2.5km flood=0.25 volc=0.20 treeline=3.0km",
+    "results": [
+      {
+        "seed": 42,
+        "overall": {
+          "fertility_mean": 0.239,
+          "forest_mean": 0.51,
+          "land_pixels": 266596
+        },
+        "per_biome": {
+          "Icecap": {
+            "fertility_mean": 0.001,
+            "forest_mean": 0.014,
+            "land_pixels": 34505
+          },
+          "Tundra": {
+            "fertility_mean": 0.072,
+            "forest_mean": 0.106,
+            "land_pixels": 54508
+          },
+          "Taiga": {
+            "fertility_mean": 0.308,
+            "forest_mean": 0.565,
+            "land_pixels": 1132
+          },
+          "Temperate": {
+            "fertility_mean": 0.377,
+            "forest_mean": 0.736,
+            "land_pixels": 141865
+          },
+          "Steppe": {
+            "fertility_mean": NaN,
+            "forest_mean": NaN,
+            "land_pixels": 0
+          },
+          "Savannah": {
+            "fertility_mean": 0.185,
+            "forest_mean": 0.562,
+            "land_pixels": 19171
+          },
+          "Tropical": {
+            "fertility_mean": 0.154,
+            "forest_mean": 0.898,
+            "land_pixels": 15415
+          },
+          "Semi-Arid": {
+            "fertility_mean": NaN,
+            "forest_mean": NaN,
+            "land_pixels": 0
+          },
+          "Desert": {
+            "fertility_mean": NaN,
+            "forest_mean": NaN,
+            "land_pixels": 0
+          }
+        }
+      },
+      {
+        "seed": 137,
+        "overall": {
+          "fertility_mean": 0.347,
+          "forest_mean": 0.447,
+          "land_pixels": 808809
+        },
+        "per_biome": {
+          "Icecap": {
+            "fertility_mean": 0.001,
+            "forest_mean": 0.018,
+            "land_pixels": 15103
+          },
+          "Tundra": {
+            "fertility_mean": 0.058,
+            "forest_mean": 0.117,
+            "land_pixels": 76438
+          },
+          "Taiga": {
+            "fertility_mean": NaN,
+            "forest_mean": NaN,
+            "land_pixels": 0
+          },
+          "Temperate": {
+            "fertility_mean": 0.508,
+            "forest_mean": 0.676,
+            "land_pixels": 313686
+          },
+          "Steppe": {
+            "fertility_mean": 0.083,
+            "forest_mean": 0.083,
+            "land_pixels": 60712
+          },
+          "Savannah": {
+            "fertility_mean": 0.542,
+            "forest_mean": 0.333,
+            "land_pixels": 107266
+          },
+          "Tropical": {
+            "fertility_mean": 0.384,
+            "forest_mean": 0.838,
+            "land_pixels": 110461
+          },
+          "Semi-Arid": {
+            "fertility_mean": 0.213,
+            "forest_mean": 0.112,
+            "land_pixels": 49138
+          },
+          "Desert": {
+            "fertility_mean": 0.009,
+            "forest_mean": 0.013,
+            "land_pixels": 76005
+          }
+        }
+      },
+      {
+        "seed": 999,
+        "overall": {
+          "fertility_mean": 0.246,
+          "forest_mean": 0.445,
+          "land_pixels": 344589
+        },
+        "per_biome": {
+          "Icecap": {
+            "fertility_mean": 0.0,
+            "forest_mean": 0.016,
+            "land_pixels": 36526
+          },
+          "Tundra": {
+            "fertility_mean": 0.052,
+            "forest_mean": 0.093,
+            "land_pixels": 68333
+          },
+          "Taiga": {
+            "fertility_mean": 0.136,
+            "forest_mean": 0.65,
+            "land_pixels": 4537
+          },
+          "Temperate": {
+            "fertility_mean": 0.332,
+            "forest_mean": 0.769,
+            "land_pixels": 132470
+          },
+          "Steppe": {
+            "fertility_mean": 0.151,
+            "forest_mean": 0.112,
+            "land_pixels": 6377
+          },
+          "Savannah": {
+            "fertility_mean": 0.47,
+            "forest_mean": 0.475,
+            "land_pixels": 33380
+          },
+          "Tropical": {
+            "fertility_mean": 0.56,
+            "forest_mean": 0.786,
+            "land_pixels": 29007
+          },
+          "Semi-Arid": {
+            "fertility_mean": 0.205,
+            "forest_mean": 0.103,
+            "land_pixels": 16603
+          },
+          "Desert": {
+            "fertility_mean": 0.018,
+            "forest_mean": 0.02,
+            "land_pixels": 17356
+          }
+        }
+      }
+    ]
+  }
+]

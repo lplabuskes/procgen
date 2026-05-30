@@ -29,6 +29,15 @@ from worldgen.climate.display import (
 )
 from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams
 from worldgen.hydrology.builder import HydrologyBuilder, HydrologyParams, LAKE_COLOR
+from worldgen.resources.builder import ResourcesBuilder, ResourcesParams
+from worldgen.resources.display import (
+    build_fertility_display_texture,
+    build_forest_density_display_texture,
+    fertility_color,
+    fertility_legend_entries,
+    forest_density_color,
+    forest_density_legend_entries,
+)
 from worldgen.globe.globe import Globe
 
 
@@ -81,6 +90,7 @@ class GlobeParams:
     elevation: ElevationParams = field(default_factory=ElevationParams)
     climate: ClimateParams = field(default_factory=ClimateParams, metadata={"label": "Climate"})
     hydrology: HydrologyParams = field(default_factory=HydrologyParams, metadata={"label": "Hydrology"})
+    resources: ResourcesParams = field(default_factory=ResourcesParams, metadata={"label": "Resources"})
 
 
 class GlobeBuilder:
@@ -97,6 +107,7 @@ class GlobeBuilder:
         self.elevation_builder: ElevationBuilder = ElevationBuilder(self.params.elevation)
         self.climate_builder: ClimateBuilder = ClimateBuilder(self.params.climate)
         self.hydrology_builder: HydrologyBuilder = HydrologyBuilder(self.params.hydrology)
+        self.resources_builder: ResourcesBuilder = ResourcesBuilder(self.params.resources)
         self.globe: Optional[Globe] = None
 
     def build(self, progress: Optional[Callable[[str], None]] = None) -> Globe:
@@ -109,6 +120,10 @@ class GlobeBuilder:
             self.climate_builder.apply_lake_humidity_feedback(
                 mesh, mesh.face_textures["lake_mask"], progress=progress
             )
+
+        self.resources_builder.build(
+            mesh, rivers=self.hydrology_builder.rivers, progress=progress
+        )
 
         globe = Globe(mesh=mesh)
         hb = self.hydrology_builder
@@ -244,6 +259,32 @@ class GlobeBuilder:
                 schemes["Annual Precipitation"] = precipitation_color
                 schemes["Humidity"] = humidity_color
 
+        ocean_mask_tex = mesh.face_textures.get("ocean_mask")
+        lake_mask_tex = mesh.face_textures.get("lake_mask")
+        elev_tex_for_resources = mesh.face_textures.get("elevation")
+        if "fertility" in mesh.face_textures:
+            mesh.set_face_textures(
+                "fertility_rgba",
+                build_fertility_display_texture(
+                    mesh.face_textures["fertility"],
+                    elevation_tex=elev_tex_for_resources,
+                    ocean_mask_tex=ocean_mask_tex,
+                    lake_mask_tex=lake_mask_tex,
+                ),
+            )
+            schemes["Fertility"] = fertility_color
+        if "forest_density" in mesh.face_textures:
+            mesh.set_face_textures(
+                "forest_density_rgba",
+                build_forest_density_display_texture(
+                    mesh.face_textures["forest_density"],
+                    elevation_tex=elev_tex_for_resources,
+                    ocean_mask_tex=ocean_mask_tex,
+                    lake_mask_tex=lake_mask_tex,
+                ),
+            )
+            schemes["Forest Density"] = forest_density_color
+
         window.set_color_schemes(schemes)
         window.associate_scheme_texture("Elevation", "elevation_rgba")
         window.register_legend("Elevation", "gradient", elevation_legend_entries())
@@ -259,6 +300,12 @@ class GlobeBuilder:
                 window.register_legend("Summer Temperature", "gradient", temperature_legend_entries())
                 window.register_legend("Winter Temperature", "gradient", temperature_legend_entries())
                 window.register_legend("Annual Precipitation", "gradient", precipitation_legend_entries())
+        if "fertility" in mesh.face_textures:
+            window.associate_scheme_texture("Fertility", "fertility_rgba")
+            window.register_legend("Fertility", "gradient", fertility_legend_entries())
+        if "forest_density" in mesh.face_textures:
+            window.associate_scheme_texture("Forest Density", "forest_density_rgba")
+            window.register_legend("Forest Density", "gradient", forest_density_legend_entries())
         if hb.rivers:
             window.add_overlay("rivers", label="Rivers")
         if debug and cb.winds is not None:
@@ -294,6 +341,10 @@ class GlobeBuilder:
                     parts.append(f"T: {meta['temperature_annual']:.1f}°C")
                 if "precipitation_annual" in meta:
                     parts.append(f"P: {meta['precipitation_annual']:.0f} mm/yr")
+                if "fertility_mean" in meta:
+                    parts.append(f"Fert: {meta['fertility_mean']:.2f}")
+                if "forest_density_mean" in meta:
+                    parts.append(f"Forest: {meta['forest_density_mean']:.2f}")
                 if uv is not None and "elevation" in mesh.face_textures:
                     elev_tex = mesh.face_textures["elevation"]
                     H_t, W_t = elev_tex.shape[1:3]
