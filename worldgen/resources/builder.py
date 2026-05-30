@@ -17,6 +17,7 @@ from typing import Callable, Optional
 import numpy as np
 
 from worldgen.mesh.mymesh import PolygonMesh
+from worldgen.resources.crops import classify_crops
 from worldgen.resources.fertility import compute_fertility
 from worldgen.resources.forest import compute_forest_density
 from worldgen.resources.terrain import (
@@ -85,6 +86,28 @@ class ResourcesParams:
     )
 
 
+def _face_modal_crop(crop_tex: np.ndarray, ocean_mask: np.ndarray) -> np.ndarray:
+    """Return the most-common non-ocean crop index per face.
+
+    Args:
+        crop_tex: (N, H, W) uint8 crop indices.
+        ocean_mask: (N, H, W) float32; 1 = ocean.
+
+    Returns:
+        (N,) int — modal crop index per face (0 = None if all ocean).
+    """
+    n = crop_tex.shape[0]
+    result = np.zeros(n, dtype=np.int32)
+    land = ocean_mask < 0.5                                    # (N, H, W) bool
+    for i in range(n):
+        land_pixels = crop_tex[i][land[i]]
+        if land_pixels.size == 0:
+            continue
+        counts = np.bincount(land_pixels.astype(np.int64), minlength=1)
+        result[i] = int(counts.argmax())
+    return result
+
+
 class ResourcesBuilder:
     """Runs the resources stage on a built (elevation + climate + hydrology) mesh.
 
@@ -99,6 +122,7 @@ class ResourcesBuilder:
         self.params: ResourcesParams = params or ResourcesParams()
         self.fertility_textures: Optional[np.ndarray] = None       # (N, H, W, 1)
         self.forest_density_textures: Optional[np.ndarray] = None  # (N, H, W, 1)
+        self.dominant_crop_textures: Optional[np.ndarray] = None   # (N, H, W, 1) uint8
         self.water_hops: Optional[np.ndarray] = None               # (N,) int
         self.volcanism_hops: Optional[np.ndarray] = None           # (N,) int
 
@@ -191,16 +215,30 @@ class ResourcesBuilder:
             mesh=mesh,
         )                                                          # (N, H, W, 1)
 
+        _report("Computing crop suitability…")
+        dominant_crop = classify_crops(
+            temperature_tex=temperature_tex,
+            precipitation_tex=precipitation_tex,
+            elevation_tex=elevation_tex,
+            fertility_tex=fertility,
+            ocean_mask_tex=ocean_mask_tex,
+        )                                                          # (N, H, W, 1) uint8
+
         mesh.set_face_textures("fertility", fertility, n_channels=1)
         mesh.set_face_textures("forest_density", forest, n_channels=1)
+        mesh.set_face_textures("dominant_crop", dominant_crop, n_channels=1)
 
         fertility_mean = fertility[..., 0].mean(axis=(1, 2)).astype(np.float32)
         forest_mean = forest[..., 0].mean(axis=(1, 2)).astype(np.float32)
+        # Per-face dominant crop: mode of land pixels.
+        dominant_crop_face = _face_modal_crop(dominant_crop[..., 0], ocean_mask_tex[..., 0])
         mesh.apply_metadata_channel("fertility_mean", fertility_mean.tolist())
         mesh.apply_metadata_channel("forest_density_mean", forest_mean.tolist())
+        mesh.apply_metadata_channel("dominant_crop", dominant_crop_face.tolist())
 
         self.fertility_textures = fertility
         self.forest_density_textures = forest
+        self.dominant_crop_textures = dominant_crop
         self.water_hops = water_hops
         self.volcanism_hops = volcanism_hops
 

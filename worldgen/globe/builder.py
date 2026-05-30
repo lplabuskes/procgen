@@ -31,8 +31,11 @@ from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams
 from worldgen.hydrology.builder import HydrologyBuilder, HydrologyParams, LAKE_COLOR
 from worldgen.resources.builder import ResourcesBuilder, ResourcesParams
 from worldgen.resources.display import (
+    build_dominant_crop_display_texture,
     build_fertility_display_texture,
     build_forest_density_display_texture,
+    crop_color,
+    crop_legend_entries,
     fertility_color,
     fertility_legend_entries,
     forest_density_color,
@@ -285,6 +288,17 @@ class GlobeBuilder:
             )
             schemes["Forest Density"] = forest_density_color
 
+        if debug and "dominant_crop" in mesh.face_textures:
+            mesh.set_face_textures(
+                "dominant_crop_rgba",
+                build_dominant_crop_display_texture(
+                    mesh.face_textures["dominant_crop"],
+                    ocean_mask_tex=ocean_mask_tex,
+                    lake_mask_tex=lake_mask_tex,
+                ),
+            )
+            schemes["Dominant Crop"] = crop_color
+
         window.set_color_schemes(schemes)
         window.associate_scheme_texture("Elevation", "elevation_rgba")
         window.register_legend("Elevation", "gradient", elevation_legend_entries())
@@ -306,6 +320,9 @@ class GlobeBuilder:
         if "forest_density" in mesh.face_textures:
             window.associate_scheme_texture("Forest Density", "forest_density_rgba")
             window.register_legend("Forest Density", "gradient", forest_density_legend_entries())
+        if debug and "dominant_crop" in mesh.face_textures:
+            window.associate_scheme_texture("Dominant Crop", "dominant_crop_rgba")
+            window.register_legend("Dominant Crop", "categorical", crop_legend_entries())
         if hb.rivers:
             window.add_overlay("rivers", label="Rivers")
         if debug and cb.winds is not None:
@@ -345,6 +362,12 @@ class GlobeBuilder:
                     parts.append(f"Fert: {meta['fertility_mean']:.2f}")
                 if "forest_density_mean" in meta:
                     parts.append(f"Forest: {meta['forest_density_mean']:.2f}")
+                if "dominant_crop" in meta:
+                    from worldgen.resources.crops import CROP_NAMES
+                    idx = int(meta["dominant_crop"])
+                    crop_name = CROP_NAMES[idx] if 0 <= idx < len(CROP_NAMES) else "?"
+                    if crop_name != "None":
+                        parts.append(f"Crop: {crop_name}")
                 if uv is not None and "elevation" in mesh.face_textures:
                     elev_tex = mesh.face_textures["elevation"]
                     H_t, W_t = elev_tex.shape[1:3]
