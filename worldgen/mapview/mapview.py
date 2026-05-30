@@ -283,7 +283,6 @@ class MapWidget(QWidget):
 
     def paintEvent(self, _) -> None:
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         W, H = float(self.width()), float(self.height())
 
         painter.fillRect(self.rect(), QColor(30, 100, 180))
@@ -344,6 +343,8 @@ class MapWidget(QWidget):
                 painter.drawPolygon(
                     QPolygonF([QPointF(float(x), float(y)) for x, y in zip(px, py)])
                 )
+
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         if self._overlay_visible.get("rivers") and self._globe is not None:
             self._draw_rivers_overlay(painter, W, H, cx, cy, scale_x, scale_y)
