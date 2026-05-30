@@ -132,6 +132,9 @@ class GlobeBuilder:
         if hb.lake_polygons:
             globe.add_feature("lakes", hb.lake_polygons)
 
+        if hb.delta_positions is not None and len(hb.delta_positions) > 0:
+            globe.add_feature("deltas", hb.delta_positions)
+
         if cb.winds is not None:
             centroids = mesh.face_centroids.astype(np.float32)
             winds_feature = []
@@ -259,6 +262,8 @@ class GlobeBuilder:
                 window.add_overlay(f"winds_season_{i}", label=f"Winds — {label}", checked=False)
         if debug and cb.currents is not None:
             window.add_overlay("currents", label="Currents", checked=False)
+        if debug and self.globe is not None and self.globe.has_feature("deltas"):
+            window.add_overlay("deltas", label="River Deltas", checked=False)
 
         if debug:
             from worldgen.climate.classification import BIOME_NAMES

@@ -359,6 +359,10 @@ class MapWidget(QWidget):
                 and self._globe is not None
                 and self._globe.has_feature("currents")):
             self._draw_currents_overlay(painter, W, H, cx, cy, scale_x, scale_y)
+        if (self._overlay_visible.get("deltas")
+                and self._globe is not None
+                and self._globe.has_feature("deltas")):
+            self._draw_deltas_overlay(painter, W, H, cx, cy, scale_x, scale_y)
 
         self._draw_legend(painter, W, H)
 
@@ -530,6 +534,29 @@ class MapWidget(QWidget):
                 QPointF(float(sx0[i]), float(sy0[i])),
                 QPointF(float(sx1[i]), float(sy1[i])),
             )
+
+    def _draw_deltas_overlay(
+        self,
+        painter: QPainter,
+        W: float, H: float,
+        cx: float, cy: float,
+        scale_x: float, scale_y: float,
+    ) -> None:
+        positions = self._globe.get_feature("deltas")  # type: ignore[union-attr]
+        if positions is None or len(positions) == 0:
+            return
+        lon = np.arctan2(positions[:, 1], positions[:, 0])
+        lat = np.arcsin(np.clip(positions[:, 2], -1.0, 1.0))
+        proj = self._projection.project_lonlat(np.column_stack([lon, lat]))
+        sx = (proj[:, 0] - cx) * scale_x + W * 0.5
+        sy = -(proj[:, 1] - cy) * scale_y + H * 0.5
+        r = max(3.0, 5.0 * self._zoom ** 0.3)
+        painter.save()
+        painter.setPen(QPen(QColor(0, 100, 0, 220), 1.5))
+        painter.setBrush(QBrush(QColor(0, 200, 80, 200)))
+        for i in range(len(positions)):
+            painter.drawEllipse(QPointF(float(sx[i]), float(sy[i])), r, r)
+        painter.restore()
 
     def _draw_rivers_overlay(
         self,

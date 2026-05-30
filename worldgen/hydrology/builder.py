@@ -29,6 +29,8 @@ class HydrologyParams:
     pet_baseline_mm_yr: float = _f(100.0, label="PET baseline (mm/yr)", min=0.0, max=500.0)
     pet_per_degree_mm_yr: float = _f(60.0, label="PET slope (mm/yr/°C)", min=0.0, max=200.0)
     pet_max_mm_yr: float = _f(2500.0, label="PET cap (mm/yr)", min=500.0, max=5000.0)
+    delta_min_flow: float = _f(1000.0, label="Delta min flow", min=0.0, max=10000.0)
+    delta_min_length_km: float = _f(500.0, label="Delta min river length (km)", min=0.0, max=5000.0)
 
 
 class HydrologyBuilder:
@@ -43,6 +45,7 @@ class HydrologyBuilder:
         self.params: HydrologyParams = params or HydrologyParams()
         self.rivers: Optional[List[River]] = None
         self.lake_polygons: Optional[List[np.ndarray]] = None
+        self.delta_positions: Optional[np.ndarray] = None  # (M, 3) mouth positions reaching the ocean
 
     def build(
         self,
@@ -79,3 +82,32 @@ class HydrologyBuilder:
         lake_mask = river_gen.get_lake_mask_texture()          # (N, H, W, 1)
         mesh.set_face_textures("filled_height", filled_height, n_channels=1)
         mesh.set_face_textures("lake_mask", lake_mask, n_channels=1)
+
+        delta_pts: list[np.ndarray] = []
+        res = river_gen.resolution
+        for river in self.rivers:
+            if river.mouth is None or not river.segments:
+                continue
+            mouth_flow = river.segments[-1].flow_rate
+            if mouth_flow < self.params.delta_min_flow:
+                continue
+            polyline = river.as_polyline()
+            if len(polyline) >= 2:
+                pts = np.stack(polyline)
+                dots = np.clip(np.einsum("ij,ij->i", pts[:-1], pts[1:]), -1.0, 1.0)
+                length_km = float(np.arccos(dots).sum()) * 6371.0
+            else:
+                length_km = 0.0
+            if length_km < self.params.delta_min_length_km:
+                continue
+            face_id = river.mouth.face_id
+            u, v = river.mouth.uv
+            row = int(round(v * (res - 1)))
+            col = int(round(u * (res - 1)))
+            node_idx = river_gen._node_idx(face_id, row, col)
+            if river_gen._ocean_mask[node_idx]:
+                mesh.set_face_metadata(face_id, is_delta=True)
+                delta_pts.append(river.mouth.position)
+        self.delta_positions = (
+            np.stack(delta_pts, axis=0).astype(np.float32) if delta_pts else None
+        )
