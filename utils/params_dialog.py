@@ -1,3 +1,11 @@
+"""Generic params dialog for any paramclass dataclass tree.
+
+Usage::
+
+    dialog = ParamsDialog(my_params, title="My Parameters", parent=window)
+    if dialog.exec() == ParamsDialog.DialogCode.Accepted:
+        new_params = dialog.result_params(my_params)
+"""
 from __future__ import annotations
 
 import dataclasses
@@ -18,8 +26,6 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
-from worldgen.globe.builder import GlobeParams
 
 
 class _CollapsibleSection(QWidget):
@@ -62,22 +68,45 @@ def _humanize(field_name: str) -> str:
     return field_name.replace("_", " ").capitalize()
 
 
-class GlobeParamsDialog(QDialog):
-    """Dialog that walks a (possibly nested) dataclass tree and builds collapsible UI.
+@dataclasses.dataclass
+class _LeafBinding:
+    kind: str  # "int" | "float" | "bool" | "optional_int"
+    widget: Any
+    check: Optional[QCheckBox] = None
 
-    Each dataclass-typed field becomes a collapsible section. Leaf fields are read
-    from their `metadata` dict: `label`, `min`, `max`, optional `step`. Setting
-    `hidden=True` skips the field/section. `kind="optional_int"` adds a "Fixed"
-    checkbox so the value can be None.
+    def read(self) -> Any:
+        if self.kind == "optional_int":
+            assert self.check is not None
+            return self.widget.value() if self.check.isChecked() else None
+        if self.kind == "bool":
+            return self.widget.isChecked()
+        if self.kind == "int":
+            return int(self.widget.value())
+        return float(self.widget.value())
+
+
+class ParamsDialog(QDialog):
+    """Dialog that walks any (possibly nested) paramclass dataclass tree.
+
+    Each dataclass-typed field becomes a collapsible section. Leaf fields are
+    read from their `metadata` dict: `label`, `min`, `max`, optional `step`.
+    Setting `hidden=True` skips the field/section. `kind="optional_int"` adds
+    a "Fixed" checkbox so the value can be None.
     """
 
-    def __init__(self, params: GlobeParams, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        params: Any,
+        *,
+        title: str = "Parameters",
+        parent: Optional[QWidget] = None,
+    ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("World Parameters")
+        self.setWindowTitle(title)
         self.setMinimumWidth(420)
         self.resize(420, 620)
 
-        # Map from path-tuple (e.g. ("elevation", "mesh", "icosphere_depth")) → widget/state.
+        # Map from path-tuple → widget/state.
         self._leaves: dict[tuple[str, ...], _LeafBinding] = {}
 
         outer = QVBoxLayout(self)
@@ -88,9 +117,9 @@ class GlobeParamsDialog(QDialog):
         content_layout = QVBoxLayout(content)
         content_layout.setSpacing(6)
 
-        # Walk the top-level GlobeParams: each top field is itself a dataclass
-        # section (currently just `elevation`). We render it inline rather than
-        # nested under an extra "GlobeParams" header.
+        # Walk the top-level params: dataclass fields become collapsible sections;
+        # leaf fields are grouped into a form. Top-level fields are rendered inline
+        # rather than nested under a root header.
         for f in dataclasses.fields(params):
             if f.metadata.get("hidden"):
                 continue
@@ -124,7 +153,6 @@ class GlobeParamsDialog(QDialog):
         parent_layout: QVBoxLayout,
     ) -> None:
         """Recursively build UI for a dataclass instance into parent_layout."""
-        # Separate leaves vs nested dataclasses so leaves group into a single form.
         form: Optional[QFormLayout] = None
         for f in dataclasses.fields(instance):
             if f.metadata.get("hidden"):
@@ -179,9 +207,7 @@ class GlobeParamsDialog(QDialog):
             self._leaves[path] = _LeafBinding(kind="optional_int", widget=spin, check=check)
             return
 
-        # Plain int/float field.
         if isinstance(value, bool):
-            # Bool would slip through isinstance(value, int); explicit case for safety.
             check = QCheckBox()
             check.setChecked(bool(value))
             form.addRow(label + ":", check)
@@ -206,8 +232,8 @@ class GlobeParamsDialog(QDialog):
 
         form.addRow(label + ":", widget)
 
-    def result_params(self, base: GlobeParams) -> GlobeParams:
-        """Return a new GlobeParams with widget values applied over `base`."""
+    def result_params(self, base: Any) -> Any:
+        """Return a new params instance with widget values applied over `base`."""
         return self._apply(base, ())
 
     def _apply(self, instance: Any, path: tuple[str, ...]) -> Any:
@@ -225,20 +251,3 @@ class GlobeParamsDialog(QDialog):
                 continue
             updates[f.name] = binding.read()
         return dataclasses.replace(instance, **updates)
-
-
-@dataclasses.dataclass
-class _LeafBinding:
-    kind: str  # "int" | "float" | "bool" | "optional_int"
-    widget: Any
-    check: Optional[QCheckBox] = None
-
-    def read(self) -> Any:
-        if self.kind == "optional_int":
-            assert self.check is not None
-            return self.widget.value() if self.check.isChecked() else None
-        if self.kind == "bool":
-            return self.widget.isChecked()
-        if self.kind == "int":
-            return int(self.widget.value())
-        return float(self.widget.value())

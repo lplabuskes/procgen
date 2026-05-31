@@ -11,7 +11,6 @@ See docs/resources_module_followups.md for deferred slices (rare resources).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 import numpy as np
@@ -29,19 +28,10 @@ from worldgen.resources.terrain import (
     river_traversed_faces,
     volcanic_faces,
 )
+from utils.params import field, param_field as _f, paramclass
 
 
-def _f(default, *, label: str, min: float, max: float, step: float | None = None,
-       hidden: bool = False):
-    meta = {"label": label, "min": min, "max": max}
-    if step is not None:
-        meta["step"] = step
-    if hidden:
-        meta["hidden"] = True
-    return field(default=default, metadata=meta)
-
-
-@dataclass
+@paramclass
 class FertilityParams:
     optimal_temperature_c: float = _f(18.0, label="Optimal T (°C)", min=0.0, max=35.0)
     temperature_sigma_c: float = _f(12.0, label="T σ (°C)", min=1.0, max=30.0)
@@ -60,7 +50,7 @@ class FertilityParams:
     )
 
 
-@dataclass
+@paramclass
 class ForestDensityParams:
     precipitation_modulation_strength: float = _f(
         0.3, label="P modulation strength", min=0.0, max=1.0
@@ -74,7 +64,7 @@ class ForestDensityParams:
     noise_octaves: int = _f(3, label="Noise octaves", min=1, max=6)
 
 
-@dataclass
+@paramclass
 class RareBioParams:
     noise_frequency: float = _f(4.0, label="Noise frequency", min=1.0, max=12.0)
     base_threshold: float = _f(0.70, label="Base threshold", min=0.3, max=0.95, step=0.05)
@@ -90,7 +80,7 @@ class RareBioParams:
     max_pearls: int = _f(6,  label="Max Pearls",  min=0, max=20)
 
 
-@dataclass
+@paramclass
 class MineralParams:
     noise_frequency: float = _f(3.0, label="Noise frequency", min=0.5, max=12.0)
     deposit_threshold: float = _f(0.55, label="Deposit threshold", min=0.1, max=0.95, step=0.05)
@@ -108,7 +98,7 @@ class MineralParams:
     coal_max_elevation_km: float = _f(0.5, label="Coal max elevation (km)", min=-1.0, max=5.0)
 
 
-@dataclass
+@paramclass
 class ResourcesParams:
     fertility: FertilityParams = field(
         default_factory=FertilityParams, metadata={"label": "Fertility"}

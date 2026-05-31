@@ -2,11 +2,19 @@ import dataclasses
 import random
 import sys
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QWidget
 
+from utils.params_dialog import ParamsDialog
 from worldgen.globe import GlobeBuilder, GlobeParams
 from worldgen.mapview.mapview import MapWindow
-from worldgen.params_dialog import GlobeParamsDialog
+
+
+class GlobeParamsDialog(ParamsDialog):
+    def __init__(self, params: GlobeParams, parent: "QWidget | None" = None) -> None:
+        super().__init__(params, title="World Parameters", parent=parent)
+
+    def result_params(self, base: GlobeParams) -> GlobeParams:  # type: ignore[override]
+        return super().result_params(base)
 
 
 def main() -> None:

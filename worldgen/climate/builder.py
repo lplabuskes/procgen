@@ -1,10 +1,10 @@
 """Climate stage orchestrator — ClimateParams and ClimateBuilder."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 import numpy as np
+
 import scipy.sparse as sp
 from scipy.sparse.csgraph import dijkstra as sp_dijkstra
 
@@ -32,23 +32,14 @@ from worldgen.climate.temperature import (
 )
 from worldgen.climate.winds import pressure_winds, zonal_winds
 from worldgen.mesh.mymesh import PolygonMesh
+from utils.params import field, param_field as _f, paramclass
 
 
 EARTH_RADIUS_KM = 6371.0
 N_SEASONS = 4
 
 
-def _f(default, *, label: str, min: float, max: float, step: float | None = None,
-       hidden: bool = False):
-    meta = {"label": label, "min": min, "max": max}
-    if step is not None:
-        meta["step"] = step
-    if hidden:
-        meta["hidden"] = True
-    return field(default=default, metadata=meta)
-
-
-@dataclass
+@paramclass
 class TemperatureParams:
     equator_annual_c: float = _f(27.0, label="Equator annual mean (°C)", min=-10.0, max=40.0)
     pole_annual_c: float = _f(-25.0, label="Pole annual mean (°C)", min=-60.0, max=10.0)
@@ -59,7 +50,7 @@ class TemperatureParams:
     inertia_distance_km: float = _f(1500.0, label="Inertia saturation (km)", min=100.0, max=5000.0)
 
 
-@dataclass
+@paramclass
 class WindParams:
     trade_speed: float = _f(7.0, label="Trade winds (m/s)", min=0.0, max=30.0)
     westerly_speed: float = _f(10.0, label="Westerlies (m/s)", min=0.0, max=30.0)
@@ -70,7 +61,7 @@ class WindParams:
     )
 
 
-@dataclass
+@paramclass
 class PrecipitationParams:
     evaporation_scale: float = _f(1.0, label="Evaporation scale", min=0.1, max=5.0)
     precipitation_scale: float = _f(2000.0, label="Precipitation scale (mm/yr)", min=100.0, max=10000.0)
@@ -83,7 +74,7 @@ class PrecipitationParams:
     lake_feedback_iter: int = _f(100, label="Lake feedback steps", min=0, max=600, hidden=True)
 
 
-@dataclass
+@paramclass
 class CurrentsParams:
     enabled: bool = _f(True, label="Enable currents", min=0, max=1)
     beta_scale: float = _f(1.0, label="β scale (western intensification)", min=0.0, max=5.0)
@@ -94,7 +85,7 @@ class CurrentsParams:
     inland_decay_km: float = _f(600.0, label="Inland decay (km)", min=50.0, max=5000.0)
 
 
-@dataclass
+@paramclass
 class ClimateParams:
     temperature: TemperatureParams = field(
         default_factory=TemperatureParams, metadata={"label": "Temperature"}

@@ -1,28 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Callable, List, Optional
 
 import numpy as np
 
 from worldgen.hydrology.rivers import River, RiverGenerator
 from worldgen.mesh.mymesh import PolygonMesh
+from utils.params import param_field as _f, paramclass
 
 
 LAKE_COLOR = np.array([0.28, 0.65, 0.90, 1.0], dtype=np.float32)
 
 
-def _f(default, *, label: str, min: float, max: float, step: float | None = None,
-       hidden: bool = False):
-    meta = {"label": label, "min": min, "max": max}
-    if step is not None:
-        meta["step"] = step
-    if hidden:
-        meta["hidden"] = True
-    return field(default=default, metadata=meta)
-
-
-@dataclass
+@paramclass
 class HydrologyParams:
     river_flow_threshold: float = _f(200.0, label="Flow threshold (faces)", min=1.0, max=1000.0)
     min_lake_pixels: int = _f(50, label="Min lake pixels", min=1, max=500)

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Callable, List, Optional
 
 import numpy as np
 
+from utils.params import field, param_field as _f, paramclass
 from worldgen.geology.elevation import (
     compute_elevation_textures,
     compute_erosion,
@@ -27,18 +27,7 @@ from worldgen.mesh import cache as mesh_cache
 from worldgen.mesh.mymesh import PolygonMesh
 
 
-def _f(default, *, label: str, min: float, max: float, step: float | None = None,
-       hidden: bool = False):
-    """Convenience for declaring a leaf param field with dialog metadata."""
-    meta = {"label": label, "min": min, "max": max}
-    if step is not None:
-        meta["step"] = step
-    if hidden:
-        meta["hidden"] = True
-    return field(default=default, metadata=meta)
-
-
-@dataclass
+@paramclass
 class MeshParams:
     icosphere_depth: int = _f(5, label="Icosphere depth", min=1, max=8)
     n_swaps: int = _f(4000, label="Edge swaps", min=0, max=10000)
@@ -47,7 +36,7 @@ class MeshParams:
     outer_iters: int = _f(3, label="Outer iterations", min=1, max=20)
 
 
-@dataclass
+@paramclass
 class PlateParams:
     n_plates: int = _f(12, label="Number of plates", min=2, max=50)
     plate_compactness: float = _f(0.9, label="Compactness", min=0.0, max=1.0)
@@ -55,13 +44,13 @@ class PlateParams:
     oceanic_fraction: float = _f(0.7, label="Oceanic fraction", min=0.0, max=1.0)
 
 
-@dataclass
+@paramclass
 class PlateMotionParams:
     drift_scale: float = _f(1.0, label="Drift scale", min=0.0, max=10.0)
     spin_scale: float = _f(0.1, label="Spin scale", min=0.0, max=10.0)
 
 
-@dataclass
+@paramclass
 class ElevationFieldParams:
     elevation_rate_norm: float = _f(1.75, label="Rate normalization", min=0.0, max=10.0)
     elevation_decay_rate: float = _f(0.25, label="Decay rate", min=0.0, max=5.0)
@@ -69,13 +58,13 @@ class ElevationFieldParams:
     elevation_tex_size: int = _f(16, label="Texture size", min=8, max=128)
 
 
-@dataclass
+@paramclass
 class NoiseParams:
     noise_amplitude: float = _f(0.5, label="Amplitude (km)", min=0.0, max=20.0)
     noise_coast_sigma: float = _f(3.0, label="Coast sigma (km)", min=0.1, max=10.0)
 
 
-@dataclass
+@paramclass
 class FaceErosionParams:
     """Face-level erosion (not currently exposed in dialog)."""
     hydraulic_iterations: int = _f(2, label="Hydraulic iterations", min=0, max=30, hidden=True)
@@ -86,7 +75,7 @@ class FaceErosionParams:
     thermal_erosion_rate: float = _f(0.5, label="Thermal erosion rate", min=0.0, max=1.0, hidden=True)
 
 
-@dataclass
+@paramclass
 class VolcanismParams:
     n_hotspots: int = _f(8, label="Hotspots", min=0, max=30)
     volcanic_decay_rate: float = _f(0.3, label="Decay rate", min=0.0, max=5.0)
@@ -95,7 +84,7 @@ class VolcanismParams:
     volcanic_elevation_scale_oceanic: float = _f(5.5, label="Scale oceanic (km)", min=0.0, max=20.0)
 
 
-@dataclass
+@paramclass
 class ElevationParams:
     mesh: MeshParams = field(default_factory=MeshParams, metadata={"label": "Mesh Generation"})
     plates: PlateParams = field(default_factory=PlateParams, metadata={"label": "Plate Layout"})
