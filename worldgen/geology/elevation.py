@@ -425,15 +425,21 @@ def smooth_texture_seams(
         The modified textures array (same object).
     """
     tex_size = textures.shape[1]
+    fa, fb, ra, ca, rb, cb = mesh.boundary_pixel_pairs(tex_size)
+    if fa.size == 0:
+        return textures
 
+    a_idx = (fa, ra, ca)
+    b_idx = (fb, rb, cb)
+    ones = np.ones(fa.size, dtype=np.int32)
     for _ in range(n_passes):
         partner_sum = np.zeros_like(textures)
         partner_count = np.zeros(textures.shape[:3], dtype=np.int32)
-        for face_a, face_b, r_a, c_a, r_b, c_b in mesh.iter_boundary_pixel_pairs(tex_size):
-            partner_sum[face_a, r_a, c_a] += textures[face_b, r_b, c_b]
-            partner_count[face_a, r_a, c_a] += 1
-            partner_sum[face_b, r_b, c_b] += textures[face_a, r_a, c_a]
-            partner_count[face_b, r_b, c_b] += 1
+        # Each pixel collects its partner's value (both directions of the pair).
+        np.add.at(partner_sum, a_idx, textures[b_idx])
+        np.add.at(partner_sum, b_idx, textures[a_idx])
+        np.add.at(partner_count, a_idx, ones)
+        np.add.at(partner_count, b_idx, ones)
         mask = partner_count > 0
         cnt = (1 + partner_count[mask]).astype(np.float32)[:, None]
         textures[mask] = (textures[mask] + partner_sum[mask]) / cnt
@@ -516,9 +522,10 @@ def compute_ocean_mask_texture(
 
     # Build cross-face pixel-pair adjacency, indexed by flat pixel id.
     cross_adj: List[List[int]] = [[] for _ in range(N * H * W)]
-    for fa, fb, ra, ca, rb, cb in mesh.iter_boundary_pixel_pairs(H):
-        ia = (fa * H + ra) * W + ca
-        ib = (fb * H + rb) * W + cb
+    fa, fb, ra, ca, rb, cb = mesh.boundary_pixel_pairs(H)
+    flat_a = (fa.astype(np.int64) * H + ra) * W + ca
+    flat_b = (fb.astype(np.int64) * H + rb) * W + cb
+    for ia, ib in zip(flat_a.tolist(), flat_b.tolist()):
         cross_adj[ia].append(ib)
         cross_adj[ib].append(ia)
 

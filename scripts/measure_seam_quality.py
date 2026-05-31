@@ -189,7 +189,7 @@ def main() -> None:
         print(f"  building seed={seed}…", end="", flush=True)
         row = measure_seed(seed, pre_noise=args.pre_noise)
         rows.append(row)
-        print(f"  max={row['max_km'] * 1000:.0f} m")
+        print(f"  max={row['max'] * 1000:.0f} m")
 
     print()
     print_table(rows)

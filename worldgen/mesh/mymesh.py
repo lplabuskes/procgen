@@ -31,6 +31,43 @@ def _edge_pixels(
     return [(float(ts[i]), int(rows[i]), int(cols[i])) for i in order]
 
 
+# Target element count for one batched (chunk, tex_size²) band array. Bounds
+# peak memory of the vectorised seam matching (~32 MB per float64 array).
+_BAND_BATCH_ELEMS = 4_000_000
+
+
+def _edge_band_batch(
+    p0: np.ndarray,
+    p1: np.ndarray,
+    grid_u: np.ndarray,
+    grid_v: np.ndarray,
+    tol_sq: float,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Vectorised :func:`_edge_pixels` over many edges at once.
+
+    Args:
+        p0, p1: (E, 2) edge endpoints in UV.
+        grid_u, grid_v: (P,) flattened pixel-centre UV coords (P = tex_size²).
+        tol_sq: squared perpendicular tolerance.
+
+    Returns:
+        (t, mask) each (E, P), computed identically to ``_edge_pixels`` so the
+        downstream matching reproduces it bit-for-bit.
+    """
+    edge = p1 - p0                                       # (E, 2)
+    elen_sq = (edge * edge).sum(axis=1)                  # (E,)
+    safe = elen_sq >= 1e-12
+    elen_safe = np.where(safe, elen_sq, 1.0)
+    du = grid_u[None, :] - p0[:, 0:1]                    # (E, P)
+    dv = grid_v[None, :] - p0[:, 1:2]
+    t = (du * edge[:, 0:1] + dv * edge[:, 1:2]) / elen_safe[:, None]
+    proj_u = p0[:, 0:1] + t * edge[:, 0:1]
+    proj_v = p0[:, 1:2] + t * edge[:, 1:2]
+    dist_sq = (grid_u[None, :] - proj_u) ** 2 + (grid_v[None, :] - proj_v) ** 2
+    mask = (t >= 0.0) & (t <= 1.0) & (dist_sq < tol_sq) & safe[:, None]
+    return t, mask
+
+
 class PolygonMesh:
     def __init__(self, vertices: np.ndarray, faces: List[Tuple[int, ...]]):
         self.vertices = vertices.astype(np.float32)
@@ -43,6 +80,9 @@ class PolygonMesh:
 
         self.face_textures: Dict[str, np.ndarray] = {}
         self.face_metadata: List[Dict[str, Any]] = [{} for _ in range(n_faces)]
+        # Matched seam pixel pairs depend only on geometry + tex_size, so cache
+        # them per resolution (keyed by tex_size) and reuse across all passes.
+        self._boundary_pair_cache: Dict[int, Tuple[np.ndarray, ...]] = {}
         self.face_adjacency: List[List[int]] = self._build_face_adjacency()
         self.face_centroids: np.ndarray = self._compute_face_centroids()
         self.face_areas: np.ndarray = self._compute_face_areas()
@@ -269,6 +309,114 @@ class PolygonMesh:
                     _, r_b, c_b = pixels_b[k_b]
                     yield face_a, face_b, r_a, c_a, r_b, c_b
 
+    def _compute_boundary_pairs(self, tex_size: int) -> Tuple[np.ndarray, ...]:
+        """Batched equivalent of consuming :meth:`iter_boundary_pixel_pairs`.
+
+        Computes the edge-band geometry for both sides of every shared edge in
+        two vectorised passes, then runs the same per-pair t-matching. Produces
+        the six pair arrays in the exact same order the generator yields them.
+        """
+        coords = np.linspace(0.0, 1.0, tex_size)
+        u_grid, v_grid = np.meshgrid(coords, coords)
+        grid_u = u_grid.reshape(-1)                       # flat index = row*tex_size + col
+        grid_v = v_grid.reshape(-1)
+        tol_sq = (0.75 / (tex_size - 1)) ** 2
+        t_tol = 1.5 / (tex_size - 1)
+        _, _, _, _, _, _, vertex_uvs = self.face_tangent_frames()
+
+        # Enumerate qualifying face pairs and collect both sides' edge endpoints.
+        a0: List[np.ndarray] = []
+        a1: List[np.ndarray] = []
+        b0: List[np.ndarray] = []
+        b1: List[np.ndarray] = []
+        pair_faces: List[Tuple[int, int]] = []
+        for face_a, neighbors in enumerate(self.face_adjacency):
+            verts_a = self.faces[face_a]
+            verts_a_set = set(verts_a)
+            for face_b in neighbors:
+                if face_b <= face_a:
+                    continue
+                verts_b = self.faces[face_b]
+                shared = list(verts_a_set & set(verts_b))
+                if len(shared) != 2:
+                    continue
+                v0, v1 = shared
+                a0.append(vertex_uvs[face_a][verts_a.index(v0)])
+                a1.append(vertex_uvs[face_a][verts_a.index(v1)])
+                b0.append(vertex_uvs[face_b][verts_b.index(v0)])
+                b1.append(vertex_uvs[face_b][verts_b.index(v1)])
+                pair_faces.append((face_a, face_b))
+
+        fa_out: List[int] = []
+        fb_out: List[int] = []
+        ra_out: List[int] = []
+        ca_out: List[int] = []
+        rb_out: List[int] = []
+        cb_out: List[int] = []
+        if pair_faces:
+            a0 = np.asarray(a0, dtype=np.float64)
+            a1 = np.asarray(a1, dtype=np.float64)
+            b0 = np.asarray(b0, dtype=np.float64)
+            b1 = np.asarray(b1, dtype=np.float64)
+            # Chunk over pairs so the (chunk, tex_size²) band arrays stay bounded
+            # regardless of resolution (tex_size can be up to 128).
+            chunk = max(1, _BAND_BATCH_ELEMS // (tex_size * tex_size))
+            for c0 in range(0, len(pair_faces), chunk):
+                c1 = min(c0 + chunk, len(pair_faces))
+                ta, mask_a = _edge_band_batch(a0[c0:c1], a1[c0:c1], grid_u, grid_v, tol_sq)
+                tb, mask_b = _edge_band_batch(b0[c0:c1], b1[c0:c1], grid_u, grid_v, tol_sq)
+                for lp in range(c1 - c0):
+                    a_idx = np.where(mask_a[lp])[0]
+                    b_idx = np.where(mask_b[lp])[0]
+                    if a_idx.size == 0 or b_idx.size == 0:
+                        continue
+                    face_a, face_b = pair_faces[c0 + lp]
+                    ta_p = ta[lp, a_idx]
+                    oa = np.argsort(ta_p)
+                    a_idx = a_idx[oa]
+                    ta_p = ta_p[oa]
+                    tb_p = tb[lp, b_idx]
+                    ob = np.argsort(tb_p)
+                    b_idx = b_idx[ob]
+                    tb_p = tb_p[ob]
+                    for k in range(a_idx.size):
+                        diffs = np.abs(tb_p - ta_p[k])
+                        k_b = int(np.argmin(diffs))
+                        if diffs[k_b] > t_tol:
+                            continue
+                        ia = int(a_idx[k])
+                        ib = int(b_idx[k_b])
+                        fa_out.append(face_a)
+                        fb_out.append(face_b)
+                        ra_out.append(ia // tex_size)
+                        ca_out.append(ia % tex_size)
+                        rb_out.append(ib // tex_size)
+                        cb_out.append(ib % tex_size)
+
+        return tuple(
+            np.asarray(c, dtype=np.int32)
+            for c in (fa_out, fb_out, ra_out, ca_out, rb_out, cb_out)
+        )
+
+    def boundary_pixel_pairs(self, tex_size: int) -> Tuple[np.ndarray, ...]:
+        """Cached matched seam pixel pairs for an `tex_size`×`tex_size` grid.
+
+        Returns six parallel int32 arrays
+        ``(face_a, face_b, row_a, col_a, row_b, col_b)`` — one entry per matched
+        cross-edge pixel pair (always ``face_a < face_b``). The pairing is a pure
+        function of mesh geometry and `tex_size`, so it is computed once (batched,
+        equivalent to consuming :meth:`iter_boundary_pixel_pairs`) and cached;
+        subsequent seam-smoothing, ocean-mask, and jump-measurement passes reuse
+        the arrays instead of re-deriving every pair. Treat the result read-only.
+        """
+        cached = self._boundary_pair_cache.get(tex_size)
+        if cached is not None:
+            return cached
+
+        result = self._compute_boundary_pairs(tex_size)
+        self._boundary_pair_cache[tex_size] = result
+        return result
+
     def measure_boundary_texture_jumps(self, texture: np.ndarray) -> Dict[str, float]:
         """Measure discontinuities in a (N, H, W, C) texture at face boundaries.
 
@@ -279,16 +427,14 @@ class PolygonMesh:
             dict with keys mean, median, max, rms, n_pairs (in texture units).
         """
         tex_size = texture.shape[1]
-        all_jumps: List[float] = []
-        for face_a, face_b, r_a, c_a, r_b, c_b in self.iter_boundary_pixel_pairs(tex_size):
-            diff = np.abs(
-                texture[face_a, r_a, c_a, :].astype(np.float64)
-                - texture[face_b, r_b, c_b, :].astype(np.float64)
-            )
-            all_jumps.append(float(diff.mean()))
-        if not all_jumps:
+        fa, fb, ra, ca, rb, cb = self.boundary_pixel_pairs(tex_size)
+        if fa.size == 0:
             return {"mean": 0.0, "median": 0.0, "max": 0.0, "rms": 0.0, "n_pairs": 0}
-        jumps = np.array(all_jumps)
+        diff = np.abs(
+            texture[fa, ra, ca, :].astype(np.float64)
+            - texture[fb, rb, cb, :].astype(np.float64)
+        )                                                    # (n_pairs, C)
+        jumps = diff.mean(axis=1)                            # (n_pairs,)
         return {
             "mean":    float(np.mean(jumps)),
             "median":  float(np.median(jumps)),
