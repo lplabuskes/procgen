@@ -368,6 +368,10 @@ class MapWidget(QWidget):
                 and self._globe is not None
                 and self._globe.has_feature("volcanoes")):
             self._draw_volcanoes_overlay(painter, W, H, cx, cy, scale_x, scale_y)
+        if (self._overlay_visible.get("minerals")
+                and self._globe is not None
+                and self._globe.has_feature("minerals")):
+            self._draw_minerals_overlay(painter, W, H, cx, cy, scale_x, scale_y)
 
         self._draw_legend(painter, W, H)
 
@@ -584,6 +588,51 @@ class MapWidget(QWidget):
         painter.setBrush(QBrush(QColor(255, 80, 0, 200)))
         for i in range(len(positions)):
             painter.drawEllipse(QPointF(float(sx[i]), float(sy[i])), r, r)
+        painter.restore()
+
+    def _draw_minerals_overlay(
+        self,
+        painter: QPainter,
+        W: float, H: float,
+        cx: float, cy: float,
+        scale_x: float, scale_y: float,
+    ) -> None:
+        from worldgen.resources.minerals import MINERAL_PALETTE, N_MINERALS
+        feature = self._globe.get_feature("minerals")  # type: ignore[union-attr]
+        if feature is None:
+            return
+        positions, kinds, abundances = feature
+        if len(positions) == 0:
+            return
+        lon = np.arctan2(positions[:, 1], positions[:, 0])
+        lat = np.arcsin(np.clip(positions[:, 2], -1.0, 1.0))
+        proj = self._projection.project_lonlat(np.column_stack([lon, lat]))
+        sx = (proj[:, 0] - cx) * scale_x + W * 0.5
+        sy = -(proj[:, 1] - cy) * scale_y + H * 0.5
+        base_r = max(2.0, 3.5 * self._zoom ** 0.3)
+        painter.save()
+        kinds_i = np.clip(kinds.astype(np.int32), 0, N_MINERALS - 1)
+        for k in range(N_MINERALS):
+            mask = kinds_i == k
+            if not mask.any():
+                continue
+            rgba = MINERAL_PALETTE[k]
+            r_fill = int(rgba[0] * 255)
+            g_fill = int(rgba[1] * 255)
+            b_fill = int(rgba[2] * 255)
+            r_pen  = max(0, r_fill - 60)
+            g_pen  = max(0, g_fill - 60)
+            b_pen  = max(0, b_fill - 60)
+            painter.setPen(QPen(QColor(r_pen, g_pen, b_pen, 220), 1.0))
+            painter.setBrush(QBrush(QColor(r_fill, g_fill, b_fill, 210)))
+            k_abund = abundances[mask]
+            k_sx = sx[mask]
+            k_sy = sy[mask]
+            for i in range(len(k_sx)):
+                r = base_r * (0.7 + 0.6 * float(k_abund[i]))
+                painter.drawRect(
+                    QRectF(float(k_sx[i]) - r, float(k_sy[i]) - r, 2 * r, 2 * r)
+                )
         painter.restore()
 
     def _draw_rivers_overlay(

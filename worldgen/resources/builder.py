@@ -3,11 +3,11 @@
 Runs after climate + hydrology (with lake feedback already applied). Reads the
 `temperature`, `precipitation`, `elevation`, `ocean_mask`, and `lake_mask` face
 textures plus the per-face `biome` and `volcanic_activity` metadata. Attaches
-`fertility` and `forest_density` single-channel textures to the mesh, and writes
-per-face `fertility_mean` / `forest_density_mean` aggregates.
+`fertility` and `forest_density` single-channel textures to the mesh, writes
+per-face `fertility_mean` / `forest_density_mean` aggregates, and places mineral
+deposits (stored as `self.minerals` for the globe builder to register as a feature).
 
-See docs/resources_module_followups.md for deferred slices (crop suitability,
-mineral deposits, rare resources).
+See docs/resources_module_followups.md for deferred slices (rare resources).
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from worldgen.mesh.mymesh import PolygonMesh
 from worldgen.resources.crops import classify_crops
 from worldgen.resources.fertility import compute_fertility
 from worldgen.resources.forest import compute_forest_density
+from worldgen.resources.minerals import place_mineral_deposits
 from worldgen.resources.terrain import (
     face_elevation_range,
     face_hops_from_seeds,
@@ -73,12 +74,33 @@ class ForestDensityParams:
 
 
 @dataclass
+class MineralParams:
+    noise_frequency: float = _f(3.0, label="Noise frequency", min=0.5, max=12.0)
+    deposit_threshold: float = _f(0.55, label="Deposit threshold", min=0.1, max=0.95, step=0.05)
+    iron_deposit_threshold: float = _f(0.35, label="Iron threshold", min=0.1, max=0.95, step=0.05)
+    gold_deposit_threshold: float = _f(0.70, label="Gold threshold", min=0.1, max=0.95, step=0.05)
+    gem_deposit_threshold: float = _f(0.78, label="Gems threshold", min=0.1, max=0.95, step=0.05)
+    coal_deposit_threshold: float = _f(0.68, label="Coal threshold", min=0.1, max=0.95, step=0.05)
+    salt_deposit_threshold: float = _f(0.58, label="Salt threshold", min=0.1, max=0.95, step=0.05)
+    marble_deposit_threshold: float = _f(0.60, label="Marble threshold", min=0.1, max=0.95, step=0.05)
+    rare_metals_deposit_threshold: float = _f(0.75, label="Rare metals threshold", min=0.1, max=0.95, step=0.05)
+    volcanic_threshold_gold: float = _f(0.25, label="Gold/Gem volcanic min", min=0.0, max=1.0)
+    volcanic_threshold_gems: float = _f(0.40, label="Gems volcanic min", min=0.0, max=1.0)
+    volcanic_threshold_rare: float = _f(0.15, label="Rare metals volcanic min", min=0.0, max=1.0)
+    coal_min_boundary_hops: int = _f(3, label="Coal min boundary hops", min=0, max=16)
+    coal_max_elevation_km: float = _f(0.5, label="Coal max elevation (km)", min=-1.0, max=5.0)
+
+
+@dataclass
 class ResourcesParams:
     fertility: FertilityParams = field(
         default_factory=FertilityParams, metadata={"label": "Fertility"}
     )
     forest_density: ForestDensityParams = field(
         default_factory=ForestDensityParams, metadata={"label": "Forest density"}
+    )
+    minerals: MineralParams = field(
+        default_factory=MineralParams, metadata={"label": "Minerals"}
     )
     seed: Optional[int] = field(
         default=None,
@@ -125,6 +147,8 @@ class ResourcesBuilder:
         self.dominant_crop_textures: Optional[np.ndarray] = None   # (N, H, W, 1) uint8
         self.water_hops: Optional[np.ndarray] = None               # (N,) int
         self.volcanism_hops: Optional[np.ndarray] = None           # (N,) int
+        # Mineral deposits: 3-tuple (positions (M,3), kinds (M,) int8, abundances (M,) float32)
+        self.minerals: Optional[tuple] = None
 
     def build(
         self,
@@ -235,6 +259,28 @@ class ResourcesBuilder:
         mesh.apply_metadata_channel("fertility_mean", fertility_mean.tolist())
         mesh.apply_metadata_channel("forest_density_mean", forest_mean.tolist())
         mesh.apply_metadata_channel("dominant_crop", dominant_crop_face.tolist())
+
+        _report("Placing mineral deposits…")
+        mp = p.minerals
+        mineral_seed = int(p.seed if p.seed is not None else 0) + 99991
+        self.minerals = place_mineral_deposits(
+            mesh,
+            noise_frequency=mp.noise_frequency,
+            deposit_threshold=mp.deposit_threshold,
+            iron_deposit_threshold=mp.iron_deposit_threshold,
+            gold_deposit_threshold=mp.gold_deposit_threshold,
+            gem_deposit_threshold=mp.gem_deposit_threshold,
+            coal_deposit_threshold=mp.coal_deposit_threshold,
+            salt_deposit_threshold=mp.salt_deposit_threshold,
+            marble_deposit_threshold=mp.marble_deposit_threshold,
+            rare_metals_deposit_threshold=mp.rare_metals_deposit_threshold,
+            volcanic_threshold_gold=mp.volcanic_threshold_gold,
+            volcanic_threshold_gems=mp.volcanic_threshold_gems,
+            volcanic_threshold_rare=mp.volcanic_threshold_rare,
+            coal_min_boundary_hops=mp.coal_min_boundary_hops,
+            coal_max_elevation_km=mp.coal_max_elevation_km,
+            seed=mineral_seed,
+        )
 
         self.fertility_textures = fertility
         self.forest_density_textures = forest

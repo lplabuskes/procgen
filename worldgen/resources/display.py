@@ -7,6 +7,7 @@ from worldgen.climate.display import _interp_stops
 from worldgen.geology.display import OCEAN_COLOR
 from worldgen.hydrology.builder import LAKE_COLOR
 from worldgen.resources.crops import CROP_NAMES, N_CROPS
+from worldgen.resources.minerals import MINERAL_NAMES, MINERAL_PALETTE, N_MINERALS
 
 
 _OCEAN_RGBA = np.array(OCEAN_COLOR, dtype=np.float32)
@@ -132,6 +133,10 @@ def build_dominant_crop_display_texture(
     idx = np.clip(crop_tex[..., 0].astype(np.int32), 0, N_CROPS - 1)
     rgba = _CROP_PALETTE[idx].copy()                          # (N, H, W, 4)
     return _apply_water_masks(rgba, None, ocean_mask_tex, lake_mask_tex)
+
+
+def mineral_legend_entries() -> list[tuple[str, tuple]]:
+    return [(name, tuple(MINERAL_PALETTE[i].tolist())) for i, name in enumerate(MINERAL_NAMES)]
 
 
 def build_forest_density_display_texture(

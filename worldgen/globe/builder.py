@@ -40,6 +40,7 @@ from worldgen.resources.display import (
     fertility_legend_entries,
     forest_density_color,
     forest_density_legend_entries,
+    mineral_legend_entries,
 )
 from worldgen.globe.globe import Globe
 
@@ -157,6 +158,10 @@ class GlobeBuilder:
                 and len(self.elevation_builder.volcano_positions) > 0):
             globe.add_feature("volcanoes", self.elevation_builder.volcano_positions)
 
+        rb = self.resources_builder
+        if rb.minerals is not None and len(rb.minerals[0]) > 0:
+            globe.add_feature("minerals", rb.minerals)
+
         if cb.winds is not None:
             centroids = mesh.face_centroids.astype(np.float32)
             winds_feature = []
@@ -265,7 +270,7 @@ class GlobeBuilder:
         ocean_mask_tex = mesh.face_textures.get("ocean_mask")
         lake_mask_tex = mesh.face_textures.get("lake_mask")
         elev_tex_for_resources = mesh.face_textures.get("elevation")
-        if "fertility" in mesh.face_textures:
+        if debug and "fertility" in mesh.face_textures:
             mesh.set_face_textures(
                 "fertility_rgba",
                 build_fertility_display_texture(
@@ -276,7 +281,7 @@ class GlobeBuilder:
                 ),
             )
             schemes["Fertility"] = fertility_color
-        if "forest_density" in mesh.face_textures:
+        if debug and "forest_density" in mesh.face_textures:
             mesh.set_face_textures(
                 "forest_density_rgba",
                 build_forest_density_display_texture(
@@ -288,7 +293,7 @@ class GlobeBuilder:
             )
             schemes["Forest Density"] = forest_density_color
 
-        if debug and "dominant_crop" in mesh.face_textures:
+        if "dominant_crop" in mesh.face_textures:
             mesh.set_face_textures(
                 "dominant_crop_rgba",
                 build_dominant_crop_display_texture(
@@ -314,13 +319,13 @@ class GlobeBuilder:
                 window.register_legend("Summer Temperature", "gradient", temperature_legend_entries())
                 window.register_legend("Winter Temperature", "gradient", temperature_legend_entries())
                 window.register_legend("Annual Precipitation", "gradient", precipitation_legend_entries())
-        if "fertility" in mesh.face_textures:
+        if debug and "fertility" in mesh.face_textures:
             window.associate_scheme_texture("Fertility", "fertility_rgba")
             window.register_legend("Fertility", "gradient", fertility_legend_entries())
-        if "forest_density" in mesh.face_textures:
+        if debug and "forest_density" in mesh.face_textures:
             window.associate_scheme_texture("Forest Density", "forest_density_rgba")
             window.register_legend("Forest Density", "gradient", forest_density_legend_entries())
-        if debug and "dominant_crop" in mesh.face_textures:
+        if "dominant_crop" in mesh.face_textures:
             window.associate_scheme_texture("Dominant Crop", "dominant_crop_rgba")
             window.register_legend("Dominant Crop", "categorical", crop_legend_entries())
         if hb.rivers:
@@ -334,24 +339,32 @@ class GlobeBuilder:
             window.add_overlay("deltas", label="River Deltas", checked=False)
         if debug and self.globe is not None and self.globe.has_feature("volcanoes"):
             window.add_overlay("volcanoes", label="Volcanoes", checked=False)
+        if self.globe is not None and self.globe.has_feature("minerals"):
+            window.add_overlay("minerals", label="Minerals", checked=True)
+            window.register_legend("minerals", "categorical", mineral_legend_entries())
 
         if debug:
             from worldgen.climate.classification import BIOME_NAMES
+            from worldgen.resources.minerals import MINERAL_NAMES
+
+            _minerals_by_face: dict[int, list[tuple[str, float]]] = {}
+            if self.globe is not None and self.globe.has_feature("minerals"):
+                _m_pos, _m_kinds, _m_abund = self.globe.get_feature("minerals")
+                _centroids_f32 = mesh.face_centroids.astype(np.float32)
+                _pos_to_face = {tuple(c): i for i, c in enumerate(_centroids_f32)}
+                for _p, _k, _a in zip(_m_pos, _m_kinds, _m_abund):
+                    _fi = _pos_to_face.get(tuple(_p))
+                    if _fi is not None:
+                        _minerals_by_face.setdefault(_fi, []).append(
+                            (MINERAL_NAMES[int(_k)], float(_a))
+                        )
 
             def _hover_cb(face_src: Optional[int], uv: Optional[np.ndarray]) -> None:
                 if face_src is None:
                     window.set_status("")
                     return
                 meta = mesh.face_metadata[face_src]
-                parts: list[str] = [f"Face {face_src}"]
-                if "elevation" in meta:
-                    parts.append(f"Elev: {meta['elevation']:.2f} km")
-                if "plate_type" in meta:
-                    parts.append(str(meta["plate_type"]))
-                if "boundary_type" in meta:
-                    bt = str(meta["boundary_type"])
-                    if bt != "interior":
-                        parts.append(bt)
+                parts: list[str] = []
                 if "biome" in meta:
                     parts.append(BIOME_NAMES[int(meta["biome"])])
                 if "temperature_annual" in meta:
@@ -368,6 +381,9 @@ class GlobeBuilder:
                     crop_name = CROP_NAMES[idx] if 0 <= idx < len(CROP_NAMES) else "?"
                     if crop_name != "None":
                         parts.append(f"Crop: {crop_name}")
+                if face_src in _minerals_by_face:
+                    _best = max(_minerals_by_face[face_src], key=lambda x: x[1])
+                    parts.append(f"{_best[0]}: {_best[1]:.2f}")
                 if uv is not None and "elevation" in mesh.face_textures:
                     elev_tex = mesh.face_textures["elevation"]
                     H_t, W_t = elev_tex.shape[1:3]
