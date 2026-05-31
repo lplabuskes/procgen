@@ -260,8 +260,8 @@ class ResourcesBuilder:
             ocean_mask_tex=ocean_mask_tex,
         )                                                          # (N, H, W, 1) uint8
 
-        mesh.set_face_textures("fertility", fertility, n_channels=1)
-        mesh.set_face_textures("forest_density", forest, n_channels=1)
+        mesh.set_face_textures("fertility", fertility.astype(np.float16), n_channels=1)
+        mesh.set_face_textures("forest_density", forest.astype(np.float16), n_channels=1)
         mesh.set_face_textures("dominant_crop", dominant_crop, n_channels=1)
 
         fertility_mean = fertility[..., 0].mean(axis=(1, 2)).astype(np.float32)

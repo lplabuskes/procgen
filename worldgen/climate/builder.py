@@ -330,9 +330,9 @@ class ClimateBuilder:
         if biome_tex.dtype != np.uint8:
             biome_tex = biome_tex.astype(np.uint8)
 
-        mesh.set_face_textures("temperature", t_pixel, n_channels=N_SEASONS)
-        mesh.set_face_textures("precipitation", p_pixel, n_channels=N_SEASONS)
-        mesh.set_face_textures("humidity", h_pixel, n_channels=N_SEASONS)
+        mesh.set_face_textures("temperature", t_pixel.astype(np.float16), n_channels=N_SEASONS)
+        mesh.set_face_textures("precipitation", p_pixel.astype(np.float16), n_channels=N_SEASONS)
+        mesh.set_face_textures("humidity", h_pixel.astype(np.float16), n_channels=N_SEASONS)
         mesh.set_face_textures("biome", biome_tex, n_channels=1)
 
         # Per-face metadata aggregates — p_face derived from pixel averages for consistency.
@@ -452,8 +452,8 @@ class ClimateBuilder:
         if biome_tex.dtype != np.uint8:
             biome_tex = biome_tex.astype(np.uint8)
 
-        mesh.set_face_textures("precipitation", p_pixel, n_channels=N_SEASONS)
-        mesh.set_face_textures("humidity", h_pixel, n_channels=N_SEASONS)
+        mesh.set_face_textures("precipitation", p_pixel.astype(np.float16), n_channels=N_SEASONS)
+        mesh.set_face_textures("humidity", h_pixel.astype(np.float16), n_channels=N_SEASONS)
         mesh.set_face_textures("biome", biome_tex, n_channels=1)
 
         # Refresh per-face metadata aggregates.

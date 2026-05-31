@@ -195,11 +195,11 @@ class PolygonMesh:
     def set_face_textures(self, name: str, textures: np.ndarray, n_channels: int = 4) -> None:
         """Add or replace a named texture layer.
 
-        Shape must be (N_faces, H, W, n_channels). Dtype must be float32 or uint8.
-        Use n_channels=4 for display textures (RGBA); use n_channels=1 for
+        Shape must be (N_faces, H, W, n_channels). Dtype must be float32, float16,
+        or uint8. Use n_channels=4 for display textures (RGBA); use n_channels=1 for
         single-channel data layers (elevation, lake mask, biome index, etc.).
-        Dtype is preserved as-is — pass uint8 for integer-index layers, float32
-        for everything else.
+        Dtype is preserved as-is — pass uint8 for integer-index layers, float16
+        for bounded continuous data, float32 for everything else.
         """
         if textures.ndim != 4:
             raise ValueError(f"textures must be 4-D (N, H, W, C), got shape {textures.shape}")
@@ -209,9 +209,9 @@ class PolygonMesh:
             raise ValueError(
                 f"textures channel count {textures.shape[3]} != n_channels={n_channels}"
             )
-        if textures.dtype not in (np.float32, np.uint8):
+        if textures.dtype not in (np.float32, np.float16, np.uint8):
             raise ValueError(
-                f"textures dtype must be float32 or uint8, got {textures.dtype}"
+                f"textures dtype must be float32, float16, or uint8, got {textures.dtype}"
             )
         self.face_textures[name] = textures
 
