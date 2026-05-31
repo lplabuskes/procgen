@@ -5,6 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Working Style
 
 - Ask for clarification rather than churning your wheels. If the task or approach is ambiguous, ask before attempting.
+- Assume visuals should be limited to debug mode, ask before adding to the main view.
 
 
 ## Running the Project

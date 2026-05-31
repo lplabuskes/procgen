@@ -21,6 +21,7 @@ from worldgen.resources.crops import classify_crops
 from worldgen.resources.fertility import compute_fertility
 from worldgen.resources.forest import compute_forest_density
 from worldgen.resources.minerals import place_mineral_deposits
+from worldgen.resources.rare_bio import place_rare_bio_resources
 from worldgen.resources.terrain import (
     face_elevation_range,
     face_hops_from_seeds,
@@ -74,6 +75,22 @@ class ForestDensityParams:
 
 
 @dataclass
+class RareBioParams:
+    noise_frequency: float = _f(4.0, label="Noise frequency", min=1.0, max=12.0)
+    base_threshold: float = _f(0.70, label="Base threshold", min=0.3, max=0.95, step=0.05)
+    max_spices: int = _f(8,  label="Max Spices",  min=0, max=30)
+    max_tea:    int = _f(8,  label="Max Tea",     min=0, max=30)
+    max_silk:   int = _f(5,  label="Max Silk",    min=0, max=20)
+    max_ivory:  int = _f(6,  label="Max Ivory",   min=0, max=20)
+    max_furs:   int = _f(10, label="Max Furs",    min=0, max=30)
+    max_incense: int = _f(6, label="Max Incense", min=0, max=20)
+    max_dyes:   int = _f(12, label="Max Dyes",    min=0, max=40)
+    max_amber:  int = _f(5,  label="Max Amber",   min=0, max=20)
+    max_rubber: int = _f(6,  label="Max Rubber",  min=0, max=20)
+    max_pearls: int = _f(6,  label="Max Pearls",  min=0, max=20)
+
+
+@dataclass
 class MineralParams:
     noise_frequency: float = _f(3.0, label="Noise frequency", min=0.5, max=12.0)
     deposit_threshold: float = _f(0.55, label="Deposit threshold", min=0.1, max=0.95, step=0.05)
@@ -101,6 +118,9 @@ class ResourcesParams:
     )
     minerals: MineralParams = field(
         default_factory=MineralParams, metadata={"label": "Minerals"}
+    )
+    rare_bio: RareBioParams = field(
+        default_factory=RareBioParams, metadata={"label": "Rare Resources"}
     )
     seed: Optional[int] = field(
         default=None,
@@ -149,6 +169,8 @@ class ResourcesBuilder:
         self.volcanism_hops: Optional[np.ndarray] = None           # (N,) int
         # Mineral deposits: 3-tuple (positions (M,3), kinds (M,) int8, abundances (M,) float32)
         self.minerals: Optional[tuple] = None
+        # Rare biological resources: same 3-tuple format as minerals.
+        self.rare_bio: Optional[tuple] = None
 
     def build(
         self,
@@ -280,6 +302,26 @@ class ResourcesBuilder:
             coal_min_boundary_hops=mp.coal_min_boundary_hops,
             coal_max_elevation_km=mp.coal_max_elevation_km,
             seed=mineral_seed,
+        )
+
+        _report("Placing rare biological resources…")
+        rbp = p.rare_bio
+        rare_bio_seed = int(p.seed if p.seed is not None else 0) + 55557
+        self.rare_bio = place_rare_bio_resources(
+            mesh,
+            noise_frequency=rbp.noise_frequency,
+            base_threshold=rbp.base_threshold,
+            max_spices=rbp.max_spices,
+            max_tea=rbp.max_tea,
+            max_silk=rbp.max_silk,
+            max_ivory=rbp.max_ivory,
+            max_furs=rbp.max_furs,
+            max_incense=rbp.max_incense,
+            max_dyes=rbp.max_dyes,
+            max_amber=rbp.max_amber,
+            max_rubber=rbp.max_rubber,
+            max_pearls=rbp.max_pearls,
+            seed=rare_bio_seed,
         )
 
         self.fertility_textures = fertility

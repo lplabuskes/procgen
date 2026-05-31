@@ -41,6 +41,7 @@ from worldgen.resources.display import (
     forest_density_color,
     forest_density_legend_entries,
     mineral_legend_entries,
+    rare_bio_legend_entries,
 )
 from worldgen.globe.globe import Globe
 
@@ -161,6 +162,8 @@ class GlobeBuilder:
         rb = self.resources_builder
         if rb.minerals is not None and len(rb.minerals[0]) > 0:
             globe.add_feature("minerals", rb.minerals)
+        if rb.rare_bio is not None and len(rb.rare_bio[0]) > 0:
+            globe.add_feature("rare_bio", rb.rare_bio)
 
         if cb.winds is not None:
             centroids = mesh.face_centroids.astype(np.float32)
@@ -340,26 +343,42 @@ class GlobeBuilder:
         if debug and self.globe is not None and self.globe.has_feature("volcanoes"):
             window.add_overlay("volcanoes", label="Volcanoes", checked=False)
         if self.globe is not None and self.globe.has_feature("minerals"):
-            window.add_overlay("minerals", label="Minerals", checked=True)
+            window.add_overlay("minerals", label="Minerals", checked=False)
             window.register_legend("minerals", "categorical", mineral_legend_entries())
+        if debug and self.globe is not None and self.globe.has_feature("rare_bio"):
+            window.add_overlay("rare_bio", label="Rare Resources", checked=False)
+            window.register_legend("rare_bio", "categorical", rare_bio_legend_entries())
+
+        # Build resource-to-face lookup dicts — used by both hover callbacks.
+        _centroids_f32 = mesh.face_centroids.astype(np.float32)
+        _pos_to_face = {tuple(c): i for i, c in enumerate(_centroids_f32)}
+
+        _minerals_by_face: dict[int, list[tuple[str, float]]] = {}
+        if self.globe is not None and self.globe.has_feature("minerals"):
+            from worldgen.resources.minerals import MINERAL_NAMES
+            _m_pos, _m_kinds, _m_abund = self.globe.get_feature("minerals")
+            for _p, _k, _a in zip(_m_pos, _m_kinds, _m_abund):
+                _fi = _pos_to_face.get(tuple(_p))
+                if _fi is not None:
+                    _minerals_by_face.setdefault(_fi, []).append(
+                        (MINERAL_NAMES[int(_k)], float(_a))
+                    )
 
         if debug:
             from worldgen.climate.classification import BIOME_NAMES
-            from worldgen.resources.minerals import MINERAL_NAMES
 
-            _minerals_by_face: dict[int, list[tuple[str, float]]] = {}
-            if self.globe is not None and self.globe.has_feature("minerals"):
-                _m_pos, _m_kinds, _m_abund = self.globe.get_feature("minerals")
-                _centroids_f32 = mesh.face_centroids.astype(np.float32)
-                _pos_to_face = {tuple(c): i for i, c in enumerate(_centroids_f32)}
-                for _p, _k, _a in zip(_m_pos, _m_kinds, _m_abund):
+            _rare_bio_by_face: dict[int, list[tuple[str, float]]] = {}
+            if self.globe is not None and self.globe.has_feature("rare_bio"):
+                from worldgen.resources.rare_bio import RARE_BIO_NAMES
+                _rb_pos, _rb_kinds, _rb_abund = self.globe.get_feature("rare_bio")
+                for _p, _k, _a in zip(_rb_pos, _rb_kinds, _rb_abund):
                     _fi = _pos_to_face.get(tuple(_p))
                     if _fi is not None:
-                        _minerals_by_face.setdefault(_fi, []).append(
-                            (MINERAL_NAMES[int(_k)], float(_a))
+                        _rare_bio_by_face.setdefault(_fi, []).append(
+                            (RARE_BIO_NAMES[int(_k)], float(_a))
                         )
 
-            def _hover_cb(face_src: Optional[int], uv: Optional[np.ndarray]) -> None:
+            def _hover_debug(face_src: Optional[int], uv: Optional[np.ndarray]) -> None:
                 if face_src is None:
                     window.set_status("")
                     return
@@ -384,6 +403,8 @@ class GlobeBuilder:
                 if face_src in _minerals_by_face:
                     _best = max(_minerals_by_face[face_src], key=lambda x: x[1])
                     parts.append(f"{_best[0]}: {_best[1]:.2f}")
+                for _name, _abund in _rare_bio_by_face.get(face_src, []):
+                    parts.append(f"{_name}: {_abund:.2f}")
                 if uv is not None and "elevation" in mesh.face_textures:
                     elev_tex = mesh.face_textures["elevation"]
                     H_t, W_t = elev_tex.shape[1:3]
@@ -393,6 +414,19 @@ class GlobeBuilder:
                     parts.append(f"[px: {px_elev:.2f} km]")
                 window.set_status("  |  ".join(parts))
 
-            window.set_hover_callback(_hover_cb)
+            window.set_hover_callback(_hover_debug)
+
+        else:
+            def _hover_simple(face_src: Optional[int], *_) -> None:
+                if face_src is None:
+                    window.set_status("")
+                    return
+                parts: list[str] = []
+                if face_src in _minerals_by_face:
+                    _best = max(_minerals_by_face[face_src], key=lambda x: x[1])
+                    parts.append(f"{_best[0]}: {_best[1]:.2f}")
+                window.set_status("  |  ".join(parts))
+
+            window.set_hover_callback(_hover_simple)
 
         _ = BIOME_PALETTE  # re-exported for downstream consumers
