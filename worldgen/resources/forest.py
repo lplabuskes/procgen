@@ -117,7 +117,7 @@ def compute_forest_density(
     Args:
         precipitation_tex: (N, H, W, K) float32 mm/season.
         elevation_tex: (N, H, W, 1) float32 km.
-        ocean_mask_tex: (N, H, W, 1) float32; 1=ocean.
+        ocean_mask_tex: (N, H, W, 1) uint8; 1=ocean.
         face_biome: (N,) int — per-face biome index.
         riparian_hops: (N,) int — face-graph hops from any river/lake face.
         pixel_positions: (N, H, W, 3) float32 unit-sphere positions, or None
@@ -178,7 +178,7 @@ def compute_forest_density(
     density = baseline_tex * p_modulation * treeline + riparian_tex + noise
     density = np.clip(density, 0.0, 1.0)
 
-    ocean = ocean_mask_tex[..., 0] > 0.5
+    ocean = ocean_mask_tex[..., 0] > 0
     density = np.where(ocean, 0.0, density).astype(np.float32)
 
     return density[..., None]

@@ -141,7 +141,7 @@ def _apply_ocean_mask(rgba: np.ndarray,
                       elevation_tex: np.ndarray | None,
                       ocean_mask_tex: np.ndarray | None = None) -> np.ndarray:
     if ocean_mask_tex is not None:
-        ocean = ocean_mask_tex[..., 0] > 0.5
+        ocean = ocean_mask_tex[..., 0] > 0
     elif elevation_tex is not None:
         ocean = elevation_tex[..., 0] < 0.0
     else:

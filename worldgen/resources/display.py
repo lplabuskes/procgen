@@ -74,13 +74,13 @@ def _apply_water_masks(
     lake_mask_tex: np.ndarray | None,
 ) -> np.ndarray:
     if ocean_mask_tex is not None:
-        ocean = ocean_mask_tex[..., 0] > 0.5
+        ocean = ocean_mask_tex[..., 0] > 0
         rgba[ocean] = _OCEAN_RGBA
     elif elevation_tex is not None:
         ocean = elevation_tex[..., 0] < 0.0
         rgba[ocean] = _OCEAN_RGBA
     if lake_mask_tex is not None:
-        lake = lake_mask_tex[..., 0] > 0.5
+        lake = lake_mask_tex[..., 0] > 0
         rgba[lake] = _LAKE_RGBA
     return rgba
 

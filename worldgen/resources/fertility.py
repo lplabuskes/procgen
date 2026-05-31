@@ -159,7 +159,7 @@ def compute_fertility(
     Args:
         temperature_tex: (N, H, W, K) float32 °C.
         precipitation_tex: (N, H, W, K) float32 mm/season.
-        ocean_mask_tex: (N, H, W, 1) float32; 1=ocean.
+        ocean_mask_tex: (N, H, W, 1) uint8; 1=ocean.
         face_biome: (N,) int — per-face biome index (from `mesh.face_metadata`).
         face_elev_range_km: (N,) float32 — pixel elevation span per face.
         water_hops: (N,) int — face-graph hops from any river/lake face.
@@ -221,7 +221,7 @@ def compute_fertility(
 
     fertility = np.clip(fertility, 0.0, 1.0)
 
-    ocean = ocean_mask_tex[..., 0] > 0.5                             # (N, H, W) bool
+    ocean = ocean_mask_tex[..., 0] > 0                               # (N, H, W) bool
     fertility = np.where(ocean, 0.0, fertility).astype(np.float32)
 
     return fertility[..., None]

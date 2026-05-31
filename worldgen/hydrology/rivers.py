@@ -738,6 +738,6 @@ class RiverGenerator:
         return self._eff.reshape(self.n_faces, res, res, 1).astype(np.float32)
 
     def get_lake_mask_texture(self) -> np.ndarray:
-        """(N, H, W, 1) float32 lake mask; 1.0 inside a lake. Call after generate()."""
+        """(N, H, W, 1) uint8 lake mask; 1 inside a lake. Call after generate()."""
         res = self.resolution
-        return self._lake_mask.reshape(self.n_faces, res, res, 1).astype(np.float32)
+        return self._lake_mask.reshape(self.n_faces, res, res, 1).astype(np.uint8)

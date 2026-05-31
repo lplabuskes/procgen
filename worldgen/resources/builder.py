@@ -123,14 +123,14 @@ def _face_modal_crop(crop_tex: np.ndarray, ocean_mask: np.ndarray) -> np.ndarray
 
     Args:
         crop_tex: (N, H, W) uint8 crop indices.
-        ocean_mask: (N, H, W) float32; 1 = ocean.
+        ocean_mask: (N, H, W) uint8; 1 = ocean.
 
     Returns:
         (N,) int — modal crop index per face (0 = None if all ocean).
     """
     n = crop_tex.shape[0]
     result = np.zeros(n, dtype=np.int32)
-    land = ocean_mask < 0.5                                    # (N, H, W) bool
+    land = ocean_mask == 0                                      # (N, H, W) bool
     for i in range(n):
         land_pixels = crop_tex[i][land[i]]
         if land_pixels.size == 0:

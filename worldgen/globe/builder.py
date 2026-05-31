@@ -53,11 +53,11 @@ def build_elevation_display_texture(mesh) -> np.ndarray:
     elev_tex = mesh.face_textures["elevation"]          # (N, H, W, 1)
     ocean_mask = None
     if "ocean_mask" in mesh.face_textures:
-        ocean_mask = mesh.face_textures["ocean_mask"][:, :, :, 0] > 0.5  # (N, H, W) bool
+        ocean_mask = mesh.face_textures["ocean_mask"][:, :, :, 0] > 0  # (N, H, W) bool
     rgba = _elevation_color_vec(elev_tex[:, :, :, 0], ocean_mask=ocean_mask)  # (N, H, W, 4)
     if "lake_mask" in mesh.face_textures:
         lake_tex = mesh.face_textures["lake_mask"]       # (N, H, W, 1)
-        rgba[lake_tex[:, :, :, 0] > 0.5] = LAKE_COLOR
+        rgba[lake_tex[:, :, :, 0] > 0] = LAKE_COLOR
     return rgba
 
 
@@ -73,7 +73,7 @@ def build_biome_display_texture(mesh) -> np.ndarray:
     idx = np.clip(idx, 0, len(BIOME_PALETTE) - 1)
     rgba = BIOME_PALETTE[idx].copy()
     if "ocean_mask" in mesh.face_textures:
-        ocean = mesh.face_textures["ocean_mask"][..., 0] > 0.5
+        ocean = mesh.face_textures["ocean_mask"][..., 0] > 0
         rgba[ocean] = np.asarray(OCEAN_COLOR, dtype=rgba.dtype)
     elif "elevation" in mesh.face_textures:
         elev_tex = mesh.face_textures["elevation"]       # (N, H, W, 1)
@@ -81,7 +81,7 @@ def build_biome_display_texture(mesh) -> np.ndarray:
         rgba[ocean] = np.asarray(OCEAN_COLOR, dtype=rgba.dtype)
     if "lake_mask" in mesh.face_textures:
         lake_tex = mesh.face_textures["lake_mask"]       # (N, H, W, 1)
-        rgba[lake_tex[:, :, :, 0] > 0.5] = LAKE_COLOR
+        rgba[lake_tex[:, :, :, 0] > 0] = LAKE_COLOR
     return rgba
 
 

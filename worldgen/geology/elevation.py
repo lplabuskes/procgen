@@ -504,7 +504,7 @@ def compute_ocean_mask_texture(
         unreachable from any core ocean face remain land.
 
     Returns:
-        float32 (N, H, W, 1) with 1.0 = ocean pixel, 0.0 = land pixel.
+        uint8 (N, H, W, 1) with 1 = ocean pixel, 0 = land pixel.
     """
     N, H, W, _ = elevation_textures.shape
     elevs = elevation_textures[:, :, :, 0]    # (N, H, W)
@@ -578,4 +578,4 @@ def compute_ocean_mask_texture(
                 mask_flat[n] = True
                 pixel_queue.append(n)
 
-    return ocean_mask[:, :, :, np.newaxis].astype(np.float32)
+    return ocean_mask[:, :, :, np.newaxis].astype(np.uint8)
