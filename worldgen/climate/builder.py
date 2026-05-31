@@ -341,15 +341,12 @@ class ClimateBuilder:
         t_warmest = t_face.max(axis=1)
         t_coldest = t_face.min(axis=1)
         p_annual = p_face.sum(axis=1)
-        p_range = p_face.max(axis=1) - p_face.min(axis=1)
-        p_seasonality = p_range / np.maximum(p_annual, 1e-6)
         biome_face = _dominant_biome_per_face(biome_tex)
 
         mesh.apply_metadata_channel("temperature_annual", t_annual.tolist())
         mesh.apply_metadata_channel("temperature_warmest", t_warmest.tolist())
         mesh.apply_metadata_channel("temperature_coldest", t_coldest.tolist())
         mesh.apply_metadata_channel("precipitation_annual", p_annual.tolist())
-        mesh.apply_metadata_channel("precipitation_seasonality", p_seasonality.tolist())
         mesh.apply_metadata_channel("biome", [int(b) for b in biome_face])
         mesh.apply_metadata_channel("distance_to_coast", dist_coast.tolist())
         mesh.apply_metadata_channel("humidity_annual", q_air.mean(axis=1).tolist())
@@ -459,11 +456,8 @@ class ClimateBuilder:
         # Refresh per-face metadata aggregates.
         p_face = p_pixel.mean(axis=(1, 2))                             # (N, K)
         p_annual = p_face.sum(axis=1)
-        p_range = p_face.max(axis=1) - p_face.min(axis=1)
-        p_seasonality = p_range / np.maximum(p_annual, 1e-6)
         biome_face = _dominant_biome_per_face(biome_tex)
         mesh.apply_metadata_channel("precipitation_annual", p_annual.tolist())
-        mesh.apply_metadata_channel("precipitation_seasonality", p_seasonality.tolist())
         mesh.apply_metadata_channel("biome", [int(b) for b in biome_face])
         mesh.apply_metadata_channel("humidity_annual", q_updated.mean(axis=1).tolist())
         self.precipitation_face = p_face

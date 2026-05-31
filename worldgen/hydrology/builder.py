@@ -70,7 +70,7 @@ class HydrologyBuilder:
 
         filled_height = river_gen.get_filled_height_texture()  # (N, H, W, 1)
         lake_mask = river_gen.get_lake_mask_texture()          # (N, H, W, 1)
-        mesh.set_face_textures("filled_height", filled_height, n_channels=1)
+        mesh.set_face_textures("filled_height", filled_height.astype(np.float16), n_channels=1)
         mesh.set_face_textures("lake_mask", lake_mask, n_channels=1)
 
         delta_pts: list[np.ndarray] = []

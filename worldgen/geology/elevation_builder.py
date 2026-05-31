@@ -177,7 +177,6 @@ class ElevationBuilder:
         speeds = np.linalg.norm(face_velocities, axis=1)
         dual.apply_metadata_channel("plate_id", plate_ids)
         dual.apply_metadata_channel("boundary_type", boundary_types)
-        dual.apply_metadata_channel("surface_velocity", [tuple(v) for v in face_velocities])
         dual.apply_metadata_channel("surface_speed", speeds.tolist())
 
         _report("Computing elevations…")
@@ -244,7 +243,7 @@ class ElevationBuilder:
         # Derive per-face elevations from the final texture for land/ocean masking.
         final_elevations = face_elevations_from_texture(elevation_textures)
 
-        dual.set_face_textures("elevation", elevation_textures, n_channels=1)
+        dual.set_face_textures("elevation", elevation_textures.astype(np.float16), n_channels=1)
 
         _report("Computing ocean mask…")
         ocean_mask = compute_ocean_mask_texture(dual, elevation_textures)
