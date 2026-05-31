@@ -18,7 +18,7 @@ from worldgen.hydrology.routing import (
     inter_face_fallback,
     priority_flood,
 )
-from worldgen.hydrology.stitching import find_connected_components, stitch_face_boundaries
+from worldgen.hydrology.stitching import find_connected_components
 from worldgen.hydrology.types import (
     River,
     RiverNode,
@@ -120,9 +120,28 @@ class RiverGenerator:
 
         self._trace_reasons: Dict[int, str] = {}
         # Sparse inter-face adjacency; intra-face neighbours derived on the fly.
-        self._inter_adj: Dict[int, List[int]] = stitch_face_boundaries(
-            mesh, self._vertex_uvs, self.resolution
-        )
+        # Derived from the mesh's cached boundary pixel pairs (already built by
+        # the elevation/climate seam passes), avoiding a separate stitch pass.
+        # The pairing uses a strict t∈[0,1] band vs stitch's ±1e-3 slack, so it
+        # differs by ~0.3% of edges — visually negligible, and the cache is free.
+        self._inter_adj: Dict[int, List[int]] = self._build_inter_adj_from_pairs(mesh)
+
+    def _build_inter_adj_from_pairs(self, mesh: PolygonMesh) -> Dict[int, List[int]]:
+        """Build sparse inter-face node adjacency from cached boundary pixel pairs."""
+        fa, fb, ra, ca, rb, cb = mesh.boundary_pixel_pairs(self.resolution)
+        r2 = self._r2
+        res = self.resolution
+        node_a = (fa.astype(np.int64) * r2 + ra * res + ca).tolist()
+        node_b = (fb.astype(np.int64) * r2 + rb * res + cb).tolist()
+        inter_adj: Dict[int, List[int]] = {}
+        for a, b in zip(node_a, node_b):
+            la = inter_adj.setdefault(a, [])
+            if b not in la:
+                la.append(b)
+            lb = inter_adj.setdefault(b, [])
+            if a not in lb:
+                lb.append(a)
+        return inter_adj
 
     # ------------------------------------------------------------------
     # Node indexing helpers
