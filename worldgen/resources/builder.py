@@ -55,7 +55,7 @@ class FertilityParams:
     volcanic_max_hops: int = _f(6, label="Volcanic max hops", min=0, max=16)
     volcanism_threshold: float = _f(0.2, label="Volcanism threshold", min=0.0, max=1.0)
     forest_penalty_strength: float = _f(
-        0.20, label="Forest penalty strength", min=0.0, max=1.0
+        0.30, label="Forest penalty strength", min=0.0, max=1.0
     )
 
 
@@ -77,7 +77,7 @@ class ForestDensityParams:
 class MineralParams:
     noise_frequency: float = _f(3.0, label="Noise frequency", min=0.5, max=12.0)
     deposit_threshold: float = _f(0.55, label="Deposit threshold", min=0.1, max=0.95, step=0.05)
-    iron_deposit_threshold: float = _f(0.35, label="Iron threshold", min=0.1, max=0.95, step=0.05)
+    iron_deposit_threshold: float = _f(0.3, label="Iron threshold", min=0.1, max=0.95, step=0.05)
     gold_deposit_threshold: float = _f(0.70, label="Gold threshold", min=0.1, max=0.95, step=0.05)
     gem_deposit_threshold: float = _f(0.78, label="Gems threshold", min=0.1, max=0.95, step=0.05)
     coal_deposit_threshold: float = _f(0.68, label="Coal threshold", min=0.1, max=0.95, step=0.05)

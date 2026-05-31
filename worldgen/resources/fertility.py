@@ -5,7 +5,10 @@ optionally docked by a small per-pixel forest penalty:
     fertility = clip((climate × terrain × water × geology × biome_mod)
                      × (1 - forest_penalty_strength × forest_density), 0, 1)
 
-- `climate` (per-pixel): bell-curve in growing-season T and log-precipitation.
+- `climate` (per-face): bell-curve in per-face mean growing-season T and
+  log-precipitation. Computed as a per-face scalar so it can be rasterized
+  (blended across face boundaries) instead of using raw per-pixel textures
+  that are not continuous at face edges.
 - `terrain` (per-face): penalty for rugged faces, using per-face pixel
   elevation range as a proxy for "is this a mountainous area". We deliberately
   avoid per-pixel slope from the elevation texture — at default resolution,
@@ -22,7 +25,7 @@ optionally docked by a small per-pixel forest penalty:
   rainforest problem). A small multiplicative penalty proportional to the
   forest-density texture from `compute_forest_density`.
 
-The four per-face factors are combined into a single per-face multiplier. When
+All five per-face factors are combined into a single per-face multiplier. When
 `mesh` is supplied to `compute_fertility`, that multiplier is rasterized via
 `rasterize_face_values` — averaged onto shared vertices and barycentric-
 interpolated within each face's fan triangles — so adjacent faces blend
@@ -57,29 +60,29 @@ BIOME_FERTILITY_MULT = np.array([
 ], dtype=np.float32)
 
 
-def _growing_season_temperature(temperature_tex: np.ndarray) -> np.ndarray:
-    """Per-pixel mean temperature over seasons where T>5°C (growing season).
+def _growing_season_temperature_face(temperature_tex: np.ndarray) -> np.ndarray:
+    """Per-face mean temperature over growing seasons (T > 5°C).
 
-    Falls back to the simple seasonal mean when no season qualifies.
+    Averages over H and W after selecting growing-season pixels, then falls
+    back to the annual mean for faces where no season qualifies.
 
     Args:
         temperature_tex: (N, H, W, K) float32 °C.
 
     Returns:
-        (N, H, W) float32 °C.
+        (N,) float32 °C.
     """
     t = temperature_tex.astype(np.float32)
-    mask = t > 5.0
-    weight = mask.sum(axis=-1).astype(np.float32)
-    # Where no season is warm enough, fall back to the annual mean (still gives
-    # a meaningful "this is cold" signal for the climate term).
+    mask = t > 5.0                                               # (N, H, W, K)
+    weight = mask.sum(axis=-1).astype(np.float32)               # (N, H, W)
     safe = np.where(weight > 0, weight, t.shape[-1])
-    season_sum = np.where(mask, t, 0.0).sum(axis=-1)
-    annual_mean = t.mean(axis=-1)
-    return np.where(weight > 0, season_sum / safe, annual_mean).astype(np.float32)
+    season_sum = np.where(mask, t, 0.0).sum(axis=-1)            # (N, H, W)
+    annual_mean = t.mean(axis=-1)                               # (N, H, W)
+    t_grow_px = np.where(weight > 0, season_sum / safe, annual_mean)  # (N, H, W)
+    return t_grow_px.mean(axis=(1, 2)).astype(np.float32)       # (N,)
 
 
-def _climate_term(
+def _climate_term_face(
     temperature_tex: np.ndarray,
     precipitation_tex: np.ndarray,
     *,
@@ -88,26 +91,25 @@ def _climate_term(
     optimal_precipitation_mm: float,
     precipitation_sigma_log: float,
 ) -> np.ndarray:
-    """Bell-curve climate suitability per pixel, in [0, 1].
+    """Bell-curve climate suitability per face, in [0, 1].
 
-    Both terms are independent Gaussians; the climate term is their product so
-    that a pixel needs both reasonable temperature *and* reasonable rainfall.
-
-    Precipitation uses log-space because the dynamic range is ~50–4000 mm/yr.
+    Uses per-face means so the result can be rasterized (blended across face
+    boundaries) rather than being computed from raw per-pixel textures that are
+    discontinuous at face edges.
     """
-    t_grow = _growing_season_temperature(temperature_tex)
+    t_grow_face = _growing_season_temperature_face(temperature_tex)   # (N,)
     t_term = np.exp(
-        -0.5 * ((t_grow - optimal_temperature_c) / max(temperature_sigma_c, 1e-3)) ** 2
+        -0.5 * ((t_grow_face - optimal_temperature_c) / max(temperature_sigma_c, 1e-3)) ** 2
     )
 
-    p_annual_mm = precipitation_tex.sum(axis=-1).astype(np.float32)
-    log_p = np.log(np.maximum(p_annual_mm, 1.0))
+    p_annual_face = precipitation_tex.sum(axis=-1).mean(axis=(1, 2)).astype(np.float32)
+    log_p = np.log(np.maximum(p_annual_face, 1.0))
     log_p_opt = np.log(max(optimal_precipitation_mm, 1.0))
     p_term = np.exp(
         -0.5 * ((log_p - log_p_opt) / max(precipitation_sigma_log, 1e-3)) ** 2
     )
 
-    return (t_term * p_term).astype(np.float32)
+    return (t_term * p_term).astype(np.float32)                       # (N,)
 
 
 def _hop_bonus(hops: np.ndarray, bonus: float, decay_per_hop: float, max_hops: int) -> np.ndarray:
@@ -170,14 +172,14 @@ def compute_fertility(
     Returns:
         (N, H, W, 1) float32 in [0, 1].
     """
-    climate = _climate_term(
+    face_climate = _climate_term_face(
         temperature_tex,
         precipitation_tex,
         optimal_temperature_c=optimal_temperature_c,
         temperature_sigma_c=temperature_sigma_c,
         optimal_precipitation_mm=optimal_precipitation_mm,
         precipitation_sigma_log=precipitation_sigma_log,
-    )                                                                # (N, H, W)
+    )                                                                # (N,)
 
     face_terrain = (
         1.0 - np.clip(
@@ -196,17 +198,19 @@ def compute_fertility(
     face_biome_mult = BIOME_FERTILITY_MULT[biome_idx]                # (N,)
 
     face_mult = (
-        face_terrain * face_water * face_geology * face_biome_mult
+        face_climate * face_terrain * face_water * face_geology * face_biome_mult
     ).astype(np.float32)                                             # (N,)
 
     if mesh is not None:
-        tex_size = climate.shape[1]
-        face_mult_tex = rasterize_face_values(
+        tex_size = temperature_tex.shape[1]
+        fertility = rasterize_face_values(
             mesh, face_mult, tex_size=tex_size
         )[..., 0]                                                    # (N, H, W)
-        fertility = climate * face_mult_tex
     else:
-        fertility = climate * face_mult[:, None, None]               # (N, H, W)
+        fertility = np.broadcast_to(
+            face_mult[:, None, None],
+            (len(face_mult), temperature_tex.shape[1], temperature_tex.shape[2]),
+        ).copy().astype(np.float32)                                  # (N, H, W)
 
     if forest_density_tex is not None and forest_penalty_strength > 0.0:
         forest = forest_density_tex
