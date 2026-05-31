@@ -4,7 +4,7 @@ from typing import List
 
 import numpy as np
 
-from worldgen.geology.simplex import fbm_sum, make_perm
+from utils.simplex import fbm_sum, make_perm
 from worldgen.mesh.mymesh import PolygonMesh
 
 

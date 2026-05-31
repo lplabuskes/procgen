@@ -19,7 +19,7 @@ from __future__ import annotations
 import numpy as np
 
 from worldgen.geology.elevation import rasterize_face_values
-from worldgen.geology.simplex import fbm_sum, make_perm
+from utils.simplex import fbm_sum, make_perm
 from worldgen.mesh.mymesh import PolygonMesh
 
 

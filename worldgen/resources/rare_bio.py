@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from worldgen.geology.simplex import fbm_sum, make_perm
+from utils.simplex import fbm_sum, make_perm
 from worldgen.mesh.mymesh import PolygonMesh
 from worldgen.resources.terrain import face_hops_from_seeds, lake_containing_faces
 
