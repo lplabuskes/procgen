@@ -703,7 +703,7 @@ class MapWidget(QWidget):
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
         max_flow = max(
-            (entry[1][-1] for entry in river_paths if entry[1]),
+            (entry[1][-1] for entry in river_paths if len(entry[1]) > 0),
             default=0.0,
         )
         if max_flow <= 0.0:
@@ -957,6 +957,12 @@ class MapWindow(QMainWindow):
         toolbar = QWidget()
         toolbar_layout = QHBoxLayout(toolbar)
         toolbar_layout.setContentsMargins(0, 0, 0, 0)
+
+        self._save_btn = QPushButton("Save…")
+        self._save_btn.setVisible(False)
+        self._has_save_callback = False
+        toolbar_layout.addWidget(self._save_btn)
+
         toolbar_layout.addWidget(QLabel("Projection:"))
         self._combo = QComboBox()
         for proj in ALL_PROJECTIONS:
@@ -1035,6 +1041,14 @@ class MapWindow(QMainWindow):
     def set_rebuild_enabled(self, enabled: bool) -> None:
         self._rerun_btn.setEnabled(enabled)
         self._params_btn.setEnabled(enabled)
+        self._save_btn.setEnabled(enabled)
+
+    def set_save_callback(self, callback: Callable[[], None]) -> None:
+        if self._has_save_callback:
+            self._save_btn.clicked.disconnect()
+        self._save_btn.clicked.connect(callback)
+        self._has_save_callback = True
+        self._save_btn.setVisible(True)
 
     def set_params_callback(self, callback: Callable[[], None]) -> None:
         if self._has_params_callback:

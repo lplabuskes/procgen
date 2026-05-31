@@ -1,4 +1,5 @@
 mesh_cache/
+saved_worlds/
 *.pyc
 *.nbc
 *.nbi
