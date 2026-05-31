@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from worldgen.geology.simplex import make_perm, simplex3_vec
+from worldgen.geology.simplex import fbm_sum, make_perm
 from worldgen.mesh.mymesh import PolygonMesh
 from worldgen.resources.terrain import face_hops_from_seeds
 
@@ -64,13 +64,15 @@ def _fbm_noise(centroids: np.ndarray, frequency: float, seed: int, octaves: int 
     """
     perm = make_perm(seed % (2**31))
     xyz = centroids.astype(np.float64)
-    noise = np.zeros(len(xyz), dtype=np.float64)
     amp, freq, total = 1.0, float(frequency), 0.0
+    freqs, amps = [], []
     for _ in range(octaves):
-        noise += amp * simplex3_vec(xyz * freq, perm)
+        freqs.append(freq)
+        amps.append(amp)
         total += amp
         amp *= 0.5
         freq *= 2.0
+    noise = fbm_sum(xyz, perm, np.array(freqs), np.array(amps))
     noise /= total
     mn, mx = float(noise.min()), float(noise.max())
     if mx > mn:

@@ -19,7 +19,7 @@ from __future__ import annotations
 import numpy as np
 
 from worldgen.geology.elevation import rasterize_face_values
-from worldgen.geology.simplex import make_perm, simplex3_vec
+from worldgen.geology.simplex import fbm_sum, make_perm
 from worldgen.mesh.mymesh import PolygonMesh
 
 
@@ -79,13 +79,15 @@ def _value_noise(
     n, h, w, _ = positions.shape
     flat = positions.reshape(-1, 3).astype(np.float64)
     perm = make_perm(seed)
-    out = np.zeros(flat.shape[0], dtype=np.float64)
     amp, freq, total = 1.0, float(base_frequency), 0.0
+    freqs, amps = [], []
     for _ in range(max(octaves, 1)):
-        out += amp * simplex3_vec(flat * freq, perm)
+        freqs.append(freq)
+        amps.append(amp)
         total += amp
         amp *= persistence
         freq *= lacunarity
+    out = fbm_sum(flat, perm, np.array(freqs), np.array(amps))
     if total == 0.0:
         total = 1.0
     return (out / total).reshape(n, h, w).astype(np.float32)

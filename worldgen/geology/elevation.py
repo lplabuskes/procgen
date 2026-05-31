@@ -4,7 +4,7 @@ from typing import List
 
 import numpy as np
 
-from worldgen.geology.simplex import make_perm, simplex3_vec
+from worldgen.geology.simplex import fbm_sum, make_perm
 from worldgen.mesh.mymesh import PolygonMesh
 
 
@@ -269,15 +269,17 @@ def compute_noise_elevation_deltas(
     flat_xyz = positions.reshape(-1, 3).astype(np.float64)       # (N*H*W, 3)
 
     perm = make_perm(seed)
-    noise_sum = np.zeros(len(flat_xyz), dtype=np.float64)
     amp, freq, total_amp = 1.0, float(base_frequency), 0.0
+    freqs, amps = [], []
     for _ in range(octaves):
         if freq > max_freq:
             break
-        noise_sum += amp * simplex3_vec(flat_xyz * freq, perm)
+        freqs.append(freq)
+        amps.append(amp)
         total_amp += amp
         amp *= persistence
         freq *= lacunarity
+    noise_sum = fbm_sum(flat_xyz, perm, np.array(freqs), np.array(amps))
 
     if total_amp == 0.0:
         total_amp = 1.0  # all octaves above Nyquist — output is flat zero.
