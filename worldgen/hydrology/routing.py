@@ -4,7 +4,7 @@ Priority-Flood depression filling (Planchon & Darboux, 2001) and
 D-infinity multi-directional flow routing (Tarboton, 1997).
 
 Public API:
-    priority_flood(elevations, ocean_mask, neighbors_fn) -> (eff, was_raised)
+    priority_flood(elevations, ocean_mask, nbr_indptr, nbr_flat) -> (eff, was_raised)
     compute_dinf_flow(eff, n_nodes, n_faces, pixels_per_face, resolution)
         -> (receiver1, receiver2, frac1, frac2, flow_angle)
     inter_face_fallback(receiver1, receiver2, frac1, frac2, flow_angle, eff,
@@ -12,31 +12,40 @@ Public API:
                         pixels_per_face) -> None
     accumulate_flow(receiver1, receiver2, frac1, frac2, eff,
                     precip_weights=None) -> flow_accum
+
+`priority_flood` and `accumulate_flow` are the two sequential per-node loops that
+dominate hydrology runtime; both are JIT-compiled with numba when available and
+fall back to equivalent pure-Python loops otherwise (bit-identical output).
 """
 from __future__ import annotations
 
 import heapq
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+try:
+    from numba import njit
+    _HAVE_NUMBA = True
+except ImportError:  # pragma: no cover - numba is an optional accelerator
+    _HAVE_NUMBA = False
 
-def priority_flood(
+
+_EPS = 1e-6
+
+
+def _priority_flood_py(
     elevations: np.ndarray,
     ocean_mask: np.ndarray,
-    neighbors_fn: Callable[[int], List[int]],
+    nbr_indptr: np.ndarray,
+    nbr_flat: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Planchon-Darboux depression filling. Returns (eff, was_raised).
-
-    was_raised[i] is True for land nodes inside a topographic depression.
-    Per-step epsilon tilts the filled surface toward the spill point so the
-    bilinear gradient doesn't go to zero inside lakes.
-    """
+    """Pure-Python Priority-Flood over the CSR neighbour adjacency (numba fallback)."""
     n = len(elevations)
     eff = elevations.astype(np.float32, copy=True)
     visited = np.zeros(n, dtype=bool)
     was_raised = np.zeros(n, dtype=bool)
-    eps = 1e-6
+    eps = _EPS
 
     heap: List[Tuple[float, int]] = []
     for idx in np.where(ocean_mask)[0].tolist():
@@ -45,21 +54,119 @@ def priority_flood(
 
     while heap:
         eff_elev, key = heapq.heappop(heap)
-        for nb in neighbors_fn(key):
+        for nb in nbr_flat[nbr_indptr[key]:nbr_indptr[key + 1]].tolist():
             if visited[nb]:
                 continue
             visited[nb] = True
             nb_elev = float(elevations[nb])
-            # Node is inside a depression: its natural elevation is below
-            # the fill level being propagated from the spill point.
             if nb_elev < eff_elev:
                 was_raised[nb] = True
-            # Imposed-gradient fill: force a tiny downhill from key to nb
-            # whenever the real elevation would create a flat or sink.
             nb_eff = max(nb_elev, eff_elev + eps)
             eff[nb] = nb_eff
             heapq.heappush(heap, (nb_eff, nb))
     return eff, was_raised
+
+
+if _HAVE_NUMBA:
+    @njit(cache=True)
+    def _priority_flood_njit(elevations, ocean_mask, nbr_indptr, nbr_flat, eps):
+        """JIT Priority-Flood with a manual binary min-heap.
+
+        The heap orders by ``(priority, node_index)`` lexicographically, exactly
+        replicating Python ``heapq``'s ``(float, int)`` tuple comparison, so the
+        pop order — and therefore eff/was_raised — match the pure-Python path.
+        """
+        n = elevations.shape[0]
+        elev64 = elevations.astype(np.float64)   # reads, matching float(elevations[i])
+        eff = elevations.copy()                  # float32 output
+        visited = np.zeros(n, dtype=np.bool_)
+        was_raised = np.zeros(n, dtype=np.bool_)
+
+        hp = np.empty(n, dtype=np.float64)       # heap priorities
+        hi = np.empty(n, dtype=np.int64)         # heap node indices
+        hsize = 0
+
+        for idx in range(n):
+            if ocean_mask[idx]:
+                hp[hsize] = elev64[idx]
+                hi[hsize] = idx
+                c = hsize
+                while c > 0:
+                    par = (c - 1) // 2
+                    if hp[par] < hp[c] or (hp[par] == hp[c] and hi[par] <= hi[c]):
+                        break
+                    hp[par], hp[c] = hp[c], hp[par]
+                    hi[par], hi[c] = hi[c], hi[par]
+                    c = par
+                hsize += 1
+                visited[idx] = True
+
+        while hsize > 0:
+            eff_elev = hp[0]
+            key = hi[0]
+            hsize -= 1
+            hp[0] = hp[hsize]
+            hi[0] = hi[hsize]
+            c = 0
+            while True:
+                lc = 2 * c + 1
+                rc = 2 * c + 2
+                sm = c
+                if lc < hsize and (hp[lc] < hp[sm] or (hp[lc] == hp[sm] and hi[lc] < hi[sm])):
+                    sm = lc
+                if rc < hsize and (hp[rc] < hp[sm] or (hp[rc] == hp[sm] and hi[rc] < hi[sm])):
+                    sm = rc
+                if sm == c:
+                    break
+                hp[sm], hp[c] = hp[c], hp[sm]
+                hi[sm], hi[c] = hi[c], hi[sm]
+                c = sm
+
+            for p in range(nbr_indptr[key], nbr_indptr[key + 1]):
+                nb = nbr_flat[p]
+                if visited[nb]:
+                    continue
+                visited[nb] = True
+                nb_elev = elev64[nb]
+                if nb_elev < eff_elev:
+                    was_raised[nb] = True
+                nb_eff = nb_elev if nb_elev > eff_elev + eps else eff_elev + eps
+                eff[nb] = nb_eff
+                hp[hsize] = nb_eff
+                hi[hsize] = nb
+                c = hsize
+                while c > 0:
+                    par = (c - 1) // 2
+                    if hp[par] < hp[c] or (hp[par] == hp[c] and hi[par] <= hi[c]):
+                        break
+                    hp[par], hp[c] = hp[c], hp[par]
+                    hi[par], hi[c] = hi[c], hi[par]
+                    c = par
+                hsize += 1
+
+        return eff, was_raised
+
+
+def priority_flood(
+    elevations: np.ndarray,
+    ocean_mask: np.ndarray,
+    nbr_indptr: np.ndarray,
+    nbr_flat: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Planchon-Darboux depression filling. Returns (eff, was_raised).
+
+    was_raised[i] is True for land nodes inside a topographic depression.
+    Per-step epsilon tilts the filled surface toward the spill point so the
+    bilinear gradient doesn't go to zero inside lakes.
+
+    Neighbours come from a precomputed CSR adjacency (``nbr_indptr``,
+    ``nbr_flat``): node ``key``'s neighbours are
+    ``nbr_flat[nbr_indptr[key]:nbr_indptr[key + 1]]``. Uses the numba kernel
+    when available, else an equivalent pure-Python loop.
+    """
+    if _HAVE_NUMBA:
+        return _priority_flood_njit(elevations, ocean_mask, nbr_indptr, nbr_flat, _EPS)
+    return _priority_flood_py(elevations, ocean_mask, nbr_indptr, nbr_flat)
 
 
 def compute_dinf_flow(
@@ -211,21 +318,15 @@ def inter_face_fallback(
         flow_angle[src] = float(np.arctan2(dv, du))
 
 
-def accumulate_flow(
+def _accumulate_flow_py(
     receiver1: np.ndarray,
     receiver2: np.ndarray,
     frac1: np.ndarray,
     frac2: np.ndarray,
-    eff: np.ndarray,
-    precip_weights: Optional[np.ndarray] = None,
+    order: np.ndarray,
+    flow_accum: np.ndarray,
 ) -> np.ndarray:
-    """Multi-receiver accumulation in eff-descending order."""
-    n = len(eff)
-    if precip_weights is not None:
-        flow_accum = precip_weights.copy()
-    else:
-        flow_accum = np.ones(n, dtype=np.float32)
-    order = np.argsort(-eff)
+    """Pure-Python multi-receiver accumulation (numba fallback)."""
     for key in order.tolist():
         r1 = int(receiver1[key])
         if r1 < 0:
@@ -238,3 +339,49 @@ def accumulate_flow(
             flow_accum[r1] += contrib * float(frac1[key])
             flow_accum[r2] += contrib * float(frac2[key])
     return flow_accum
+
+
+if _HAVE_NUMBA:
+    @njit(cache=True)
+    def _accumulate_flow_njit(receiver1, receiver2, frac1, frac2, order, flow_accum):
+        # Each increment is formed in float64, cast to float32, then added in
+        # float32 — exactly numpy 2.x (NEP 50) `float32[i] += python_float`
+        # semantics, so the result is bit-identical to the pure-Python path.
+        for i in range(order.shape[0]):
+            key = order[i]
+            r1 = receiver1[key]
+            if r1 < 0:
+                continue
+            contrib = np.float64(flow_accum[key])
+            r2 = receiver2[key]
+            if r2 < 0:
+                flow_accum[r1] = flow_accum[r1] + np.float32(contrib)
+            else:
+                flow_accum[r1] = flow_accum[r1] + np.float32(contrib * np.float64(frac1[key]))
+                flow_accum[r2] = flow_accum[r2] + np.float32(contrib * np.float64(frac2[key]))
+        return flow_accum
+
+
+def accumulate_flow(
+    receiver1: np.ndarray,
+    receiver2: np.ndarray,
+    frac1: np.ndarray,
+    frac2: np.ndarray,
+    eff: np.ndarray,
+    precip_weights: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Multi-receiver accumulation in eff-descending order.
+
+    The ``argsort`` is done in NumPy (passed into the kernel) so the addition
+    order — and therefore the float result — is identical to the pure-Python
+    path regardless of which backend runs the loop.
+    """
+    n = len(eff)
+    if precip_weights is not None:
+        flow_accum = precip_weights.copy()
+    else:
+        flow_accum = np.ones(n, dtype=np.float32)
+    order = np.argsort(-eff)
+    if _HAVE_NUMBA:
+        return _accumulate_flow_njit(receiver1, receiver2, frac1, frac2, order, flow_accum)
+    return _accumulate_flow_py(receiver1, receiver2, frac1, frac2, order, flow_accum)

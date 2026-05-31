@@ -125,6 +125,9 @@ class RiverGenerator:
         # The pairing uses a strict t∈[0,1] band vs stitch's ±1e-3 slack, so it
         # differs by ~0.3% of edges — visually negligible, and the cache is free.
         self._inter_adj: Dict[int, List[int]] = self._build_inter_adj_from_pairs(mesh)
+        # Static node adjacency as CSR (indptr + flat indices) for the JIT-compiled
+        # Priority-Flood. Built once; the grid + stitch topology never changes.
+        self._build_neighbor_csr()
 
     def _build_inter_adj_from_pairs(self, mesh: PolygonMesh) -> Dict[int, List[int]]:
         """Build sparse inter-face node adjacency from cached boundary pixel pairs."""
@@ -142,6 +145,59 @@ class RiverGenerator:
             if a not in lb:
                 lb.append(a)
         return inter_adj
+
+    def _build_neighbor_csr(self) -> None:
+        """Precompute static node adjacency as CSR arrays (indptr, flat).
+
+        Builds the D8 intra-face edges (vectorised across all faces) plus the
+        stitched inter-face edges, then stable-sorts them by source node. The
+        block concatenation order ([up, down, left, right, UL, UR, DL, DR] then
+        inter-face) with a *stable* sort reproduces the exact neighbour ordering
+        ``_neighbors`` emits. Consumed by the JIT Priority-Flood in routing.py.
+        """
+        res = self.resolution
+        r2 = self._r2
+        n_faces = self.n_faces
+        n_nodes = self.n_nodes
+
+        local = np.arange(r2, dtype=np.int32)
+        rows = local // res
+        cols = local % res
+        face_base = (np.arange(n_faces, dtype=np.int32) * r2)[:, None]  # (n_faces, 1)
+
+        directions = (
+            (-1, 0), (1, 0), (0, -1), (0, 1),
+            (-1, -1), (-1, 1), (1, -1), (1, 1),
+        )
+        src_blocks: List[np.ndarray] = []
+        dst_blocks: List[np.ndarray] = []
+        for dr, dc in directions:
+            valid = (
+                (rows + dr >= 0) & (rows + dr < res)
+                & (cols + dc >= 0) & (cols + dc < res)
+            )
+            ls = local[valid]
+            ld = ls + dr * res + dc
+            src_blocks.append((face_base + ls[None, :]).reshape(-1))
+            dst_blocks.append((face_base + ld[None, :]).reshape(-1))
+
+        if self._inter_adj:
+            inter_src: List[int] = []
+            inter_dst: List[int] = []
+            for node, nbrs in self._inter_adj.items():
+                inter_src.extend([node] * len(nbrs))
+                inter_dst.extend(nbrs)
+            src_blocks.append(np.asarray(inter_src, dtype=np.int32))
+            dst_blocks.append(np.asarray(inter_dst, dtype=np.int32))
+
+        src = np.concatenate(src_blocks)
+        dst = np.concatenate(dst_blocks)
+        order = np.argsort(src, kind="stable")
+        self._nbr_flat: np.ndarray = dst[order]
+        counts = np.bincount(src, minlength=n_nodes)
+        indptr = np.zeros(n_nodes + 1, dtype=np.int64)
+        np.cumsum(counts, out=indptr[1:])
+        self._nbr_indptr: np.ndarray = indptr
 
     # ------------------------------------------------------------------
     # Node indexing helpers
@@ -198,7 +254,9 @@ class RiverGenerator:
 
         Stores filled DEM as self._eff. Returns (r1, r2, f1, f2, flow_angle, flow_accum).
         """
-        eff, was_raised = priority_flood(self.elevations, self._ocean_mask, self._neighbors)
+        eff, was_raised = priority_flood(
+            self.elevations, self._ocean_mask, self._nbr_indptr, self._nbr_flat
+        )
         self._eff = eff
         self._was_raised = was_raised
         self._lake_mask = self._build_lake_mask(was_raised)

@@ -1,5 +1,7 @@
 mesh_cache/
 *.pyc
+*.nbc
+*.nbi
 .DS_Store
 .vscode/
 .venv/
