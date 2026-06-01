@@ -3,7 +3,7 @@
 Two cheap, robust signals derived from data already on the mesh:
   - `face_elevation_range`: pixel elevation span per face, the "ruggedness" proxy
     we use in place of unreliable per-pixel slope (see
-    docs/resources_module_followups.md for the slope rationale).
+    docs/resources_generation_spec.md for the slope rationale).
   - `face_hops_from_seeds`: BFS hop count on the face-adjacency graph from a
     boolean seed mask, used for water-proximity and volcanism-proximity terms.
 """

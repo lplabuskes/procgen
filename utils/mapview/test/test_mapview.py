@@ -1,12 +1,12 @@
 import numpy as np
-from worldgen.mapview.projections import (
+from utils.mapview.projections import (
     EquirectangularProjection,
     MercatorProjection,
     MollweideProjection,
     RobinsonProjection,
     ALL_PROJECTIONS,
 )
-from worldgen.mapview.mapview import _split_at_antimeridian
+from utils.mapview.mapview import _split_at_antimeridian
 
 
 def _lonlat_to_ecef(lon_deg: float, lat_deg: float) -> np.ndarray:

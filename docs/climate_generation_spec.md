@@ -1,11 +1,9 @@
-# Climate Generation — Intended Design
+# Climate Generation
 
-**Modules (to be created):** `worldgen/climate/` (`builder.py`, `insolation.py`, `temperature.py`, `winds.py`, `precipitation.py`, `classification.py`, `currents.py`, `display.py`)
+**Module:** `worldgen/climate/` (`builder.py`, `insolation.py`, `temperature.py`, `winds.py`, `humidity.py`, `precipitation.py`, `classification.py`, `currents.py`, `display.py`)
 **Purpose:** Produce per-face, per-season temperature & precipitation textures, a biome classification, and a prevailing-wind vector field on top of an already-generated elevation mesh.
 
-This is a forward-looking spec written before implementation. It is intentionally a *minimum viable climate*: zonal winds (no pressure-cell modulation), no ocean currents, quantitative but heuristic. Hooks are reserved for currents to be added later without changing the call shape of temperature/precipitation.
-
-Inspired by Geoff's [Climate Cookbook](https://worldbuildingworkshop.com/2015/11/27/climate/), but rendered as continuous (lat, season) → (°C, mm/season) functions rather than lookup tables.
+Inspired by Geoff's [Climate Cookbook](https://worldbuildingworkshop.com/2015/11/27/climate/), rendered as continuous (lat, season) → (°C, mm/season) functions. Precipitation emerges from SST-driven moisture advection along seasonal wind fields rather than zonal lookup tables, so continental drying, ITCZ convergence, and rain shadows arise from the transport physics.
 
 ---
 
@@ -18,26 +16,30 @@ elevation textures, mesh
 [ Seasonal insolation Q(lat, season) ]              # insolation.py
         │  Q: (N_faces, n_seasons) W/m² daily mean
         ▼
-[ Distance-to-coast field ]                         # builder, BFS on face graph
+[ Distance-to-coast field ]                         # builder, Dijkstra on face graph
         │  d_coast: (N_faces,) km
         ▼
 [ Surface temperature ]                             # temperature.py
         │  T_face: (N_faces, n_seasons) °C   (annual mean + damped seasonal anomaly,
-        │                                     lapse rate, optional current delta)
+        │                                     lapse rate)
         ▼
-[ Prevailing winds (zonal Hadley/Ferrel/Polar) ]    # winds.py
+[ Prevailing winds (zonal Hadley/Ferrel/Polar + pressure-gradient) ]    # winds.py
         │  W_face: (N_faces, n_seasons, 3) tangent vectors, m/s
         ▼
-[ Precipitation ]                                   # precipitation.py
-        │  P_face: (N_faces, n_seasons) mm/season   (zonal base × orographic × continentality)
+[ SST-driven moisture advection ]                   # humidity.py
+        │  q_air: (N_faces, n_seasons) dimensionless specific humidity
+        ▼
+[ Ocean currents — second-pass T and humidity ]     # currents.py (if enabled)
+        │  ΔT, ΔP deltas broadcast across seasons
         ▼
 [ Texture rasterisation ]                           # builder
-        │  per-pixel T, P from per-face values via elevation-aware downsample
+        │  per-pixel T, humidity via vertex-averaged barycentric interpolation
+        │  per-pixel P via humidity × orographic factor × precipitation_scale
         ▼
 [ Classification ]                                  # classification.py
         │  biome: (N_faces, H, W) uint8
         ▼
-Globe with climate textures + winds feature
+Globe with climate textures + winds/currents features
 ```
 
 ---
@@ -49,10 +51,10 @@ Globe with climate textures + winds feature
 | `mesh.face_centroids` | 3D unit-sphere positions | latitude, wind tangent frames |
 | `mesh.face_adjacency` | edge-sharing neighbours | distance-to-coast BFS, gradient |
 | `mesh.face_metadata['elevation']` | per-face elevation (km) | temperature lapse, ocean/land mask |
-| `mesh.face_textures['elevation']` | per-pixel elevation (km) | per-pixel T downscale, orographic uplift |
-| `ElevationFieldParams.elevation_tex_size` | H = W = tex_size | shared texture resolution |
+| `mesh.face_textures['elevation']` | per-pixel elevation (km) | per-pixel T lapse, orographic uplift |
+| `mesh.face_textures['ocean_mask']` | per-pixel ocean flag (uint8) | ocean/land mask override when present |
 
-Sea level threshold (elev ≤ 0 km) defines the ocean mask, identically to hydrology.
+Sea level threshold (elev ≤ 0 km) defines the ocean mask, unless the `ocean_mask` texture is present.
 
 ---
 
@@ -62,11 +64,10 @@ Sea level threshold (elev ≤ 0 km) defines the ocean mask, identically to hydro
 
 | Key | Shape | Dtype | Meaning |
 |---|---|---|---|
-| `temperature` | `(N, H, W, 4)` | `float32` | Channel `j` = mean surface temperature in °C during season `j` |
-| `precipitation` | `(N, H, W, 4)` | `float32` | Channel `j` = total precipitation in mm during season `j` |
+| `temperature` | `(N, H, W, 4)` | `float16` | Channel `j` = mean surface temperature in °C during season `j` |
+| `precipitation` | `(N, H, W, 4)` | `float16` | Channel `j` = total precipitation in mm during season `j` |
+| `humidity` | `(N, H, W, 4)` | `float16` | Channel `j` = dimensionless specific humidity (q_air) during season `j` |
 | `biome` | `(N, H, W, 1)` | `uint8` | Biome index (0–8 for the default 9-biome classifier) |
-
-> `PolygonMesh.set_face_textures` currently hard-codes `float32`. To support the `uint8` biome channel, the signature needs an optional `dtype` parameter (or to infer dtype from the array). The texture-atlas packing in `MeshViewer._setup_buffers` and the `QImage` conversion in `MapWidget._rebuild_textures` already pass through `uint8` for display purposes; the change is local to validation and storage. Spec'd as a small precursor to the climate work.
 
 ### Per-face metadata (for color schemes & quick display)
 
@@ -76,17 +77,16 @@ Sea level threshold (elev ≤ 0 km) defines the ocean mask, identically to hydro
 | `temperature_warmest` | `float` | Warmest season mean °C |
 | `temperature_coldest` | `float` | Coldest season mean °C |
 | `precipitation_annual` | `float` | Annual total mm |
-| `precipitation_seasonality` | `float` | (max − min seasonal P) / annual P, in [0, 1] |
 | `biome` | `int` | Dominant biome index (mode across the face's pixels) |
 | `distance_to_coast` | `float` | km along great-circle from the nearest ocean face |
+| `humidity_annual` | `float` | Annual mean specific humidity (mean of q_air across the 4 seasons) |
 
 ### Globe features (vector overlays)
 
 | Name | Structure | Meaning |
 |---|---|---|
-| `prevailing_winds` | `list[(positions_3d, vectors_3d)]` length 4 | One entry per season; `positions_3d` is `(N_faces, 3)` face centroids, `vectors_3d` is `(N_faces, 3)` wind velocity (m/s) tangent to the sphere |
-
-Rendered as four toggleable map overlays (`Winds — Spring`, `Summer`, `Autumn`, `Winter`), all hidden by default. Drawing strategy: short line segments at each face centroid, length scaled by wind speed.
+| `winds` | `list[(positions_3d, vectors_3d)]` length 4 | One entry per season; `positions_3d` is `(N_faces, 3)` face centroids, `vectors_3d` is `(N_faces, 3)` wind velocity (m/s) tangent to the sphere |
+| `currents` | `[(positions_3d, current_vectors_3d, temperature_delta)]` length 1 | Annual-mean current velocity `(N_faces, 3)` and per-face ΔT `(N_faces,)`. Present only when `params.currents.enabled` |
 
 ---
 
@@ -133,38 +133,41 @@ T_eq_season(φ, season) = a + b · Q(φ, season)                         # b tun
 ΔT_season              = T_eq_season − ⟨T_eq_season⟩_year             # zero-mean over the 4 seasons
 T_face(face, season)   = T_annual(φ)
                           + inertia_factor(face) · ΔT_season(φ, season)
-                          − Γ · elevation_km(face)
-                          + current_delta(face, season)               # 0 in MVP
+                          − Γ · max(elevation_km(face), 0)             # lapse rate above sea level only
+                          + current_delta(face)                        # broadcast from annual ΔT; 0 when currents disabled
 ```
 
 Tunables (`TemperatureParams`):
 
 | Name | Default | Effect |
 |---|---|---|
-| `T_eq` | `27.0` °C | Equatorial annual mean |
-| `T_pole` | `-25.0` °C | Polar annual mean |
-| `anomaly_scale` (`b`) | tuned to give ~3 °C amplitude at the equator and ~25 °C at 60° land | converts insolation anomaly to °C anomaly |
-| `lapse_rate` (`Γ`) | `6.5` °C/km | dry adiabatic-ish, applied uniformly |
+| `equator_annual_c` | `27.0` °C | Equatorial annual mean |
+| `pole_annual_c` | `-25.0` °C | Polar annual mean |
+| `anomaly_scale` (`b`) | `0.05` | converts insolation anomaly to °C anomaly |
+| `lapse_rate_c_per_km` (`Γ`) | `6.5` °C/km | dry adiabatic-ish, applied above sea level only |
 | `ocean_inertia` | `0.3` | factor for face entirely over ocean (damps seasonal swing) |
 | `land_inertia` | `1.0` | factor for face deep inland |
+| `inertia_distance_km` | `1500.0` | tanh saturation distance (km) |
 
 `inertia_factor(face)` interpolates between `ocean_inertia` and `land_inertia` by `distance_to_coast` (saturating at ~1500 km inland with `tanh(d_coast / 1500)`).
 
 ### Per-pixel temperature texture
 
-Lapse-rate scaling is applied per-pixel using the face's pixel-elevation texture so high terrain inside an otherwise-warm face gets cooled. All other terms are face-uniform (the per-face value is broadcast to every pixel of the face).
+Per-face temperatures are averaged onto shared vertices via `rasterize_face_values` + `smooth_texture_seams` (from `elevation.py`) so adjacent faces interpolate from the same boundary values and face-edge seams are eliminated. The per-pixel lapse-rate correction is then applied relative to the vertex-averaged reference elevation:
 
 ```
-T_pixel[f, h, w, j] = T_face[f, j] + Γ · elev_face[f] − Γ · elev_pixel[f, h, w]
+T_pixel[f, h, w, j] = T_interp[f, h, w, j] + Γ · (ref_elev[f, h, w] − pix_elev[f, h, w])
 ```
 
-This keeps face-scale physics where it belongs and adds local terrain detail "for free".
+where `ref_elev` is the rasterized per-face elevation (on the same vertex-averaged grid), and both elevations are clamped at 0 km for lapse purposes.
 
 ---
 
-## Stage 3 — Prevailing winds (zonal)
+## Stage 3 — Prevailing winds (zonal + pressure-gradient)
 
 The wind field is computed at face centroids; per-pixel winds are not stored.
+
+### Zonal winds
 
 Bands (NH; mirror for SH by reversing meridional sign):
 
@@ -187,17 +190,11 @@ season_phase ∈ {0, π/2, π, 3π/2} for seasons {0, 1, 2, 3}
 - `east_hat = normalise( ẑ × centroid )`     (zero at poles — handled with a fallback frame)
 - `north_hat = centroid × east_hat`
 
-then `wind_3d = u_east · east_hat + v_north · north_hat`. The sign of `u_east` and `v_north` follows the band lookup above; magnitude is the band's speed default.
-
-The mesh is rigid (no deflection around landmasses in MVP). This is the single largest concession to the article's model and is the obvious next thing to add when currents go in: a divergence-free correction that routes winds around mountains and coastlines.
+then `wind_3d = u_east · east_hat + v_north · north_hat`. The (u_east, v_north) direction is normalised to unit magnitude before multiplying by the band speed.
 
 ### Pressure-gradient wind from land/sea contrast
 
-A second wind component is added on top of the zonal base to capture seasonal
-pressure systems (continental highs in winter, lows in summer → monsoonal
-reversal). It is a cookbook proxy, not a real pressure-tendency model: the
-seasonal temperature anomaly itself is treated as a (sign-flipped) pressure
-field, and wind blows from high to low.
+A second wind component is added on top of the zonal base to capture seasonal pressure systems (continental highs in winter, lows in summer → monsoonal reversal). It is a cookbook proxy, not a real pressure-tendency model: the seasonal temperature anomaly itself is treated as a (sign-flipped) pressure field, and wind blows from high to low.
 
 ```
 anomaly[f, j]   = T_face[f, j] − T_annual[f]                  # °C, near-zero over ocean
@@ -207,69 +204,51 @@ W_pressure[f,j] = pressure_wind_scale · ∇a[f, j]              # m/s, blows to
 W_total[f, j]   = W_zonal[f, j] + W_pressure[f, j]
 ```
 
-The wind is **pure cross-isobar** — no Coriolis rotation. Geostrophic balance
-would put air on circulation around highs/lows but produce no mass flux toward
-warm continents in summer; cross-isobar flow is what reproduces the monsoonal
-intuition the cookbook describes. The tradeoff is no anticyclonic gyre around
-the Siberian high; for that, blend a rotated component on top in a future revision.
-
-Because the ocean's thermal inertia is much lower than land's (`ocean_inertia
-≈ 0.3` vs `land_inertia ≈ 1.0`), the anomaly is near-zero offshore, so the
-contribution is largest on continental coasts and inland. This automatically
-breaks hemispheric symmetry on worlds with strong land/ocean asymmetry.
-
-Tunable on `WindParams.pressure_wind_scale` (m·s⁻¹·km/°C, default 200, set to 0 to disable).
+The wind is **pure cross-isobar** — no Coriolis rotation. The ocean's large thermal inertia (`ocean_inertia ≈ 0.3`) keeps the ocean's anomaly near-zero, so the contribution is largest on continental coasts and inland. Tunable on `WindParams.pressure_wind_scale` (m·s⁻¹·km/°C, default 600, set to 0 to disable).
 
 ---
 
-## Stage 4 — Precipitation
+## Stage 4 — Atmospheric moisture and precipitation
+
+Precipitation emerges from SST-driven evaporation advected along seasonal winds. All logic lives in `humidity.py` and `precipitation.py`.
+
+### Evaporation source
+
+Ocean faces emit moisture proportional to SST; land faces are zeroed:
 
 ```
-P_face[f, j] = P_zonal(φ_eff[f, j])
-               · orographic_factor(f, j)
-               · continentality_factor(f)
-               · (1 + current_wet_delta(f, j))      # 0 in MVP
+evap[f, j] = evaporation_scale · clamp((T_face[f, j] + 25) / 52, 0, 1)   (ocean faces)
+           = 0                                                              (land faces)
 ```
 
-### Zonal base
+Warm tropical oceans produce strong emission; cold polar seas produce negligible evaporation.
 
-`P_zonal(φ_eff)` is a piecewise function (mm/season):
+### Moisture advection (Jacobi)
 
-| Latitude (|φ_eff|) | Annual baseline | Per-season (÷4) |
-|---|---|---|
-| 0° (ITCZ) | 2200 mm | 550 mm |
-| 30° (horse latitudes) | 250 mm | 62 mm |
-| 50°–60° (mid-lat) | 900 mm | 225 mm |
-| 75°+ (polar) | 200 mm | 50 mm |
+An iterative transport model runs to near-steady-state (`moisture_advection_iter` steps):
 
-Smoothly interpolated (Gaussian sum centred on each band, see `PrecipitationParams.zonal_*` knobs).
+1. Each face sends `0.5 × q` to its downwind neighbours, distributed proportional to the dot product of wind with the direction to each neighbour (normalised to sum to 1 per source face).
+2. Background precipitation removes `moisture_decay_rate × q` from every face.
+3. Ocean faces are clamped back to their evaporation source level (continuous replenishment).
 
-Because `φ_eff` shifts seasonally, the same face gets a different zonal base per season — monsoonal latitudes (~10–20°) get the ITCZ band in summer and the horse latitudes in winter.
+`moisture_decay_rate` controls continental drying: higher values keep moisture close to the ocean; lower values allow wetter continental interiors. Convergence zones (ITCZ) accumulate moisture from multiple source directions; divergence zones (horse latitudes) dry out because outflow exceeds inflow. This eliminates the need for explicit continentality and zonal-base parameters.
 
-### Orographic uplift
+Followed by Laplacian graph smoothing (`humidity_smoothing_passes` passes of neighbour-mean blending with weight `humidity_smoothing_alpha`) to soften face-edge discontinuities.
 
-```
-∇h[f] = projected elevation gradient at face centroid, units km / km
-        (3D vector tangent to sphere, computed from elevation differences with face neighbours)
+### Per-pixel humidity
 
-uplift[f, j] = wind_3d[f, j] · ∇h[f]            # m/s · (km/km) = m/s, positive on windward side
+Face humidity values are rasterized to per-pixel grids via vertex-averaged barycentric interpolation (same `rasterize_face_values` + `smooth_texture_seams` pipeline as temperature), eliminating hard face-edge seams.
 
-orographic_factor[f, j] = clamp(1 + K_orographic · uplift[f, j], 0.1, 3.0)
-```
-
-`K_orographic` default = 0.4 (tuneable). Positive uplift wets the windward side; negative uplift (leeward) drops precipitation by up to 10×. This single term captures both rain shadow and mountain enhancement.
-
-### Continentality
+### Per-pixel precipitation
 
 ```
-continentality_factor[f] = lerp(1.0, 0.2, tanh(d_coast[f] / 1200 km))
+P_pixel[f, h, w, j] = q_pixel[f, h, w, j] · oro_factor[f, h, w, j] · (precipitation_scale / 4)
+
+oro_factor = clamp(1 + orographic_k · uplift, 0.3, 2.0)
+uplift = wind_u · (∂h/∂u) + wind_v · (∂h/∂v)    # m/s in face tangent-frame UV coordinates
 ```
 
-Deep interior gets ~20% of the coastal precipitation. Distance is in km along the surface.
-
-### Per-pixel precipitation texture
-
-Like temperature, the per-face value is broadcast; we additionally re-apply a per-pixel orographic correction using the pixel-elevation gradient inside the face. The pixel uplift is computed from finite differences on the per-face elevation texture (the same neighbours the river code uses, via D8 grid + inter-face stitching is overkill — plain interior-only `np.gradient` is enough since orographic effects don't need cross-face precision).
+The per-pixel elevation gradient `(∂h/∂u, ∂h/∂v)` is computed from `np.gradient` over the face's pixel elevation texture; wind components are projected into the face's UV tangent frame via `face_u_axes` and `face_v_axes`. `precipitation_scale` (mm/yr) sets the global precipitation level at unit moisture; the spatial distribution is shaped entirely by the humidity field.
 
 ---
 
@@ -294,31 +273,31 @@ def default_biome(
 Internally the function derives:
 
 ```
-t_warmest    = temperature_c.max()
-t_coldest    = temperature_c.min()
-p_annual     = precipitation_mm.sum()
+t_warmest     = temperature_c.max()
+t_coldest     = temperature_c.min()
+p_annual      = precipitation_mm.sum()
 p_seasonality = (precipitation_mm.max() - precipitation_mm.min()) / max(p_annual, 1e-6)
 ```
 
 Decision tree (in order; first match wins):
 
-1. `t_warmest < 0`                                                    → **Icecap (0)**
-2. `t_warmest < 10`                                                    → **Tundra (1)**
-3. `t_coldest < -10`                                                   → **Taiga (2)**
-4. `p_annual < 250`  and `t_warmest > 18`                              → **Desert (8)**
-5. `p_annual < 500`  and `t_warmest > 18`                              → **Semi-Arid (7)**
-6. `p_annual < 400`                                                    → **Steppe (4)**
-7. `t_warmest > 22` and `p_annual > 1500` and `p_seasonality < 0.4`    → **Tropical (6)**
-8. `t_warmest > 22` and `p_seasonality ≥ 0.4`                          → **Savannah (5)**
-9. fallthrough                                                          → **Temperate (3)**
+1. `t_warmest < 0`                                                          → **Icecap (0)**
+2. `t_warmest < 10`                                                         → **Tundra (1)**
+3. `t_coldest < -10`                                                        → **Taiga (2)**
+4. `p_annual < 300`  and `t_warmest > 18`                                   → **Desert (8)**
+5. `p_annual < 500`  and `t_warmest > 18`                                   → **Semi-Arid (7)**
+6. `p_annual < 400`                                                         → **Steppe (4)**
+7. `t_warmest > 22` and `p_annual > 750`  and `p_seasonality < 0.5`        → **Tropical (6)**
+8. `t_warmest > 21` and `p_annual > 350`                                    → **Savannah (5)**
+9. fallthrough                                                               → **Temperate (3)**
 
-Thresholds are intentionally loose. The classifier runs **per pixel** (using the per-pixel temperature/precip textures) so we get sub-face transitions like "snow line on a tropical peak". For per-face metadata, the dominant biome is the integer mode over the face's pixels.
+The classifier runs **per pixel** (using the per-pixel temperature/precip textures) so we get sub-face transitions like "snow line on a tropical peak". For per-face metadata, the dominant biome is the integer mode over the face's pixels.
 
 `default_biome` is the canonical scalar reference. `classification.py` additionally exposes `classify_textures(temperature_tex, precipitation_tex, lat_tex) -> biome_tex` which implements the same decision tree fully vectorised over `(N, H, W, 4)` arrays — this is what the builder calls. The two must agree pixel-for-pixel; a small test pins this invariant.
 
 ### Swappability
 
-`ClimateBuilder.__init__` takes `classifier: Callable[..., np.ndarray] = classify_textures`. Replacing it (e.g. Köppen-Geiger later) requires only matching the array-in / array-out signature; no other code in the module reads biome indices semantically. Users who only want to override the per-point logic can pass `lambda t, p, lat: vectorise_pointwise(my_default_biome, t, p, lat)`.
+`ClimateBuilder.__init__` takes `classifier: Callable[..., np.ndarray] = classify_textures`. Replacing it (e.g. Köppen-Geiger later) requires only matching the array-in / array-out signature; no other code in the module reads biome indices semantically.
 
 ---
 
@@ -329,12 +308,13 @@ worldgen/climate/
     __init__.py
     builder.py            # ClimateParams + ClimateBuilder
     insolation.py         # seasonal_insolation(latitudes, declinations) -> Q[face, season]
-    temperature.py        # surface_temperatures(...) -> (T_face, T_pixel)
-    winds.py              # zonal_winds(centroids, season_phases, params) -> W[face, season, 3]
-    precipitation.py      # surface_precipitation(...) -> (P_face, P_pixel)
+    temperature.py        # surface_temperatures(...) -> T_face; per_pixel_temperatures(...)
+    winds.py              # zonal_winds(...) + pressure_winds(...) -> W[face, season, 3]
+    humidity.py           # evaporation_source, advect_moisture, smooth_humidity, per_pixel_humidity
+    precipitation.py      # per_pixel_precipitation(...) -> P[face, px, px, season]
     classification.py     # BIOME_NAMES, default_biome, classify_textures
-    currents.py           # CurrentsResult + compute_currents(mesh, ..., winds, insolation) → annual ΔT and ΔP deltas
-    display.py            # color schemes for T/P/biome + wind overlay rendering helpers
+    currents.py           # CurrentsResult + compute_currents(mesh, ...) → annual ΔT and ΔP deltas
+    display.py            # color schemes for T/P/humidity/biome + legend entries
 ```
 
 Per-stage functions are pure (input arrays → output arrays) so they can be tested in isolation. The builder is responsible for plumbing.
@@ -345,8 +325,8 @@ Per-stage functions are pure (input arrays → output arrays) so they can be tes
 class ClimateBuilder:
     def __init__(
         self,
-        params: ClimateParams,
-        classifier: Callable[..., int] = default_biome,
+        params: ClimateParams | None = None,
+        classifier: Callable[..., np.ndarray] = classify_textures,
     ): ...
 
     def build(
@@ -355,118 +335,108 @@ class ClimateBuilder:
         elevation_textures: np.ndarray,        # (N, H, W, 1)
         progress: Optional[Callable[[str], None]] = None,
     ) -> None: ...
+
+    def apply_lake_humidity_feedback(
+        self,
+        mesh: PolygonMesh,
+        lake_mask_tex: np.ndarray,             # (N, H, W, 1) float32
+        progress: Optional[Callable[[str], None]] = None,
+    ) -> None: ...
 ```
 
-Attaches `temperature`, `precipitation`, and `biome` textures to the mesh and stores intermediate results as attributes:
+`build()` attaches `temperature`, `precipitation`, `humidity`, and `biome` textures to the mesh and stores intermediate results as attributes:
 
 | Attribute | Type | Notes |
 |---|---|---|
-| `insolation` | `(N, 4) float32` | W/m², daily mean |
+| `insolation` | `(N, 4) float64` | W/m², daily mean |
 | `distance_to_coast` | `(N,) float32` | km |
-| `temperature_face` | `(N, 4) float32` | °C |
-| `precipitation_face` | `(N, 4) float32` | mm/season |
+| `temperature_face` | `(N, 4) float64` | °C |
+| `precipitation_face` | `(N, 4) float32` | mm/season (pixel averages) |
+| `humidity_face` | `(N, 4) float32` | dimensionless q_air |
 | `winds` | `(N, 4, 3) float32` | m/s tangent |
-| `currents` | `CurrentsResult \| None` | populated when `params.currents.enabled`; holds `currents (N,3) m/s`, `temperature_delta (N,) °C`, `precipitation_delta (N,)`, `advected_insolation (N,) W/m²` |
+| `currents` | `CurrentsResult \| None` | populated when `params.currents.enabled` |
+
+`apply_lake_humidity_feedback(mesh, lake_mask_tex)` is called after `HydrologyBuilder.build()` completes. It adds lake evaporation as an extra moisture source (proportional to lake area fraction × SST), then re-runs humidity advection (`lake_feedback_iter` steps) and refreshes precipitation and biome textures. This single-correction pass approximates the hydrology→climate feedback without re-running the full pipeline.
 
 ---
 
 ## Pipeline integration
 
-`GlobeBuilder.build()` order becomes:
+`GlobeBuilder.build()` order:
 
 ```
 elevation_builder.build()
-climate_builder.build(mesh, elevation_textures)        # ← new
-hydrology_builder.build(mesh, elevation_textures)
+climate_builder.build(mesh, elevation_textures)
+hydrology_builder.build(mesh, elevation_textures)    # reads "precipitation" and "temperature" textures
+climate_builder.apply_lake_humidity_feedback(mesh, lake_mask_tex)    # if lake_mask present
+resources_builder.build(mesh, rivers=rivers)
 ```
 
-Hydrology does not consume climate output in this iteration — the river network is still driven by elevation alone. A future revision can switch `flow_accum[k] = 1.0` to `flow_accum[k] = precipitation_pixel[k] / reference_P` (see `river_generation_spec.md` § "Current limitations"), which is the natural place for climate → hydrology coupling.
-
-`GlobeParams` gains `climate: ClimateParams`. `GlobeBuilder.apply_display` is extended to register temperature/precip/biome color schemes and the four wind overlays.
+`GlobeParams` exposes `climate: ClimateParams`. `GlobeBuilder.apply_display` registers climate color schemes; in debug mode this includes temperature (annual + seasonal slices), precipitation, humidity, and wind/currents overlays.
 
 ---
 
 ## Ocean currents (annual mean)
 
-Currents are implemented as an annual-mean second pass on top of the
-first-pass temperature/precipitation fields. They incorporate the three
-inputs that move surface ocean heat around at the resolution we model:
+Currents are computed as an annual-mean second pass using a **barotropic Stommel streamfunction** model.
 
-1. **Wind** — surface current ≈ `ekman_coupling` × annual-mean wind,
-   rotated 45° via Ekman drift (right in NH, left in SH).
-2. **Insolation** — the local annual-mean insolation acts as the water's
-   thermal payload; we advect this scalar along the resulting flow
-   network.
-3. **Blockage by land** — current edges on the face graph are restricted
-   to ocean neighbours. Land neighbours receive zero outflow weight; the
-   remaining ocean neighbours absorb the redistributed flow. A face
-   whose current points entirely into land becomes a natural sink.
-
-No seasonal breakdown — a single (N,) °C / multiplicative-precip delta
-is produced per face and broadcast across the four seasons via the
-existing hooks below.
-
-### Pipeline (`worldgen/climate/currents.py`)
+### Model (`worldgen/climate/currents.py`)
 
 ```
-annual-mean wind ──▶ Ekman 45° rotation ──▶ per-face current vector (ocean only)
-                                                │
-                                                ▼
-                                  build sparse (src, dst, w) edges
-                                  w = max(0, current[src] · dir(src→dst))
-                                                │
-                                                ▼
-                       damped Jacobi: advected = (1-α)·local + α·avg_inflow
-                       (per-destination averaging keeps it bounded)
-                                                │
-                                                ▼
-                            ΔT_ocean = scale_T · (advected_Q − local_Q)
-                                                │
-                                                ▼
-                Dijkstra from ocean faces → ΔT_land = ΔT_parent · exp(-d/decay)
-                                                │
-                                                ▼
-                              ΔP_delta = scale_W · ΔT  (multiplicative)
+annual-mean wind ──▶ quadratic-drag wind stress τ ──▶ curl(τ) per face
+                                                              │
+                                                              ▼
+                    GMRES solve: (L − β·D_east)·ψ = −curl(τ)
+                    L = Voronoi-weighted graph Laplacian (FVM ≈ −∇²)
+                    β·D_east = Stommel planetary vorticity gradient term
+                    ψ = 0 on land (Dirichlet BC per basin)
+                                                              │
+                                                              ▼
+                              u = k̂ × ∇ψ  (divergence-free currents)
+                                                              │
+                                                              ▼
+                   Jacobi advection of annual-mean insolation along currents
+                                                              │
+                                                              ▼
+                        ΔT_ocean = temperature_scale × (advected_Q − local_Q)
+                                                              │
+                                                              ▼
+          Dijkstra from ocean faces → ΔT_land = ΔT_ocean[parent] · exp(-d/decay)
+                                                              │
+                                                              ▼
+                            precip_delta = precipitation_scale × ΔT  (multiplicative)
 ```
 
-### Hooks (unchanged)
+The `CurrentsResult` dataclass holds:
+- `currents` `(N, 3) float32` m/s — annual-mean current vector per face (zero on land)
+- `streamfunction` `(N,) float32` — ψ in solver units
+- `temperature_delta` `(N,) float32` — °C, broadcast across all K seasons
+- `precipitation_delta` `(N,) float32` — multiplicative wet delta applied to q_air before precipitation conversion
+- `advected_insolation` `(N,) float32` — W/m² post-advection (for inspection)
 
-1. **`temperature.surface_temperatures(...)`** accepts an optional
-   `coastal_current_temp_delta: (N, K) | None`. The builder broadcasts the
-   per-face annual ΔT via shape `(N, 1)`.
-2. **`precipitation.surface_precipitation(...)`** accepts an optional
-   `current_wet_delta: (N, K) | None`, treated as a multiplicative
-   `(1 + delta)`. Same broadcast.
-3. **`ClimateParams.currents: CurrentsParams`** has `enabled: bool = True`
-   and the tunables in the table below. When disabled the second pass is
-   skipped and `self.currents` stays `None`.
+### Hooks
+
+1. **`temperature.surface_temperatures(...)`** accepts `coastal_current_temp_delta: (N, 1) | None`; the builder passes the per-face annual ΔT broadcast across seasons.
+2. **`humidity`** `current_wet_delta` is applied as `q_air × (1 + delta)` after humidity advection and before the humidity→precipitation conversion.
+3. **`ClimateParams.currents: CurrentsParams`** has `enabled: bool = True`. When disabled the second pass is skipped and `self.currents` stays `None`.
 
 ### Tunables (`CurrentsParams`)
 
 | Field | Default | Effect |
 |---|---|---|
 | `enabled` | `True` | Master switch for the second pass |
-| `ekman_coupling` | `0.03` | Current speed as a fraction of wind speed |
-| `advection_alpha` | `1.0` | Per-iter inflow mixing (1.0 = pure Lagrangian) |
+| `beta_scale` | `1.0` | Scale on β·D_east: 0 = symmetric gyres, ~1 = western-boundary intensification |
+| `advection_alpha` | `1.0` | Per-iter inflow mixing fraction |
 | `advection_iterations` | `400` | Jacobi sweeps; ~400 is enough for depth-4 |
 | `temperature_scale` | `0.06` | °C per W/m² of advected-vs-local insolation gap |
 | `precipitation_scale` | `0.03` | Multiplicative wet delta per °C of anomaly |
 | `inland_decay_km` | `600.0` | e-folding distance for coastal → inland decay |
 
-### Known shortcomings vs the spec's original ambitions
+### Known shortcomings
 
-- **No proper Lagrangian particle tracking.** The advection is a Markov
-  diffusion on the face graph, which dilutes signal at convergence
-  points compared to real currents.
-- **No gyre structure beyond what falls out of Ekman + wind curl.** The
-  model captures western-vs-eastern coast asymmetry from the prevailing
-  winds, but not the boundary-current intensification that produces
-  Gulf-Stream-class warm anomalies (5–10 °C). Effective range is ~ ±3 °C
-  ocean, ~ ±2 °C land in our defaults.
-- **Inland propagation is great-circle Dijkstra from the nearest ocean
-  face**, not upwind-traced. A coastal face's parent ocean is the
-  closest ocean face, not the ocean face the prevailing wind would
-  carry air from.
+- **No proper Lagrangian particle tracking.** The advection is a Markov diffusion on the face graph, which dilutes signal at convergence points. Effective range is ~±3 °C ocean / ~±2 °C land, vs. ~±10 °C for Gulf-Stream-class anomalies.
+- **No full gyre structure beyond Stommel + wind curl.** The β-plane term captures western-boundary intensification, but not boundary-current intensification at Gulf-Stream scale.
+- **Inland propagation is Dijkstra from the nearest ocean face**, not upwind-traced. The coastal parent is the closest ocean face, not the one the prevailing wind would carry air from.
 
 ---
 
@@ -487,19 +457,22 @@ Sub-dataclasses mirror `ElevationParams` style (`_f(default, label=..., min=...,
 | | `westerly_speed` | 10.0 m/s | 0, 30 |
 | | `polar_speed` | 5.0 m/s | 0, 30 |
 | | `itcz_shift_deg` | 10.0 | 0, 30 |
-| | `pressure_wind_scale` | 200.0 m·s⁻¹·km/°C | 0, 1000 |
-| `PrecipitationParams` | `itcz_mm_annual` | 2200 | 0, 5000 |
-| | `horse_mm_annual` | 250 | 0, 2000 |
-| | `midlat_mm_annual` | 900 | 0, 3000 |
-| | `polar_mm_annual` | 200 | 0, 2000 |
+| | `pressure_wind_scale` | 600.0 m·s⁻¹·km/°C | 0, 1000 |
+| `PrecipitationParams` | `evaporation_scale` | 1.0 | 0.1, 5.0 |
+| | `precipitation_scale` | 2000.0 mm/yr | 100, 10000 |
+| | `moisture_advection_iter` | 200 | 50, 600 |
+| | `moisture_decay_rate` | 0.03 | 0.005, 0.2 |
 | | `orographic_k` | 0.4 | 0, 2 |
-| | `continentality_decay_km` | 1200 | 100, 5000 |
-| `CurrentsParams` | `enabled` | `True` | Master switch for the currents pass |
-| | `ekman_coupling` | `0.03` | 0, 0.2 |
+| | `humidity_smoothing_passes` | 10 (hidden) | 0, 30 |
+| | `humidity_smoothing_alpha` | 0.4 (hidden) | 0.0, 1.0 |
+| | `lake_evap_scale` | 1.0 (hidden) | 0, 5 |
+| | `lake_feedback_iter` | 100 (hidden) | 0, 600 |
+| `CurrentsParams` | `enabled` | `True` | — |
+| | `beta_scale` | `1.0` | 0, 5 |
 | | `advection_alpha` | `1.0` | 0, 1 |
 | | `advection_iterations` | `400` | 10, 2000 |
-| | `temperature_scale` | `0.06` | °C per W/m² |
-| | `precipitation_scale` | `0.03` | wet delta per °C |
+| | `temperature_scale` | `0.06` | 0, 0.5 |
+| | `precipitation_scale` | `0.03` | 0, 0.2 |
 | | `inland_decay_km` | `600` | 50, 5000 |
 | (root) | `seed` | `None` | Optional[int] |
 
@@ -507,28 +480,26 @@ Sub-dataclasses mirror `ElevationParams` style (`_f(default, label=..., min=...,
 
 ## Display additions
 
-New color schemes wired by `GlobeBuilder.apply_display`:
+Color schemes wired by `GlobeBuilder.apply_display`:
 
-| Scheme name | Source | Style |
+| Scheme name | Source | Mode |
 |---|---|---|
-| Annual Temperature | `temperature_annual` metadata + per-pixel temperature texture | blue→white→red diverging, anchored at 0 °C |
-| Summer Temperature | warmest-season slice of `temperature` texture | same palette, season 1 (NH summer) |
-| Winter Temperature | coldest-season slice of `temperature` texture | same palette, season 3 (NH winter) |
-| Annual Precipitation | sum of seasonal precipitation channels | yellow→green→deep blue, log scale (mm) |
-| Biome | `biome` texture | 9 categorical swatches, dark grey for unset |
+| Biome | `biome` texture, categorical 9-class palette | default |
+| Annual Temperature | `temperature` texture (mean of 4 seasons), blue→white→red diverging at 0 °C | debug |
+| Summer Temperature | `temperature` texture season 1 (NH summer) | debug |
+| Winter Temperature | `temperature` texture season 3 (NH winter) | debug |
+| Annual Precipitation | `precipitation` texture (4-season sum), log scale mm | debug |
+| Humidity | `humidity_annual` metadata (per-face, arid tan → moist blue-green) | debug |
 
-Per-scheme texture associations follow the existing `window.associate_scheme_texture(name, texture_key)` pattern.
-
-Four wind overlays (`Winds — Spring/Summer/Autumn/Winter`) draw as line segments at face centroids, length scaled by wind speed; toggled like the rivers overlay.
+Wind overlays (`winds` globe feature, 4 seasons) and current overlay (`currents` feature) are drawn as line segments at face centroids, length scaled by speed; both rendered in debug mode only.
 
 ---
 
 ## Known limitations / future work
 
-- **Currents are a coarse Markov-diffusion advection** of insolation, not a real fluid simulation. The model captures west-coast vs east-coast asymmetry but its peak anomalies are ~±3 °C rather than the ~±10 °C real western boundary currents produce. See the "Ocean currents" section above.
-- **No deflection around mountains or continents.** Surface winds pass straight through terrain rather than being routed around it. The pressure-anomaly wind component does capture continental highs/lows and monsoonal reversal, but only via cross-isobar mass flux — no anticyclonic/cyclonic rotation around them.
+- **Currents are a Stommel barotropic model** — captures gyre structure and western-boundary asymmetry, but peak anomalies are ~±3 °C rather than the ~±10 °C real western boundary currents produce.
+- **No deflection around mountains or continents.** Surface winds pass straight through terrain. The pressure-anomaly wind component captures continental highs/lows but produces no anticyclonic/cyclonic rotation around them.
 - **Per-face wind, per-pixel everything else.** Orographic precipitation uses the per-face wind vector even when sampling the per-pixel elevation gradient. Cross-face wind variation inside a single face is below the modelling resolution.
-- **No snowpack, no humidity, no clouds.** Precipitation is the only hydrological output; the temperature field does not distinguish rain from snow (the classifier infers it from temperature).
+- **No snowpack or clouds.** Precipitation is the only hydrological output; the temperature field does not distinguish rain from snow (the classifier infers it from temperature).
 - **Lapse rate is uniform.** Wet vs dry adiabatic distinction is ignored; coastal humidity does not damp the lapse rate.
-- **Distance-to-coast is great-circle on the face graph.** It approximates surface distance to ~one-face resolution; fine for continentality damping but coarse for, e.g., island chains.
-- **Texture dtype precursor.** Requires `PolygonMesh.set_face_textures` to accept `uint8` for the biome channel — straightforward but a prerequisite change to land before climate.
+- **Distance-to-coast is great-circle Dijkstra on the face graph.** Approximates surface distance to ~one-face resolution; fine for continentality damping but coarse for, e.g., island chains.

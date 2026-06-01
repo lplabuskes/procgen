@@ -3,7 +3,7 @@ import sys
 import numpy as np
 from PySide6.QtWidgets import QApplication
 
-from worldgen.mapview.mapview import MapWindow
+from utils.mapview.mapview import MapWindow
 from worldgen.mesh.mymesh import Mesh
 
 if __name__ == "__main__":

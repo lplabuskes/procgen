@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from worldgen.mapview.projections import ALL_PROJECTIONS, RobinsonProjection, Projection
+from utils.mapview.projections import ALL_PROJECTIONS, RobinsonProjection, Projection
 
 if TYPE_CHECKING:
     from worldgen.mesh.mymesh import PolygonMesh
