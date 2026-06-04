@@ -27,6 +27,7 @@ from worldgen.climate.display import (
     temperature_color,
     temperature_legend_entries,
 )
+from worldgen.cost.builder import CostBuilder, CostParams
 from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams
 from worldgen.hydrology.builder import HydrologyBuilder, HydrologyParams, LAKE_COLOR
 from worldgen.resources.builder import ResourcesBuilder, ResourcesParams
@@ -96,6 +97,7 @@ class GlobeParams:
     climate: ClimateParams = field(default_factory=ClimateParams, metadata={"label": "Climate"})
     hydrology: HydrologyParams = field(default_factory=HydrologyParams, metadata={"label": "Hydrology"})
     resources: ResourcesParams = field(default_factory=ResourcesParams, metadata={"label": "Resources"})
+    cost: CostParams = field(default_factory=CostParams, metadata={"label": "Cost"})
 
 
 class GlobeBuilder:
@@ -113,6 +115,7 @@ class GlobeBuilder:
         self.climate_builder: ClimateBuilder = ClimateBuilder(self.params.climate)
         self.hydrology_builder: HydrologyBuilder = HydrologyBuilder(self.params.hydrology)
         self.resources_builder: ResourcesBuilder = ResourcesBuilder(self.params.resources)
+        self.cost_builder: CostBuilder = CostBuilder(self.params.cost)
         self.globe: Optional[Globe] = None
 
     def build(self, progress: Optional[Callable[[str], None]] = None) -> Globe:
@@ -127,6 +130,12 @@ class GlobeBuilder:
             )
 
         self.resources_builder.build(
+            mesh, rivers=self.hydrology_builder.rivers, progress=progress
+        )
+
+        # Final physical stage: base land + sea traversal-cost surfaces. These are
+        # consumed by the downstream realm layer, which adds a danger field on top.
+        self.cost_builder.build(
             mesh, rivers=self.hydrology_builder.rivers, progress=progress
         )
 
@@ -164,6 +173,9 @@ class GlobeBuilder:
             globe.add_feature("minerals", rb.minerals)
         if rb.rare_bio is not None and len(rb.rare_bio[0]) > 0:
             globe.add_feature("rare_bio", rb.rare_bio)
+
+        if self.cost_builder.surfaces is not None:
+            globe.add_feature("cost_surfaces", self.cost_builder.surfaces)
 
         if cb.winds is not None:
             centroids = mesh.face_centroids.astype(np.float32)
@@ -306,6 +318,57 @@ class GlobeBuilder:
                 ),
             )
             schemes["Dominant Crop"] = crop_color
+
+        if debug and mesh.face_metadata and "land_base_cost" in mesh.face_metadata[0]:
+            land_costs = np.array(
+                [m.get("land_base_cost", 0.0) for m in mesh.face_metadata], dtype=np.float64
+            )
+            # Water = ocean ∪ lake (impassable on land); fall back to is_ocean for
+            # worlds saved before the cost stage wrote is_water.
+            is_water_arr = np.array(
+                [bool(m.get("is_water", m.get("is_ocean", False))) for m in mesh.face_metadata],
+                dtype=bool,
+            )
+            land_ref = (
+                float(np.percentile(land_costs[~is_water_arr], 95))
+                if (~is_water_arr).any() else 1.0
+            )
+            land_ref = max(land_ref, 1e-6)
+
+            def _land_cost_color(meta: dict, _ref=land_ref) -> tuple:
+                if meta.get("is_water", meta.get("is_ocean", False)):
+                    return OCEAN_COLOR
+                c = min(max(float(meta.get("land_base_cost", 0.0)) / _ref, 0.0), 1.0)
+                return (0.15 + 0.80 * c, 0.75 - 0.55 * c, 0.20, 1.0)
+
+            schemes["Land Cost"] = _land_cost_color
+
+            # Sailable faces (water ∪ navigable rivers) carry the sea cost.
+            is_sailable_arr = is_water_arr | np.array(
+                [bool(m.get("is_navigable_river", False)) for m in mesh.face_metadata],
+                dtype=bool,
+            )
+            sea_costs = np.array(
+                [m.get("sea_base_cost", 0.0) for m in mesh.face_metadata], dtype=np.float64
+            )
+            sea_ref = max(
+                float(sea_costs[is_sailable_arr].max()) if is_sailable_arr.any() else 1.0, 1e-6
+            )
+
+            def _sea_cost_color(meta: dict, _ref=sea_ref) -> tuple:
+                sailable = meta.get("is_water", meta.get("is_ocean", False)) or meta.get(
+                    "is_navigable_river", False
+                )
+                if not sailable:
+                    return LAND_COLOR
+                if meta.get("is_strait", False):
+                    return (1.0, 0.85, 0.1, 1.0)  # highlight chokepoints
+                if meta.get("is_navigable_river", False):
+                    return (0.30, 0.85, 0.95, 1.0)  # navigable rivers stand out
+                c = min(max(float(meta.get("sea_base_cost", 0.0)) / _ref, 0.0), 1.0)
+                return (0.1, 0.20 + 0.30 * (1.0 - c), 0.50 + 0.40 * c, 1.0)
+
+            schemes["Sea Cost"] = _sea_cost_color
 
         window.set_color_schemes(schemes)
         window.associate_scheme_texture("Elevation", "elevation_rgba")

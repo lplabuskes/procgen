@@ -167,6 +167,18 @@ def save_globe(builder: GlobeBuilder, path: Union[str, Path]) -> None:
         arrays["rare_bio_kinds"] = rb_kinds.astype(np.int8)
         arrays["rare_bio_abundances"] = rb_abund.astype(np.float32)
 
+    # ── CostBuilder: base cost surfaces ────────────────────────────────────
+    cs = builder.cost_builder.surfaces
+    if cs is not None:
+        arrays["cost_land_base_cost"] = cs.land_base_cost.astype(np.float32)
+        arrays["cost_land_passable"] = cs.land_passable.astype(np.bool_)
+        arrays["cost_river_flow_dir"] = cs.river_flow_dir.astype(np.float32)
+        arrays["cost_river_flow_mag"] = cs.river_flow_mag.astype(np.float32)
+        arrays["cost_river_navigability"] = cs.river_navigability.astype(np.float32)
+        arrays["cost_sea_base_cost"] = cs.sea_base_cost.astype(np.float32)
+        arrays["cost_sea_passable"] = cs.sea_passable.astype(np.bool_)
+        arrays["cost_strait_mask"] = cs.strait_mask.astype(np.bool_)
+
     np.savez_compressed(path, **arrays)
 
 
@@ -304,6 +316,29 @@ def load_globe(path: Union[str, Path]) -> tuple[GlobeBuilder, Globe]:
 
     if "rare_bio_positions" in data.files:
         globe.add_feature("rare_bio", rb.rare_bio)
+
+    if "cost_land_base_cost" in data.files:
+        from worldgen.cost.surfaces import CostSurfaces
+
+        river_flow_mag = data["cost_river_flow_mag"]
+        # Back-compat: navigability was added later; default to zeros.
+        river_navigability = (
+            data["cost_river_navigability"]
+            if "cost_river_navigability" in data.files
+            else np.zeros_like(river_flow_mag)
+        )
+        cost_surfaces = CostSurfaces(
+            land_base_cost=data["cost_land_base_cost"],
+            land_passable=data["cost_land_passable"],
+            river_flow_dir=data["cost_river_flow_dir"],
+            river_flow_mag=river_flow_mag,
+            river_navigability=river_navigability,
+            sea_base_cost=data["cost_sea_base_cost"],
+            sea_passable=data["cost_sea_passable"],
+            strait_mask=data["cost_strait_mask"],
+        )
+        builder.cost_builder.surfaces = cost_surfaces
+        globe.add_feature("cost_surfaces", cost_surfaces)
 
     if cb.winds is not None:
         centroids = mesh.face_centroids.astype(np.float32)
