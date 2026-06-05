@@ -149,9 +149,11 @@ realmgen mirrors the existing stage builders so it slots into the project cleanl
 Physical land + sea traversal cost and `strait` tagging, attached to the Globe. Sailable water is ocean ∪ lake; navigable rivers (gated by flow and by a ruggedness-driven fall line) join the sea network and stay land-passable (amphibious). The land surface carries an anisotropic river term (cheap along a navigable valley with the discount tapered by navigability, expensive to ford) folded into `build_land_edge_costs`; realmgen calls the same function after adding its danger field to the per-face base cost.
 *Done when:* the land-cost and sea-cost schemes render sensibly; open water (ocean and lakes) is impassable on land and vice-versa; navigable rivers extend the sea network up to the fall line; straits are tagged at narrow passages; the biome cost table is tunable without touching realmgen. ✅
 
-**Stage 1 — Foundation (realmgen)**
+**Stage 1 — Foundation (realmgen)** *(suitability scorer implemented)*
 DangerField (procedural default), danger overlay on both surfaces, suitability scorer, static situational value. No placement yet.
 *Done when:* the suitability heatmap places likely cities in recognizable regions; harbor quality and passes/straits read correctly; the danger overlay inflates cost without corrupting the physical base.
+
+Suitability scorer (`realmgen/suitability.py`, orchestrated by `RealmBuilder`): five independent per-face factors (water proximity via BFS hop-decay from river+lake seeds + coastal exponential decay; climate habitability as piecewise T_warmest × T_coldest × P_annual; fertility direct from `fertility_mean`; defensibility as tanh of `face_elevation_range`; resource access via BFS hop-decay from mineral+rare_bio faces) combined as a tunable weighted sum; water faces forced to 0. Remaining items (DangerField, danger overlay, static situational value) not yet implemented.
 
 **Stage 2 — Placement**
 Settlement seeder using the combined score, hierarchical with cost-distance exclusion radii.

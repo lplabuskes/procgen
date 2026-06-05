@@ -167,6 +167,14 @@ Final physical stage. Converts already-computed data into the **base** land + se
 - **`assign_plate_types(n_plates, oceanic_fraction, seed)`**: Classifies each plate as `'oceanic'` or `'continental'`. Default `oceanic_fraction=0.7` matches Earth's rough ratio.
 - **`classify_plate_boundaries(mesh, plate_ids, plate_omegas)`**: Returns `List[dict]` (one per face) with keys `boundary_type` (`'interior'|'convergent'|'divergent'|'transform'`), `normal_avg` (mean normal velocity component across inter-plate edges; positive = diverging), and `neighbor_plate_types` (set of plate type strings seen across those edges). Interior faces get zeros/empty set.
 
+### `realmgen/` — Human geography layer
+
+Standalone module downstream of worldgen. Takes a fully-built `Globe` (read-only) and attaches human geography features. Integrated via `RealmBuilder.build(globe)` — not wired into `GlobeBuilder`; keep realmgen optional.
+
+- **`RealmParams`** (dataclass in `builder.py`): Nested sub-params — `water: WaterProximityParams`, `climate: ClimateHabitabilityParams`, `defensibility: DefensibilityParams`, `resource: ResourceAccessParams`, `weights: SuitabilityWeightParams`. All leaf fields carry `label`/`min`/`max` metadata.
+- **`RealmBuilder`** (`builder.py`): `build(globe, progress=None)` reads `is_water`/`is_ocean` metadata, `lake_mask` texture, `cost_surfaces` feature (for `river_flow_mag` river mask), `fertility_mean`/`temperature_*`/`precipitation_annual`/`distance_to_coast` metadata, `elevation` texture, and `minerals`/`rare_bio` globe features. Stores `self.suitability (N,) float32` and writes `"suitability"` per-face metadata.
+- **`suitability.py`** — pure testable functions. Five factors, each in [0, 1]: `compute_water_proximity` (BFS hop-decay from river+lake faces + exponential coastal-access term); `compute_climate_habitability` (piecewise-linear T_warmest/T_coldest/P_annual, multiplied); `compute_defensibility` (tanh of `face_elevation_range`); `compute_resource_proximity` (BFS hop-decay from mineral+rare_bio deposit faces via `_positions_to_face_ids` nearest-centroid lookup); `combine_suitability` (weighted sum, water faces forced to 0). Default weights: water=0.30, climate=0.30, fertility=0.25, resources=0.10, defensibility=0.05.
+
 ### `main.py` — Primary entrypoint
 
 Top-level entrypoint. Creates a `GlobeBuilder(GlobeParams())`, calls `build()` to produce a `Globe`, passes it to `MapWindow.set_globe(globe)`, and calls `builder.apply_display(window)` to wire color schemes and the elevation texture. By default (non-debug) the available schemes are **Elevation** (multi-stop gradient from abyssal ocean blues through beach/lowland/highland to snow-capped peaks, with a hard break at sea level; lake pixels rendered in lake blue) and **Biome** (categorical 9-class palette). A Re-run callback is registered so the world can be regenerated in place without restarting.
