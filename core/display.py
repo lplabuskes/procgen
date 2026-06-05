@@ -11,8 +11,8 @@ monolithic hover callback dissolves into per-stage pieces.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Callable, List, Optional, Tuple, TYPE_CHECKING
+from dataclasses import dataclass
+from typing import Callable, List, Optional, Tuple, TYPE_CHECKING
 
 import numpy as np
 
@@ -39,6 +39,7 @@ class OverlaySpec:
     feature: str
     label: str
     checked: bool = True
+    legend: Optional[Legend] = None
 
 
 class DisplayRegistry:
@@ -59,8 +60,15 @@ class DisplayRegistry:
     ) -> None:
         self.schemes[name] = SchemeSpec(fn, texture, legend)
 
-    def add_overlay(self, feature: str, label: str, *, checked: bool = True) -> None:
-        self.overlays.append(OverlaySpec(feature, label, checked))
+    def add_overlay(
+        self,
+        feature: str,
+        label: str,
+        *,
+        checked: bool = True,
+        legend: Optional[Legend] = None,
+    ) -> None:
+        self.overlays.append(OverlaySpec(feature, label, checked, legend))
 
     def add_hover(self, fn: HoverFn) -> None:
         self.hover_fns.append(fn)

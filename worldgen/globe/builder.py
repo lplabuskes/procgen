@@ -1,51 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import numpy as np
 from typing import Callable, Optional
 
-from worldgen.geology.display import (
-    BOUNDARY_COLORS,
-    LAND_COLOR,
-    OCEAN_COLOR,
-    _elevation_color,
-    _elevation_color_vec,
-    _plate_palette,
-    elevation_legend_entries,
-)
-
-from worldgen.climate.builder import ClimateBuilder, ClimateParams
-from worldgen.climate.display import (
-    BIOME_PALETTE,
-    biome_color,
-    biome_legend_entries,
-    build_precipitation_display_texture,
-    build_temperature_display_texture,
-    humidity_color,
-    precipitation_color,
-    precipitation_legend_entries,
-    temperature_color,
-    temperature_legend_entries,
-)
-from worldgen.cost.builder import CostBuilder, CostParams
-from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams
-from worldgen.hydrology.builder import HydrologyBuilder, HydrologyParams, LAKE_COLOR
-from worldgen.resources.builder import ResourcesBuilder, ResourcesParams
-from worldgen.resources.display import (
-    build_dominant_crop_display_texture,
-    build_fertility_display_texture,
-    build_forest_density_display_texture,
-    crop_color,
-    crop_legend_entries,
-    fertility_color,
-    fertility_legend_entries,
-    forest_density_color,
-    forest_density_legend_entries,
-    mineral_legend_entries,
-    rare_bio_legend_entries,
-)
+from core.display import DisplayRegistry
 from core.pipeline import BuildContext, Pipeline
 from core.world import World
+from worldgen.climate.builder import ClimateBuilder, ClimateParams
+from worldgen.cost.builder import CostBuilder, CostParams
+from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams
+from worldgen.hydrology.builder import HydrologyBuilder, HydrologyParams
+from worldgen.resources.builder import ResourcesBuilder, ResourcesParams
 from worldgen.globe.globe import Globe
 from worldgen.globe.stages import (
     ClimateStage,
@@ -53,46 +18,17 @@ from worldgen.globe.stages import (
     ElevationStage,
     HydrologyStage,
     ResourcesStage,
+    build_biome_display_texture,
+    build_elevation_display_texture,
 )
 
-
-SEASON_LABELS = ["Spring", "Summer", "Autumn", "Winter"]
-
-
-def build_elevation_display_texture(mesh) -> np.ndarray:
-    elev_tex = mesh.face_textures["elevation"]          # (N, H, W, 1)
-    ocean_mask = None
-    if "ocean_mask" in mesh.face_textures:
-        ocean_mask = mesh.face_textures["ocean_mask"][:, :, :, 0] > 0  # (N, H, W) bool
-    rgba = _elevation_color_vec(elev_tex[:, :, :, 0], ocean_mask=ocean_mask)  # (N, H, W, 4)
-    if "lake_mask" in mesh.face_textures:
-        lake_tex = mesh.face_textures["lake_mask"]       # (N, H, W, 1)
-        rgba[lake_tex[:, :, :, 0] > 0] = LAKE_COLOR
-    return rgba
-
-
-def build_biome_display_texture(mesh) -> np.ndarray:
-    """Look up `"biome"` indices in BIOME_PALETTE → (N, H, W, 4) RGBA.
-
-    Ocean pixels are overpainted with OCEAN_COLOR (using the ocean_mask texture
-    if present, otherwise falling back to elevation < 0). Inland lake pixels are
-    overpainted with LAKE_COLOR.
-    """
-    biome_tex = mesh.face_textures["biome"]              # (N, H, W, 1) uint8
-    idx = biome_tex[..., 0].astype(np.int32)
-    idx = np.clip(idx, 0, len(BIOME_PALETTE) - 1)
-    rgba = BIOME_PALETTE[idx].copy()
-    if "ocean_mask" in mesh.face_textures:
-        ocean = mesh.face_textures["ocean_mask"][..., 0] > 0
-        rgba[ocean] = np.asarray(OCEAN_COLOR, dtype=rgba.dtype)
-    elif "elevation" in mesh.face_textures:
-        elev_tex = mesh.face_textures["elevation"]       # (N, H, W, 1)
-        ocean = elev_tex[..., 0] < 0.0
-        rgba[ocean] = np.asarray(OCEAN_COLOR, dtype=rgba.dtype)
-    if "lake_mask" in mesh.face_textures:
-        lake_tex = mesh.face_textures["lake_mask"]       # (N, H, W, 1)
-        rgba[lake_tex[:, :, :, 0] > 0] = LAKE_COLOR
-    return rgba
+# Re-exported for back-compat (these display-texture helpers moved to stages.py).
+__all__ = [
+    "GlobeParams",
+    "GlobeBuilder",
+    "build_biome_display_texture",
+    "build_elevation_display_texture",
+]
 
 
 @dataclass
@@ -114,8 +50,8 @@ class GlobeBuilder:
 
     Each stage's builder is stored as an attribute (`elevation_builder`,
     `climate_builder`, `hydrology_builder`) so callers can read intermediate
-    results without re-running work. `build()` returns a `Globe` wrapping the
-    resulting mesh.
+    results without re-running work. `build()` runs the pipeline and returns a
+    `World` (aliased `Globe`).
     """
 
     def __init__(self, params: GlobeParams | None = None) -> None:
@@ -157,297 +93,19 @@ class GlobeBuilder:
         return world
 
     def apply_display(self, window, debug: bool = False) -> None:
-        """Wire color schemes and overlays into a MapWindow after build()."""
-        eb = self.elevation_builder
-        hb = self.hydrology_builder
-        cb = self.climate_builder
-        assert eb.mesh is not None, "GlobeBuilder.build() must be called before apply_display"
+        """Wire color schemes, overlays, and hover into a MapWindow after build().
 
-        mesh = eb.mesh
-        palette = _plate_palette(eb.params.plates.n_plates)
-        max_speed = eb.max_speed
+        Builds a ``DisplayRegistry`` by asking each pipeline stage to contribute
+        its slice, then hands the registry to the viz adapter for Qt wiring. The
+        adapter is imported lazily so this module stays Qt-free.
+        """
+        from utils.mapview.registry import apply_registry
 
-        mesh.set_face_colors(palette[np.array(eb.plate_ids, dtype=np.int32)])
-
-        elevation_rgba = build_elevation_display_texture(mesh)
-        mesh.set_face_textures("elevation_rgba", elevation_rgba)
-
-        schemes: dict[str, Callable[[dict], tuple]] = {
-            "Elevation": _elevation_color,
-        }
-
-        if debug:
-            def _speed_color(meta: dict) -> tuple:
-                t = meta["surface_speed"] / max_speed
-                return (t, 0.2 + 0.3 * (1.0 - t), 1.0 - t, 1.0)
-
-            def _volcanic_color(meta: dict) -> tuple:
-                t = meta["volcanic_activity"]
-                if t <= 0.0:
-                    return (0.35, 0.35, 0.35, 1.0)
-                elif t < 0.5:
-                    s = t / 0.5
-                    return (0.35 + 0.60 * s, 0.35 - 0.10 * s, 0.35 - 0.35 * s, 1.0)
-                else:
-                    s = (t - 0.5) / 0.5
-                    return (0.95, 0.25 - 0.20 * s, 0.0, 1.0)
-
-            schemes.update({
-                "Plates": lambda meta: tuple(palette[meta["plate_id"]]),
-                "Plate Type": lambda meta: OCEAN_COLOR if meta["plate_type"] == "oceanic" else LAND_COLOR,
-                "Speed": _speed_color,
-                "Boundary": lambda meta: BOUNDARY_COLORS[meta["boundary_type"]],
-                "Volcanic Activity": _volcanic_color,
-            })
-
-        if "temperature" in mesh.face_textures:
-            elev_tex = mesh.face_textures["elevation"]
-            mesh.set_face_textures(
-                "biome_rgba",
-                build_biome_display_texture(mesh),
-            )
-            schemes["Biome"] = biome_color
-
-            if debug:
-                temp_tex = mesh.face_textures["temperature"]
-                precip_tex = mesh.face_textures["precipitation"]
-                ocean_mask_tex = mesh.face_textures["ocean_mask"] if "ocean_mask" in mesh.face_textures else None
-                mesh.set_face_textures(
-                    "temperature_annual_rgba",
-                    build_temperature_display_texture(temp_tex, elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex),
-                )
-                mesh.set_face_textures(
-                    "temperature_summer_rgba",
-                    build_temperature_display_texture(
-                        temp_tex, season=1, elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex
-                    ),
-                )
-                mesh.set_face_textures(
-                    "temperature_winter_rgba",
-                    build_temperature_display_texture(
-                        temp_tex, season=3, elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex
-                    ),
-                )
-                mesh.set_face_textures(
-                    "precipitation_rgba",
-                    build_precipitation_display_texture(
-                        precip_tex, elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex
-                    ),
-                )
-                schemes["Annual Temperature"] = temperature_color
-                schemes["Summer Temperature"] = lambda meta: temperature_color(meta, key="temperature_warmest")
-                schemes["Winter Temperature"] = lambda meta: temperature_color(meta, key="temperature_coldest")
-                schemes["Annual Precipitation"] = precipitation_color
-                schemes["Humidity"] = humidity_color
-
-        ocean_mask_tex = mesh.face_textures.get("ocean_mask")
-        lake_mask_tex = mesh.face_textures.get("lake_mask")
-        elev_tex_for_resources = mesh.face_textures.get("elevation")
-        if debug and "fertility" in mesh.face_textures:
-            mesh.set_face_textures(
-                "fertility_rgba",
-                build_fertility_display_texture(
-                    mesh.face_textures["fertility"],
-                    elevation_tex=elev_tex_for_resources,
-                    ocean_mask_tex=ocean_mask_tex,
-                    lake_mask_tex=lake_mask_tex,
-                ),
-            )
-            schemes["Fertility"] = fertility_color
-        if debug and "forest_density" in mesh.face_textures:
-            mesh.set_face_textures(
-                "forest_density_rgba",
-                build_forest_density_display_texture(
-                    mesh.face_textures["forest_density"],
-                    elevation_tex=elev_tex_for_resources,
-                    ocean_mask_tex=ocean_mask_tex,
-                    lake_mask_tex=lake_mask_tex,
-                ),
-            )
-            schemes["Forest Density"] = forest_density_color
-
-        if "dominant_crop" in mesh.face_textures:
-            mesh.set_face_textures(
-                "dominant_crop_rgba",
-                build_dominant_crop_display_texture(
-                    mesh.face_textures["dominant_crop"],
-                    ocean_mask_tex=ocean_mask_tex,
-                    lake_mask_tex=lake_mask_tex,
-                ),
-            )
-            schemes["Dominant Crop"] = crop_color
-
-        if debug and mesh.face_metadata and "land_base_cost" in mesh.face_metadata[0]:
-            land_costs = np.array(
-                [m.get("land_base_cost", 0.0) for m in mesh.face_metadata], dtype=np.float64
-            )
-            # Water = ocean ∪ lake (impassable on land); fall back to is_ocean for
-            # worlds saved before the cost stage wrote is_water.
-            is_water_arr = np.array(
-                [bool(m.get("is_water", m.get("is_ocean", False))) for m in mesh.face_metadata],
-                dtype=bool,
-            )
-            land_ref = (
-                float(np.percentile(land_costs[~is_water_arr], 95))
-                if (~is_water_arr).any() else 1.0
-            )
-            land_ref = max(land_ref, 1e-6)
-
-            def _land_cost_color(meta: dict, _ref=land_ref) -> tuple:
-                if meta.get("is_water", meta.get("is_ocean", False)):
-                    return OCEAN_COLOR
-                c = min(max(float(meta.get("land_base_cost", 0.0)) / _ref, 0.0), 1.0)
-                return (0.15 + 0.80 * c, 0.75 - 0.55 * c, 0.20, 1.0)
-
-            schemes["Land Cost"] = _land_cost_color
-
-            # Sailable faces (water ∪ navigable rivers) carry the sea cost.
-            is_sailable_arr = is_water_arr | np.array(
-                [bool(m.get("is_navigable_river", False)) for m in mesh.face_metadata],
-                dtype=bool,
-            )
-            sea_costs = np.array(
-                [m.get("sea_base_cost", 0.0) for m in mesh.face_metadata], dtype=np.float64
-            )
-            sea_ref = max(
-                float(sea_costs[is_sailable_arr].max()) if is_sailable_arr.any() else 1.0, 1e-6
-            )
-
-            def _sea_cost_color(meta: dict, _ref=sea_ref) -> tuple:
-                sailable = meta.get("is_water", meta.get("is_ocean", False)) or meta.get(
-                    "is_navigable_river", False
-                )
-                if not sailable:
-                    return LAND_COLOR
-                if meta.get("is_strait", False):
-                    return (1.0, 0.85, 0.1, 1.0)  # highlight chokepoints
-                if meta.get("is_navigable_river", False):
-                    return (0.30, 0.85, 0.95, 1.0)  # navigable rivers stand out
-                c = min(max(float(meta.get("sea_base_cost", 0.0)) / _ref, 0.0), 1.0)
-                return (0.1, 0.20 + 0.30 * (1.0 - c), 0.50 + 0.40 * c, 1.0)
-
-            schemes["Sea Cost"] = _sea_cost_color
-
-        window.set_color_schemes(schemes)
-        window.associate_scheme_texture("Elevation", "elevation_rgba")
-        window.register_legend("Elevation", "gradient", elevation_legend_entries())
-        if "temperature" in mesh.face_textures:
-            window.associate_scheme_texture("Biome", "biome_rgba")
-            window.register_legend("Biome", "categorical", biome_legend_entries())
-            if debug:
-                window.associate_scheme_texture("Annual Temperature", "temperature_annual_rgba")
-                window.associate_scheme_texture("Summer Temperature", "temperature_summer_rgba")
-                window.associate_scheme_texture("Winter Temperature", "temperature_winter_rgba")
-                window.associate_scheme_texture("Annual Precipitation", "precipitation_rgba")
-                window.register_legend("Annual Temperature", "gradient", temperature_legend_entries())
-                window.register_legend("Summer Temperature", "gradient", temperature_legend_entries())
-                window.register_legend("Winter Temperature", "gradient", temperature_legend_entries())
-                window.register_legend("Annual Precipitation", "gradient", precipitation_legend_entries())
-        if debug and "fertility" in mesh.face_textures:
-            window.associate_scheme_texture("Fertility", "fertility_rgba")
-            window.register_legend("Fertility", "gradient", fertility_legend_entries())
-        if debug and "forest_density" in mesh.face_textures:
-            window.associate_scheme_texture("Forest Density", "forest_density_rgba")
-            window.register_legend("Forest Density", "gradient", forest_density_legend_entries())
-        if "dominant_crop" in mesh.face_textures:
-            window.associate_scheme_texture("Dominant Crop", "dominant_crop_rgba")
-            window.register_legend("Dominant Crop", "categorical", crop_legend_entries())
-        if hb.rivers:
-            window.add_overlay("rivers", label="Rivers")
-        if debug and cb.winds is not None:
-            for i, label in enumerate(SEASON_LABELS):
-                window.add_overlay(f"winds_season_{i}", label=f"Winds — {label}", checked=False)
-        if debug and cb.currents is not None:
-            window.add_overlay("currents", label="Currents", checked=False)
-        if debug and self.globe is not None and self.globe.has_feature("deltas"):
-            window.add_overlay("deltas", label="River Deltas", checked=False)
-        if debug and self.globe is not None and self.globe.has_feature("volcanoes"):
-            window.add_overlay("volcanoes", label="Volcanoes", checked=False)
-        if self.globe is not None and self.globe.has_feature("minerals"):
-            window.add_overlay("minerals", label="Minerals", checked=False)
-            window.register_legend("minerals", "categorical", mineral_legend_entries())
-        if debug and self.globe is not None and self.globe.has_feature("rare_bio"):
-            window.add_overlay("rare_bio", label="Rare Resources", checked=False)
-            window.register_legend("rare_bio", "categorical", rare_bio_legend_entries())
-
-        # Build resource-to-face lookup dicts — used by both hover callbacks.
-        _centroids_f32 = mesh.face_centroids.astype(np.float32)
-        _pos_to_face = {tuple(c): i for i, c in enumerate(_centroids_f32)}
-
-        _minerals_by_face: dict[int, list[tuple[str, float]]] = {}
-        if self.globe is not None and self.globe.has_feature("minerals"):
-            from worldgen.resources.minerals import MINERAL_NAMES
-            _m_pos, _m_kinds, _m_abund = self.globe.get_feature("minerals")
-            for _p, _k, _a in zip(_m_pos, _m_kinds, _m_abund):
-                _fi = _pos_to_face.get(tuple(_p))
-                if _fi is not None:
-                    _minerals_by_face.setdefault(_fi, []).append(
-                        (MINERAL_NAMES[int(_k)], float(_a))
-                    )
-
-        if debug:
-            from worldgen.climate.classification import BIOME_NAMES
-
-            _rare_bio_by_face: dict[int, list[tuple[str, float]]] = {}
-            if self.globe is not None and self.globe.has_feature("rare_bio"):
-                from worldgen.resources.rare_bio import RARE_BIO_NAMES
-                _rb_pos, _rb_kinds, _rb_abund = self.globe.get_feature("rare_bio")
-                for _p, _k, _a in zip(_rb_pos, _rb_kinds, _rb_abund):
-                    _fi = _pos_to_face.get(tuple(_p))
-                    if _fi is not None:
-                        _rare_bio_by_face.setdefault(_fi, []).append(
-                            (RARE_BIO_NAMES[int(_k)], float(_a))
-                        )
-
-            def _hover_debug(face_src: Optional[int], uv: Optional[np.ndarray]) -> None:
-                if face_src is None:
-                    window.set_status("")
-                    return
-                meta = mesh.face_metadata[face_src]
-                parts: list[str] = []
-                if "biome" in meta:
-                    parts.append(BIOME_NAMES[int(meta["biome"])])
-                if "temperature_annual" in meta:
-                    parts.append(f"T: {meta['temperature_annual']:.1f}°C")
-                if "precipitation_annual" in meta:
-                    parts.append(f"P: {meta['precipitation_annual']:.0f} mm/yr")
-                if "fertility_mean" in meta:
-                    parts.append(f"Fert: {meta['fertility_mean']:.2f}")
-                if "forest_density_mean" in meta:
-                    parts.append(f"Forest: {meta['forest_density_mean']:.2f}")
-                if "dominant_crop" in meta:
-                    from worldgen.resources.crops import CROP_NAMES
-                    idx = int(meta["dominant_crop"])
-                    crop_name = CROP_NAMES[idx] if 0 <= idx < len(CROP_NAMES) else "?"
-                    if crop_name != "None":
-                        parts.append(f"Crop: {crop_name}")
-                if face_src in _minerals_by_face:
-                    _best = max(_minerals_by_face[face_src], key=lambda x: x[1])
-                    parts.append(f"{_best[0]}: {_best[1]:.2f}")
-                for _name, _abund in _rare_bio_by_face.get(face_src, []):
-                    parts.append(f"{_name}: {_abund:.2f}")
-                if uv is not None and "elevation" in mesh.face_textures:
-                    elev_tex = mesh.face_textures["elevation"]
-                    H_t, W_t = elev_tex.shape[1:3]
-                    tx = int(np.clip(uv[0] * W_t, 0, W_t - 1))
-                    ty = int(np.clip(uv[1] * H_t, 0, H_t - 1))
-                    px_elev = float(elev_tex[face_src, ty, tx, 0])
-                    parts.append(f"[px: {px_elev:.2f} km]")
-                window.set_status("  |  ".join(parts))
-
-            window.set_hover_callback(_hover_debug)
-
-        else:
-            def _hover_simple(face_src: Optional[int], *_) -> None:
-                if face_src is None:
-                    window.set_status("")
-                    return
-                parts: list[str] = []
-                if face_src in _minerals_by_face:
-                    _best = max(_minerals_by_face[face_src], key=lambda x: x[1])
-                    parts.append(f"{_best[0]}: {_best[1]:.2f}")
-                window.set_status("  |  ".join(parts))
-
-            window.set_hover_callback(_hover_simple)
-
-        _ = BIOME_PALETTE  # re-exported for downstream consumers
+        world = self.globe
+        assert world is not None and world.mesh is not None, (
+            "GlobeBuilder.build() must be called before apply_display"
+        )
+        reg = DisplayRegistry()
+        for stage in self.pipeline:
+            stage.register_display(world, reg, debug=debug)
+        apply_registry(reg, window, world)

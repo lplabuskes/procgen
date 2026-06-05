@@ -127,6 +127,7 @@ def test_pipeline_runs_stages_in_order():
     class _S(Stage):
         def __init__(self, tag):
             self.name = tag
+
         def build(self, ctx):
             order.append(self.name)
             ctx.world.add_feature(self.name, True)
@@ -142,13 +143,14 @@ def test_pipeline_runs_stages_in_order():
 def test_stage_default_hooks_are_noops():
     class _S(Stage):
         name = "s"
+
         def build(self, ctx):
             pass
 
     s = _S()
     reg = DisplayRegistry()
     assert s.serialize() == {}
-    assert s.register_display(reg, debug=True) is None
+    assert s.register_display(World(), reg, debug=True) is None
     assert s.load({}, BuildContext(world=World())) is None
 
 

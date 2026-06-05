@@ -367,8 +367,14 @@ class RealmStage(Stage):
 
         ctx.report("Situational value done.")
 
-    def register_display(self, reg: DisplayRegistry, *, debug: bool = False) -> None:
-        """Contribute realm color schemes (always shown — realm is an output)."""
+    def register_display(
+        self, world: "World | None", reg: DisplayRegistry, *, debug: bool = False
+    ) -> None:
+        """Contribute realm color schemes (always shown — realm is an output).
+
+        ``world`` is unused — results are read off the stage — so a façade caller
+        may pass ``None``.
+        """
         if self.suitability is not None:
             reg.add_scheme("Suitability", _suitability_color)
         if self.situational_value is not None:
@@ -419,7 +425,8 @@ class RealmBuilder:
         schemes are appended alongside the worldgen schemes.
         """
         reg = DisplayRegistry()
-        self.stage.register_display(reg, debug=True)
+        # RealmStage.register_display reads its results off the stage, not world.
+        self.stage.register_display(None, reg, debug=True)
         if not reg.schemes:
             return
         merged = dict(window._map._color_schemes)

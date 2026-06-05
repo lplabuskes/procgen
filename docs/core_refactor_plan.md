@@ -179,9 +179,16 @@ class DisplayRegistry:
      builders are kept intact + wrapped rather than rewritten. Consequently `apply_display` and
      `serialization.py` are **still centralized** (they read the preserved builder attributes
      and the world features) — their per-stage decomposition is deferred to steps 5/6 below.
-5. **Decompose `apply_display`** — move each stage's slice of the ~300-line god-method into its
-   `Stage.register_display`, and add the viz adapter `apply_registry(reg, window)` so
-   `GlobeBuilder.apply_display` becomes `for stage in pipeline: stage.register_display(reg)`.
+5. **[DONE] Decompose `apply_display`** — each stage's slice of the ~300-line god-method now
+   lives in its `Stage.register_display` (in `worldgen/globe/stages.py`: elevation, climate,
+   hydrology, resources, cost; plus `realmgen`'s Suitability/Situational Value). Added the viz
+   adapter `apply_registry(reg, window, world)` (`utils/mapview/registry.py`) — the one place
+   that knows both the `DisplayRegistry` shape and the Qt window API. `GlobeBuilder.apply_display`
+   is now `reg = DisplayRegistry(); for stage in pipeline: stage.register_display(world, reg,
+   debug=debug); apply_registry(reg, window, world)`, importing the adapter lazily so `builder.py`
+   stays Qt-free. All 295 tests green.
+   - **Deviation from plan:** the hook signature is `register_display(world, reg, *, debug)` (not
+     `register_display(reg, *, debug)`) — stages need `world` to read textures/features.
 6. **Rewrite `serialization.py`** as the core framework + per-stage `serialize`/`load`. Keep
    per-stage back-compat (e.g. navigability-defaults-to-zeros) inside each stage's `load`.
 7. **`viz/` extraction** (optional, last) — move `mapview`, `projections`, `params_dialog`,

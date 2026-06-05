@@ -18,10 +18,10 @@ def test_register_display_is_gated_on_computed_results():
     stage = RealmStage()
     reg = DisplayRegistry()
     # Nothing computed yet → no schemes contributed.
-    stage.register_display(reg)
+    stage.register_display(None, reg)
     assert reg.schemes == {}
     # Once results exist, both schemes are contributed.
     stage.suitability = np.array([0.5], dtype=np.float32)
     stage.situational_value = np.array([0.5], dtype=np.float32)
-    stage.register_display(reg)
+    stage.register_display(None, reg)
     assert set(reg.schemes) == {"Suitability", "Situational Value"}

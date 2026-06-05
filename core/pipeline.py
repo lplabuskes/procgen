@@ -91,7 +91,9 @@ class Stage(ABC):
     def build(self, ctx: BuildContext) -> None:
         ...
 
-    def register_display(self, reg: "DisplayRegistry", *, debug: bool = False) -> None:
+    def register_display(
+        self, world: World, reg: "DisplayRegistry", *, debug: bool = False
+    ) -> None:
         return None
 
     def serialize(self) -> dict[str, np.ndarray]:
