@@ -44,7 +44,16 @@ from worldgen.resources.display import (
     mineral_legend_entries,
     rare_bio_legend_entries,
 )
+from core.pipeline import BuildContext, Pipeline
+from core.world import World
 from worldgen.globe.globe import Globe
+from worldgen.globe.stages import (
+    ClimateStage,
+    CostStage,
+    ElevationStage,
+    HydrologyStage,
+    ResourcesStage,
+)
 
 
 SEASON_LABELS = ["Spring", "Summer", "Autumn", "Winter"]
@@ -116,87 +125,36 @@ class GlobeBuilder:
         self.hydrology_builder: HydrologyBuilder = HydrologyBuilder(self.params.hydrology)
         self.resources_builder: ResourcesBuilder = ResourcesBuilder(self.params.resources)
         self.cost_builder: CostBuilder = CostBuilder(self.params.cost)
+
+        # Compose the generation pipeline. Each stage wraps its builder and
+        # registers its own features; the climate lake-feedback second pass is an
+        # explicit node placed after hydrology.
+        climate_stage = ClimateStage(self.climate_builder)
+        self.pipeline: Pipeline = Pipeline([
+            ElevationStage(self.elevation_builder),
+            climate_stage,
+            HydrologyStage(self.hydrology_builder),
+            climate_stage.lake_feedback_stage(),
+            ResourcesStage(self.resources_builder, self.hydrology_builder),
+            CostStage(self.cost_builder, self.hydrology_builder),
+        ])
         self.globe: Optional[Globe] = None
 
     def build(self, progress: Optional[Callable[[str], None]] = None) -> Globe:
-        mesh = self.elevation_builder.build(progress=progress)
+        """Run every stage in order and return the populated world.
 
-        elevation_textures = mesh.face_textures["elevation"]  # (N, H, W, 1)
-        self.climate_builder.build(mesh, elevation_textures, progress=progress)
-        self.hydrology_builder.build(mesh, elevation_textures, progress=progress)
-        if "lake_mask" in mesh.face_textures:
-            self.climate_builder.apply_lake_humidity_feedback(
-                mesh, mesh.face_textures["lake_mask"], progress=progress
-            )
-
-        self.resources_builder.build(
-            mesh, rivers=self.hydrology_builder.rivers, progress=progress
-        )
-
-        # Final physical stage: base land + sea traversal-cost surfaces. These are
-        # consumed by the downstream realm layer, which adds a danger field on top.
-        self.cost_builder.build(
-            mesh, rivers=self.hydrology_builder.rivers, progress=progress
-        )
-
-        globe = Globe(mesh=mesh)
-        hb = self.hydrology_builder
-        cb = self.climate_builder
-
-        if hb.rivers:
-            paths_with_flow = []
-            for river in hb.rivers:
-                polyline = river.as_polyline()
-                if len(polyline) < 2:
-                    continue
-                positions = np.stack(polyline).astype(np.float32)  # (M, 3)
-                flows = river.flow_rates()                          # length M-1
-                in_lake = np.array(
-                    [s.in_lake for s in river.segments], dtype=bool
-                )                                                    # length M-1
-                paths_with_flow.append((positions, flows, in_lake))
-            if paths_with_flow:
-                globe.add_feature("rivers", paths_with_flow)
-
-        if hb.lake_polygons:
-            globe.add_feature("lakes", hb.lake_polygons)
-
-        if hb.delta_positions is not None and len(hb.delta_positions) > 0:
-            globe.add_feature("deltas", hb.delta_positions)
-
-        if (self.elevation_builder.volcano_positions is not None
-                and len(self.elevation_builder.volcano_positions) > 0):
-            globe.add_feature("volcanoes", self.elevation_builder.volcano_positions)
-
-        rb = self.resources_builder
-        if rb.minerals is not None and len(rb.minerals[0]) > 0:
-            globe.add_feature("minerals", rb.minerals)
-        if rb.rare_bio is not None and len(rb.rare_bio[0]) > 0:
-            globe.add_feature("rare_bio", rb.rare_bio)
-
-        if self.cost_builder.surfaces is not None:
-            globe.add_feature("cost_surfaces", self.cost_builder.surfaces)
-
-        if cb.winds is not None:
-            centroids = mesh.face_centroids.astype(np.float32)
-            winds_feature = []
-            for season_idx in range(cb.winds.shape[1]):
-                winds_feature.append((centroids.copy(), cb.winds[:, season_idx, :].astype(np.float32)))
-            globe.add_feature("winds", winds_feature)
-
-        if cb.currents is not None:
-            centroids = mesh.face_centroids.astype(np.float32)
-            globe.add_feature(
-                "currents",
-                [(
-                    centroids.copy(),
-                    cb.currents.currents.astype(np.float32),
-                    cb.currents.temperature_delta.astype(np.float32),
-                )],
-            )
-
-        self.globe = globe
-        return globe
+        The elevation stage sets ``world.mesh``; each subsequent stage reads it
+        from the context and registers its own features. The stage builders
+        remain accessible as ``GlobeBuilder`` attributes for the display and
+        serialization paths.
+        """
+        world = World()
+        ctx = BuildContext(world=world)
+        if progress is not None:
+            ctx.progress = progress
+        self.pipeline.build(ctx)
+        self.globe = world
+        return world
 
     def apply_display(self, window, debug: bool = False) -> None:
         """Wire color schemes and overlays into a MapWindow after build()."""

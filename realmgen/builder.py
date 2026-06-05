@@ -1,17 +1,23 @@
-"""RealmBuilder — orchestrator for the human geography layer.
+"""Realm stage — human-geography layer over a fully-built world.
 
-Downstream of the full worldgen pipeline. Takes a fully-built :class:`Globe`
-and attaches realm features. Stage 1 is complete: suitability scorer and static
-situational value (see docs/settlement_generation_design.md).
+Downstream of the worldgen pipeline. ``RealmStage`` implements the core
+``Stage`` protocol: ``build(ctx)`` reads upstream physical layers through typed
+``Channel`` descriptors (no magic-string ``meta.get`` fallbacks), computes the
+suitability and static situational-value scores, and writes them back as
+channels; ``register_display`` contributes its color schemes to a
+``DisplayRegistry``.
+
+``RealmBuilder`` is a thin back-compat wrapper preserving the original
+standalone API (``RealmBuilder(params).build(globe) -> suitability`` plus
+``.suitability`` / ``.situational_value`` and ``apply_display(window)``).
 
 Usage::
 
-    from realmgen.builder import RealmBuilder, RealmParams
+    from realmgen.builder import RealmStage
+    from core.pipeline import BuildContext
 
-    params = RealmParams()
-    builder = RealmBuilder(params)
-    builder.build(globe)
-    # globe.mesh.face_metadata[i]["suitability"] and ["situational_value"] are set
+    RealmStage(RealmParams()).build(BuildContext(world=globe))
+    # globe.mesh.face_metadata[i]["suitability"] / ["situational_value"] are set
 """
 from __future__ import annotations
 
@@ -19,14 +25,12 @@ from typing import Callable, Optional
 
 import numpy as np
 
-from realmgen.suitability import (
-    _positions_to_face_ids,
-    combine_suitability,
-    compute_climate_habitability,
-    compute_resource_proximity,
-    compute_ruggedness_penalty,
-    compute_water_proximity,
-)
+from core.display import DisplayRegistry
+from core.params import field, param_field as _f, paramclass
+from core.pipeline import BuildContext, Stage
+from core.world import World
+
+from realmgen.channels import SITUATIONAL_VALUE, SUITABILITY
 from realmgen.situational_value import (
     combine_situational_value,
     compute_harbor_quality,
@@ -35,10 +39,26 @@ from realmgen.situational_value import (
     compute_river_confluences,
     compute_strait_adjacency,
 )
+from realmgen.suitability import (
+    _positions_to_face_ids,
+    combine_suitability,
+    compute_climate_habitability,
+    compute_resource_proximity,
+    compute_ruggedness_penalty,
+    compute_water_proximity,
+)
+from worldgen.climate.channels import (
+    DISTANCE_TO_COAST,
+    PRECIPITATION_ANNUAL,
+    TEMPERATURE_COLDEST,
+    TEMPERATURE_WARMEST,
+)
+from worldgen.cost.channels import IS_STRAIT, IS_WATER
+from worldgen.geology.channels import ELEVATION, IS_OCEAN
 from worldgen.geology.display import OCEAN_COLOR
-from worldgen.globe.globe import Globe
+from worldgen.hydrology.channels import LAKE_MASK
+from worldgen.resources.channels import FERTILITY_MEAN
 from worldgen.resources.terrain import face_elevation_range
-from core.params import field, param_field as _f, paramclass
 
 
 # ── Params ────────────────────────────────────────────────────────────────────
@@ -136,115 +156,107 @@ class RealmParams:
     )
 
 
-# ── Builder ───────────────────────────────────────────────────────────────────
+# ── Display color schemes ───────────────────────────────────────────────────────
 
 
-def _read_meta_floats(face_metadata: list[dict], key: str, default: float = 0.0) -> np.ndarray:
-    return np.array([float(m.get(key, default)) for m in face_metadata], dtype=np.float64)
+def _suitability_color(meta: dict) -> tuple:
+    if meta.get("is_water", meta.get("is_ocean", False)):
+        return OCEAN_COLOR
+    s = min(max(float(meta.get("suitability", 0.0)), 0.0), 1.0)
+    if s < 0.5:
+        t = s / 0.5
+        return (0.45 + 0.20 * t, 0.38 + 0.42 * t, 0.28 - 0.08 * t, 1.0)
+    t = (s - 0.5) / 0.5
+    return (0.65 - 0.55 * t, 0.80 - 0.20 * t, 0.20, 1.0)
 
 
-def _read_meta_bools(face_metadata: list[dict], key: str, default: bool = False) -> np.ndarray:
-    return np.array([bool(m.get(key, default)) for m in face_metadata], dtype=bool)
+def _situational_color(meta: dict) -> tuple:
+    if meta.get("is_water", meta.get("is_ocean", False)):
+        return OCEAN_COLOR
+    s = min(max(float(meta.get("situational_value", 0.0)), 0.0), 1.0)
+    if s < 0.5:
+        t = s / 0.5
+        return (0.35 + 0.50 * t, 0.33 + 0.42 * t, 0.30 + 0.00 * t, 1.0)
+    t = (s - 0.5) / 0.5
+    return (0.85 + 0.05 * t, 0.75 - 0.20 * t, 0.30 - 0.20 * t, 1.0)
 
 
-class RealmBuilder:
-    """Produces human geography features from a fully-built ``Globe``.
+# ── Stage ───────────────────────────────────────────────────────────────────────
 
-    Call :meth:`build` after ``GlobeBuilder.build()`` so the ``biome``,
-    ``fertility_mean``, ``temperature_*``, ``precipitation_annual``, and
-    ``is_ocean`` / ``is_water`` per-face metadata and the ``elevation`` texture
-    are present, along with the ``cost_surfaces`` and ``minerals`` / ``rare_bio``
-    globe features.
 
-    Stores:
+class RealmStage(Stage):
+    """Computes human-geography scores from a fully-built world.
 
-    * ``self.suitability`` — ``(N,)`` float32 in [0, 1].
-    * ``self.situational_value`` — ``(N,)`` float32 in [0, 1].
-
-    Writes per-face metadata keys ``"suitability"`` and ``"situational_value"``.
+    Run after the worldgen pipeline so the channels listed in ``requires`` and
+    the ``cost_surfaces`` / ``minerals`` / ``rare_bio`` / ``rivers`` features are
+    present. Stores ``self.suitability`` and ``self.situational_value`` (``(N,)``
+    float32 in [0, 1]) and writes them via the ``SUITABILITY`` /
+    ``SITUATIONAL_VALUE`` channels.
     """
+
+    name = "realm"
+    requires = (
+        IS_WATER, IS_OCEAN, IS_STRAIT, ELEVATION,
+        DISTANCE_TO_COAST, FERTILITY_MEAN,
+        TEMPERATURE_WARMEST, TEMPERATURE_COLDEST, PRECIPITATION_ANNUAL,
+    )
+    provides = (SUITABILITY, SITUATIONAL_VALUE)
 
     def __init__(self, params: RealmParams | None = None) -> None:
         self.params: RealmParams = params or RealmParams()
         self.suitability: Optional[np.ndarray] = None
         self.situational_value: Optional[np.ndarray] = None
 
-    def build(
-        self,
-        globe: Globe,
-        progress: Optional[Callable[[str], None]] = None,
-    ) -> np.ndarray:
-        """Compute suitability for every face and write it to face metadata.
-
-        Args:
-            globe:    Fully-built Globe (all worldgen stages done).
-            progress: Optional callback for progress messages.
-
-        Returns:
-            ``(N,)`` float32 suitability array (also stored as
-            ``self.suitability`` and in ``mesh.face_metadata[i]["suitability"]``).
-        """
-        def _report(msg: str) -> None:
-            if progress is not None:
-                progress(msg)
-
-        mesh = globe.mesh
+    def build(self, ctx: BuildContext) -> None:
+        world = ctx.world
+        mesh = ctx.mesh
         n = len(mesh.faces)
         p = self.params
 
         # ── Open-water mask (impassable for settlement) ──────────────────────
-        _report("Reading physical layers…")
-        # Prefer the cost stage's is_water metadata (ocean ∪ lake); fall back
-        # to is_ocean if the cost stage has not been run.
-        if "is_water" in mesh.face_metadata[0]:
-            is_water = _read_meta_bools(mesh.face_metadata, "is_water")
-        else:
-            is_water = _read_meta_bools(mesh.face_metadata, "is_ocean")
+        ctx.report("Reading physical layers…")
+        # IS_WATER (ocean ∪ lake) falls back to is_ocean for pre-cost worlds.
+        is_water = IS_WATER.read(world)
 
         # ── Freshwater seed mask (rivers + lakes) ───────────────────────────
-        # Rivers: use cost_surfaces.river_flow_mag > 0 which covers all
-        # non-in_lake river segments (the most accurate signal available).
+        # Rivers: cost_surfaces.river_flow_mag > 0 covers all non-in_lake river
+        # segments (the most accurate signal available).
         river_mask = np.zeros(n, dtype=bool)
-        if globe.has_feature("cost_surfaces"):
-            cs = globe.get_feature("cost_surfaces")
-            river_mask = cs.river_flow_mag > 0.0
+        if world.has_feature("cost_surfaces"):
+            river_mask = world.get_feature("cost_surfaces").river_flow_mag > 0.0
 
-        # Lakes: non-ocean water faces (coast stage adds is_water but not all
-        # callers will have the cost stage — use the texture directly if present).
-        lake_mask = np.zeros(n, dtype=bool)
-        if "lake_mask" in mesh.face_textures:
-            lake_tex = mesh.face_textures["lake_mask"]
+        # Lakes: use the lake_mask texture if present, else any non-ocean water.
+        if LAKE_MASK.present(world):
+            lake_tex = LAKE_MASK.read(world)
             lake_mask = lake_tex[..., 0].mean(axis=(1, 2)) >= 0.5
         else:
-            # Fall back: any face flagged is_water but not is_ocean is a lake.
-            is_ocean = _read_meta_bools(mesh.face_metadata, "is_ocean")
-            lake_mask = is_water & ~is_ocean
+            lake_mask = is_water & ~IS_OCEAN.read(world)
 
         freshwater_mask = river_mask | lake_mask
 
         # ── Per-face climate and fertility ───────────────────────────────────
-        dist_coast_km = _read_meta_floats(mesh.face_metadata, "distance_to_coast")
-        fertility = _read_meta_floats(mesh.face_metadata, "fertility_mean").clip(0.0, 1.0)
-        t_warmest = _read_meta_floats(mesh.face_metadata, "temperature_warmest")
-        t_coldest = _read_meta_floats(mesh.face_metadata, "temperature_coldest")
-        p_annual = _read_meta_floats(mesh.face_metadata, "precipitation_annual")
+        dist_coast_km = DISTANCE_TO_COAST.read(world)
+        fertility = FERTILITY_MEAN.read(world).clip(0.0, 1.0)
+        t_warmest = TEMPERATURE_WARMEST.read(world)
+        t_coldest = TEMPERATURE_COLDEST.read(world)
+        p_annual = PRECIPITATION_ANNUAL.read(world)
 
         # ── Elevation range for ruggedness penalty ───────────────────────────
-        elev_range = face_elevation_range(mesh.face_textures["elevation"])
+        elev_range = face_elevation_range(ELEVATION.read(world))
 
         # ── Resource deposit positions → face seeds ─────────────────────────
-        _report("Mapping resource deposits to faces…")
+        ctx.report("Mapping resource deposits to faces…")
         resource_mask = np.zeros(n, dtype=bool)
         centroids = np.asarray(mesh.face_centroids, dtype=np.float64)
         for feature_name in ("minerals", "rare_bio"):
-            if globe.has_feature(feature_name):
-                positions, _, _ = globe.get_feature(feature_name)
+            if world.has_feature(feature_name):
+                positions, _, _ = world.get_feature(feature_name)
                 if len(positions) > 0:
                     fids = _positions_to_face_ids(positions, centroids)
                     resource_mask[fids] = True
 
         # ── Factor computation ───────────────────────────────────────────────
-        _report("Computing water proximity…")
+        ctx.report("Computing water proximity…")
         water_score = compute_water_proximity(
             mesh,
             freshwater_mask,
@@ -255,7 +267,7 @@ class RealmBuilder:
             coast_weight=p.water.coast_weight,
         )
 
-        _report("Computing climate habitability…")
+        ctx.report("Computing climate habitability…")
         climate_score = compute_climate_habitability(
             t_warmest,
             t_coldest,
@@ -268,7 +280,7 @@ class RealmBuilder:
             p_wet_mm=p.climate.p_wet_mm,
         )
 
-        _report("Computing resource access…")
+        ctx.report("Computing resource access…")
         resource_score = compute_resource_proximity(
             mesh,
             resource_mask,
@@ -276,7 +288,7 @@ class RealmBuilder:
             resource_max_hops=p.resource.max_hops,
         )
 
-        _report("Combining suitability…")
+        ctx.report("Combining suitability…")
         suitability = combine_suitability(
             is_water,
             water_score,
@@ -296,35 +308,35 @@ class RealmBuilder:
         suitability = (suitability * ruggedness_mult).astype(np.float32)
 
         self.suitability = suitability
-        mesh.apply_metadata_channel("suitability", suitability.astype(float).tolist())
+        SUITABILITY.write(world, suitability)
 
         # ── Situational value ────────────────────────────────────────────────
-        _report("Computing situational value…")
+        ctx.report("Computing situational value…")
         sp = p.situational
 
         # Harbor quality: needs per-face mean elevation and ocean mask.
-        is_ocean = _read_meta_bools(mesh.face_metadata, "is_ocean")
-        face_mean_elev_km = mesh.face_textures["elevation"][..., 0].mean(axis=(1, 2))
+        is_ocean = IS_OCEAN.read(world)
+        face_mean_elev_km = ELEVATION.read(world)[..., 0].mean(axis=(1, 2))
         harbor_score = compute_harbor_quality(
             mesh, is_ocean, face_mean_elev_km,
             depth_scale_km=sp.harbor.depth_scale_km,
         )
 
-        # River confluences and navigable heads use the globe's rivers feature
+        # River confluences and navigable heads use the world's rivers feature
         # (positions/flows/in_lake tuples) with a centroid lookup.
-        rivers = globe.get_feature("rivers") if globe.has_feature("rivers") else None
+        rivers = world.get_feature("rivers") if world.has_feature("rivers") else None
         confluence_score = compute_river_confluences(rivers, centroids, n)
 
         # Navigable river heads: fall-line faces per river.
         river_navigability = np.zeros(n, dtype=np.float32)
-        if globe.has_feature("cost_surfaces"):
-            river_navigability = globe.get_feature("cost_surfaces").river_navigability
+        if world.has_feature("cost_surfaces"):
+            river_navigability = world.get_feature("cost_surfaces").river_navigability
         nav_head_score = compute_navigable_heads(rivers, centroids, river_navigability, n)
 
         # Mountain passes: local land-cost minima in high-cost terrain.
         land_base_cost = np.zeros(n, dtype=np.float32)
-        if globe.has_feature("cost_surfaces"):
-            land_base_cost = globe.get_feature("cost_surfaces").land_base_cost
+        if world.has_feature("cost_surfaces"):
+            land_base_cost = world.get_feature("cost_surfaces").land_base_cost
         pass_score = compute_mountain_passes(
             mesh, land_base_cost, is_water,
             min_neighbor_cost=sp.passes.min_neighbor_cost,
@@ -332,7 +344,7 @@ class RealmBuilder:
         )
 
         # Strait adjacency: land faces bordering tagged strait ocean faces.
-        is_strait = _read_meta_bools(mesh.face_metadata, "is_strait")
+        is_strait = IS_STRAIT.read(world)
         strait_score = compute_strait_adjacency(mesh, is_strait, is_water)
 
         sw = sp.weights
@@ -351,55 +363,66 @@ class RealmBuilder:
         )
 
         self.situational_value = situational_value
-        mesh.apply_metadata_channel(
-            "situational_value", situational_value.astype(float).tolist()
-        )
+        SITUATIONAL_VALUE.write(world, situational_value)
 
-        _report("Situational value done.")
-        return suitability
+        ctx.report("Situational value done.")
+
+    def register_display(self, reg: DisplayRegistry, *, debug: bool = False) -> None:
+        """Contribute realm color schemes (always shown — realm is an output)."""
+        if self.suitability is not None:
+            reg.add_scheme("Suitability", _suitability_color)
+        if self.situational_value is not None:
+            reg.add_scheme("Situational Value", _situational_color)
+
+
+# ── Back-compat wrapper ─────────────────────────────────────────────────────────
+
+
+class RealmBuilder:
+    """Standalone façade over :class:`RealmStage` preserving the original API.
+
+    ``RealmBuilder(params).build(globe)`` returns the suitability array and
+    exposes ``.suitability`` / ``.situational_value``; ``apply_display(window)``
+    merges the realm schemes into a ``MapWindow``.
+    """
+
+    def __init__(self, params: RealmParams | None = None) -> None:
+        self.stage = RealmStage(params)
+
+    @property
+    def params(self) -> RealmParams:
+        return self.stage.params
+
+    @property
+    def suitability(self) -> Optional[np.ndarray]:
+        return self.stage.suitability
+
+    @property
+    def situational_value(self) -> Optional[np.ndarray]:
+        return self.stage.situational_value
+
+    def build(
+        self,
+        globe: World,
+        progress: Optional[Callable[[str], None]] = None,
+    ) -> np.ndarray:
+        ctx = BuildContext(world=globe)
+        if progress is not None:
+            ctx.progress = progress
+        self.stage.build(ctx)
+        return self.stage.suitability
 
     def apply_display(self, window) -> None:
         """Register realmgen color schemes into a MapWindow.
 
-        Call after :meth:`build` and after ``GlobeBuilder.apply_display`` so
-        the schemes are appended alongside the worldgen schemes.  Only adds
-        schemes for results that have actually been computed.
-
-        Args:
-            window: ``MapWindow`` instance.
+        Call after :meth:`build` and after the worldgen display is wired so the
+        schemes are appended alongside the worldgen schemes.
         """
-        schemes: dict = {}
-
-        if self.suitability is not None:
-            def _suitability_color(meta: dict) -> tuple:
-                if meta.get("is_water", meta.get("is_ocean", False)):
-                    return OCEAN_COLOR
-                s = min(max(float(meta.get("suitability", 0.0)), 0.0), 1.0)
-                if s < 0.5:
-                    t = s / 0.5
-                    return (0.45 + 0.20 * t, 0.38 + 0.42 * t, 0.28 - 0.08 * t, 1.0)
-                else:
-                    t = (s - 0.5) / 0.5
-                    return (0.65 - 0.55 * t, 0.80 - 0.20 * t, 0.20, 1.0)
-            schemes["Suitability"] = _suitability_color
-
-        if self.situational_value is not None:
-            def _situational_color(meta: dict) -> tuple:
-                if meta.get("is_water", meta.get("is_ocean", False)):
-                    return OCEAN_COLOR
-                s = min(max(float(meta.get("situational_value", 0.0)), 0.0), 1.0)
-                if s < 0.5:
-                    t = s / 0.5
-                    return (0.35 + 0.50 * t, 0.33 + 0.42 * t, 0.30 + 0.00 * t, 1.0)
-                else:
-                    t = (s - 0.5) / 0.5
-                    return (0.85 + 0.05 * t, 0.75 - 0.20 * t, 0.30 - 0.20 * t, 1.0)
-            schemes["Situational Value"] = _situational_color
-
-        if not schemes:
+        reg = DisplayRegistry()
+        self.stage.register_display(reg, debug=True)
+        if not reg.schemes:
             return
-
-        # Merge into the existing scheme dict so the combo box keeps all entries.
         merged = dict(window._map._color_schemes)
-        merged.update(schemes)
+        for name, spec in reg.schemes.items():
+            merged[name] = spec.fn
         window.set_color_schemes(merged)

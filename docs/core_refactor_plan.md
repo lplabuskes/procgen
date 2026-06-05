@@ -159,17 +159,29 @@ class DisplayRegistry:
    every existing `Globe` import resolves to the one canonical container. Added
    `core/test/test_skeleton.py` (12 tests). Nothing is wired onto the pipeline yet — pure
    addition. All 293 tests green.
-3. **Convert ONE stage as the proof slice: `realmgen`.** Newest, least entangled, already
-   reads everything through metadata. Make `RealmStage(Stage)` with `build`/`register_display`.
-   Define the `MetaChannel` constants it needs (`IS_WATER`, `IS_OCEAN`, `TEMPERATURE_WARMEST`,
-   …) exported from the owning worldgen stages. Prove the protocol end-to-end before touching
-   the working pipeline.
-4. **Convert worldgen stages one at a time**, bottom-up: elevation, climate (+ lake-feedback
-   node), hydrology, resources, cost. After each, that stage's slice of `apply_display` /
-   `serialization` moves into the stage and is deleted from the god-functions.
-5. **Replace `GlobeBuilder`** with `Pipeline` construction. `GlobeParams` stays as the
-   composed params dataclass (params dialog introspects it unchanged); each stage gets its
-   params slice in `__init__`.
+3. **[DONE] Convert the proof slice: `realmgen`.** `RealmStage(Stage)` reads every upstream
+   layer through typed channels (killing the `m.get("is_water", m.get("is_ocean", …))` smear)
+   and contributes its schemes via `register_display`. Channel constants now live in the
+   owning packages: `worldgen/{geology,climate,hydrology,resources,cost}/channels.py` and
+   `realmgen/channels.py`. `RealmBuilder` is a back-compat façade over `RealmStage` (delegates
+   `build`/`apply_display`, exposes `.suitability`/`.situational_value`), so the standalone API
+   and its 61 tests are unchanged. Added `realmgen/test/test_stage.py`. All green.
+4. **[DONE] Convert the worldgen stages + run `GlobeBuilder` on a `Pipeline`.** Added thin
+   `Stage` wrappers (`ElevationStage`, `ClimateStage` + `ClimateLakeFeedbackStage`,
+   `HydrologyStage`, `ResourcesStage`, `CostStage`) that adapt the existing builders and
+   register each stage's features. `GlobeBuilder.__init__` composes the pipeline; `build()` is
+   now `world = World(); self.pipeline.build(ctx); return world` — the ~80-line manual
+   orchestration + feature-registration block is gone, the climate two-pass is an explicit
+   node. Verified: full suite **295 green**, end-to-end pipeline build, save/load round-trip,
+   `apply_display` (debug + non-debug), and realm-on-top.
+   - **Deviation from plan:** to keep churn low, the worldgen wrappers live together in
+     `worldgen/globe/stages.py` rather than each in its package (a trivial later move), and the
+     builders are kept intact + wrapped rather than rewritten. Consequently `apply_display` and
+     `serialization.py` are **still centralized** (they read the preserved builder attributes
+     and the world features) — their per-stage decomposition is deferred to steps 5/6 below.
+5. **Decompose `apply_display`** — move each stage's slice of the ~300-line god-method into its
+   `Stage.register_display`, and add the viz adapter `apply_registry(reg, window)` so
+   `GlobeBuilder.apply_display` becomes `for stage in pipeline: stage.register_display(reg)`.
 6. **Rewrite `serialization.py`** as the core framework + per-stage `serialize`/`load`. Keep
    per-stage back-compat (e.g. navigability-defaults-to-zeros) inside each stage's `load`.
 7. **`viz/` extraction** (optional, last) — move `mapview`, `projections`, `params_dialog`,
