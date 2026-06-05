@@ -30,7 +30,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from worldgen.globe.builder import GlobeBuilder, GlobeParams  # noqa: E402
-from worldgen.mesh import cache as mesh_cache  # noqa: E402
+from core import mesh_cache  # noqa: E402
 
 
 # Substring → stage name. The first phase whose message contains the key marks

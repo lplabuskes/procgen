@@ -15,7 +15,7 @@ from typing import Callable, Optional
 
 import numpy as np
 
-from worldgen.mesh.mymesh import PolygonMesh
+from core.mesh import PolygonMesh
 from worldgen.resources.crops import classify_crops
 from worldgen.resources.fertility import compute_fertility
 from worldgen.resources.forest import compute_forest_density

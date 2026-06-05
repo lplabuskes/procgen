@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from worldgen.climate.builder import ClimateBuilder, ClimateParams  # noqa: E402
 from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams  # noqa: E402
-from worldgen.mesh import cache as mesh_cache  # noqa: E402
+from core import mesh_cache  # noqa: E402
 
 
 def measure_seed(seed: int) -> dict:

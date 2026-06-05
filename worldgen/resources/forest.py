@@ -20,7 +20,7 @@ import numpy as np
 
 from worldgen.geology.elevation import rasterize_face_values
 from utils.simplex import fbm_sum, make_perm
-from worldgen.mesh.mymesh import PolygonMesh
+from core.mesh import PolygonMesh
 
 
 # Biome index → forest density baseline. Indices follow `BIOME_NAMES` in

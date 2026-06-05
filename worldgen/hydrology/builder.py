@@ -5,7 +5,7 @@ from typing import Callable, List, Optional
 import numpy as np
 
 from worldgen.hydrology.rivers import River, RiverGenerator
-from worldgen.mesh.mymesh import PolygonMesh
+from core.mesh import PolygonMesh
 from utils.params import param_field as _f, paramclass
 
 

@@ -13,7 +13,7 @@ from collections import deque
 
 import numpy as np
 
-from worldgen.mesh.mymesh import PolygonMesh
+from core.mesh import PolygonMesh
 
 
 def face_elevation_range(elevation_tex: np.ndarray) -> np.ndarray:

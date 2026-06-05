@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from worldgen.mesh.mymesh import Mesh
+from core.mesh import Mesh
 from worldgen.geology.tectonics import (
     _tarjan_aps_iterative,
     assign_plate_types,

@@ -1,5 +1,5 @@
 import numpy as np
-from worldgen.mesh.mymesh import Mesh
+from core.mesh import Mesh
 
 
 class TestIcosphere:

@@ -24,7 +24,7 @@ from worldgen.hydrology.types import (
     RiverNode,
     RiverSegment,
 )
-from worldgen.mesh.mymesh import PolygonMesh
+from core.mesh import PolygonMesh
 
 
 class RiverGenerator:

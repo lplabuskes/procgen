@@ -3,7 +3,7 @@ import sys
 import numpy as np
 from PySide6.QtWidgets import QApplication
 
-from worldgen.mesh.mymesh import Mesh
+from core.mesh import Mesh
 from worldgen.mesh.gui import MainWindow
 
 

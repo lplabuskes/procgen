@@ -23,8 +23,8 @@ from worldgen.geology.tectonics import (
     generate_plates,
     relax_plates,
 )
-from worldgen.mesh import cache as mesh_cache
-from worldgen.mesh.mymesh import PolygonMesh
+from core import mesh_cache
+from core.mesh import PolygonMesh
 
 
 @paramclass

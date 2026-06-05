@@ -40,7 +40,7 @@ from __future__ import annotations
 import numpy as np
 
 from worldgen.geology.elevation import rasterize_face_values
-from worldgen.mesh.mymesh import PolygonMesh
+from core.mesh import PolygonMesh
 
 
 # Biome index → fertility multiplier. Indices follow `BIOME_NAMES` in

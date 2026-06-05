@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 from utils.mapview.projections import ALL_PROJECTIONS, RobinsonProjection, Projection
 
 if TYPE_CHECKING:
-    from worldgen.mesh.mymesh import PolygonMesh
+    from core.mesh import PolygonMesh
     from worldgen.globe.globe import Globe
 
 

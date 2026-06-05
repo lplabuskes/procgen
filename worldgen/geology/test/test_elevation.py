@@ -7,7 +7,7 @@ from worldgen.geology.elevation import (
     face_elevations_from_texture,
 )
 from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams
-from worldgen.mesh.mymesh import Mesh
+from core.mesh import Mesh
 
 
 def _bilinear_sample(texture: np.ndarray, uv: np.ndarray) -> np.ndarray:

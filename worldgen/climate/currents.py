@@ -29,7 +29,7 @@ import scipy.sparse.linalg as spla
 from scipy.sparse.csgraph import dijkstra as sp_dijkstra
 
 from worldgen.climate.winds import _tangent_frames
-from worldgen.mesh.mymesh import PolygonMesh
+from core.mesh import PolygonMesh
 
 
 EARTH_RADIUS_KM = 6371.0

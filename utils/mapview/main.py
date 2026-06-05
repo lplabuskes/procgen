@@ -4,7 +4,7 @@ import numpy as np
 from PySide6.QtWidgets import QApplication
 
 from utils.mapview.mapview import MapWindow
-from worldgen.mesh.mymesh import Mesh
+from core.mesh import Mesh
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

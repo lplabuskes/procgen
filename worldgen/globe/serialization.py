@@ -23,7 +23,7 @@ import numpy as np
 from worldgen.climate.currents import CurrentsResult
 from worldgen.globe.builder import GlobeBuilder, GlobeParams
 from worldgen.globe.globe import Globe
-from worldgen.mesh.mymesh import PolygonMesh
+from core.mesh import PolygonMesh
 
 
 class _NumpyEncoder(json.JSONEncoder):

@@ -5,7 +5,7 @@ from typing import List
 import numpy as np
 
 from utils.simplex import fbm_sum, make_perm
-from worldgen.mesh.mymesh import PolygonMesh
+from core.mesh import PolygonMesh
 
 
 # Baseline elevation by plate type (km, roughly)

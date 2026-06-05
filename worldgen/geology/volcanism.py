@@ -5,7 +5,7 @@ from typing import List, Optional
 
 import numpy as np
 
-from worldgen.mesh.mymesh import PolygonMesh
+from core.mesh import PolygonMesh
 
 
 def _boundary_volcanic_intensity(

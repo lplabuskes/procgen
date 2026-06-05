@@ -48,7 +48,7 @@ from worldgen.geology.tectonics import (  # noqa: E402
     relax_plates,
 )
 from worldgen.geology.volcanism import compute_volcanism  # noqa: E402
-from worldgen.mesh import cache as mesh_cache  # noqa: E402
+from core import mesh_cache  # noqa: E402
 
 
 def _build_base_textures(seed: int):

@@ -21,11 +21,11 @@ No build step or linter is configured. Run the test suites with:
 
 ```bash
 python3 -m pytest                                       # all tests (testpaths in pyproject.toml)
-python3 -m pytest worldgen/mesh/test/test_mymesh.py -v
+python3 -m pytest core/test/test_mymesh.py -v
 python3 -m pytest utils/mapview/test/test_mapview.py -v
 ```
 
-`mesh/test/test_mymesh.py` covers `Mesh` (icosphere topology, unit-sphere property, outward face normals) and `Mesh.mesh_dual` (dual topology counts, face sizes, and correct CCW winding of all fan triangles).
+`core/test/test_mymesh.py` covers `Mesh` (icosphere topology, unit-sphere property, outward face normals) and `Mesh.mesh_dual` (dual topology counts, face sizes, and correct CCW winding of all fan triangles).
 
 `utils/mapview/test/test_mapview.py` covers all four projections (equator/meridian anchors, N/S and E/W symmetry, projection-specific bounds, `project` vs `project_lonlat` consistency) and `_split_at_antimeridian` (no-crossing passthrough, two-polygon split, boundary latitude continuity).
 
@@ -64,7 +64,7 @@ This is a procedural world generation project. The core pipeline is: generate a 
 
 The top-level orchestrator is `worldgen.globe.GlobeBuilder`, which runs each stage (elevation/tectonics → climate → hydrology → resources) and returns a `Globe`. The `Globe` holds the surface `mesh` plus a generic `features` registry for vector-style overlays (rivers, coastlines, etc.) that don't fit the per-face rasterized structure.
 
-### `worldgen/mesh/mymesh.py` — Mesh data structures
+### `core/mesh.py` — Mesh data structures (was `worldgen/mesh/mymesh.py`)
 
 - **`PolygonMesh`**: Base class for any polygon mesh. Pre-computes `face_adjacency`, `face_centroids`, `face_metadata`, and fan-triangulated render arrays at construction. Key API: `set_face_colors(colors)`, `set_face_metadata(face_idx, **kw)`, `apply_metadata_channel(key, values)` (bulk-write one metadata key across all faces), `set_face_textures(name, textures, n_channels=4)` (attach `(N, H, W, C)` float32; use `n_channels=1` for data layers like elevation, 4 for RGBA display), `face_texture_positions(h, w)` (unit-sphere 3D position of every texture pixel — starting point for any per-pixel geographic computation), `face_tangent_frames()` (raw per-face tangent-plane data for projecting arbitrary 3D points into a face's UV space).
 - **`Mesh`** (subclass of `PolygonMesh`): Triangular mesh. `icosphere(depth)` generates a subdivided icosahedron; vertices are sorted along the Z-axis for spatial locality. `.deregularize(n_swaps, n_relax, stiffness, outer_iters)` breaks regularity via random edge-swaps and spring relaxation on the unit sphere. `.mesh_dual()` returns a `PolygonMesh` by placing new vertices at face centroids (normalized to unit sphere), then for each original vertex builds a CCW-wound face from the centroids of its adjacent faces.

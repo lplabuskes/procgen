@@ -31,7 +31,7 @@ from worldgen.climate.temperature import (
     surface_temperatures,
 )
 from worldgen.climate.winds import pressure_winds, zonal_winds
-from worldgen.mesh.mymesh import PolygonMesh
+from core.mesh import PolygonMesh
 from utils.params import field, param_field as _f, paramclass
 
 

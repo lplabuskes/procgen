@@ -16,7 +16,7 @@ from worldgen.geology.elevation import compute_elevation_textures
 from worldgen.hydrology.crossings import _arc_param, crossing_pairs, resolve_crossings
 from worldgen.hydrology.rivers import RiverGenerator
 from worldgen.hydrology.types import River, RiverNode, RiverSegment
-from worldgen.mesh.mymesh import Mesh
+from core.mesh import Mesh
 
 
 # ---------------------------------------------------------------------------

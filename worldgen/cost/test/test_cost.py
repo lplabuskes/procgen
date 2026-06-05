@@ -25,7 +25,7 @@ from worldgen.cost.surfaces import (
     navigable_river_mask,
 )
 from worldgen.hydrology.types import River, RiverNode, RiverSegment
-from worldgen.mesh.mymesh import Mesh
+from core.mesh import Mesh
 from worldgen.cost.builder import CostBuilder
 from worldgen.climate.classification import N_BIOMES
 

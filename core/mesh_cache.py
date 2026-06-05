@@ -6,7 +6,7 @@ from typing import Callable, Optional
 
 import numpy as np
 
-from worldgen.mesh.mymesh import Mesh, PolygonMesh
+from core.mesh import Mesh, PolygonMesh
 
 _CACHE_DIR = Path(__file__).parent.parent.parent / "mesh_cache"
 _N_CACHED = 5
