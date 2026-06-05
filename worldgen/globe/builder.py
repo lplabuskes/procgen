@@ -7,22 +7,16 @@ from core.display import DisplayRegistry
 from core.pipeline import BuildContext, Pipeline
 from core.world import World
 from worldgen.climate.builder import ClimateBuilder, ClimateParams
+from worldgen.climate.display import build_biome_display_texture
 from worldgen.cost.builder import CostBuilder, CostParams
+from worldgen.geology.display import build_elevation_display_texture
 from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams
 from worldgen.hydrology.builder import HydrologyBuilder, HydrologyParams
 from worldgen.resources.builder import ResourcesBuilder, ResourcesParams
 from worldgen.globe.globe import Globe
-from worldgen.globe.stages import (
-    ClimateStage,
-    CostStage,
-    ElevationStage,
-    HydrologyStage,
-    ResourcesStage,
-    build_biome_display_texture,
-    build_elevation_display_texture,
-)
 
-# Re-exported for back-compat (these display-texture helpers moved to stages.py).
+# Re-exported for back-compat (these display-texture helpers live in the
+# owning stages' display modules; re-exported here for existing importers).
 __all__ = [
     "GlobeParams",
     "GlobeBuilder",
@@ -62,17 +56,17 @@ class GlobeBuilder:
         self.resources_builder: ResourcesBuilder = ResourcesBuilder(self.params.resources)
         self.cost_builder: CostBuilder = CostBuilder(self.params.cost)
 
-        # Compose the generation pipeline. Each stage wraps its builder and
-        # registers its own features; the climate lake-feedback second pass is an
-        # explicit node placed after hydrology.
-        climate_stage = ClimateStage(self.climate_builder)
+        # Compose the generation pipeline. Each builder is itself a ``Stage`` that
+        # reads its inputs from the ``BuildContext`` and registers its own
+        # features; the climate lake-feedback second pass is an explicit node
+        # placed after hydrology (sharing the climate builder instance).
         self.pipeline: Pipeline = Pipeline([
-            ElevationStage(self.elevation_builder),
-            climate_stage,
-            HydrologyStage(self.hydrology_builder),
-            climate_stage.lake_feedback_stage(),
-            ResourcesStage(self.resources_builder, self.hydrology_builder),
-            CostStage(self.cost_builder, self.hydrology_builder),
+            self.elevation_builder,
+            self.climate_builder,
+            self.hydrology_builder,
+            self.climate_builder.lake_feedback_stage(),
+            self.resources_builder,
+            self.cost_builder,
         ])
         self.globe: Optional[Globe] = None
 

@@ -33,6 +33,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import numpy as np  # noqa: E402
 
+from core.pipeline import BuildContext  # noqa: E402
+from core.world import World  # noqa: E402
 from worldgen.climate.builder import ClimateBuilder, ClimateParams  # noqa: E402
 from worldgen.climate.classification import BIOME_NAMES  # noqa: E402
 from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams  # noqa: E402
@@ -63,17 +65,14 @@ EARTH_REF = {
 
 def measure_seed(seed: int) -> dict:
     """Build elevation + climate for one seed; return biome statistics dict."""
+    ctx = BuildContext(world=World())
     elev_params = ElevationParams(seed=seed)
     elev_builder = ElevationBuilder(elev_params)
-    elev_builder.build(progress=lambda _: None)
+    elev_builder.build(ctx)
 
     climate_params = ClimateParams()
     climate_builder = ClimateBuilder(climate_params)
-    climate_builder.build(
-        elev_builder.mesh,
-        elev_builder.elevation_textures,
-        progress=lambda _: None,
-    )
+    climate_builder.build(ctx)
 
     mesh = elev_builder.mesh
     elevations = elev_builder.elevations          # (N,) km

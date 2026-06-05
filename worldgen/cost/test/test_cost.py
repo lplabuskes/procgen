@@ -26,6 +26,8 @@ from worldgen.cost.surfaces import (
 )
 from worldgen.hydrology.types import River, RiverNode, RiverSegment
 from core.mesh import Mesh
+from core.pipeline import BuildContext
+from core.world import World
 from worldgen.cost.builder import CostBuilder
 from worldgen.climate.classification import N_BIOMES
 
@@ -33,6 +35,18 @@ from worldgen.climate.classification import N_BIOMES
 def _norm(v) -> np.ndarray:
     v = np.asarray(v, dtype=np.float64)
     return v / np.linalg.norm(v)
+
+
+def _run_cost(dual, rivers=None):
+    """Run the CostBuilder stage against a stub mesh and return its surfaces.
+
+    Rivers (River objects) are supplied via the ``"river_objects"`` world
+    feature, the same channel the hydrology stage registers them on.
+    """
+    world = World(mesh=dual)
+    if rivers is not None:
+        world.add_feature("river_objects", rivers)
+    return CostBuilder().build(BuildContext(world=world))
 
 
 @dataclass
@@ -526,7 +540,7 @@ class TestCostBuilder:
 
     def test_build_outputs_and_metadata(self):
         dual, n, is_ocean = self._small_mesh()
-        surf = CostBuilder().build(dual)
+        surf = _run_cost(dual)
         assert surf.land_base_cost.shape == (n,)
         assert surf.land_passable.tolist() == (~is_ocean).tolist()
         assert surf.sea_passable.tolist() == is_ocean.tolist()
@@ -540,7 +554,7 @@ class TestCostBuilder:
     def test_build_with_river_populates_flow_field(self):
         dual, n, is_ocean = self._small_mesh()             # rugged (random) elevation
         f = int(np.argmax(~is_ocean))                        # any land face
-        surf = CostBuilder().build(dual, rivers=[self._tangent_river(dual, f, 3000.0)])
+        surf = _run_cost(dual, rivers=[self._tangent_river(dual, f, 3000.0)])
         assert surf.river_flow_mag[f] == pytest.approx(3000.0)
         assert np.linalg.norm(surf.river_flow_dir[f]) == pytest.approx(1.0, abs=1e-4)
         # Rugged terrain → past the fall line → not navigable, land-only.
@@ -553,7 +567,7 @@ class TestCostBuilder:
         lake = np.zeros((n, 4, 4, 1), np.float32)
         lake[f] = 1.0                                        # flood it
         dual.set_face_textures("lake_mask", lake, n_channels=1)
-        surf = CostBuilder().build(dual)
+        surf = _run_cost(dual)
         assert not surf.land_passable[f]                     # impassable overland
         assert surf.sea_passable[f]                          # sailable like ocean
         assert bool(dual.face_metadata[f]["is_water"])
@@ -561,7 +575,7 @@ class TestCostBuilder:
     def test_navigable_river_joins_sea_network(self):
         dual, n, is_ocean = self._flat_mesh()                # flat → fully navigable
         f = int(np.argmax(~is_ocean))
-        surf = CostBuilder().build(dual, rivers=[self._tangent_river(dual, f, 3000.0)])
+        surf = _run_cost(dual, rivers=[self._tangent_river(dual, f, 3000.0)])
         assert surf.river_navigability[f] == pytest.approx(1.0)
         assert surf.sea_passable[f]                          # amphibious: joins the sea
         assert surf.land_passable[f]                         # …but still walkable
@@ -571,6 +585,6 @@ class TestCostBuilder:
     def test_low_flow_river_is_not_navigable(self):
         dual, n, is_ocean = self._flat_mesh()
         f = int(np.argmax(~is_ocean))
-        surf = CostBuilder().build(dual, rivers=[self._tangent_river(dual, f, 100.0)])
+        surf = _run_cost(dual, rivers=[self._tangent_river(dual, f, 100.0)])
         assert surf.river_navigability[f] == pytest.approx(1.0)  # flat…
         assert not surf.sea_passable[f]                          # …but too little flow

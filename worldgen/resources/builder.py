@@ -11,12 +11,27 @@ See docs/resources_generation_spec.md for full design details.
 """
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Mapping, Optional
 
 import numpy as np
 
-from core.mesh import PolygonMesh
+from core.display import DisplayRegistry
+from core.pipeline import BuildContext, Stage
+from core.world import World
 from worldgen.resources.crops import classify_crops
+from worldgen.resources.display import (
+    build_dominant_crop_display_texture,
+    build_fertility_display_texture,
+    build_forest_density_display_texture,
+    crop_color,
+    crop_legend_entries,
+    fertility_color,
+    fertility_legend_entries,
+    forest_density_color,
+    forest_density_legend_entries,
+    mineral_legend_entries,
+    rare_bio_legend_entries,
+)
 from worldgen.resources.fertility import compute_fertility
 from worldgen.resources.forest import compute_forest_density
 from worldgen.resources.minerals import place_mineral_deposits
@@ -140,15 +155,17 @@ def _face_modal_crop(crop_tex: np.ndarray, ocean_mask: np.ndarray) -> np.ndarray
     return result
 
 
-class ResourcesBuilder:
-    """Runs the resources stage on a built (elevation + climate + hydrology) mesh.
+class ResourcesBuilder(Stage):
+    """Runs the resources stage (a pipeline ``Stage``) on a built world.
 
-    Call `build(mesh, rivers=...)` after `HydrologyBuilder.build()` and after
-    `ClimateBuilder.apply_lake_humidity_feedback()` so biome metadata reflects
-    the final precipitation field. Attaches `fertility` and `forest_density`
-    single-channel textures and writes `fertility_mean` / `forest_density_mean`
-    per-face metadata.
+    ``build(ctx)`` runs after hydrology + the climate lake-feedback pass, reading
+    the mesh textures/metadata and the ``"river_objects"`` world feature. Attaches
+    `fertility` and `forest_density` single-channel textures, writes
+    `fertility_mean` / `forest_density_mean` per-face metadata, and registers the
+    ``"minerals"`` and ``"rare_bio"`` features.
     """
+
+    name = "resources"
 
     def __init__(self, params: ResourcesParams | None = None) -> None:
         self.params: ResourcesParams = params or ResourcesParams()
@@ -162,15 +179,10 @@ class ResourcesBuilder:
         # Rare biological resources: same 3-tuple format as minerals.
         self.rare_bio: Optional[tuple] = None
 
-    def build(
-        self,
-        mesh: PolygonMesh,
-        rivers=None,
-        progress: Optional[Callable[[str], None]] = None,
-    ) -> None:
-        def _report(msg: str) -> None:
-            if progress is not None:
-                progress(msg)
+    def build(self, ctx: BuildContext) -> None:
+        mesh = ctx.mesh
+        rivers = ctx.world.get_feature("river_objects")
+        _report = ctx.report
 
         p = self.params
         fp, gp = p.fertility, p.forest_density
@@ -320,4 +332,153 @@ class ResourcesBuilder:
         self.water_hops = water_hops
         self.volcanism_hops = volcanism_hops
 
+        if self.minerals is not None and len(self.minerals[0]) > 0:
+            ctx.world.add_feature("minerals", self.minerals)
+        if self.rare_bio is not None and len(self.rare_bio[0]) > 0:
+            ctx.world.add_feature("rare_bio", self.rare_bio)
+
         _report("Resources done.")
+
+    # ── Display ──────────────────────────────────────────────────────────────
+
+    def register_display(
+        self, world: World, reg: DisplayRegistry, *, debug: bool = False
+    ) -> None:
+        mesh = world.mesh
+        ocean_mask_tex = mesh.face_textures.get("ocean_mask")
+        lake_mask_tex = mesh.face_textures.get("lake_mask")
+        elev_tex = mesh.face_textures.get("elevation")
+
+        if debug and "fertility" in mesh.face_textures:
+            mesh.set_face_textures(
+                "fertility_rgba",
+                build_fertility_display_texture(
+                    mesh.face_textures["fertility"],
+                    elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex, lake_mask_tex=lake_mask_tex,
+                ),
+            )
+            reg.add_scheme(
+                "Fertility", fertility_color,
+                texture="fertility_rgba", legend=("gradient", fertility_legend_entries()),
+            )
+        if debug and "forest_density" in mesh.face_textures:
+            mesh.set_face_textures(
+                "forest_density_rgba",
+                build_forest_density_display_texture(
+                    mesh.face_textures["forest_density"],
+                    elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex, lake_mask_tex=lake_mask_tex,
+                ),
+            )
+            reg.add_scheme(
+                "Forest Density", forest_density_color,
+                texture="forest_density_rgba", legend=("gradient", forest_density_legend_entries()),
+            )
+        if "dominant_crop" in mesh.face_textures:
+            mesh.set_face_textures(
+                "dominant_crop_rgba",
+                build_dominant_crop_display_texture(
+                    mesh.face_textures["dominant_crop"],
+                    ocean_mask_tex=ocean_mask_tex, lake_mask_tex=lake_mask_tex,
+                ),
+            )
+            reg.add_scheme(
+                "Dominant Crop", crop_color,
+                texture="dominant_crop_rgba", legend=("categorical", crop_legend_entries()),
+            )
+
+        # Resource → face lookups (built once, closed over by the hover fns).
+        centroids = mesh.face_centroids.astype(np.float32)
+        pos_to_face = {tuple(c): i for i, c in enumerate(centroids)}
+
+        minerals_by_face: dict = {}
+        if world.has_feature("minerals"):
+            from worldgen.resources.minerals import MINERAL_NAMES
+            m_pos, m_kinds, m_abund = world.get_feature("minerals")
+            for p, k, a in zip(m_pos, m_kinds, m_abund):
+                fi = pos_to_face.get(tuple(p))
+                if fi is not None:
+                    minerals_by_face.setdefault(fi, []).append((MINERAL_NAMES[int(k)], float(a)))
+            reg.add_overlay(
+                "minerals", "Minerals", checked=False,
+                legend=("categorical", mineral_legend_entries()),
+            )
+
+        # Debug crop/fertility/forest fragments come first (matching the original
+        # status-bar order), then minerals (always), then rare-bio (debug).
+        if debug:
+            from worldgen.resources.crops import CROP_NAMES
+
+            def _resources_meta_hover(face: int, _uv, _w) -> list:
+                meta = mesh.face_metadata[face]
+                parts: list = []
+                if "fertility_mean" in meta:
+                    parts.append(f"Fert: {meta['fertility_mean']:.2f}")
+                if "forest_density_mean" in meta:
+                    parts.append(f"Forest: {meta['forest_density_mean']:.2f}")
+                if "dominant_crop" in meta:
+                    idx = int(meta["dominant_crop"])
+                    crop_name = CROP_NAMES[idx] if 0 <= idx < len(CROP_NAMES) else "?"
+                    if crop_name != "None":
+                        parts.append(f"Crop: {crop_name}")
+                return parts
+
+            reg.add_hover(_resources_meta_hover)
+
+        def _minerals_hover(face: int, _uv, _w) -> list:
+            if face in minerals_by_face:
+                best = max(minerals_by_face[face], key=lambda x: x[1])
+                return [f"{best[0]}: {best[1]:.2f}"]
+            return []
+
+        reg.add_hover(_minerals_hover)
+
+        if debug:
+            rare_bio_by_face: dict = {}
+            if world.has_feature("rare_bio"):
+                from worldgen.resources.rare_bio import RARE_BIO_NAMES
+                rb_pos, rb_kinds, rb_abund = world.get_feature("rare_bio")
+                for p, k, a in zip(rb_pos, rb_kinds, rb_abund):
+                    fi = pos_to_face.get(tuple(p))
+                    if fi is not None:
+                        rare_bio_by_face.setdefault(fi, []).append((RARE_BIO_NAMES[int(k)], float(a)))
+                reg.add_overlay(
+                    "rare_bio", "Rare Resources", checked=False,
+                    legend=("categorical", rare_bio_legend_entries()),
+                )
+
+            def _rare_bio_hover(face: int, _uv, _w) -> list:
+                return [f"{n}: {a:.2f}" for n, a in rare_bio_by_face.get(face, [])]
+
+            reg.add_hover(_rare_bio_hover)
+
+    # ── Persistence ──────────────────────────────────────────────────────────
+
+    def serialize(self) -> dict:
+        arrays: dict = {}
+        if self.minerals is not None and len(self.minerals[0]) > 0:
+            m_pos, m_kinds, m_abund = self.minerals
+            arrays["mineral_positions"] = m_pos.astype(np.float32)
+            arrays["mineral_kinds"] = m_kinds.astype(np.int8)
+            arrays["mineral_abundances"] = m_abund.astype(np.float32)
+        if self.rare_bio is not None and len(self.rare_bio[0]) > 0:
+            rb_pos, rb_kinds, rb_abund = self.rare_bio
+            arrays["rare_bio_positions"] = rb_pos.astype(np.float32)
+            arrays["rare_bio_kinds"] = rb_kinds.astype(np.int8)
+            arrays["rare_bio_abundances"] = rb_abund.astype(np.float32)
+        return arrays
+
+    def load(self, arrays: Mapping[str, np.ndarray], ctx: BuildContext) -> None:
+        if "mineral_positions" in arrays:
+            self.minerals = (
+                arrays["mineral_positions"],
+                arrays["mineral_kinds"],
+                arrays["mineral_abundances"],
+            )
+            ctx.world.add_feature("minerals", self.minerals)
+        if "rare_bio_positions" in arrays:
+            self.rare_bio = (
+                arrays["rare_bio_positions"],
+                arrays["rare_bio_kinds"],
+                arrays["rare_bio_abundances"],
+            )
+            ctx.world.add_feature("rare_bio", self.rare_bio)

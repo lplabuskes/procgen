@@ -12,7 +12,7 @@ sailable sea network inland so a river can connect to the sea directly.
 """
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Mapping, Optional
 
 import numpy as np
 
@@ -26,8 +26,12 @@ from worldgen.cost.surfaces import (
     detect_straits,
     navigable_river_mask,
 )
+from core.display import DisplayRegistry
 from core.mesh import PolygonMesh
 from core.params import field, param_field as _f, paramclass
+from core.pipeline import BuildContext, Stage
+from core.world import World
+from worldgen.geology.display import LAND_COLOR, OCEAN_COLOR
 
 
 @paramclass
@@ -89,12 +93,13 @@ def _face_lake_mask(mesh: PolygonMesh, threshold: float = 0.5) -> np.ndarray:
     return tex[..., 0].mean(axis=(1, 2)) >= threshold
 
 
-class CostBuilder:
-    """Builds the base land + sea cost surfaces from a fully-built mesh.
+class CostBuilder(Stage):
+    """Builds the base land + sea cost surfaces (a pipeline ``Stage``).
 
-    Call ``build(mesh, rivers=...)`` after elevation + climate + hydrology so the
+    ``build(ctx)`` runs after elevation + climate + hydrology so the
     ``biome`` / ``is_ocean`` metadata and the ``elevation`` / ``lake_mask``
-    textures are present. Stores ``self.surfaces: CostSurfaces`` and writes
+    textures are present; it reads the rivers from the ``"river_objects"`` world
+    feature. Stores ``self.surfaces: CostSurfaces`` and writes
     ``land_base_cost`` / ``sea_base_cost`` / ``is_strait`` / ``is_water`` /
     ``is_navigable_river`` / ``river_navigability`` per-face metadata (the
     displayable, serializable summary; the full surfaces — including the river
@@ -102,19 +107,16 @@ class CostBuilder:
     feature).
     """
 
+    name = "cost"
+
     def __init__(self, params: CostParams | None = None) -> None:
         self.params: CostParams = params or CostParams()
         self.surfaces: Optional[CostSurfaces] = None
 
-    def build(
-        self,
-        mesh: PolygonMesh,
-        rivers=None,
-        progress: Optional[Callable[[str], None]] = None,
-    ) -> CostSurfaces:
-        def _report(msg: str) -> None:
-            if progress is not None:
-                progress(msg)
+    def build(self, ctx: BuildContext) -> CostSurfaces:
+        mesh = ctx.mesh
+        rivers = ctx.world.get_feature("river_objects")
+        _report = ctx.report
 
         p = self.params
         n = len(mesh.faces)
@@ -207,5 +209,105 @@ class CostBuilder:
             "river_navigability", river_navigability.astype(float).tolist()
         )
 
+        ctx.world.add_feature("cost_surfaces", surfaces)
+
         _report("Cost surfaces done.")
         return surfaces
+
+    # ── Display ──────────────────────────────────────────────────────────────
+
+    def register_display(
+        self, world: World, reg: DisplayRegistry, *, debug: bool = False
+    ) -> None:
+        mesh = world.mesh
+        if not (debug and mesh.face_metadata and "land_base_cost" in mesh.face_metadata[0]):
+            return
+
+        land_costs = np.array(
+            [m.get("land_base_cost", 0.0) for m in mesh.face_metadata], dtype=np.float64
+        )
+        # Water = ocean ∪ lake (impassable on land); fall back to is_ocean for
+        # worlds saved before the cost stage wrote is_water.
+        is_water_arr = np.array(
+            [bool(m.get("is_water", m.get("is_ocean", False))) for m in mesh.face_metadata],
+            dtype=bool,
+        )
+        land_ref = (
+            float(np.percentile(land_costs[~is_water_arr], 95)) if (~is_water_arr).any() else 1.0
+        )
+        land_ref = max(land_ref, 1e-6)
+
+        def _land_cost_color(meta: dict, _ref=land_ref) -> tuple:
+            if meta.get("is_water", meta.get("is_ocean", False)):
+                return OCEAN_COLOR
+            c = min(max(float(meta.get("land_base_cost", 0.0)) / _ref, 0.0), 1.0)
+            return (0.15 + 0.80 * c, 0.75 - 0.55 * c, 0.20, 1.0)
+
+        reg.add_scheme("Land Cost", _land_cost_color)
+
+        # Sailable faces (water ∪ navigable rivers) carry the sea cost.
+        is_sailable_arr = is_water_arr | np.array(
+            [bool(m.get("is_navigable_river", False)) for m in mesh.face_metadata], dtype=bool
+        )
+        sea_costs = np.array(
+            [m.get("sea_base_cost", 0.0) for m in mesh.face_metadata], dtype=np.float64
+        )
+        sea_ref = max(
+            float(sea_costs[is_sailable_arr].max()) if is_sailable_arr.any() else 1.0, 1e-6
+        )
+
+        def _sea_cost_color(meta: dict, _ref=sea_ref) -> tuple:
+            sailable = meta.get("is_water", meta.get("is_ocean", False)) or meta.get(
+                "is_navigable_river", False
+            )
+            if not sailable:
+                return LAND_COLOR
+            if meta.get("is_strait", False):
+                return (1.0, 0.85, 0.1, 1.0)  # highlight chokepoints
+            if meta.get("is_navigable_river", False):
+                return (0.30, 0.85, 0.95, 1.0)  # navigable rivers stand out
+            c = min(max(float(meta.get("sea_base_cost", 0.0)) / _ref, 0.0), 1.0)
+            return (0.1, 0.20 + 0.30 * (1.0 - c), 0.50 + 0.40 * c, 1.0)
+
+        reg.add_scheme("Sea Cost", _sea_cost_color)
+
+    # ── Persistence ──────────────────────────────────────────────────────────
+
+    def serialize(self) -> dict:
+        cs = self.surfaces
+        if cs is None:
+            return {}
+        return {
+            "cost_land_base_cost": cs.land_base_cost.astype(np.float32),
+            "cost_land_passable": cs.land_passable.astype(np.bool_),
+            "cost_river_flow_dir": cs.river_flow_dir.astype(np.float32),
+            "cost_river_flow_mag": cs.river_flow_mag.astype(np.float32),
+            "cost_river_navigability": cs.river_navigability.astype(np.float32),
+            "cost_sea_base_cost": cs.sea_base_cost.astype(np.float32),
+            "cost_sea_passable": cs.sea_passable.astype(np.bool_),
+            "cost_strait_mask": cs.strait_mask.astype(np.bool_),
+        }
+
+    def load(self, arrays: Mapping[str, np.ndarray], ctx: BuildContext) -> None:
+        if "cost_land_base_cost" not in arrays:
+            return
+        river_flow_mag = arrays["cost_river_flow_mag"]
+        # Back-compat: navigability was added after the first saved worlds; default
+        # to zeros when the key is absent.
+        river_navigability = (
+            arrays["cost_river_navigability"]
+            if "cost_river_navigability" in arrays
+            else np.zeros_like(river_flow_mag)
+        )
+        cs = CostSurfaces(
+            land_base_cost=arrays["cost_land_base_cost"],
+            land_passable=arrays["cost_land_passable"],
+            river_flow_dir=arrays["cost_river_flow_dir"],
+            river_flow_mag=river_flow_mag,
+            river_navigability=river_navigability,
+            sea_base_cost=arrays["cost_sea_base_cost"],
+            sea_passable=arrays["cost_sea_passable"],
+            strait_mask=arrays["cost_strait_mask"],
+        )
+        self.surfaces = cs
+        ctx.world.add_feature("cost_surfaces", cs)

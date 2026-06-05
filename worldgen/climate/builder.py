@@ -1,12 +1,16 @@
 """Climate stage orchestrator — ClimateParams and ClimateBuilder."""
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Callable, Mapping, Optional
 
 import numpy as np
 
 import scipy.sparse as sp
 from scipy.sparse.csgraph import dijkstra as sp_dijkstra
+
+from core.display import DisplayRegistry
+from core.pipeline import BuildContext, Stage
+from core.world import World
 
 from worldgen.climate.classification import (
     N_BIOMES,
@@ -31,8 +35,23 @@ from worldgen.climate.temperature import (
     surface_temperatures,
 )
 from worldgen.climate.winds import pressure_winds, zonal_winds
+from worldgen.climate.display import (
+    biome_color,
+    biome_legend_entries,
+    build_biome_display_texture,
+    build_precipitation_display_texture,
+    build_temperature_display_texture,
+    humidity_color,
+    precipitation_color,
+    precipitation_legend_entries,
+    temperature_color,
+    temperature_legend_entries,
+)
 from core.mesh import PolygonMesh
 from core.params import field, param_field as _f, paramclass
+
+
+SEASON_LABELS = ["Spring", "Summer", "Autumn", "Winter"]
 
 
 EARTH_RADIUS_KM = 6371.0
@@ -147,16 +166,18 @@ def _dominant_biome_per_face(biome_tex: np.ndarray) -> np.ndarray:
     return result
 
 
-class ClimateBuilder:
-    """Runs the climate stage on a built elevation mesh.
+class ClimateBuilder(Stage):
+    """Runs the first climate pass on a built elevation mesh (a pipeline ``Stage``).
 
-    Call `build(mesh, elevation_textures)` after `ElevationBuilder.build()`.
+    ``build(ctx)`` reads the mesh and its ``"elevation"`` texture from the world.
     Attaches `temperature` (N,H,W,4 float32 °C), `precipitation` (N,H,W,4
     float32 mm/season), and `biome` (N,H,W,1 uint8) textures, and writes
     per-face aggregates into `mesh.face_metadata`. Intermediate per-face
     results are kept as attributes so downstream code (display, future
     currents stage) can read them without re-running anything.
     """
+
+    name = "climate"
 
     def __init__(self,
                  params: ClimateParams | None = None,
@@ -172,13 +193,10 @@ class ClimateBuilder:
         self.winds: Optional[np.ndarray] = None                  # (N, K, 3) m/s
         self.currents: Optional[CurrentsResult] = None           # populated when params.currents.enabled
 
-    def build(self,
-              mesh: PolygonMesh,
-              elevation_textures: np.ndarray,
-              progress: Optional[Callable[[str], None]] = None) -> None:
-        def _report(msg: str) -> None:
-            if progress is not None:
-                progress(msg)
+    def build(self, ctx: BuildContext) -> None:
+        mesh = ctx.mesh
+        elevation_textures = mesh.face_textures["elevation"]
+        _report = ctx.report
 
         p = self.params
         tp, wp, pp, cp = p.temperature, p.wind, p.precipitation, p.currents
@@ -359,7 +377,30 @@ class ClimateBuilder:
         self.winds = winds
         self.currents = currents_result
 
+        centroids = mesh.face_centroids.astype(np.float32)
+        if self.winds is not None:
+            ctx.world.add_feature(
+                "winds",
+                [
+                    (centroids.copy(), self.winds[:, s, :].astype(np.float32))
+                    for s in range(self.winds.shape[1])
+                ],
+            )
+        if self.currents is not None:
+            ctx.world.add_feature(
+                "currents",
+                [(
+                    centroids.copy(),
+                    self.currents.currents.astype(np.float32),
+                    self.currents.temperature_delta.astype(np.float32),
+                )],
+            )
+
         _report("Climate done.")
+
+    def lake_feedback_stage(self) -> "ClimateLakeFeedbackStage":
+        """The second climate pass as its own pipeline node (runs after hydrology)."""
+        return ClimateLakeFeedbackStage(self)
 
     def apply_lake_humidity_feedback(
         self,
@@ -463,6 +504,148 @@ class ClimateBuilder:
         self.precipitation_face = p_face
 
         _report("Lake humidity feedback applied.")
+
+    # ── Display ──────────────────────────────────────────────────────────────
+
+    def register_display(
+        self, world: World, reg: DisplayRegistry, *, debug: bool = False
+    ) -> None:
+        mesh = world.mesh
+        if "temperature" not in mesh.face_textures:
+            return
+        elev_tex = mesh.face_textures["elevation"]
+
+        mesh.set_face_textures("biome_rgba", build_biome_display_texture(mesh))
+        reg.add_scheme(
+            "Biome", biome_color,
+            texture="biome_rgba", legend=("categorical", biome_legend_entries()),
+        )
+        if not debug:
+            return
+
+        temp_tex = mesh.face_textures["temperature"]
+        precip_tex = mesh.face_textures["precipitation"]
+        ocean_mask_tex = mesh.face_textures.get("ocean_mask")
+        mesh.set_face_textures(
+            "temperature_annual_rgba",
+            build_temperature_display_texture(temp_tex, elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex),
+        )
+        mesh.set_face_textures(
+            "temperature_summer_rgba",
+            build_temperature_display_texture(
+                temp_tex, season=1, elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex
+            ),
+        )
+        mesh.set_face_textures(
+            "temperature_winter_rgba",
+            build_temperature_display_texture(
+                temp_tex, season=3, elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex
+            ),
+        )
+        mesh.set_face_textures(
+            "precipitation_rgba",
+            build_precipitation_display_texture(precip_tex, elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex),
+        )
+        reg.add_scheme(
+            "Annual Temperature", temperature_color,
+            texture="temperature_annual_rgba", legend=("gradient", temperature_legend_entries()),
+        )
+        reg.add_scheme(
+            "Summer Temperature", lambda meta: temperature_color(meta, key="temperature_warmest"),
+            texture="temperature_summer_rgba", legend=("gradient", temperature_legend_entries()),
+        )
+        reg.add_scheme(
+            "Winter Temperature", lambda meta: temperature_color(meta, key="temperature_coldest"),
+            texture="temperature_winter_rgba", legend=("gradient", temperature_legend_entries()),
+        )
+        reg.add_scheme(
+            "Annual Precipitation", precipitation_color,
+            texture="precipitation_rgba", legend=("gradient", precipitation_legend_entries()),
+        )
+        reg.add_scheme("Humidity", humidity_color)
+
+        if self.winds is not None:
+            for i, label in enumerate(SEASON_LABELS):
+                reg.add_overlay(f"winds_season_{i}", f"Winds — {label}", checked=False)
+        if self.currents is not None:
+            reg.add_overlay("currents", "Currents", checked=False)
+
+        from worldgen.climate.classification import BIOME_NAMES
+
+        def _climate_hover(face: int, _uv, _w) -> list:
+            meta = mesh.face_metadata[face]
+            parts: list = []
+            if "biome" in meta:
+                parts.append(BIOME_NAMES[int(meta["biome"])])
+            if "temperature_annual" in meta:
+                parts.append(f"T: {meta['temperature_annual']:.1f}°C")
+            if "precipitation_annual" in meta:
+                parts.append(f"P: {meta['precipitation_annual']:.0f} mm/yr")
+            return parts
+
+        reg.add_hover(_climate_hover)
+
+    # ── Persistence ──────────────────────────────────────────────────────────
+
+    def serialize(self) -> dict:
+        arrays: dict = {}
+        if self.winds is not None:
+            arrays["cb_winds"] = self.winds.astype(np.float32)
+        if self.currents is not None:
+            arrays["cb_currents_vectors"] = self.currents.currents.astype(np.float32)
+            arrays["cb_currents_streamfunction"] = self.currents.streamfunction.astype(np.float32)
+            arrays["cb_currents_temp_delta"] = self.currents.temperature_delta.astype(np.float32)
+            arrays["cb_currents_precip_delta"] = self.currents.precipitation_delta.astype(np.float32)
+            arrays["cb_currents_advected_insolation"] = self.currents.advected_insolation.astype(np.float32)
+        return arrays
+
+    def load(self, arrays: Mapping[str, np.ndarray], ctx: BuildContext) -> None:
+        centroids = ctx.mesh.face_centroids.astype(np.float32)
+        if "cb_winds" in arrays:
+            self.winds = arrays["cb_winds"]
+            ctx.world.add_feature(
+                "winds",
+                [
+                    (centroids.copy(), self.winds[:, s, :].astype(np.float32))
+                    for s in range(self.winds.shape[1])
+                ],
+            )
+        if "cb_currents_vectors" in arrays:
+            self.currents = CurrentsResult(
+                currents=arrays["cb_currents_vectors"],
+                streamfunction=arrays["cb_currents_streamfunction"],
+                temperature_delta=arrays["cb_currents_temp_delta"],
+                precipitation_delta=arrays["cb_currents_precip_delta"],
+                advected_insolation=arrays["cb_currents_advected_insolation"],
+            )
+            ctx.world.add_feature(
+                "currents",
+                [(
+                    centroids.copy(),
+                    self.currents.currents.astype(np.float32),
+                    self.currents.temperature_delta.astype(np.float32),
+                )],
+            )
+
+
+class ClimateLakeFeedbackStage(Stage):
+    """Second climate pass: lake evaporation feedback (runs after hydrology).
+
+    Shares the :class:`ClimateBuilder` instance so it reuses the per-face climate
+    state computed in the first pass.
+    """
+
+    name = "climate_lake_feedback"
+
+    def __init__(self, builder: ClimateBuilder) -> None:
+        self.builder = builder
+
+    def build(self, ctx: BuildContext) -> None:
+        mesh = ctx.mesh
+        if "lake_mask" in mesh.face_textures:
+            self.builder.apply_lake_humidity_feedback(
+                mesh, mesh.face_textures["lake_mask"], progress=ctx.report
+            )
 
 
 _ = default_biome  # keep accessible for downstream imports

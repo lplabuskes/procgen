@@ -39,6 +39,8 @@ from worldgen.geology.elevation import (  # noqa: E402
     compute_face_elevations,
     compute_erosion,
 )
+from core.pipeline import BuildContext  # noqa: E402
+from core.world import World  # noqa: E402
 from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams  # noqa: E402
 from worldgen.geology.tectonics import (  # noqa: E402
     assign_plate_types,
@@ -127,7 +129,7 @@ def measure_seed(seed: int, pre_noise: bool = False) -> dict:
     else:
         params = ElevationParams(seed=seed)
         builder = ElevationBuilder(params)
-        builder.build(progress=lambda _: None)
+        builder.build(BuildContext(world=World()))
         assert builder.mesh is not None
         dual = builder.mesh
         textures = dual.face_textures["elevation"]

@@ -23,6 +23,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from worldgen.climate.builder import ClimateBuilder, ClimateParams  # noqa: E402
 from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams  # noqa: E402
 from core import mesh_cache  # noqa: E402
+from core.pipeline import BuildContext  # noqa: E402
+from core.world import World  # noqa: E402
 
 
 def measure_seed(seed: int) -> dict:
@@ -36,13 +38,13 @@ def measure_seed(seed: int) -> dict:
             outer_iters=e_params.mesh.outer_iters,
         )
 
+    ctx = BuildContext(world=World())
     e_builder = ElevationBuilder(e_params)
-    e_builder.build(progress=lambda _: None)
+    e_builder.build(ctx)
     mesh = e_builder.mesh
-    elev_tex = mesh.face_textures["elevation"]
 
     c_builder = ClimateBuilder(ClimateParams())
-    c_builder.build(mesh, elev_tex, progress=lambda _: None)
+    c_builder.build(ctx)
 
     t_tex = mesh.face_textures["temperature"]    # (N, H, W, K) °C
     p_tex = mesh.face_textures["precipitation"]  # (N, H, W, K) mm/season

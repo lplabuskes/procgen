@@ -123,3 +123,19 @@ def _elevation_color_vec(elevs: np.ndarray, ocean_mask: np.ndarray | None = None
     result[is_ocean] = _apply_stops_vec(elevs[is_ocean], _OCEAN_ELEVATION_STOPS)
     result[~is_ocean] = _apply_stops_vec(elevs[~is_ocean], _LAND_ELEVATION_STOPS)
     return result
+
+
+def build_elevation_display_texture(mesh) -> np.ndarray:
+    """RGBA (N, H, W, 4) elevation texture from the single-channel ``"elevation"``
+    data layer, painting ocean pixels by depth and lake pixels in lake blue."""
+    from worldgen.hydrology.builder import LAKE_COLOR
+
+    elev_tex = mesh.face_textures["elevation"]          # (N, H, W, 1)
+    ocean_mask = None
+    if "ocean_mask" in mesh.face_textures:
+        ocean_mask = mesh.face_textures["ocean_mask"][:, :, :, 0] > 0  # (N, H, W) bool
+    rgba = _elevation_color_vec(elev_tex[:, :, :, 0], ocean_mask=ocean_mask)  # (N, H, W, 4)
+    if "lake_mask" in mesh.face_textures:
+        lake_tex = mesh.face_textures["lake_mask"]       # (N, H, W, 1)
+        rgba[lake_tex[:, :, :, 0] > 0] = LAKE_COLOR
+    return rgba

@@ -178,3 +178,29 @@ def build_precipitation_display_texture(precipitation_tex: np.ndarray,
     return _apply_ocean_mask(rgba, elevation_tex, ocean_mask_tex)
 
 
+def build_biome_display_texture(mesh) -> np.ndarray:
+    """Look up ``"biome"`` indices in BIOME_PALETTE → (N, H, W, 4) RGBA.
+
+    Ocean pixels are overpainted with OCEAN_COLOR (using the ocean_mask texture
+    if present, otherwise falling back to elevation < 0). Inland lake pixels are
+    overpainted with LAKE_COLOR.
+    """
+    from worldgen.hydrology.builder import LAKE_COLOR
+
+    biome_tex = mesh.face_textures["biome"]              # (N, H, W, 1) uint8
+    idx = biome_tex[..., 0].astype(np.int32)
+    idx = np.clip(idx, 0, len(BIOME_PALETTE) - 1)
+    rgba = BIOME_PALETTE[idx].copy()
+    if "ocean_mask" in mesh.face_textures:
+        ocean = mesh.face_textures["ocean_mask"][..., 0] > 0
+        rgba[ocean] = np.asarray(OCEAN_COLOR, dtype=rgba.dtype)
+    elif "elevation" in mesh.face_textures:
+        elev_tex = mesh.face_textures["elevation"]       # (N, H, W, 1)
+        ocean = elev_tex[..., 0] < 0.0
+        rgba[ocean] = np.asarray(OCEAN_COLOR, dtype=rgba.dtype)
+    if "lake_mask" in mesh.face_textures:
+        lake_tex = mesh.face_textures["lake_mask"]       # (N, H, W, 1)
+        rgba[lake_tex[:, :, :, 0] > 0] = LAKE_COLOR
+    return rgba
+
+

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from typing import Callable, List, Optional
+from typing import List, Mapping, Optional
 
 import numpy as np
 
+from core.display import DisplayRegistry
 from core.params import field, param_field as _f, paramclass
+from core.pipeline import BuildContext, Stage
+from core.world import World
 from worldgen.geology.elevation import (
     compute_elevation_textures,
     compute_erosion,
@@ -13,6 +16,15 @@ from worldgen.geology.elevation import (
     compute_ocean_mask_texture,
     face_elevations_from_texture,
     smooth_elevation_seams,
+)
+from worldgen.geology.display import (
+    BOUNDARY_COLORS,
+    LAND_COLOR,
+    OCEAN_COLOR,
+    _elevation_color,
+    _plate_palette,
+    build_elevation_display_texture,
+    elevation_legend_entries,
 )
 from worldgen.geology.volcanism import compute_volcanism, generate_volcano_positions
 from worldgen.geology.tectonics import (
@@ -97,13 +109,15 @@ class ElevationParams:
     seed: Optional[int] = field(default=None, metadata={"label": "Seed", "kind": "optional_int", "min": 0, "max": 2**31 - 1})
 
 
-class ElevationBuilder:
-    """Orchestrates the full elevation/tectonics pipeline.
+class ElevationBuilder(Stage):
+    """Builds the mesh and the elevation/tectonics layers; sets ``ctx.world.mesh``.
 
-    Call build() to run every stage. Intermediate results are stored as
-    attributes so callers (e.g. visualization code) can read them without
-    re-running any work.
+    A pipeline ``Stage``: ``build(ctx)`` runs every sub-step and stores the
+    intermediate results as attributes so callers (visualization, downstream
+    stages, scripts) can read them without re-running any work.
     """
+
+    name = "elevation"
 
     def __init__(self, params: ElevationParams | None = None) -> None:
         self.params: ElevationParams = params or ElevationParams()
@@ -123,11 +137,9 @@ class ElevationBuilder:
     def _sub_seed(self, offset: int) -> Optional[int]:
         return None if self.params.seed is None else self.params.seed + offset
 
-    def build(self, progress: Optional[Callable[[str], None]] = None) -> PolygonMesh:
-        """Run the full pipeline and return the dual mesh with all metadata applied."""
-        def _report(msg: str) -> None:
-            if progress is not None:
-                progress(msg)
+    def build(self, ctx: BuildContext) -> PolygonMesh:
+        """Run the full pipeline, set ``ctx.world.mesh``, and return the dual mesh."""
+        _report = ctx.report
 
         p = self.params
 
@@ -264,5 +276,93 @@ class ElevationBuilder:
         self.volcano_positions = generate_volcano_positions(dual, volcanism, final_elevations)
         self.max_speed = float(speeds.max()) or 1.0
 
+        ctx.world.mesh = dual
+        if self.volcano_positions is not None and len(self.volcano_positions) > 0:
+            ctx.world.add_feature("volcanoes", self.volcano_positions)
+
         _report("Done.")
         return dual
+
+    # ── Display ──────────────────────────────────────────────────────────────
+
+    def register_display(
+        self, world: World, reg: DisplayRegistry, *, debug: bool = False
+    ) -> None:
+        mesh = world.mesh
+        palette = _plate_palette(self.params.plates.n_plates)
+        mesh.set_face_colors(palette[np.array(self.plate_ids, dtype=np.int32)])
+
+        mesh.set_face_textures("elevation_rgba", build_elevation_display_texture(mesh))
+        reg.add_scheme(
+            "Elevation", _elevation_color,
+            texture="elevation_rgba", legend=("gradient", elevation_legend_entries()),
+        )
+        if not debug:
+            return
+
+        max_speed = self.max_speed
+
+        def _speed_color(meta: dict) -> tuple:
+            t = meta["surface_speed"] / max_speed
+            return (t, 0.2 + 0.3 * (1.0 - t), 1.0 - t, 1.0)
+
+        def _volcanic_color(meta: dict) -> tuple:
+            t = meta["volcanic_activity"]
+            if t <= 0.0:
+                return (0.35, 0.35, 0.35, 1.0)
+            elif t < 0.5:
+                s = t / 0.5
+                return (0.35 + 0.60 * s, 0.35 - 0.10 * s, 0.35 - 0.35 * s, 1.0)
+            else:
+                s = (t - 0.5) / 0.5
+                return (0.95, 0.25 - 0.20 * s, 0.0, 1.0)
+
+        reg.add_scheme("Plates", lambda meta: tuple(palette[meta["plate_id"]]))
+        reg.add_scheme(
+            "Plate Type",
+            lambda meta: OCEAN_COLOR if meta["plate_type"] == "oceanic" else LAND_COLOR,
+        )
+        reg.add_scheme("Speed", _speed_color)
+        reg.add_scheme("Boundary", lambda meta: BOUNDARY_COLORS[meta["boundary_type"]])
+        reg.add_scheme("Volcanic Activity", _volcanic_color)
+
+        if world.has_feature("volcanoes"):
+            reg.add_overlay("volcanoes", "Volcanoes", checked=False)
+
+        def _elev_px_hover(face: int, uv, _w) -> list:
+            if uv is None or "elevation" not in mesh.face_textures:
+                return []
+            elev_tex = mesh.face_textures["elevation"]
+            h_t, w_t = elev_tex.shape[1:3]
+            tx = int(np.clip(uv[0] * w_t, 0, w_t - 1))
+            ty = int(np.clip(uv[1] * h_t, 0, h_t - 1))
+            return [f"[px: {float(elev_tex[face, ty, tx, 0]):.2f} km]"]
+
+        reg.add_hover(_elev_px_hover)
+
+    # ── Persistence ──────────────────────────────────────────────────────────
+
+    def serialize(self) -> dict:
+        arrays = {
+            "eb_plate_ids": np.array(self.plate_ids, dtype=np.int32),
+            "eb_plate_omegas": self.plate_omegas.astype(np.float64),
+            "eb_face_velocities": self.face_velocities.astype(np.float64),
+            "eb_volcanism": self.volcanism.astype(np.float64),
+            "eb_elevations": self.elevations.astype(np.float64),
+            "eb_max_speed": np.array([self.max_speed], dtype=np.float64),
+        }
+        if self.volcano_positions is not None and len(self.volcano_positions) > 0:
+            arrays["eb_volcano_positions"] = self.volcano_positions.astype(np.float32)
+        return arrays
+
+    def load(self, arrays: Mapping[str, np.ndarray], ctx: BuildContext) -> None:
+        self.mesh = ctx.mesh
+        self.plate_ids = arrays["eb_plate_ids"].tolist()
+        self.plate_omegas = arrays["eb_plate_omegas"]
+        self.face_velocities = arrays["eb_face_velocities"]
+        self.volcanism = arrays["eb_volcanism"]
+        self.elevations = arrays["eb_elevations"]
+        self.max_speed = float(arrays["eb_max_speed"][0])
+        if "eb_volcano_positions" in arrays:
+            self.volcano_positions = arrays["eb_volcano_positions"]
+            ctx.world.add_feature("volcanoes", self.volcano_positions)

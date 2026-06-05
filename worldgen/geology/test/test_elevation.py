@@ -8,6 +8,8 @@ from worldgen.geology.elevation import (
 )
 from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams
 from core.mesh import Mesh
+from core.pipeline import BuildContext
+from core.world import World
 
 
 def _bilinear_sample(texture: np.ndarray, uv: np.ndarray) -> np.ndarray:
@@ -335,7 +337,7 @@ class TestOceanMaskComponents:
         params = ElevationParams()
         params.seed = 72264827
         builder = ElevationBuilder(params)
-        builder.build()
+        builder.build(BuildContext(world=World()))
 
         mesh = builder.mesh
         elev = builder.elevation_textures[:, :, :, 0]   # (N, H, W)

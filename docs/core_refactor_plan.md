@@ -204,6 +204,21 @@ class DisplayRegistry:
    - **Note:** `HydrologyStage` caches the flattened `(positions, flows, in_lake)` river tuples
      it registers (in both `build` and `load`) because `serialize` has no world access and a
      *loaded* world's `hb.rivers` holds tuples, not `River` objects.
+6b. **[DONE] Collapse the wrappers — builders *are* the stages.** Resolved the step-4 deviation:
+   `worldgen/globe/stages.py` is deleted and each `*Builder` now **inherits `Stage` directly**
+   (`ElevationBuilder`/`ClimateBuilder`/`HydrologyBuilder`/`ResourcesBuilder`/`CostBuilder`),
+   owning its own `build(ctx)` + `register_display` + `serialize`/`load`. All `build()` signatures
+   collapsed to `build(ctx)` — inputs (mesh, elevation/lake textures) are read from `ctx.world`,
+   and the hydrology→resources/cost `River` handoff goes through a new `"river_objects"` world
+   feature (the rich objects) alongside the flattened `"rivers"` feature (rendering/serialization),
+   so the `hydrology_builder` back-reference is gone. `GlobeBuilder` composes the builders straight
+   into the `Pipeline`. The two display-texture helpers moved to their owning display modules
+   (`build_elevation_display_texture` → `geology/display.py`, `build_biome_display_texture` →
+   `climate/display.py`), re-exported from `worldgen.globe.builder`. The lake-feedback pass is
+   `ClimateBuilder.lake_feedback_stage()` → a `ClimateLakeFeedbackStage`. Standalone callers
+   (scripts `measure_*`, tests `test_elevation`/`test_cost`) converted to the `build(ctx)` idiom.
+   **297 tests green**; verified end-to-end build, save/load round-trip, `apply_display`
+   (debug + non-debug), and realm-on-top.
 7. **`viz/` extraction** (optional, last) — move `mapview`, `projections`, `params_dialog`,
    `mesh/gui` under `viz/`; add `apply_registry(reg, window)`.
 8. **`humangen/`** — rename/expand `realmgen` once city/name stages exist; not required for
