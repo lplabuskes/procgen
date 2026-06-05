@@ -1,5 +1,5 @@
 [tool.pytest.ini_options]
-testpaths = ["core/test", "utils/mapview/test", "worldgen/geology/test", "worldgen/hydrology/test", "worldgen/resources/test", "worldgen/cost/test", "realmgen/test"]
+testpaths = ["core/test", "utils/mapview/test", "worldgen/geology/test", "worldgen/hydrology/test", "worldgen/resources/test", "worldgen/cost/test", "worldgen/globe/test", "realmgen/test"]
 pythonpath = ["."]
 
 [tool.pyright]

@@ -189,8 +189,21 @@ class DisplayRegistry:
    stays Qt-free. All 295 tests green.
    - **Deviation from plan:** the hook signature is `register_display(world, reg, *, debug)` (not
      `register_display(reg, *, debug)`) — stages need `world` to read textures/features.
-6. **Rewrite `serialization.py`** as the core framework + per-stage `serialize`/`load`. Keep
-   per-stage back-compat (e.g. navigability-defaults-to-zeros) inside each stage's `load`.
+6. **[DONE] Rewrite `serialization.py`** as the core framework + per-stage `serialize`/`load`.
+   Added `core/persistence.py` (`NumpyEncoder`, `deep_from_dict`, `save_world`, `load_world`) —
+   it owns only the generic slice (params JSON, mesh geometry, `tex_*` textures, face-metadata
+   JSON) and stays free of any `worldgen` import. Each worldgen `Stage` now implements
+   `serialize() -> dict` / `load(arrays, ctx)`, keeping the **existing array key names**
+   (`eb_*`, `cb_*`, `river_*`, `mineral_*`, `cost_*`) so old `.npz` worlds still load; the
+   navigability-defaults-to-zeros back-compat lives in `CostStage.load`, and the cost stage's
+   absent-key early-return handles pre-cost saves. `worldgen/globe/serialization.py` is now a
+   ~40-line shim: `save_globe` → `save_world(builder.globe, params, builder.pipeline, path)`;
+   `load_globe` → `load_world(...)` then `for stage in pipeline: stage.load(data, ctx)`. Added
+   `worldgen/globe/test/test_serialization.py` (legacy-fixture load + re-save round-trip);
+   verified fresh full-build round-trip too. **297 tests green.**
+   - **Note:** `HydrologyStage` caches the flattened `(positions, flows, in_lake)` river tuples
+     it registers (in both `build` and `load`) because `serialize` has no world access and a
+     *loaded* world's `hb.rivers` holds tuples, not `River` objects.
 7. **`viz/` extraction** (optional, last) — move `mapview`, `projections`, `params_dialog`,
    `mesh/gui` under `viz/`; add `apply_registry(reg, window)`.
 8. **`humangen/`** — rename/expand `realmgen` once city/name stages exist; not required for

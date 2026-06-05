@@ -19,7 +19,7 @@ pipeline.)
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Mapping, Optional
 
 import numpy as np
 
@@ -28,6 +28,7 @@ from core.pipeline import BuildContext, Stage
 from core.world import World
 
 from worldgen.climate.builder import ClimateBuilder
+from worldgen.climate.currents import CurrentsResult
 from worldgen.cost.builder import CostBuilder
 from worldgen.geology.elevation_builder import ElevationBuilder
 from worldgen.hydrology.builder import HydrologyBuilder, LAKE_COLOR
@@ -183,6 +184,33 @@ class ElevationStage(Stage):
 
         reg.add_hover(_elev_px_hover)
 
+    def serialize(self) -> dict:
+        eb = self.builder
+        arrays = {
+            "eb_plate_ids": np.array(eb.plate_ids, dtype=np.int32),
+            "eb_plate_omegas": eb.plate_omegas.astype(np.float64),
+            "eb_face_velocities": eb.face_velocities.astype(np.float64),
+            "eb_volcanism": eb.volcanism.astype(np.float64),
+            "eb_elevations": eb.elevations.astype(np.float64),
+            "eb_max_speed": np.array([eb.max_speed], dtype=np.float64),
+        }
+        if eb.volcano_positions is not None and len(eb.volcano_positions) > 0:
+            arrays["eb_volcano_positions"] = eb.volcano_positions.astype(np.float32)
+        return arrays
+
+    def load(self, arrays: Mapping[str, np.ndarray], ctx: BuildContext) -> None:
+        eb = self.builder
+        eb.mesh = ctx.mesh
+        eb.plate_ids = arrays["eb_plate_ids"].tolist()
+        eb.plate_omegas = arrays["eb_plate_omegas"]
+        eb.face_velocities = arrays["eb_face_velocities"]
+        eb.volcanism = arrays["eb_volcanism"]
+        eb.elevations = arrays["eb_elevations"]
+        eb.max_speed = float(arrays["eb_max_speed"][0])
+        if "eb_volcano_positions" in arrays:
+            eb.volcano_positions = arrays["eb_volcano_positions"]
+            ctx.world.add_feature("volcanoes", eb.volcano_positions)
+
 
 class ClimateStage(Stage):
     """Runs the first climate pass; registers wind and current features + schemes."""
@@ -293,6 +321,48 @@ class ClimateStage(Stage):
 
         reg.add_hover(_climate_hover)
 
+    def serialize(self) -> dict:
+        cb = self.builder
+        arrays: dict = {}
+        if cb.winds is not None:
+            arrays["cb_winds"] = cb.winds.astype(np.float32)
+        if cb.currents is not None:
+            arrays["cb_currents_vectors"] = cb.currents.currents.astype(np.float32)
+            arrays["cb_currents_streamfunction"] = cb.currents.streamfunction.astype(np.float32)
+            arrays["cb_currents_temp_delta"] = cb.currents.temperature_delta.astype(np.float32)
+            arrays["cb_currents_precip_delta"] = cb.currents.precipitation_delta.astype(np.float32)
+            arrays["cb_currents_advected_insolation"] = cb.currents.advected_insolation.astype(np.float32)
+        return arrays
+
+    def load(self, arrays: Mapping[str, np.ndarray], ctx: BuildContext) -> None:
+        cb = self.builder
+        centroids = ctx.mesh.face_centroids.astype(np.float32)
+        if "cb_winds" in arrays:
+            cb.winds = arrays["cb_winds"]
+            ctx.world.add_feature(
+                "winds",
+                [
+                    (centroids.copy(), cb.winds[:, s, :].astype(np.float32))
+                    for s in range(cb.winds.shape[1])
+                ],
+            )
+        if "cb_currents_vectors" in arrays:
+            cb.currents = CurrentsResult(
+                currents=arrays["cb_currents_vectors"],
+                streamfunction=arrays["cb_currents_streamfunction"],
+                temperature_delta=arrays["cb_currents_temp_delta"],
+                precipitation_delta=arrays["cb_currents_precip_delta"],
+                advected_insolation=arrays["cb_currents_advected_insolation"],
+            )
+            ctx.world.add_feature(
+                "currents",
+                [(
+                    centroids.copy(),
+                    cb.currents.currents.astype(np.float32),
+                    cb.currents.temperature_delta.astype(np.float32),
+                )],
+            )
+
 
 class ClimateLakeFeedbackStage(Stage):
     """Second climate pass: lake evaporation feedback (runs after hydrology)."""
@@ -317,22 +387,35 @@ class HydrologyStage(Stage):
 
     def __init__(self, builder: HydrologyBuilder) -> None:
         self.builder = builder
+        # The canonical ``(positions, flows, in_lake)`` polyline tuples registered
+        # as the "rivers" feature. Cached here because ``serialize`` (no world
+        # access) must reproduce it from either a fresh build (River objects) or a
+        # load (already-flattened tuples).
+        self._river_feature: Optional[list] = None
+
+    def _flatten_rivers(self) -> list:
+        """Flatten ``self.builder.rivers`` (List[River]) into ``(positions, flows,
+        in_lake)`` polyline tuples — the form used by both the world feature and
+        the serialized arrays."""
+        paths = []
+        for river in self.builder.rivers:
+            polyline = river.as_polyline()
+            if len(polyline) < 2:
+                continue
+            positions = np.stack(polyline).astype(np.float32)
+            flows = river.flow_rates()
+            in_lake = np.array([s.in_lake for s in river.segments], dtype=bool)
+            paths.append((positions, flows, in_lake))
+        return paths
 
     def build(self, ctx: BuildContext) -> None:
         mesh = ctx.mesh
         self.builder.build(mesh, mesh.face_textures["elevation"], progress=ctx.report)
         hb = self.builder
         if hb.rivers:
-            paths_with_flow = []
-            for river in hb.rivers:
-                polyline = river.as_polyline()
-                if len(polyline) < 2:
-                    continue
-                positions = np.stack(polyline).astype(np.float32)
-                flows = river.flow_rates()
-                in_lake = np.array([s.in_lake for s in river.segments], dtype=bool)
-                paths_with_flow.append((positions, flows, in_lake))
+            paths_with_flow = self._flatten_rivers()
             if paths_with_flow:
+                self._river_feature = paths_with_flow
                 ctx.world.add_feature("rivers", paths_with_flow)
         if hb.lake_polygons:
             ctx.world.add_feature("lakes", hb.lake_polygons)
@@ -344,6 +427,67 @@ class HydrologyStage(Stage):
             reg.add_overlay("rivers", "Rivers")
         if debug and world.has_feature("deltas"):
             reg.add_overlay("deltas", "River Deltas", checked=False)
+
+    def serialize(self) -> dict:
+        hb = self.builder
+        arrays: dict = {}
+        if self._river_feature:
+            all_pos, all_flows, all_in_lake = [], [], []
+            pos_offsets, flow_offsets = [0], [0]
+            for positions, flows, in_lake in self._river_feature:
+                all_pos.append(positions)
+                all_flows.append(flows)
+                all_in_lake.append(in_lake)
+                pos_offsets.append(pos_offsets[-1] + len(positions))
+                flow_offsets.append(flow_offsets[-1] + len(flows))
+            arrays["river_positions_flat"] = np.concatenate(all_pos).astype(np.float32)
+            arrays["river_flows_flat"] = np.concatenate(all_flows).astype(np.float32)
+            arrays["river_in_lake_flat"] = np.concatenate(all_in_lake).astype(np.bool_)
+            arrays["river_pos_offsets"] = np.array(pos_offsets, dtype=np.int64)
+            arrays["river_flow_offsets"] = np.array(flow_offsets, dtype=np.int64)
+        if hb.lake_polygons:
+            all_verts, lake_offsets = [], [0]
+            for poly in hb.lake_polygons:
+                all_verts.append(poly)
+                lake_offsets.append(lake_offsets[-1] + len(poly))
+            arrays["lake_polys_flat"] = np.concatenate(all_verts).astype(np.float32)
+            arrays["lake_poly_offsets"] = np.array(lake_offsets, dtype=np.int64)
+        if hb.delta_positions is not None and len(hb.delta_positions) > 0:
+            arrays["hb_delta_positions"] = hb.delta_positions.astype(np.float32)
+        return arrays
+
+    def load(self, arrays: Mapping[str, np.ndarray], ctx: BuildContext) -> None:
+        hb = self.builder
+        if "river_pos_offsets" in arrays:
+            pos_flat = arrays["river_positions_flat"]
+            flows_flat = arrays["river_flows_flat"]
+            in_lake_flat = arrays["river_in_lake_flat"]
+            pos_offs = arrays["river_pos_offsets"]
+            flow_offs = arrays["river_flow_offsets"]
+            # Rehydrated rivers are the flattened polyline tuples, not River
+            # objects (no downstream stage re-runs after load).
+            paths_with_flow = [
+                (
+                    pos_flat[pos_offs[i]:pos_offs[i + 1]],
+                    flows_flat[flow_offs[i]:flow_offs[i + 1]],
+                    in_lake_flat[flow_offs[i]:flow_offs[i + 1]],
+                )
+                for i in range(len(pos_offs) - 1)
+            ]
+            hb.rivers = paths_with_flow
+            self._river_feature = paths_with_flow
+            ctx.world.add_feature("rivers", paths_with_flow)
+        if "lake_poly_offsets" in arrays:
+            poly_flat = arrays["lake_polys_flat"]
+            poly_offs = arrays["lake_poly_offsets"]
+            hb.lake_polygons = [
+                poly_flat[poly_offs[i]:poly_offs[i + 1]]
+                for i in range(len(poly_offs) - 1)
+            ]
+            ctx.world.add_feature("lakes", hb.lake_polygons)
+        if "hb_delta_positions" in arrays:
+            hb.delta_positions = arrays["hb_delta_positions"]
+            ctx.world.add_feature("deltas", hb.delta_positions)
 
 
 class ResourcesStage(Stage):
@@ -474,6 +618,38 @@ class ResourcesStage(Stage):
 
             reg.add_hover(_rare_bio_hover)
 
+    def serialize(self) -> dict:
+        rb = self.builder
+        arrays: dict = {}
+        if rb.minerals is not None and len(rb.minerals[0]) > 0:
+            m_pos, m_kinds, m_abund = rb.minerals
+            arrays["mineral_positions"] = m_pos.astype(np.float32)
+            arrays["mineral_kinds"] = m_kinds.astype(np.int8)
+            arrays["mineral_abundances"] = m_abund.astype(np.float32)
+        if rb.rare_bio is not None and len(rb.rare_bio[0]) > 0:
+            rb_pos, rb_kinds, rb_abund = rb.rare_bio
+            arrays["rare_bio_positions"] = rb_pos.astype(np.float32)
+            arrays["rare_bio_kinds"] = rb_kinds.astype(np.int8)
+            arrays["rare_bio_abundances"] = rb_abund.astype(np.float32)
+        return arrays
+
+    def load(self, arrays: Mapping[str, np.ndarray], ctx: BuildContext) -> None:
+        rb = self.builder
+        if "mineral_positions" in arrays:
+            rb.minerals = (
+                arrays["mineral_positions"],
+                arrays["mineral_kinds"],
+                arrays["mineral_abundances"],
+            )
+            ctx.world.add_feature("minerals", rb.minerals)
+        if "rare_bio_positions" in arrays:
+            rb.rare_bio = (
+                arrays["rare_bio_positions"],
+                arrays["rare_bio_kinds"],
+                arrays["rare_bio_abundances"],
+            )
+            ctx.world.add_feature("rare_bio", rb.rare_bio)
+
 
 class CostStage(Stage):
     """Runs the base traversal-cost surfaces; registers the cost_surfaces feature + schemes."""
@@ -544,3 +720,44 @@ class CostStage(Stage):
             return (0.1, 0.20 + 0.30 * (1.0 - c), 0.50 + 0.40 * c, 1.0)
 
         reg.add_scheme("Sea Cost", _sea_cost_color)
+
+    def serialize(self) -> dict:
+        cs = self.builder.surfaces
+        if cs is None:
+            return {}
+        return {
+            "cost_land_base_cost": cs.land_base_cost.astype(np.float32),
+            "cost_land_passable": cs.land_passable.astype(np.bool_),
+            "cost_river_flow_dir": cs.river_flow_dir.astype(np.float32),
+            "cost_river_flow_mag": cs.river_flow_mag.astype(np.float32),
+            "cost_river_navigability": cs.river_navigability.astype(np.float32),
+            "cost_sea_base_cost": cs.sea_base_cost.astype(np.float32),
+            "cost_sea_passable": cs.sea_passable.astype(np.bool_),
+            "cost_strait_mask": cs.strait_mask.astype(np.bool_),
+        }
+
+    def load(self, arrays: Mapping[str, np.ndarray], ctx: BuildContext) -> None:
+        if "cost_land_base_cost" not in arrays:
+            return
+        from worldgen.cost.surfaces import CostSurfaces
+
+        river_flow_mag = arrays["cost_river_flow_mag"]
+        # Back-compat: navigability was added after the first saved worlds; default
+        # to zeros when the key is absent.
+        river_navigability = (
+            arrays["cost_river_navigability"]
+            if "cost_river_navigability" in arrays
+            else np.zeros_like(river_flow_mag)
+        )
+        cs = CostSurfaces(
+            land_base_cost=arrays["cost_land_base_cost"],
+            land_passable=arrays["cost_land_passable"],
+            river_flow_dir=arrays["cost_river_flow_dir"],
+            river_flow_mag=river_flow_mag,
+            river_navigability=river_navigability,
+            sea_base_cost=arrays["cost_sea_base_cost"],
+            sea_passable=arrays["cost_sea_passable"],
+            strait_mask=arrays["cost_strait_mask"],
+        )
+        self.builder.surfaces = cs
+        ctx.world.add_feature("cost_surfaces", cs)
