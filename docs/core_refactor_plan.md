@@ -150,9 +150,15 @@ class DisplayRegistry:
    rewritten (`from core.mesh import ...`, `from core import mesh_cache`); `pyproject.toml`
    testpath updated. The dev 3-D viewer (`worldgen/mesh/gui.py`, `main.py`) stays put for now
    (moves to `viz/` in step 7), repointed at `core.mesh`. All 281 tests green.
-2. **Stand up `core/` skeleton** — `Stage`, `Pipeline`, `BuildContext`, `World`,
-   `MetaChannel`/`TextureChannel`, `DisplayRegistry`, move `params.py`. No behavior change yet;
-   `core/` has no importers beyond the mesh.
+2. **[DONE] Stand up `core/` skeleton** — added `core/world.py` (`World`; mesh `Optional`),
+   `core/channels.py` (`MetaChannel`/`TextureChannel` + `Channel` union, with the fallback
+   chain), `core/pipeline.py` (`Stage` ABC, `Pipeline`, `BuildContext` with deterministic
+   per-stage `rng(name)` fan-out + mesh guard), `core/display.py` (Qt-free `DisplayRegistry`
+   with scheme/overlay/decomposed-hover accumulation). Moved `utils/params.py -> core/params.py`
+   (6 importers rewired). `worldgen/globe/globe.py` is now a one-line shim: `Globe = World`, so
+   every existing `Globe` import resolves to the one canonical container. Added
+   `core/test/test_skeleton.py` (12 tests). Nothing is wired onto the pipeline yet — pure
+   addition. All 293 tests green.
 3. **Convert ONE stage as the proof slice: `realmgen`.** Newest, least entangled, already
    reads everything through metadata. Make `RealmStage(Stage)` with `build`/`register_display`.
    Define the `MetaChannel` constants it needs (`IS_WATER`, `IS_OCEAN`, `TEMPERATURE_WARMEST`,

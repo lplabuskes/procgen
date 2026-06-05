@@ -2,7 +2,7 @@
 
 Usage::
 
-    from worldgen.utils.params import field, paramclass, param_field as _f
+    from core.params import field, paramclass, param_field as _f
 
     @paramclass
     class FooParams:

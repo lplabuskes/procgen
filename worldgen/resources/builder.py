@@ -28,7 +28,7 @@ from worldgen.resources.terrain import (
     river_traversed_faces,
     volcanic_faces,
 )
-from utils.params import field, param_field as _f, paramclass
+from core.params import field, param_field as _f, paramclass
 
 
 @paramclass

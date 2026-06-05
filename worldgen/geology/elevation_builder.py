@@ -4,7 +4,7 @@ from typing import Callable, List, Optional
 
 import numpy as np
 
-from utils.params import field, param_field as _f, paramclass
+from core.params import field, param_field as _f, paramclass
 from worldgen.geology.elevation import (
     compute_elevation_textures,
     compute_erosion,

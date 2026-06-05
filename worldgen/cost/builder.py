@@ -27,7 +27,7 @@ from worldgen.cost.surfaces import (
     navigable_river_mask,
 )
 from core.mesh import PolygonMesh
-from utils.params import field, param_field as _f, paramclass
+from core.params import field, param_field as _f, paramclass
 
 
 @paramclass

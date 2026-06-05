@@ -32,7 +32,7 @@ from worldgen.climate.temperature import (
 )
 from worldgen.climate.winds import pressure_winds, zonal_winds
 from core.mesh import PolygonMesh
-from utils.params import field, param_field as _f, paramclass
+from core.params import field, param_field as _f, paramclass
 
 
 EARTH_RADIUS_KM = 6371.0

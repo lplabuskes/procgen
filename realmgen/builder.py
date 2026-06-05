@@ -38,7 +38,7 @@ from realmgen.situational_value import (
 from worldgen.geology.display import OCEAN_COLOR
 from worldgen.globe.globe import Globe
 from worldgen.resources.terrain import face_elevation_range
-from utils.params import field, param_field as _f, paramclass
+from core.params import field, param_field as _f, paramclass
 
 
 # ── Params ────────────────────────────────────────────────────────────────────

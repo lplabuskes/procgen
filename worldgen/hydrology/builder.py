@@ -6,7 +6,7 @@ import numpy as np
 
 from worldgen.hydrology.rivers import River, RiverGenerator
 from core.mesh import PolygonMesh
-from utils.params import param_field as _f, paramclass
+from core.params import param_field as _f, paramclass
 
 
 LAKE_COLOR = np.array([0.28, 0.65, 0.90, 1.0], dtype=np.float32)
