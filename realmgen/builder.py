@@ -1,8 +1,8 @@
 """RealmBuilder — orchestrator for the human geography layer.
 
 Downstream of the full worldgen pipeline. Takes a fully-built :class:`Globe`
-and attaches realm features. At this stage only the suitability scorer is
-implemented (Stage 1 partial; see docs/settlement_generation_design.md).
+and attaches realm features. Stage 1 is complete: suitability scorer and static
+situational value (see docs/settlement_generation_design.md).
 
 Usage::
 
@@ -11,7 +11,7 @@ Usage::
     params = RealmParams()
     builder = RealmBuilder(params)
     builder.build(globe)
-    # globe.mesh.face_metadata[i]["suitability"] is now set
+    # globe.mesh.face_metadata[i]["suitability"] and ["situational_value"] are set
 """
 from __future__ import annotations
 
@@ -27,6 +27,15 @@ from realmgen.suitability import (
     compute_ruggedness_penalty,
     compute_water_proximity,
 )
+from realmgen.situational_value import (
+    combine_situational_value,
+    compute_harbor_quality,
+    compute_mountain_passes,
+    compute_navigable_heads,
+    compute_river_confluences,
+    compute_strait_adjacency,
+)
+from worldgen.geology.display import OCEAN_COLOR
 from worldgen.globe.globe import Globe
 from worldgen.resources.terrain import face_elevation_range
 from utils.params import field, param_field as _f, paramclass
@@ -73,6 +82,39 @@ class SuitabilityWeightParams:
 
 
 @paramclass
+class HarborQualityParams:
+    depth_scale_km: float = _f(0.5, label="Harbor depth scale (km)", min=0.05, max=5.0)
+
+
+@paramclass
+class MountainPassParams:
+    min_neighbor_cost: float = _f(3.0, label="Min neighbor cost for pass", min=0.5, max=10.0)
+    cost_scale: float = _f(1.5, label="Pass contrast scale", min=0.1, max=5.0)
+
+
+@paramclass
+class SituationalValueWeightParams:
+    harbor_weight: float = _f(0.25, label="Harbor weight", min=0.0, max=1.0)
+    confluence_weight: float = _f(0.20, label="Confluence weight", min=0.0, max=1.0)
+    nav_head_weight: float = _f(0.20, label="Nav. river head weight", min=0.0, max=1.0)
+    pass_weight: float = _f(0.20, label="Pass weight", min=0.0, max=1.0)
+    strait_weight: float = _f(0.15, label="Strait weight", min=0.0, max=1.0)
+
+
+@paramclass
+class SituationalValueParams:
+    harbor: HarborQualityParams = field(
+        default_factory=HarborQualityParams, metadata={"label": "Harbor quality"}
+    )
+    passes: MountainPassParams = field(
+        default_factory=MountainPassParams, metadata={"label": "Mountain passes"}
+    )
+    weights: SituationalValueWeightParams = field(
+        default_factory=SituationalValueWeightParams, metadata={"label": "Weights"}
+    )
+
+
+@paramclass
 class RealmParams:
     water: WaterProximityParams = field(
         default_factory=WaterProximityParams, metadata={"label": "Water proximity"}
@@ -88,6 +130,9 @@ class RealmParams:
     )
     weights: SuitabilityWeightParams = field(
         default_factory=SuitabilityWeightParams, metadata={"label": "Weights"}
+    )
+    situational: SituationalValueParams = field(
+        default_factory=SituationalValueParams, metadata={"label": "Situational value"}
     )
 
 
@@ -113,14 +158,16 @@ class RealmBuilder:
 
     Stores:
 
-    * ``self.suitability`` — ``(N,)`` float32 in [0, 1], one score per face.
+    * ``self.suitability`` — ``(N,)`` float32 in [0, 1].
+    * ``self.situational_value`` — ``(N,)`` float32 in [0, 1].
 
-    Writes per-face metadata key ``"suitability"`` for color-scheme rendering.
+    Writes per-face metadata keys ``"suitability"`` and ``"situational_value"``.
     """
 
     def __init__(self, params: RealmParams | None = None) -> None:
         self.params: RealmParams = params or RealmParams()
         self.suitability: Optional[np.ndarray] = None
+        self.situational_value: Optional[np.ndarray] = None
 
     def build(
         self,
@@ -251,5 +298,108 @@ class RealmBuilder:
         self.suitability = suitability
         mesh.apply_metadata_channel("suitability", suitability.astype(float).tolist())
 
-        _report("Suitability done.")
+        # ── Situational value ────────────────────────────────────────────────
+        _report("Computing situational value…")
+        sp = p.situational
+
+        # Harbor quality: needs per-face mean elevation and ocean mask.
+        is_ocean = _read_meta_bools(mesh.face_metadata, "is_ocean")
+        face_mean_elev_km = mesh.face_textures["elevation"][..., 0].mean(axis=(1, 2))
+        harbor_score = compute_harbor_quality(
+            mesh, is_ocean, face_mean_elev_km,
+            depth_scale_km=sp.harbor.depth_scale_km,
+        )
+
+        # River confluences and navigable heads use the globe's rivers feature
+        # (positions/flows/in_lake tuples) with a centroid lookup.
+        rivers = globe.get_feature("rivers") if globe.has_feature("rivers") else None
+        confluence_score = compute_river_confluences(rivers, centroids, n)
+
+        # Navigable river heads: fall-line faces per river.
+        river_navigability = np.zeros(n, dtype=np.float32)
+        if globe.has_feature("cost_surfaces"):
+            river_navigability = globe.get_feature("cost_surfaces").river_navigability
+        nav_head_score = compute_navigable_heads(rivers, centroids, river_navigability, n)
+
+        # Mountain passes: local land-cost minima in high-cost terrain.
+        land_base_cost = np.zeros(n, dtype=np.float32)
+        if globe.has_feature("cost_surfaces"):
+            land_base_cost = globe.get_feature("cost_surfaces").land_base_cost
+        pass_score = compute_mountain_passes(
+            mesh, land_base_cost, is_water,
+            min_neighbor_cost=sp.passes.min_neighbor_cost,
+            cost_scale=sp.passes.cost_scale,
+        )
+
+        # Strait adjacency: land faces bordering tagged strait ocean faces.
+        is_strait = _read_meta_bools(mesh.face_metadata, "is_strait")
+        strait_score = compute_strait_adjacency(mesh, is_strait, is_water)
+
+        sw = sp.weights
+        situational_value = combine_situational_value(
+            is_water,
+            harbor_score,
+            confluence_score,
+            nav_head_score,
+            pass_score,
+            strait_score,
+            harbor_weight=sw.harbor_weight,
+            confluence_weight=sw.confluence_weight,
+            nav_head_weight=sw.nav_head_weight,
+            pass_weight=sw.pass_weight,
+            strait_weight=sw.strait_weight,
+        )
+
+        self.situational_value = situational_value
+        mesh.apply_metadata_channel(
+            "situational_value", situational_value.astype(float).tolist()
+        )
+
+        _report("Situational value done.")
         return suitability
+
+    def apply_display(self, window) -> None:
+        """Register realmgen color schemes into a MapWindow.
+
+        Call after :meth:`build` and after ``GlobeBuilder.apply_display`` so
+        the schemes are appended alongside the worldgen schemes.  Only adds
+        schemes for results that have actually been computed.
+
+        Args:
+            window: ``MapWindow`` instance.
+        """
+        schemes: dict = {}
+
+        if self.suitability is not None:
+            def _suitability_color(meta: dict) -> tuple:
+                if meta.get("is_water", meta.get("is_ocean", False)):
+                    return OCEAN_COLOR
+                s = min(max(float(meta.get("suitability", 0.0)), 0.0), 1.0)
+                if s < 0.5:
+                    t = s / 0.5
+                    return (0.45 + 0.20 * t, 0.38 + 0.42 * t, 0.28 - 0.08 * t, 1.0)
+                else:
+                    t = (s - 0.5) / 0.5
+                    return (0.65 - 0.55 * t, 0.80 - 0.20 * t, 0.20, 1.0)
+            schemes["Suitability"] = _suitability_color
+
+        if self.situational_value is not None:
+            def _situational_color(meta: dict) -> tuple:
+                if meta.get("is_water", meta.get("is_ocean", False)):
+                    return OCEAN_COLOR
+                s = min(max(float(meta.get("situational_value", 0.0)), 0.0), 1.0)
+                if s < 0.5:
+                    t = s / 0.5
+                    return (0.35 + 0.50 * t, 0.33 + 0.42 * t, 0.30 + 0.00 * t, 1.0)
+                else:
+                    t = (s - 0.5) / 0.5
+                    return (0.85 + 0.05 * t, 0.75 - 0.20 * t, 0.30 - 0.20 * t, 1.0)
+            schemes["Situational Value"] = _situational_color
+
+        if not schemes:
+            return
+
+        # Merge into the existing scheme dict so the combo box keeps all entries.
+        merged = dict(window._map._color_schemes)
+        merged.update(schemes)
+        window.set_color_schemes(merged)

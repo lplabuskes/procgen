@@ -370,21 +370,6 @@ class GlobeBuilder:
 
             schemes["Sea Cost"] = _sea_cost_color
 
-        if debug and mesh.face_metadata and "suitability" in mesh.face_metadata[0]:
-            def _suitability_color(meta: dict) -> tuple:
-                if meta.get("is_water", meta.get("is_ocean", False)):
-                    return OCEAN_COLOR
-                s = min(max(float(meta.get("suitability", 0.0)), 0.0), 1.0)
-                # low → muted brown; mid → yellow-green; high → rich green
-                if s < 0.5:
-                    t = s / 0.5
-                    return (0.45 + 0.20 * t, 0.38 + 0.42 * t, 0.28 - 0.08 * t, 1.0)
-                else:
-                    t = (s - 0.5) / 0.5
-                    return (0.65 - 0.55 * t, 0.80 - 0.20 * t, 0.20, 1.0)
-
-            schemes["Suitability"] = _suitability_color
-
         window.set_color_schemes(schemes)
         window.associate_scheme_texture("Elevation", "elevation_rgba")
         window.register_legend("Elevation", "gradient", elevation_legend_entries())
