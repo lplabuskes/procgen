@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 from core.display import DisplayRegistry
+from core.mesh_cache import MeshParams
 from core.persistence import load_world, save_world
 from core.pipeline import BuildContext, Pipeline
 from core.world import World
@@ -24,17 +25,22 @@ __all__ = [
 
 @dataclass
 class GlobeParams:
+    mesh: MeshParams = field(default_factory=MeshParams, metadata={"label": "Mesh Generation"})
     elevation: ElevationParams = field(default_factory=ElevationParams)
     climate: ClimateParams = field(default_factory=ClimateParams, metadata={"label": "Climate"})
     hydrology: HydrologyParams = field(default_factory=HydrologyParams, metadata={"label": "Hydrology"})
     resources: ResourcesParams = field(default_factory=ResourcesParams, metadata={"label": "Resources"})
     cost: CostParams = field(default_factory=CostParams, metadata={"label": "Cost"})
+    # World seed — drives mesh selection and every stage's draws. None → random each run.
+    seed: Optional[int] = field(default=None, metadata={"label": "Seed", "kind": "optional_int", "min": 0, "max": 2**31 - 1})
 
 
 class GlobePipeline(Pipeline):
     def __init__(self, params: GlobeParams | None = None) -> None:
         self.params: GlobeParams = params or GlobeParams()
-        self.elevation_builder: ElevationBuilder = ElevationBuilder(self.params.elevation)
+        self.elevation_builder: ElevationBuilder = ElevationBuilder(
+            self.params.elevation, seed=self.params.seed
+        )
         self.climate_builder: ClimateBuilder = ClimateBuilder(self.params.climate)
         self.hydrology_builder: HydrologyBuilder = HydrologyBuilder(self.params.hydrology)
         self.resources_builder: ResourcesBuilder = ResourcesBuilder(self.params.resources)

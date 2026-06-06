@@ -80,10 +80,10 @@ def _stage_of(msg: str, current: str) -> str:
 def profile_once(seed: int) -> list[tuple[str, str, float]]:
     """Run the full pipeline once; return [(stage, phase_msg, duration_s)]."""
     params = GlobeParams()
-    params.elevation.seed = seed
+    params.seed = seed
 
     timer = PhaseTimer()
-    ctx = BuildContext(world=World(), progress=timer)
+    ctx = BuildContext(world=World(params.mesh, seed=params.seed), progress=timer)
     builder = GlobePipeline(params)
     builder.build(ctx)
     timer.finish()
@@ -128,9 +128,9 @@ def run_cprofile(seed: int, module: str, top: int) -> None:
     filtered to functions defined under worldgen/<module>/.
     """
     params = GlobeParams()
-    params.elevation.seed = seed
+    params.seed = seed
 
-    ctx = BuildContext(world=World(), progress=lambda _msg: None)
+    ctx = BuildContext(world=World(params.mesh, seed=params.seed), progress=lambda _msg: None)
     builder = GlobePipeline(params)
     profiler = cProfile.Profile()
     print(f"Running build under cProfile (seed={seed})…", flush=True)
@@ -181,11 +181,7 @@ def main() -> None:
 
     if not mesh_cache.is_populated():
         print("Mesh cache not populated — building it once (untimed)…")
-        gp = GlobeParams().elevation.mesh
-        mesh_cache.build(
-            icosphere_depth=gp.icosphere_depth, n_swaps=gp.n_swaps,
-            n_relax=gp.n_relax, stiffness=gp.stiffness, outer_iters=gp.outer_iters,
-        )
+        mesh_cache.build(GlobeParams().mesh)
 
     # One throwaway run to warm imports / numpy / scipy paths.
     print("Warming up…", flush=True)

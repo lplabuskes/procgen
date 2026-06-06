@@ -334,10 +334,8 @@ class TestOceanMaskComponents:
     """
 
     def test_each_component_reaches_deep_ocean(self):
-        params = ElevationParams()
-        params.seed = 72264827
-        builder = ElevationBuilder(params)
-        builder.build(BuildContext(world=World()))
+        builder = ElevationBuilder(ElevationParams(), seed=72264827)
+        builder.build(BuildContext(world=World(seed=72264827)))
 
         mesh = builder.mesh
         elev = builder.elevation_textures[:, :, :, 0]   # (N, H, W)

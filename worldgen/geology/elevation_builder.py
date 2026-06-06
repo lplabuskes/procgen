@@ -58,17 +58,7 @@ from worldgen.geology.tectonics import (
     generate_plates,
     relax_plates,
 )
-from core import mesh_cache
 from core.mesh import PolygonMesh
-
-
-@paramclass
-class MeshParams:
-    icosphere_depth: int = _f(5, label="Icosphere depth", min=1, max=8)
-    n_swaps: int = _f(4000, label="Edge swaps", min=0, max=10000)
-    n_relax: int = _f(10, label="Relaxation steps", min=0, max=100)
-    stiffness: float = _f(0.1, label="Stiffness", min=0.01, max=1.0)
-    outer_iters: int = _f(3, label="Outer iterations", min=1, max=20)
 
 
 @paramclass
@@ -121,30 +111,32 @@ class VolcanismParams:
 
 @paramclass
 class ElevationParams:
-    mesh: MeshParams = field(default_factory=MeshParams, metadata={"label": "Mesh Generation"})
     plates: PlateParams = field(default_factory=PlateParams, metadata={"label": "Plate Layout"})
     plate_motion: PlateMotionParams = field(default_factory=PlateMotionParams, metadata={"label": "Plate Motion"})
     elevation: ElevationFieldParams = field(default_factory=ElevationFieldParams, metadata={"label": "Elevation"})
     noise: NoiseParams = field(default_factory=NoiseParams, metadata={"label": "Elevation Noise"})
     face_erosion: FaceErosionParams = field(default_factory=FaceErosionParams, metadata={"label": "Face Erosion", "hidden": True})
     volcanism: VolcanismParams = field(default_factory=VolcanismParams, metadata={"label": "Volcanism"})
-    # Reproducibility — None means random each run
-    seed: Optional[int] = field(default=None, metadata={"label": "Seed", "kind": "optional_int", "min": 0, "max": 2**31 - 1})
 
 
 class ElevationBuilder(Stage):
-    """Builds the mesh and the elevation/tectonics layers; sets ``ctx.world.mesh``.
+    """Decorates the world mesh with the elevation/tectonics layers.
 
-    A pipeline ``Stage``: ``build(ctx)`` runs every sub-step and stores the
-    intermediate results as attributes so callers (visualization, downstream
-    stages, scripts) can read them without re-running any work.
+    A pipeline ``Stage``: ``build(ctx)`` reads the mesh the ``World`` already
+    owns (``ctx.mesh``), runs every sub-step, and stores the intermediate results
+    as attributes so callers (visualization, downstream stages, scripts) can read
+    them without re-running any work. The ``seed`` (the world seed, passed in by
+    the orchestrator) keys the name-keyed sub-seed draws.
     """
 
     name = "elevation"
 
-    def __init__(self, params: ElevationParams | None = None) -> None:
+    def __init__(
+        self, params: ElevationParams | None = None, *, seed: Optional[int] = None
+    ) -> None:
         self.params: ElevationParams = params or ElevationParams()
-        self._seed_base: int = 0  # set at the start of build() from params.seed
+        self._world_seed: Optional[int] = seed
+        self._seed_base: int = 0  # resolved at the start of build()
         self.mesh: Optional[PolygonMesh] = None
         self.plate_ids: Optional[List[int]] = None
         self.plate_omegas: Optional[np.ndarray] = None
@@ -159,35 +151,26 @@ class ElevationBuilder(Stage):
         self.max_speed: float = 1.0
 
     def _seed(self, name: str) -> int:
-        """Deterministic sub-seed for a named draw, derived from ``params.seed``.
+        """Deterministic sub-seed for a named draw, derived from the world seed.
 
         Name-keyed (not positional offsets) so adding or removing a draw never
-        shifts the others. When ``params.seed is None`` the base is drawn once at
-        the start of ``build`` — reproducible within a run, random across runs.
+        shifts the others. When the world seed is ``None`` the base is drawn once
+        at the start of ``build`` — reproducible within a run, random across runs.
         """
         h = int.from_bytes(hashlib.sha256(name.encode("utf-8")).digest()[:8], "little")
         state = np.random.SeedSequence([self._seed_base, h]).generate_state(1)
         return int(state[0])
 
     def build(self, ctx: BuildContext) -> PolygonMesh:
-        """Run the full pipeline, set ``ctx.world.mesh``, and return the dual mesh."""
+        """Decorate ``ctx.mesh`` with the elevation/tectonics layers; return it."""
         _report = ctx.report
 
         p = self.params
-        self._seed_base = p.seed if p.seed is not None else secrets.randbits(63)
+        self._seed_base = (
+            self._world_seed if self._world_seed is not None else secrets.randbits(63)
+        )
 
-        if not mesh_cache.is_populated():
-            _report("Building mesh cache (first run only)…")
-            mesh_cache.build(
-                icosphere_depth=p.mesh.icosphere_depth,
-                n_swaps=p.mesh.n_swaps,
-                n_relax=p.mesh.n_relax,
-                stiffness=p.mesh.stiffness,
-                outer_iters=p.mesh.outer_iters,
-                progress=_report,
-            )
-        _report("Loading mesh…")
-        dual = mesh_cache.load_random(seed=self._seed("mesh"))
+        dual = ctx.mesh
 
         _report("Generating tectonic plates…")
         plate_ids = generate_plates(
@@ -299,7 +282,6 @@ class ElevationBuilder(Stage):
         self.volcano_positions = generate_volcano_positions(dual, volcanism, final_elevations)
         self.max_speed = float(speeds.max()) or 1.0
 
-        ctx.world.mesh = dual
         if self.volcano_positions is not None and len(self.volcano_positions) > 0:
             ctx.world.add_feature("volcanoes", self.volcano_positions)
 

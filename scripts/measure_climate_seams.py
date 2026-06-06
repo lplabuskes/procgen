@@ -22,24 +22,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from worldgen.climate.builder import ClimateBuilder, ClimateParams  # noqa: E402
 from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams  # noqa: E402
-from core import mesh_cache  # noqa: E402
 from core.pipeline import BuildContext  # noqa: E402
 from core.world import World  # noqa: E402
 
 
 def measure_seed(seed: int) -> dict:
-    e_params = ElevationParams(seed=seed)
-    if not mesh_cache.is_populated():
-        mesh_cache.build(
-            icosphere_depth=e_params.mesh.icosphere_depth,
-            n_swaps=e_params.mesh.n_swaps,
-            n_relax=e_params.mesh.n_relax,
-            stiffness=e_params.mesh.stiffness,
-            outer_iters=e_params.mesh.outer_iters,
-        )
-
-    ctx = BuildContext(world=World())
-    e_builder = ElevationBuilder(e_params)
+    ctx = BuildContext(world=World(seed=seed))
+    e_builder = ElevationBuilder(ElevationParams(), seed=seed)
     e_builder.build(ctx)
     mesh = e_builder.mesh
 

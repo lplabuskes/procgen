@@ -77,8 +77,9 @@ PRIMARY_BIOMES = ["Tropical", "Temperate", "Taiga", "Savannah", "Steppe",
 def measure_seed(seed: int) -> dict:
     """Build full pipeline for one seed; return per-biome aggregate dict."""
     params = GlobeParams()
-    params.elevation.seed = seed
-    ctx = BuildContext(world=World(), progress=lambda _: None)
+    params.seed = seed
+    world = World(params.mesh, seed=params.seed)
+    ctx = BuildContext(world=world, progress=lambda _: None)
     builder = GlobePipeline(params)
     builder.build(ctx)
 

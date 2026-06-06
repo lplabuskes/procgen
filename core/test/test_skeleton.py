@@ -1,7 +1,6 @@
 """Unit tests for the core pipeline skeleton: World, channels, BuildContext,
 Pipeline, and DisplayRegistry. No Qt — pure logic."""
 import numpy as np
-import pytest
 
 from core.channels import FeatureChannel, MetaChannel, TextureChannel
 from core.display import DisplayRegistry
@@ -29,8 +28,8 @@ class _FakeMesh:
 # ── World ──────────────────────────────────────────────────────────────────────
 
 def test_world_feature_registry():
-    w = World()
-    assert w.mesh is None
+    w = World.from_mesh(_FakeMesh(1))
+    assert w.mesh is not None
     assert not w.has_feature("rivers")
     w.add_feature("rivers", [1, 2, 3])
     assert w.has_feature("rivers")
@@ -68,7 +67,7 @@ def test_texture_channel_round_trip():
 # ── FeatureChannel (world-based) ─────────────────────────────────────────────────
 
 def test_feature_channel_round_trip():
-    w = World()
+    w = World.from_mesh(_FakeMesh(1))
     ch = FeatureChannel("rivers")
     assert not ch.present(w)
     assert ch.read(w) is None
@@ -79,21 +78,19 @@ def test_feature_channel_round_trip():
 
 # ── BuildContext ────────────────────────────────────────────────────────────────
 
-def test_context_mesh_guard():
-    ctx = BuildContext(world=World())
-    with pytest.raises(RuntimeError):
-        _ = ctx.mesh
-    ctx.world.mesh = _FakeMesh(1)
-    assert ctx.mesh is ctx.world.mesh
+def test_context_mesh_exposes_world_mesh():
+    mesh = _FakeMesh(1)
+    ctx = BuildContext(world=World.from_mesh(mesh))
+    assert ctx.mesh is mesh is ctx.world.mesh
 
 
 def test_rng_is_deterministic_and_name_separated():
-    a = BuildContext(world=World(), seed=42)
-    b = BuildContext(world=World(), seed=42)
+    a = BuildContext(world=World.from_mesh(_FakeMesh(1)), seed=42)
+    b = BuildContext(world=World.from_mesh(_FakeMesh(1)), seed=42)
     # Same (seed, name) → identical streams, regardless of context instance.
     assert a.rng("climate").random() == b.rng("climate").random()
     # Order independence: drawing "hydrology" first doesn't change "climate".
-    c = BuildContext(world=World(), seed=42)
+    c = BuildContext(world=World.from_mesh(_FakeMesh(1)), seed=42)
     _ = c.rng("hydrology").random()
     assert c.rng("climate").random() == a.rng("climate").random()
     # Different names → different streams.
@@ -101,14 +98,14 @@ def test_rng_is_deterministic_and_name_separated():
 
 
 def test_rng_unseeded_varies_but_self_consistent():
-    ctx = BuildContext(world=World())  # seed=None → random base
+    ctx = BuildContext(world=World.from_mesh(_FakeMesh(1)))  # seed=None → random base
     # Same name twice → same stream within one context.
     assert ctx.rng("x").random() == ctx.rng("x").random()
 
 
 def test_progress_callback():
     seen = []
-    ctx = BuildContext(world=World(), progress=seen.append)
+    ctx = BuildContext(world=World.from_mesh(_FakeMesh(1)), progress=seen.append)
     ctx.report("hello")
     assert seen == ["hello"]
 
@@ -126,7 +123,7 @@ def test_pipeline_runs_stages_in_order():
             order.append(self.name)
             ctx.world.add_feature(self.name, True)
 
-    w = World()
+    w = World.from_mesh(_FakeMesh(1))
     ctx = BuildContext(world=w)
     Pipeline([_S("a"), _S("b"), _S("c")]).build(ctx)
     assert order == ["a", "b", "c"]
@@ -143,8 +140,8 @@ def test_stage_default_hooks_are_noops():
     s = _S()
     reg = DisplayRegistry()
     assert s.serialize() == {}
-    assert s.register_display(World(), reg, debug=True) is None
-    assert s.load({}, BuildContext(world=World())) is None
+    assert s.register_display(World.from_mesh(_FakeMesh(1)), reg, debug=True) is None
+    assert s.load({}, BuildContext(world=World.from_mesh(_FakeMesh(1)))) is None
 
 
 # ── DisplayRegistry ─────────────────────────────────────────────────────────────

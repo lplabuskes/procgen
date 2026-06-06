@@ -41,8 +41,8 @@ class BuildContext:
     """Shared state threaded through every stage's ``build``.
 
     Args:
-        world:    The container stages read/write. Its ``mesh`` is ``None`` until
-                  the mesh-producing stage runs; access via ``ctx.mesh`` after.
+        world:    The container stages read/write. It owns its ``mesh`` from
+                  construction; stages decorate it and read it via ``ctx.mesh``.
         seed:     Base seed for the per-stage RNG fan-out. ``None`` → a random
                   base is drawn once at construction (reproducible within this
                   context, random across runs).
@@ -58,10 +58,6 @@ class BuildContext:
 
     @property
     def mesh(self) -> "PolygonMesh":
-        if self.world.mesh is None:
-            raise RuntimeError(
-                "World mesh not available; a mesh-producing stage must run first"
-            )
         return self.world.mesh
 
     def report(self, msg: str) -> None:

@@ -50,7 +50,6 @@ from worldgen.geology.tectonics import (  # noqa: E402
     relax_plates,
 )
 from worldgen.geology.volcanism import compute_volcanism  # noqa: E402
-from core import mesh_cache  # noqa: E402
 
 
 def _build_base_textures(seed: int):
@@ -59,17 +58,9 @@ def _build_base_textures(seed: int):
     Returns (dual_mesh, base_textures, params) so the caller can measure the
     base texture seam quality independently from the noise contribution.
     """
-    p = ElevationParams(seed=seed)
+    p = ElevationParams()
 
-    if not mesh_cache.is_populated():
-        mesh_cache.build(
-            icosphere_depth=p.mesh.icosphere_depth,
-            n_swaps=p.mesh.n_swaps,
-            n_relax=p.mesh.n_relax,
-            stiffness=p.mesh.stiffness,
-            outer_iters=p.mesh.outer_iters,
-        )
-    dual = mesh_cache.load_random(seed=seed + 5)
+    dual = World(seed=seed).mesh
 
     plate_ids = generate_plates(
         dual, n_plates=p.plates.n_plates, seed=seed,
@@ -119,9 +110,8 @@ def measure_seed(seed: int, pre_noise: bool = False) -> dict:
     if pre_noise:
         dual, textures, _ = _build_base_textures(seed)
     else:
-        params = ElevationParams(seed=seed)
-        builder = ElevationBuilder(params)
-        builder.build(BuildContext(world=World()))
+        builder = ElevationBuilder(ElevationParams(), seed=seed)
+        builder.build(BuildContext(world=World(seed=seed)))
         assert builder.mesh is not None
         dual = builder.mesh
         textures = dual.face_textures["elevation"]

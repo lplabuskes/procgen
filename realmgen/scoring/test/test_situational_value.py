@@ -337,8 +337,8 @@ class TestCombineSituationalValue:
 class TestRealmPipelineSituational:
     def _small_globe(self):
         p = GlobeParams()
-        p.elevation.seed = 7
-        ctx = BuildContext(world=World())
+        p.seed = 7
+        ctx = BuildContext(world=World(p.mesh, seed=p.seed))
         GlobePipeline(p).build(ctx)
         return ctx.world
 

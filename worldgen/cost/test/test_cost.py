@@ -43,7 +43,7 @@ def _run_cost(dual, rivers=None):
     Rivers (River objects) are supplied via the ``"river_objects"`` world
     feature, the same channel the hydrology stage registers them on.
     """
-    world = World(mesh=dual)
+    world = World.from_mesh(dual)
     if rivers is not None:
         world.add_feature("river_objects", rivers)
     return CostBuilder().build(BuildContext(world=world))

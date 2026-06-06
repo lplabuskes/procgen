@@ -65,9 +65,8 @@ EARTH_REF = {
 
 def measure_seed(seed: int) -> dict:
     """Build elevation + climate for one seed; return biome statistics dict."""
-    ctx = BuildContext(world=World())
-    elev_params = ElevationParams(seed=seed)
-    elev_builder = ElevationBuilder(elev_params)
+    ctx = BuildContext(world=World(seed=seed))
+    elev_builder = ElevationBuilder(ElevationParams(), seed=seed)
     elev_builder.build(ctx)
 
     climate_params = ClimateParams()

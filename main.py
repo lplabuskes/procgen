@@ -39,13 +39,13 @@ def main() -> None:
             window.set_status(msg)
             QApplication.processEvents()
 
-        if params.elevation.seed is None:
-            ep = dataclasses.replace(params.elevation, seed=random.randint(0, 2**31 - 1))
-            params = dataclasses.replace(params, elevation=ep)
+        if params.seed is None:
+            params = dataclasses.replace(params, seed=random.randint(0, 2**31 - 1))
 
         current_params[0] = params
 
-        ctx = BuildContext(world=World(), progress=_progress)
+        world = World(params.mesh, seed=params.seed, progress=_progress)
+        ctx = BuildContext(world=world, progress=_progress)
         pipelines = [GlobePipeline(params)]
         for p in pipelines:
             p.build(ctx)
@@ -74,9 +74,7 @@ def main() -> None:
         window.set_rebuild_enabled(True)
 
     def _rerun() -> None:
-        fresh = dataclasses.replace(current_params[0], elevation=dataclasses.replace(
-            current_params[0].elevation, seed=None
-        ))
+        fresh = dataclasses.replace(current_params[0], seed=None)
         _build_and_apply(fresh)
 
     def _open_params() -> None:

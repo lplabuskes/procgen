@@ -140,5 +140,5 @@ def load_world(path: Union[str, Path], params_cls) -> Tuple[object, World, objec
     """
     data = np.load(Path(path), allow_pickle=False)
     params = deep_from_dict(params_cls, json.loads(str(data["params_json"])))
-    world = World(mesh=_reconstruct_mesh(data))
+    world = World.from_mesh(_reconstruct_mesh(data))
     return params, world, data
