@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from viz.color_stops import gradient_texture, categorical_texture
-from worldgen.geology.display import apply_water_masks, ocean_gradient_scheme, ocean_categorical_scheme
+from viz.color_stops import gradient_texture, categorical_texture, interp_stops_scalar
+from worldgen.geology.display import apply_water_masks, is_ocean_face, ocean_gradient_scheme, ocean_categorical_scheme
 from worldgen.resources.crops import CROP_NAMES, N_CROPS
 from worldgen.resources.minerals import MINERAL_NAMES, MINERAL_PALETTE
 from worldgen.resources.rare_bio import RARE_BIO_NAMES, RARE_BIO_PALETTE
@@ -20,6 +20,15 @@ _FERTILITY_STOPS = [
     (1.00, (0.05, 0.35, 0.12, 1.0)),
 ]
 
+# Aquatic fertility palette: deep dark blue → teal → bright aqua.
+_WATER_FERTILITY_STOPS = [
+    (0.00, (0.04, 0.18, 0.30, 1.0)),
+    (0.20, (0.08, 0.38, 0.55, 1.0)),
+    (0.45, (0.12, 0.58, 0.72, 1.0)),
+    (0.70, (0.18, 0.78, 0.82, 1.0)),
+    (1.00, (0.25, 0.92, 0.88, 1.0)),
+]
+
 # Forest density palette: open ground tan → light green → dark forest.
 _FOREST_STOPS = [
     (0.00, (0.82, 0.78, 0.58, 1.0)),
@@ -30,7 +39,14 @@ _FOREST_STOPS = [
 ]
 
 
-fertility_color = ocean_gradient_scheme("fertility_mean", _FERTILITY_STOPS)
+def _fertility_color(meta: dict) -> tuple:
+    val = meta.get("fertility_mean", 0.0)
+    if is_ocean_face(meta) or meta.get("is_water", False):
+        return interp_stops_scalar(val, _WATER_FERTILITY_STOPS)
+    return interp_stops_scalar(val, _FERTILITY_STOPS)
+
+
+fertility_color = _fertility_color
 forest_density_color = ocean_gradient_scheme("forest_density_mean", _FOREST_STOPS)
 
 
@@ -82,9 +98,17 @@ def build_fertility_display_texture(
 ) -> np.ndarray:
     """Convert (N, H, W, 1) fertility texture to (N, H, W, 4) RGBA."""
     rgba = gradient_texture(fertility_tex, _FERTILITY_STOPS)
-    return apply_water_masks(
-        rgba, elevation_tex=elevation_tex, ocean_mask_tex=ocean_mask_tex, lake_mask_tex=lake_mask_tex
-    )
+    water_mask = np.zeros(fertility_tex.shape[:3], dtype=bool)
+    if ocean_mask_tex is not None:
+        water_mask |= ocean_mask_tex[..., 0] > 0
+    elif elevation_tex is not None:
+        water_mask |= elevation_tex[..., 0] < 0.0
+    if lake_mask_tex is not None:
+        water_mask |= lake_mask_tex[..., 0] > 0
+    if water_mask.any():
+        water_rgba = gradient_texture(fertility_tex, _WATER_FERTILITY_STOPS)
+        rgba[water_mask] = water_rgba[water_mask]
+    return rgba
 
 
 def build_forest_density_display_texture(
