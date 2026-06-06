@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from realmgen.suitability import _positions_to_face_ids
+from realmgen.scoring.suitability import _positions_to_face_ids
 
 if TYPE_CHECKING:
     from realmgen.builder import MountainPassParams, SituationalValueWeightParams

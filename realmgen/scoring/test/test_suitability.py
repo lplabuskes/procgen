@@ -14,7 +14,7 @@ import pytest
 
 from core.pipeline import BuildContext
 from core.world import World
-from realmgen.suitability import (
+from realmgen.scoring.suitability import (
     _positions_to_face_ids,
     combine_suitability,
     compute_climate_habitability,

@@ -9,7 +9,7 @@ import pytest
 
 from core.pipeline import BuildContext
 from core.world import World
-from realmgen.situational_value import (
+from realmgen.scoring.situational_value import (
     combine_situational_value,
     compute_harbor_quality,
     compute_mountain_passes,

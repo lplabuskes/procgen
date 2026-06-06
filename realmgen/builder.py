@@ -31,7 +31,7 @@ from core.pipeline import BuildContext, Pipeline, Stage
 from core.world import World
 
 from realmgen.channels import SITUATIONAL_VALUE, SUITABILITY
-from realmgen.situational_value import (
+from realmgen.scoring.situational_value import (
     combine_situational_value,
     compute_harbor_quality,
     compute_mountain_passes,
@@ -39,7 +39,7 @@ from realmgen.situational_value import (
     compute_river_confluences,
     compute_strait_adjacency,
 )
-from realmgen.suitability import (
+from realmgen.scoring.suitability import (
     _positions_to_face_ids,
     combine_suitability,
     compute_climate_habitability,
