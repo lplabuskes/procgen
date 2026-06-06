@@ -4,7 +4,7 @@ import colorsys
 
 import numpy as np
 
-from viz.color_stops import interp_stops, interp_stops_scalar
+from viz.color_stops import interp_stops, interp_stops_scalar, gradient_scheme, categorical_scheme
 
 
 OCEAN_COLOR = (0.25, 0.55, 0.85, 1.0)
@@ -35,6 +35,53 @@ _LAND_ELEVATION_STOPS = [
 ]
 
 
+_OCEAN_RGBA = np.array(OCEAN_COLOR, dtype=np.float32)
+
+
+def is_ocean_face(meta: dict) -> bool:
+    if "is_ocean" in meta:
+        return bool(meta["is_ocean"])
+    return float(meta.get("elevation", 0.0)) < 0.0
+
+
+def apply_water_masks(
+    rgba: np.ndarray,
+    *,
+    elevation_tex: np.ndarray | None = None,
+    ocean_mask_tex: np.ndarray | None = None,
+    lake_mask_tex: np.ndarray | None = None,
+) -> np.ndarray:
+    """Overwrite ocean and lake pixels in an (N, H, W, 4) RGBA array in-place."""
+    if ocean_mask_tex is not None:
+        rgba[ocean_mask_tex[..., 0] > 0] = _OCEAN_RGBA
+    elif elevation_tex is not None:
+        rgba[elevation_tex[..., 0] < 0.0] = _OCEAN_RGBA
+    if lake_mask_tex is not None:
+        from worldgen.hydrology.builder import LAKE_COLOR
+        rgba[lake_mask_tex[..., 0] > 0] = LAKE_COLOR
+    return rgba
+
+
+def ocean_gradient_scheme(meta_key: str, stops: list, default: float = 0.0):
+    """Return a gradient scheme function that paints ocean faces with OCEAN_COLOR."""
+    base = gradient_scheme(meta_key, stops, default)
+    def fn(meta: dict) -> tuple:
+        if is_ocean_face(meta):
+            return OCEAN_COLOR
+        return base(meta)
+    return fn
+
+
+def ocean_categorical_scheme(meta_key: str, palette: np.ndarray, n: int, default: int = 0):
+    """Return a categorical scheme function that paints ocean faces with OCEAN_COLOR."""
+    base = categorical_scheme(meta_key, palette, n, default)
+    def fn(meta: dict) -> tuple:
+        if is_ocean_face(meta):
+            return OCEAN_COLOR
+        return base(meta)
+    return fn
+
+
 def _plate_palette(n: int) -> np.ndarray:
     """Return (n, 4) float32 RGBA colors evenly spaced around the HSV hue wheel."""
     hues = np.linspace(0, 1, n, endpoint=False)
@@ -47,8 +94,7 @@ def _plate_palette(n: int) -> np.ndarray:
 
 def _elevation_color(meta: dict) -> tuple:
     e = meta["elevation"]
-    is_ocean = bool(meta.get("is_ocean", e < 0.0))
-    stops = _OCEAN_ELEVATION_STOPS if is_ocean else _LAND_ELEVATION_STOPS
+    stops = _OCEAN_ELEVATION_STOPS if is_ocean_face(meta) else _LAND_ELEVATION_STOPS
     return interp_stops_scalar(e, stops)
 
 
@@ -92,14 +138,9 @@ def _elevation_color_vec(elevs: np.ndarray, ocean_mask: np.ndarray | None = None
 def build_elevation_display_texture(mesh) -> np.ndarray:
     """RGBA (N, H, W, 4) elevation texture from the single-channel ``"elevation"``
     data layer, painting ocean pixels by depth and lake pixels in lake blue."""
-    from worldgen.hydrology.builder import LAKE_COLOR
-
     elev_tex = mesh.face_textures["elevation"]          # (N, H, W, 1)
     ocean_mask = None
     if "ocean_mask" in mesh.face_textures:
         ocean_mask = mesh.face_textures["ocean_mask"][:, :, :, 0] > 0  # (N, H, W) bool
     rgba = _elevation_color_vec(elev_tex[:, :, :, 0], ocean_mask=ocean_mask)  # (N, H, W, 4)
-    if "lake_mask" in mesh.face_textures:
-        lake_tex = mesh.face_textures["lake_mask"]       # (N, H, W, 1)
-        rgba[lake_tex[:, :, :, 0] > 0] = LAKE_COLOR
-    return rgba
+    return apply_water_masks(rgba, lake_mask_tex=mesh.face_textures.get("lake_mask"))

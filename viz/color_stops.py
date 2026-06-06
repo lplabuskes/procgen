@@ -39,3 +39,30 @@ def interp_stops(values: np.ndarray, stops: list) -> np.ndarray:
     result[values <= stops[0][0]] = np.array(stops[0][1], dtype=np.float32)
     result[values >= stops[-1][0]] = np.array(stops[-1][1], dtype=np.float32)
     return result
+
+
+def gradient_scheme(meta_key: str, stops: list, default: float = 0.0):
+    """Return a scheme function that reads meta[meta_key] as float and interpolates through stops."""
+    def fn(meta: dict) -> tuple:
+        v = float(meta.get(meta_key, default))
+        return tuple(interp_stops(np.array(v, dtype=np.float32), stops).tolist())
+    return fn
+
+
+def categorical_scheme(meta_key: str, palette: np.ndarray, n: int, default: int = 0):
+    """Return a scheme function that reads meta[meta_key] as int and looks up in palette."""
+    def fn(meta: dict) -> tuple:
+        idx = max(0, min(int(meta.get(meta_key, default)), n - 1))
+        return tuple(palette[idx].tolist())
+    return fn
+
+
+def gradient_texture(channel_tex: np.ndarray, stops: list) -> np.ndarray:
+    """(N, H, W, 1) single-channel → (N, H, W, 4) RGBA via stops interpolation."""
+    return interp_stops(channel_tex[..., 0], stops)
+
+
+def categorical_texture(idx_tex: np.ndarray, palette: np.ndarray, n: int) -> np.ndarray:
+    """(N, H, W, 1) int index texture → (N, H, W, 4) RGBA via palette lookup."""
+    idx = np.clip(idx_tex[..., 0].astype(np.int32), 0, n - 1)
+    return palette[idx].copy()

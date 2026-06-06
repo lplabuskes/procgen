@@ -56,7 +56,9 @@ from worldgen.climate.display import (
     precipitation_color,
     precipitation_legend_entries,
     temperature_color,
+    temperature_coldest_color,
     temperature_legend_entries,
+    temperature_warmest_color,
 )
 from core.mesh import PolygonMesh
 from core.params import field, param_field as _f, paramclass
@@ -542,11 +544,11 @@ class ClimateBuilder(Stage):
             texture="temperature_annual_rgba", legend=("gradient", temperature_legend_entries()),
         )
         reg.add_scheme(
-            "Summer Temperature", lambda meta: temperature_color(meta, key="temperature_warmest"),
+            "Summer Temperature", temperature_warmest_color,
             texture="temperature_summer_rgba", legend=("gradient", temperature_legend_entries()),
         )
         reg.add_scheme(
-            "Winter Temperature", lambda meta: temperature_color(meta, key="temperature_coldest"),
+            "Winter Temperature", temperature_coldest_color,
             texture="temperature_winter_rgba", legend=("gradient", temperature_legend_entries()),
         )
         reg.add_scheme(

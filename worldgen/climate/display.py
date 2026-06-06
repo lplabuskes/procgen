@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import numpy as np
 
-from viz.color_stops import interp_stops
-from worldgen.geology.display import OCEAN_COLOR
-
-_OCEAN_RGBA = np.array(OCEAN_COLOR, dtype=np.float32)
+from viz.color_stops import interp_stops, categorical_texture
+from worldgen.geology.display import (
+    OCEAN_COLOR,
+    apply_water_masks,
+    ocean_gradient_scheme,
+    ocean_categorical_scheme,
+)
 
 
 # 9 biome palette, indexed by BIOME_NAMES order in classification.py.
@@ -45,6 +48,7 @@ _PRECIP_STOPS_MM = [
     (2400.0, (0.20, 0.45, 0.75, 1.0)),
     (4000.0, (0.10, 0.20, 0.55, 1.0)),
 ]
+_LOG_PRECIP_STOPS = [(np.log10(a), c) for a, c in _PRECIP_STOPS_MM]
 
 
 # Humidity sequential palette: arid tan → moist blue-green.
@@ -59,45 +63,20 @@ _HUMIDITY_STOPS = [
 ]
 
 
-def _is_ocean_face(meta: dict) -> bool:
-    if "is_ocean" in meta:
-        return bool(meta["is_ocean"])
-    return float(meta.get("elevation", 0.0)) < 0.0
-
-
-def temperature_color(meta: dict, key: str = "temperature_annual") -> tuple:
-    """Per-face temperature color scheme, anchored at 0 °C."""
-    if _is_ocean_face(meta):
-        return OCEAN_COLOR
-    t = float(meta.get(key, 0.0))
-    return tuple(interp_stops(np.array(t, dtype=np.float32), _TEMP_STOPS).tolist())
+temperature_color = ocean_gradient_scheme("temperature_annual", _TEMP_STOPS)
+temperature_warmest_color = ocean_gradient_scheme("temperature_warmest", _TEMP_STOPS)
+temperature_coldest_color = ocean_gradient_scheme("temperature_coldest", _TEMP_STOPS)
+humidity_color = ocean_gradient_scheme("humidity_annual", _HUMIDITY_STOPS)
+biome_color = ocean_categorical_scheme("biome", BIOME_PALETTE, len(BIOME_PALETTE))
 
 
 def precipitation_color(meta: dict) -> tuple:
     """Per-face annual precipitation color scheme (linear on log mm)."""
-    if _is_ocean_face(meta):
+    from worldgen.geology.display import is_ocean_face
+    if is_ocean_face(meta):
         return OCEAN_COLOR
     p = max(float(meta.get("precipitation_annual", 0.0)), 1.0)
-    log_stops = [(np.log10(a), c) for a, c in _PRECIP_STOPS_MM]
-    return tuple(interp_stops(np.array(np.log10(p), dtype=np.float32), log_stops).tolist())
-
-
-def humidity_color(meta: dict) -> tuple:
-    """Per-face annual mean humidity color scheme."""
-    if _is_ocean_face(meta):
-        return OCEAN_COLOR
-    h = float(meta.get("humidity_annual", 0.0))
-    return tuple(interp_stops(np.array(h, dtype=np.float32), _HUMIDITY_STOPS).tolist())
-
-
-def biome_color(meta: dict) -> tuple:
-    """Per-face biome color (categorical)."""
-    if _is_ocean_face(meta):
-        return OCEAN_COLOR
-    idx = int(meta.get("biome", 0))
-    if 0 <= idx < len(BIOME_PALETTE):
-        return tuple(BIOME_PALETTE[idx].tolist())
-    return (0.5, 0.5, 0.5, 1.0)
+    return tuple(interp_stops(np.array(np.log10(p), dtype=np.float32), _LOG_PRECIP_STOPS).tolist())
 
 
 def temperature_legend_entries() -> list[tuple[str, tuple]]:
@@ -121,35 +100,17 @@ def biome_legend_entries() -> list[tuple[str, tuple]]:
     return [(name, tuple(BIOME_PALETTE[i].tolist())) for i, name in enumerate(BIOME_NAMES)]
 
 
-def _apply_ocean_mask(rgba: np.ndarray,
-                      elevation_tex: np.ndarray | None,
-                      ocean_mask_tex: np.ndarray | None = None) -> np.ndarray:
-    if ocean_mask_tex is not None:
-        ocean = ocean_mask_tex[..., 0] > 0
-    elif elevation_tex is not None:
-        ocean = elevation_tex[..., 0] < 0.0
-    else:
-        return rgba
-    rgba[ocean] = _OCEAN_RGBA
-    return rgba
-
-
 def build_temperature_display_texture(temperature_tex: np.ndarray,
                                       season: int | None = None,
                                       elevation_tex: np.ndarray | None = None,
                                       ocean_mask_tex: np.ndarray | None = None) -> np.ndarray:
-    """Convert (N, H, W, K) °C texture to (N, H, W, 4) RGBA.
-
-    season=None returns annual mean across all K channels; otherwise picks one.
-    Ocean pixels (per ocean_mask_tex, or elevation < 0 as fallback) are overwritten
-    with the ocean color.
-    """
+    """Convert (N, H, W, K) °C texture to (N, H, W, 4) RGBA."""
     if season is None:
         values = temperature_tex.mean(axis=-1)
     else:
         values = temperature_tex[..., season]
     rgba = interp_stops(values, _TEMP_STOPS)
-    return _apply_ocean_mask(rgba, elevation_tex, ocean_mask_tex)
+    return apply_water_masks(rgba, elevation_tex=elevation_tex, ocean_mask_tex=ocean_mask_tex)
 
 
 def build_precipitation_display_texture(precipitation_tex: np.ndarray,
@@ -157,32 +118,16 @@ def build_precipitation_display_texture(precipitation_tex: np.ndarray,
                                         ocean_mask_tex: np.ndarray | None = None) -> np.ndarray:
     """Convert (N, H, W, K) mm/season texture to (N, H, W, 4) RGBA (annual log scale)."""
     annual = np.maximum(precipitation_tex.sum(axis=-1), 1.0)
-    log_stops = [(np.log10(a), c) for a, c in _PRECIP_STOPS_MM]
-    rgba = interp_stops(np.log10(annual), log_stops)
-    return _apply_ocean_mask(rgba, elevation_tex, ocean_mask_tex)
+    rgba = interp_stops(np.log10(annual), _LOG_PRECIP_STOPS)
+    return apply_water_masks(rgba, elevation_tex=elevation_tex, ocean_mask_tex=ocean_mask_tex)
 
 
 def build_biome_display_texture(mesh) -> np.ndarray:
-    """Look up ``"biome"`` indices in BIOME_PALETTE → (N, H, W, 4) RGBA.
-
-    Ocean pixels are overpainted with OCEAN_COLOR (using the ocean_mask texture
-    if present, otherwise falling back to elevation < 0). Inland lake pixels are
-    overpainted with LAKE_COLOR.
-    """
-    from worldgen.hydrology.builder import LAKE_COLOR
-
-    biome_tex = mesh.face_textures["biome"]              # (N, H, W, 1) uint8
-    idx = biome_tex[..., 0].astype(np.int32)
-    idx = np.clip(idx, 0, len(BIOME_PALETTE) - 1)
-    rgba = BIOME_PALETTE[idx].copy()
-    if "ocean_mask" in mesh.face_textures:
-        ocean = mesh.face_textures["ocean_mask"][..., 0] > 0
-        rgba[ocean] = np.asarray(OCEAN_COLOR, dtype=rgba.dtype)
-    elif "elevation" in mesh.face_textures:
-        elev_tex = mesh.face_textures["elevation"]       # (N, H, W, 1)
-        ocean = elev_tex[..., 0] < 0.0
-        rgba[ocean] = np.asarray(OCEAN_COLOR, dtype=rgba.dtype)
-    if "lake_mask" in mesh.face_textures:
-        lake_tex = mesh.face_textures["lake_mask"]       # (N, H, W, 1)
-        rgba[lake_tex[:, :, :, 0] > 0] = LAKE_COLOR
-    return rgba
+    """Look up ``"biome"`` indices in BIOME_PALETTE → (N, H, W, 4) RGBA."""
+    rgba = categorical_texture(mesh.face_textures["biome"], BIOME_PALETTE, len(BIOME_PALETTE))
+    return apply_water_masks(
+        rgba,
+        elevation_tex=mesh.face_textures.get("elevation"),
+        ocean_mask_tex=mesh.face_textures.get("ocean_mask"),
+        lake_mask_tex=mesh.face_textures.get("lake_mask"),
+    )
