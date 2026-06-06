@@ -35,7 +35,6 @@ from scipy.sparse.csgraph import dijkstra as sp_dijkstra
 
 from realmgen.placement.types import Settlement
 
-DEFAULT_TIER_DEMANDS = (1.0, 0.6, 0.3, 0.12)
 
 
 @dataclass
@@ -194,7 +193,7 @@ def compute_trade_network(
     *,
     port_cost: float = 5.0,
     river_switch_cost: float = 0.0,
-    tier_demands: tuple = DEFAULT_TIER_DEMANDS,
+    settlement_demands: np.ndarray | None = None,
     demand_penalty: float = 5.0,
     flow_decay: float = 0.05,
     hub_flow_quantile: float = 0.90,
@@ -222,7 +221,10 @@ def compute_trade_network(
         sea_passable: ``(N,)`` bool.
         port_cost: one-time loading/unloading cost at a coastal transition.
         river_switch_cost: cost to switch surfaces at a navigable river face.
-        tier_demands: demand weights indexed by ``Settlement.tier``.
+        settlement_demands: optional ``(S,)`` per-settlement demand weights.
+            When provided, overrides each settlement's ``demand`` field — used
+            by the population relaxation loop to substitute population-
+            proportional demands.
         demand_penalty: unused in two-phase model; kept for API compatibility.
         flow_decay: exponential decay factor applied to both phase-1 and
             phase-2 routes with increasing cost distance.
@@ -245,11 +247,13 @@ def compute_trade_network(
 
     centroids = np.asarray(mesh.face_centroids, dtype=np.float64)
 
-    # Normalised demand weights per settlement (tier 0 capitals = 1.0)
-    raw_demands = np.array(
-        [float(tier_demands[min(s.tier, len(tier_demands) - 1)]) for s in settlements],
-        dtype=np.float64,
-    )
+    # Normalised demand weights per settlement.
+    # settlement_demands (population-proportional, from relaxation passes) takes
+    # priority over each settlement's own demand field.
+    if settlement_demands is not None:
+        raw_demands = np.asarray(settlement_demands, dtype=np.float64)
+    else:
+        raw_demands = np.array([s.demand for s in settlements], dtype=np.float64)
     max_d = raw_demands.max()
     norm_demands = raw_demands / max_d if max_d > 0 else raw_demands.copy()
     settlement_nodes = [s.face_id for s in settlements]

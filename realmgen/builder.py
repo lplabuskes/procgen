@@ -30,14 +30,22 @@ from core.params import field, param_field as _f, paramclass
 from core.pipeline import BuildContext, Pipeline, Stage
 from core.world import World
 
-from realmgen.channels import SITUATIONAL_VALUE, SUITABILITY, TRADE_FLOW
-from realmgen.trade.network import DEFAULT_TIER_DEMANDS, compute_trade_network
+from realmgen.channels import HINTERLAND_ID, POPULATION, SITUATIONAL_VALUE, SUITABILITY, TRADE_FLOW
+from realmgen.population.calibration import (
+    apply_population_to_settlements,
+    assign_hinterlands,
+    compute_carrying_capacity,
+    compute_population,
+    compute_trade_wealth,
+    cull_settlements,
+)
+from realmgen.trade.network import compute_trade_network
 from realmgen.placement.seeder import (
     build_cost_graph,
     placement_score,
     seed_settlements,
 )
-from realmgen.placement.types import Settlement, TIER_NAMES
+from realmgen.placement.types import Settlement, TIER_NAMES, population_display_tier
 from realmgen.scoring.situational_value import (
     combine_situational_value,
     compute_harbor_quality,
@@ -85,6 +93,15 @@ _TRADE_FLOW_STOPS = [
     (0.4, (0.80, 0.70, 0.20, 1.0)),
     (1.0, (0.95, 0.85, 0.10, 1.0)),
 ]
+
+# Muted versions of TIER_COLORS used to fill hinterland territory.
+_HINTERLAND_TIER_COLORS: list[tuple] = [
+    (0.75, 0.65, 0.15, 1.0),  # muted gold   — capital hinterland
+    (0.25, 0.45, 0.70, 1.0),  # muted blue   — city hinterland
+    (0.30, 0.58, 0.30, 1.0),  # muted green  — town hinterland
+    (0.60, 0.52, 0.38, 1.0),  # muted tan    — village hinterland
+]
+_HINTERLAND_UNASSIGNED = (0.30, 0.28, 0.25, 1.0)
 
 
 # ── Params ────────────────────────────────────────────────────────────────────
@@ -164,6 +181,8 @@ class SituationalValueParams:
 class TierParams:
     exclusion_radius: float = _f(20.0, label="Exclusion radius (cost-dist)", min=0.5, max=100.0)
     score_threshold: float = _f(0.30, label="Min score to place", min=0.0, max=1.0)
+    influence: float = _f(0.0, label="Territory influence (lower = wider)", min=0.0, max=30.0)
+    demand: float = _f(1.0, label="Trade demand weight", min=0.0, max=2.0)
 
 
 @paramclass
@@ -176,22 +195,29 @@ class TradeParams:
 
 
 @paramclass
+class PopulationParams:
+    relaxation_passes: int = _f(2, label="Relaxation passes", min=1, max=5)
+    trade_weight: float = _f(1.5, label="Trade wealth weight", min=0.0, max=5.0)
+    min_pop_fraction: float = _f(0.005, label="Min pop fraction (cull)", min=0.0, max=0.1)
+
+
+@paramclass
 class SeederParams:
     situational_weight: float = _f(0.40, label="Situational value weight", min=0.0, max=1.0)
     tier0: TierParams = field(
-        default_factory=lambda: TierParams(exclusion_radius=25.0, score_threshold=0.45),
+        default_factory=lambda: TierParams(exclusion_radius=25.0, score_threshold=0.45, influence=0.0, demand=1.0),
         metadata={"label": "Capitals"},
     )
     tier1: TierParams = field(
-        default_factory=lambda: TierParams(exclusion_radius=12.0, score_threshold=0.28),
+        default_factory=lambda: TierParams(exclusion_radius=12.0, score_threshold=0.28, influence=4.0, demand=0.6),
         metadata={"label": "Cities"},
     )
     tier2: TierParams = field(
-        default_factory=lambda: TierParams(exclusion_radius=6.0, score_threshold=0.2),
+        default_factory=lambda: TierParams(exclusion_radius=6.0, score_threshold=0.2, influence=9.0, demand=0.3),
         metadata={"label": "Towns"},
     )
     tier3: TierParams = field(
-        default_factory=lambda: TierParams(exclusion_radius=3.0, score_threshold=0.1),
+        default_factory=lambda: TierParams(exclusion_radius=3.0, score_threshold=0.1, influence=15.0, demand=0.12),
         metadata={"label": "Villages"},
     )
 
@@ -222,9 +248,35 @@ class RealmParams:
     trade: TradeParams = field(
         default_factory=TradeParams, metadata={"label": "Trade network"}
     )
+    population: PopulationParams = field(
+        default_factory=PopulationParams, metadata={"label": "Population"}
+    )
 
 
 # ── Display color schemes ───────────────────────────────────────────────────────
+
+
+def _make_hinterland_color(settlements: "list[Settlement]"):
+    """Return a color-scheme callable that maps hinterland_id → display-tier color.
+
+    Display tier is derived from each settlement's population relative to the
+    world peak, not from the seeding tier label.
+    """
+    max_pop = max((s.population for s in settlements), default=0.0)
+    display_tiers = [
+        min(population_display_tier(s.population, max_pop), len(_HINTERLAND_TIER_COLORS) - 1)
+        for s in settlements
+    ]
+
+    def fn(meta: dict) -> tuple:
+        if meta.get("is_water", meta.get("is_ocean", False)):
+            return OCEAN_COLOR
+        hid = meta.get("hinterland_id", -1)
+        if hid is None or int(hid) < 0 or int(hid) >= len(display_tiers):
+            return _HINTERLAND_UNASSIGNED
+        return _HINTERLAND_TIER_COLORS[display_tiers[int(hid)]]
+
+    return fn
 
 
 def _suitability_color(meta: dict) -> tuple:
@@ -278,6 +330,8 @@ class RealmStage(Stage):
         self.situational_value: Optional[np.ndarray] = None
         self.settlements: Optional[list[Settlement]] = None
         self.trade_result = None
+        self.population: Optional[np.ndarray] = None
+        self.hinterland: Optional[np.ndarray] = None
 
     def build(self, ctx: BuildContext) -> None:
         world = ctx.world
@@ -449,10 +503,10 @@ class RealmStage(Stage):
         )
         cost_graph = build_cost_graph(mesh.face_adjacency, edge_costs)
         tier_configs = [
-            (sp.tier0.exclusion_radius, sp.tier0.score_threshold),
-            (sp.tier1.exclusion_radius, sp.tier1.score_threshold),
-            (sp.tier2.exclusion_radius, sp.tier2.score_threshold),
-            (sp.tier3.exclusion_radius, sp.tier3.score_threshold),
+            (sp.tier0.exclusion_radius, sp.tier0.score_threshold, sp.tier0.influence, sp.tier0.demand),
+            (sp.tier1.exclusion_radius, sp.tier1.score_threshold, sp.tier1.influence, sp.tier1.demand),
+            (sp.tier2.exclusion_radius, sp.tier2.score_threshold, sp.tier2.influence, sp.tier2.demand),
+            (sp.tier3.exclusion_radius, sp.tier3.score_threshold, sp.tier3.influence, sp.tier3.demand),
         ]
 
         ctx.report("Seeding settlements…")
@@ -460,20 +514,15 @@ class RealmStage(Stage):
             combined, is_water, centroids, cost_graph, tier_configs,
         )
 
-        # Per-face metadata: settlement_tier = tier index or -1.
+        # Provisional per-face metadata written at seeding time; overwritten
+        # with population-derived display tiers after calibration.
         tier_arr = np.full(n, -1, dtype=np.int32)
         for s in self.settlements:
             tier_arr[s.face_id] = s.tier
         mesh.apply_metadata_channel("settlement_tier", tier_arr)
 
         world.add_feature("settlements", self.settlements)
-        ctx.report(
-            f"Seeder done: {len(self.settlements)} settlements "
-            f"({sum(1 for s in self.settlements if s.tier == 0)} capitals, "
-            f"{sum(1 for s in self.settlements if s.tier == 1)} cities, "
-            f"{sum(1 for s in self.settlements if s.tier == 2)} towns, "
-            f"{sum(1 for s in self.settlements if s.tier == 3)} villages)."
-        )
+        ctx.report(f"Seeder done: {len(self.settlements)} settlements.")
 
         # ── Trade network ────────────────────────────────────────────────────
         ctx.report("Building trade network…")
@@ -511,19 +560,94 @@ class RealmStage(Stage):
             demand_penalty=tp.demand_penalty,
             flow_decay=tp.flow_decay,
             hub_flow_quantile=tp.hub_flow_quantile,
-            tier_demands=DEFAULT_TIER_DEMANDS,
         )
 
-        # Per-face trade_flow metadata
-        TRADE_FLOW.write(mesh, self.trade_result.face_flow)
+        ctx.report(
+            f"Initial trade done: {len(self.trade_result.routes)} route segments, "
+            f"{self.trade_result.hub_mask.sum()} hub faces."
+        )
 
-        # is_trade_hub metadata flag
+        # ── Population & Calibration ─────────────────────────────────────────
+        ctx.report("Computing hinterland assignment…")
+        pp = p.population
+        self.hinterland = assign_hinterlands(n, self.settlements, cost_graph)
+        face_areas = np.asarray(mesh.face_areas, dtype=np.float64)
+        carrying_cap = compute_carrying_capacity(
+            self.hinterland, fertility, face_areas, len(self.settlements),
+        )
+
+        # Closure to recompute trade with updated settlement demands.
+        def _compute_trade(settlements, settlement_demands=None):
+            return compute_trade_network(
+                mesh,
+                settlements,
+                good_sources,
+                edge_costs,
+                ~is_water,
+                sea_edge_costs,
+                sea_passable,
+                port_cost=tp.port_cost,
+                river_switch_cost=tp.river_switch_cost,
+                demand_penalty=tp.demand_penalty,
+                flow_decay=tp.flow_decay,
+                hub_flow_quantile=tp.hub_flow_quantile,
+                settlement_demands=settlement_demands,
+            )
+
+        current_flow = self.trade_result.face_flow.astype(np.float64)
+        n_passes = max(1, int(pp.relaxation_passes))
+        population = np.zeros(len(self.settlements), dtype=np.float64)
+
+        for pass_idx in range(n_passes):
+            trade_wealth = compute_trade_wealth(self.settlements, current_flow)
+            population = compute_population(
+                carrying_cap, trade_wealth, trade_weight=pp.trade_weight,
+            )
+            if pass_idx < n_passes - 1:
+                max_p = float(population.max())
+                norm_demands = population / max_p if max_p > 0 else np.ones_like(population)
+                self.trade_result = _compute_trade(self.settlements, settlement_demands=norm_demands)
+                current_flow = self.trade_result.face_flow.astype(np.float64)
+                ctx.report(f"Population relaxation pass {pass_idx + 1}/{n_passes} done.")
+
+        # Cull, then stamp final population on surviving settlements.
+        self.settlements, population = cull_settlements(
+            self.settlements, population, min_pop_fraction=pp.min_pop_fraction,
+        )
+        self.settlements = apply_population_to_settlements(self.settlements, population)
+        self.population = population
+
+        # Recompute hinterland for the culled settlement list.
+        self.hinterland = assign_hinterlands(n, self.settlements, cost_graph)
+
+        # Run one final trade pass with the culled settlement list so routes
+        # reflect the final geography.
+        if self.settlements:
+            self.trade_result = _compute_trade(self.settlements)
+
+        # ── Write per-face metadata ───────────────────────────────────────────
+        TRADE_FLOW.write(mesh, self.trade_result.face_flow)
         mesh.apply_metadata_channel("is_trade_hub", self.trade_result.hub_mask)
 
+        # Per-face population = population of owning settlement (0 if unassigned).
+        pop_arr = np.zeros(n, dtype=np.float64)
+        for k, s in enumerate(self.settlements):
+            pop_arr[self.hinterland == k] = population[k]
+        POPULATION.write(mesh, pop_arr)
+        HINTERLAND_ID.write(mesh, self.hinterland.tolist())
+
+        # Write population-derived display tiers (overwriting seeder's provisional write).
+        max_pop = float(population.max()) if population.size > 0 else 0.0
+        tier_arr = np.full(n, -1, dtype=np.int32)
+        for k, s in enumerate(self.settlements):
+            tier_arr[s.face_id] = population_display_tier(population[k], max_pop)
+        mesh.apply_metadata_channel("settlement_tier", tier_arr.tolist())
+
+        world.add_feature("settlements", self.settlements)
         world.add_feature("trade_routes", self.trade_result.routes)
         ctx.report(
-            f"Trade network done: {len(self.trade_result.routes)} route segments, "
-            f"{self.trade_result.hub_mask.sum()} hub faces."
+            f"Population & calibration done: {len(self.settlements)} settlements, "
+            f"{len(self.trade_result.routes)} route segments."
         )
 
     def register_display(
@@ -545,6 +669,8 @@ class RealmStage(Stage):
                 "Trade Flow",
                 lambda meta, _ref=_max_flow_ref: _trade_flow_color(meta, _ref),
             )
+        if self.hinterland is not None and self.settlements is not None:
+            reg.add_scheme("Hinterland", _make_hinterland_color(self.settlements))
         if self.settlements is not None:
             reg.add_overlay("settlements", "Settlements", checked=True)
         if self.trade_result is not None and self.trade_result.routes:
@@ -626,6 +752,9 @@ class RealmPipeline(Pipeline):
             if tier is not None and int(tier) >= 0:
                 t = int(tier)
                 parts.append(TIER_NAMES[min(t, len(TIER_NAMES) - 1)])
+            pop = meta.get("population")
+            if pop is not None and float(pop) > 0:
+                parts.append(f"Pop: {float(pop):.3g}")
             if parts:
                 cur = window._status_label.text()
                 fragment = "  ".join(parts)

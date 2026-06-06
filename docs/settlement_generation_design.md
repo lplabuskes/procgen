@@ -163,8 +163,9 @@ Settlement seeder using the combined score, hierarchical with cost-distance excl
 Rare-good flow accumulation and hub identification across both surfaces.
 *Done when:* overland routes follow terrain intelligently; maritime routes connect major ports; routes detour around high-cost biomes and danger; hubs appear at chokepoints including strait adjacencies; coastal islands show activity.
 
-**Stage 4 — Population & Calibration**
+**Stage 4 — Population & Calibration** *(implemented)*
 Carrying capacity, trade wealth, relaxation passes, culling.
+`realmgen/population/calibration.py` — pure functions: `assign_hinterlands` (multi-source Dijkstra with tier-priority offsets), `compute_carrying_capacity` (fertility × area over hinterland), `compute_trade_wealth` (face flow at settlement), `compute_population` (carrying_cap × log-trade bonus), `cull_and_downgrade` (settlements below `min_pop_fraction` of peak are downgraded or culled). Wired in `RealmStage.build`: computes hinterland once, then iterates 2–3 passes of (wealth → population → trade with population demands); culls after last pass; final trade pass with culled list. Writes `population` and `hinterland_id` per-face metadata; settlement dots scale by sqrt(pop/max_pop); Hinterland color scheme shows territory colored by settlement tier.
 *Done when:* the population distribution roughly follows a rank-size curve without being enforced. Isolated fertile regions stay modest; trade-hub regions are dense.
 
 **Stage 5 — Polities**

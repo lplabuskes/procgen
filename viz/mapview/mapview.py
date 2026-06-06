@@ -757,18 +757,29 @@ class MapWidget(QWidget):
         cx: float, cy: float,
         scale_x: float, scale_y: float,
     ) -> None:
-        from realmgen.placement.types import TIER_COLORS, TIER_RADII
+        from realmgen.placement.types import TIER_COLORS, TIER_RADII, population_display_tier
         feature = self._globe.get_feature("settlements")  # type: ignore[union-attr]
         if not feature:
             return
         positions = np.array([s.position for s in feature], dtype=np.float64)
-        tiers = np.array([s.tier for s in feature], dtype=np.int32)
+        pops = np.array([s.population for s in feature], dtype=np.float64)
+        max_pop = float(pops.max()) if pops.size > 0 else 0.0
+        tiers = np.array(
+            [population_display_tier(float(p), max_pop) for p in pops], dtype=np.int32
+        )
         lon = np.arctan2(positions[:, 1], positions[:, 0])
         lat = np.arcsin(np.clip(positions[:, 2], -1.0, 1.0))
         proj = self._projection.project_lonlat(np.column_stack([lon, lat]))
         sx = (proj[:, 0] - cx) * scale_x + W * 0.5
         sy = -(proj[:, 1] - cy) * scale_y + H * 0.5
         zoom_scale = max(1.0, self._zoom ** 0.3)
+        # Population-scaled radii: sqrt(pop / max_pop) in [0.6, 1.0] relative
+        # to the tier base radius so the shape of the distribution is visible.
+        max_pop = float(pops.max()) if pops.size > 0 else 0.0
+        if max_pop > 0:
+            pop_scale = np.sqrt(np.clip(pops / max_pop, 0.0, 1.0)) * 0.4 + 0.6
+        else:
+            pop_scale = np.ones(len(feature), dtype=np.float64)
         painter.save()
         n_tiers = len(TIER_COLORS)
         for tier_idx in range(n_tiers):
@@ -788,8 +799,9 @@ class MapWidget(QWidget):
             base_r = TIER_RADII[tier_idx] * zoom_scale
             t_sx = sx[mask]
             t_sy = sy[mask]
+            t_scale = pop_scale[mask]
             for i in range(len(t_sx)):
-                r = base_r
+                r = base_r * float(t_scale[i])
                 painter.drawEllipse(QRectF(
                     float(t_sx[i]) - r, float(t_sy[i]) - r, 2 * r, 2 * r,
                 ))

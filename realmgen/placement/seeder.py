@@ -107,7 +107,7 @@ def seed_settlements(
     is_water: np.ndarray,
     face_centroids: np.ndarray,
     cost_graph: csr_matrix,
-    tier_configs: list[tuple[float, float]],
+    tier_configs: list[tuple[float, float, float, float]],
 ) -> list[Settlement]:
     """Hierarchical greedy settlement seeder.
 
@@ -127,20 +127,21 @@ def seed_settlements(
         is_water:     (N,) bool — always forbidden.
         face_centroids: (N, 3) float64 unit-sphere centroids.
         cost_graph:   directed CSR sparse matrix from :func:`build_cost_graph`.
-        tier_configs: list of ``(exclusion_radius, score_threshold)`` per tier,
-            ordered from highest (widest exclusion) to lowest.
+        tier_configs: list of ``(exclusion_radius, score_threshold, influence,
+            demand)`` per tier, ordered from highest (widest exclusion) to
+            lowest.  ``influence`` is the hinterland Dijkstra offset; ``demand``
+            is the initial trade demand weight.
 
     Returns:
         Ordered list of :class:`~realmgen.placement.types.Settlement` objects in
         placement order (highest tier first).
     """
-    n = cost_graph.shape[0]
     forbidden = np.asarray(is_water, dtype=bool).copy()
     score_arr = np.asarray(score, dtype=np.float64)
     centroids = np.asarray(face_centroids, dtype=np.float64)
     settlements: list[Settlement] = []
 
-    for tier_idx, (excl_radius, threshold) in enumerate(tier_configs):
+    for tier_idx, (excl_radius, threshold, influence, demand) in enumerate(tier_configs):
         while True:
             available = ~forbidden
             if not available.any():
@@ -155,6 +156,8 @@ def seed_settlements(
                 position=centroids[best].copy(),
                 tier=tier_idx,
                 score=float(score_arr[best]),
+                influence=float(influence),
+                demand=float(demand),
             ))
 
             # Forbid everything reachable within the exclusion radius.
