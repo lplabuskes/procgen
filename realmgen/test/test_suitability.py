@@ -1,8 +1,8 @@
-"""Tests for realmgen.suitability and RealmBuilder.
+"""Tests for realmgen.suitability and RealmPipeline.
 
 Each pure-function test uses a lightweight stub mesh so there is no dependency
 on a full worldgen run.  The integration tests at the bottom use a real (small)
-dual mesh built by the full GlobeBuilder pipeline.
+dual mesh built by the full GlobePipeline pipeline.
 """
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ from typing import List
 import numpy as np
 import pytest
 
+from core.pipeline import BuildContext
+from core.world import World
 from realmgen.suitability import (
     _positions_to_face_ids,
     combine_suitability,
@@ -22,11 +24,11 @@ from realmgen.suitability import (
 )
 from realmgen.builder import (
     ClimateHabitabilityParams,
-    RealmBuilder,
+    RealmPipeline,
     SuitabilityWeightParams,
     WaterProximityParams,
 )
-from worldgen.globe.builder import GlobeBuilder, GlobeParams
+from worldgen.globe.builder import GlobePipeline, GlobeParams
 
 
 def _norm(v) -> np.ndarray:
@@ -284,30 +286,35 @@ class TestCombineSuitability:
 # ── Builder integration ───────────────────────────────────────────────────────
 
 
-class TestRealmBuilder:
+class TestRealmPipeline:
     def _small_globe(self):
         p = GlobeParams()
         p.elevation.seed = 7
-        b = GlobeBuilder(p)
-        globe = b.build()
-        return globe
+        ctx = BuildContext(world=World())
+        GlobePipeline(p).build(ctx)
+        return ctx.world
+
+    def _run_realm(self, globe) -> "tuple[RealmPipeline, np.ndarray]":
+        realm = RealmPipeline()
+        realm.build(BuildContext(world=globe))
+        return realm, realm.suitability
 
     def test_build_output_shape_and_range(self):
         globe = self._small_globe()
         n = len(globe.mesh.faces)
-        suit = RealmBuilder().build(globe)
+        _, suit = self._run_realm(globe)
         assert suit.shape == (n,)
         assert suit.min() >= 0.0
         assert suit.max() <= 1.0
 
     def test_suitability_metadata_written(self):
         globe = self._small_globe()
-        RealmBuilder().build(globe)
+        self._run_realm(globe)
         assert "suitability" in globe.mesh.face_metadata[0]
 
     def test_water_faces_score_zero(self):
         globe = self._small_globe()
-        suit = RealmBuilder().build(globe)
+        _, suit = self._run_realm(globe)
         mesh = globe.mesh
         for i, m in enumerate(mesh.face_metadata):
             if m.get("is_water", m.get("is_ocean", False)):
@@ -315,10 +322,9 @@ class TestRealmBuilder:
 
     def test_land_face_suitability_nonzero_in_habitable_world(self):
         globe = self._small_globe()
-        suit = RealmBuilder().build(globe)
+        _, suit = self._run_realm(globe)
         mesh = globe.mesh
         land_suit = [suit[i] for i, m in enumerate(mesh.face_metadata)
                      if not m.get("is_water", m.get("is_ocean", False))]
         assert len(land_suit) > 0
-        # At least some land faces should have non-trivial suitability.
         assert max(land_suit) > 0.1

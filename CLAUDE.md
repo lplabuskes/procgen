@@ -6,6 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Ask for clarification rather than churning your wheels. If the task or approach is ambiguous, ask before attempting.
 - Assume visuals should be limited to debug mode, ask before adding to the main view.
+- Don't worry about backwards compatibility for saving and loading worlds
 
 
 ## Running the Project

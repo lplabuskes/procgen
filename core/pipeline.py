@@ -115,7 +115,6 @@ class Pipeline:
     def __len__(self) -> int:
         return len(self.stages)
 
-    def build(self, ctx: BuildContext) -> World:
+    def build(self, ctx: BuildContext) -> None:
         for stage in self.stages:
             stage.build(ctx)
-        return ctx.world

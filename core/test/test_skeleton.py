@@ -59,19 +59,6 @@ def test_meta_channel_round_trip():
     np.testing.assert_allclose(ch.read(w), [0.1, 0.2, 0.3, 0.4])
 
 
-def test_meta_channel_fallback_chain():
-    w = _world(3)
-    is_ocean = MetaChannel("is_ocean", dtype=np.bool_, default=False)
-    is_water = MetaChannel("is_water", dtype=np.bool_, fallback=is_ocean, default=False)
-    # Only is_ocean present → is_water reads through the fallback.
-    is_ocean.write(w, np.array([True, False, True]))
-    np.testing.assert_array_equal(is_water.read(w), [True, False, True])
-    assert is_water.read(w).dtype == np.bool_
-    # Once is_water itself is written, it wins over the fallback.
-    is_water.write(w, np.array([False, False, False]))
-    np.testing.assert_array_equal(is_water.read(w), [False, False, False])
-
-
 def test_texture_channel_round_trip():
     w = _world(2)
     ch = TextureChannel("elevation", n_channels=1)
@@ -134,9 +121,8 @@ def test_pipeline_runs_stages_in_order():
 
     w = World()
     ctx = BuildContext(world=w)
-    out = Pipeline([_S("a"), _S("b"), _S("c")]).build(ctx)
+    Pipeline([_S("a"), _S("b"), _S("c")]).build(ctx)
     assert order == ["a", "b", "c"]
-    assert out is w
     assert set(w.feature_names()) == {"a", "b", "c"}
 
 

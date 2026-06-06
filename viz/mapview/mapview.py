@@ -21,7 +21,7 @@ from viz.mapview.projections import ALL_PROJECTIONS, RobinsonProjection, Project
 
 if TYPE_CHECKING:
     from core.mesh import PolygonMesh
-    from worldgen.globe.globe import Globe
+    from core.world import World
 
 
 def _pip_polygon(pu: float, pv: float, poly: np.ndarray) -> bool:
@@ -153,7 +153,7 @@ class MapWidget(QWidget):
         self._active_scheme: Optional[str] = None
         self._scheme_texture_key: dict[str, str] = {}
 
-        self._globe: Optional["Globe"] = None
+        self._globe: Optional["World"] = None
         self._overlay_visible: dict[str, bool] = {}
         self._legends: dict[str, tuple[str, list]] = {}  # scheme → (kind, entries)
 
@@ -175,7 +175,7 @@ class MapWidget(QWidget):
         self._reproject()
         self.update()
 
-    def set_globe(self, globe: "Globe") -> None:
+    def set_globe(self, globe: "World") -> None:
         self._globe = globe
         self.set_mesh(globe.mesh)
 
@@ -1032,7 +1032,7 @@ class MapWindow(QMainWindow):
     def set_mesh(self, mesh: PolygonMesh) -> None:
         self._map.set_mesh(mesh)
 
-    def set_globe(self, globe: "Globe") -> None:
+    def set_globe(self, globe: "World") -> None:
         self._map.set_globe(globe)
 
     def set_status(self, text: str) -> None:

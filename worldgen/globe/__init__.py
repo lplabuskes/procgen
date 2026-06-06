@@ -1,4 +1,4 @@
-from worldgen.globe.globe import Globe
-from worldgen.globe.builder import GlobeBuilder, GlobeParams
+from core.world import World
+from worldgen.globe.builder import GlobePipeline, GlobeParams
 
-__all__ = ["Globe", "GlobeBuilder", "GlobeParams"]
+__all__ = ["World", "GlobePipeline", "GlobeParams"]

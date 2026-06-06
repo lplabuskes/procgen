@@ -5,10 +5,6 @@ in ``mesh.face_metadata``) and ``TextureChannel`` (``(N, H, W, C)`` arrays in
 ``mesh.face_textures``) instead of magic strings. Each stage exports the channels
 it produces as module-level constants; downstream stages import those constants,
 so the dependency is an explicit, type-checked edge rather than a string literal.
-
-A ``MetaChannel`` may declare a ``fallback`` channel, so back-compat key chains
-(e.g. ``is_water`` → ``is_ocean``) live in exactly one place instead of being
-smeared as ``m.get("is_water", m.get("is_ocean", False))`` across call sites.
 """
 from __future__ import annotations
 
@@ -31,7 +27,6 @@ class MetaChannel:
     """
     name: str
     dtype: Any = np.float64
-    fallback: "MetaChannel | None" = None
     default: Union[float, bool, int] = 0.0
 
     def present(self, world: "World") -> bool:
@@ -44,8 +39,6 @@ class MetaChannel:
             return np.array(
                 [m.get(self.name, self.default) for m in meta], dtype=self.dtype
             )
-        if self.fallback is not None:
-            return self.fallback.read(world).astype(self.dtype)
         return np.full(len(meta), self.default, dtype=self.dtype)
 
     def write(self, world: "World", values: np.ndarray) -> None:

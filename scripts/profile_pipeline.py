@@ -29,7 +29,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from worldgen.globe.builder import GlobeBuilder, GlobeParams  # noqa: E402
+from core.pipeline import BuildContext  # noqa: E402
+from core.world import World  # noqa: E402
+from worldgen.globe.builder import GlobePipeline, GlobeParams  # noqa: E402
 from core import mesh_cache  # noqa: E402
 
 
@@ -81,8 +83,9 @@ def profile_once(seed: int) -> list[tuple[str, str, float]]:
     params.elevation.seed = seed
 
     timer = PhaseTimer()
-    builder = GlobeBuilder(params)
-    builder.build(progress=timer)
+    ctx = BuildContext(world=World(), progress=timer)
+    builder = GlobePipeline(params)
+    builder.build(ctx)
     timer.finish()
 
     rows: list[tuple[str, str, float]] = []
@@ -127,11 +130,12 @@ def run_cprofile(seed: int, module: str, top: int) -> None:
     params = GlobeParams()
     params.elevation.seed = seed
 
-    builder = GlobeBuilder(params)
+    ctx = BuildContext(world=World(), progress=lambda _msg: None)
+    builder = GlobePipeline(params)
     profiler = cProfile.Profile()
     print(f"Running build under cProfile (seed={seed})…", flush=True)
     profiler.enable()
-    builder.build(progress=lambda _msg: None)
+    builder.build(ctx)
     profiler.disable()
 
     restriction: tuple = (top or 25,)

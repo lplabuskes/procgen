@@ -284,13 +284,7 @@ class CostBuilder(Stage):
         if "cost_land_base_cost" not in arrays:
             return
         river_flow_mag = arrays["cost_river_flow_mag"]
-        # Back-compat: navigability was added after the first saved worlds; default
-        # to zeros when the key is absent.
-        river_navigability = (
-            arrays["cost_river_navigability"]
-            if "cost_river_navigability" in arrays
-            else np.zeros_like(river_flow_mag)
-        )
+        river_navigability = arrays["cost_river_navigability"]
         cs = CostSurfaces(
             land_base_cost=arrays["cost_land_base_cost"],
             land_passable=arrays["cost_land_passable"],

@@ -2,16 +2,19 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
+from core.pipeline import BuildContext
+from core.world import World
 from worldgen.geology.display import build_elevation_display_texture
-from worldgen.globe import GlobeBuilder, GlobeParams
+from worldgen.globe import GlobePipeline, GlobeParams
 from viz.mesh.gui import MainWindow
 
 
 def main() -> None:
     app = QApplication(sys.argv)
 
-    builder = GlobeBuilder(GlobeParams())
-    builder.build()
+    ctx = BuildContext(world=World())
+    builder = GlobePipeline(GlobeParams())
+    builder.build(ctx)
 
     mesh = builder.elevation_builder.mesh
     assert mesh is not None

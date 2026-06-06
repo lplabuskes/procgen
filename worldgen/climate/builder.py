@@ -15,7 +15,6 @@ from core.world import World
 from worldgen.climate.classification import (
     N_BIOMES,
     classify_textures,
-    default_biome,
 )
 from worldgen.climate.currents import CurrentsResult, compute_currents
 from worldgen.climate.insolation import (
@@ -628,4 +627,3 @@ class ClimateLakeFeedbackStage(Stage):
             )
 
 
-_ = default_biome  # keep accessible for downstream imports

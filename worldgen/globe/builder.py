@@ -1,27 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Optional
 
 from core.display import DisplayRegistry
 from core.pipeline import BuildContext, Pipeline
-from core.world import World
 from worldgen.climate.builder import ClimateBuilder, ClimateParams
-from worldgen.climate.display import build_biome_display_texture
 from worldgen.cost.builder import CostBuilder, CostParams
-from worldgen.geology.display import build_elevation_display_texture
 from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams
 from worldgen.hydrology.builder import HydrologyBuilder, HydrologyParams
 from worldgen.resources.builder import ResourcesBuilder, ResourcesParams
-from worldgen.globe.globe import Globe
+from core.world import World
 
-# Re-exported for back-compat (these display-texture helpers live in the
-# owning stages' display modules; re-exported here for existing importers).
 __all__ = [
     "GlobeParams",
-    "GlobeBuilder",
-    "build_biome_display_texture",
-    "build_elevation_display_texture",
+    "GlobePipeline",
 ]
 
 
@@ -39,13 +32,12 @@ class GlobeParams:
     cost: CostParams = field(default_factory=CostParams, metadata={"label": "Cost"})
 
 
-class GlobeBuilder:
-    """Orchestrates every stage of globe generation.
+class GlobePipeline(Pipeline):
+    """Ordered pipeline of every worldgen stage.
 
-    Each stage's builder is stored as an attribute (`elevation_builder`,
-    `climate_builder`, `hydrology_builder`) so callers can read intermediate
-    results without re-running work. `build()` runs the pipeline and returns a
-    `World` (aliased `Globe`).
+    Each stage builder is stored as an attribute so callers can read
+    intermediate results without re-running work. Call ``build(ctx)``
+    with a shared ``BuildContext`` to run all stages in order.
     """
 
     def __init__(self, params: GlobeParams | None = None) -> None:
@@ -56,11 +48,9 @@ class GlobeBuilder:
         self.resources_builder: ResourcesBuilder = ResourcesBuilder(self.params.resources)
         self.cost_builder: CostBuilder = CostBuilder(self.params.cost)
 
-        # Compose the generation pipeline. Each builder is itself a ``Stage`` that
-        # reads its inputs from the ``BuildContext`` and registers its own
-        # features; the climate lake-feedback second pass is an explicit node
-        # placed after hydrology (sharing the climate builder instance).
-        self.pipeline: Pipeline = Pipeline([
+        # The climate lake-feedback second pass is an explicit node placed after
+        # hydrology, sharing the climate builder instance.
+        super().__init__([
             self.elevation_builder,
             self.climate_builder,
             self.hydrology_builder,
@@ -68,23 +58,11 @@ class GlobeBuilder:
             self.resources_builder,
             self.cost_builder,
         ])
-        self.globe: Optional[Globe] = None
+        self.globe: Optional[World] = None
 
-    def build(self, progress: Optional[Callable[[str], None]] = None) -> Globe:
-        """Run every stage in order and return the populated world.
-
-        The elevation stage sets ``world.mesh``; each subsequent stage reads it
-        from the context and registers its own features. The stage builders
-        remain accessible as ``GlobeBuilder`` attributes for the display and
-        serialization paths.
-        """
-        world = World()
-        ctx = BuildContext(world=world)
-        if progress is not None:
-            ctx.progress = progress
-        self.pipeline.build(ctx)
-        self.globe = world
-        return world
+    def build(self, ctx: BuildContext) -> None:
+        super().build(ctx)
+        self.globe = ctx.world
 
     def apply_display(self, window, debug: bool = False) -> None:
         """Wire color schemes, overlays, and hover into a MapWindow after build().
@@ -97,9 +75,9 @@ class GlobeBuilder:
 
         world = self.globe
         assert world is not None and world.mesh is not None, (
-            "GlobeBuilder.build() must be called before apply_display"
+            "GlobePipeline.build() must be called before apply_display"
         )
         reg = DisplayRegistry()
-        for stage in self.pipeline:
+        for stage in self:
             stage.register_display(world, reg, debug=debug)
         apply_registry(reg, window, world)

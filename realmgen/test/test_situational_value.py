@@ -1,4 +1,4 @@
-"""Tests for realmgen.situational_value and the situational-value portion of RealmBuilder."""
+"""Tests for realmgen.situational_value and the situational-value portion of RealmPipeline."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -7,6 +7,8 @@ from typing import List
 import numpy as np
 import pytest
 
+from core.pipeline import BuildContext
+from core.world import World
 from realmgen.situational_value import (
     combine_situational_value,
     compute_harbor_quality,
@@ -17,10 +19,10 @@ from realmgen.situational_value import (
 )
 from realmgen.builder import (
     MountainPassParams,
-    RealmBuilder,
+    RealmPipeline,
     SituationalValueWeightParams,
 )
-from worldgen.globe.builder import GlobeBuilder, GlobeParams
+from worldgen.globe.builder import GlobePipeline, GlobeParams
 
 
 def _norm(v) -> np.ndarray:
@@ -332,18 +334,23 @@ class TestCombineSituationalValue:
 # ── Builder integration ───────────────────────────────────────────────────────
 
 
-class TestRealmBuilderSituational:
+class TestRealmPipelineSituational:
     def _small_globe(self):
         p = GlobeParams()
         p.elevation.seed = 7
-        b = GlobeBuilder(p)
-        return b.build()
+        ctx = BuildContext(world=World())
+        GlobePipeline(p).build(ctx)
+        return ctx.world
+
+    def _run_realm(self, globe) -> RealmPipeline:
+        realm = RealmPipeline()
+        realm.build(BuildContext(world=globe))
+        return realm
 
     def test_situational_value_shape_and_range(self):
         globe = self._small_globe()
-        builder = RealmBuilder()
-        builder.build(globe)
-        sv = builder.situational_value
+        realm = self._run_realm(globe)
+        sv = realm.situational_value
         n = len(globe.mesh.faces)
         assert sv is not None
         assert sv.shape == (n,)
@@ -352,14 +359,13 @@ class TestRealmBuilderSituational:
 
     def test_situational_value_metadata_written(self):
         globe = self._small_globe()
-        RealmBuilder().build(globe)
+        self._run_realm(globe)
         assert "situational_value" in globe.mesh.face_metadata[0]
 
     def test_water_faces_score_zero(self):
         globe = self._small_globe()
-        builder = RealmBuilder()
-        builder.build(globe)
-        sv = builder.situational_value
+        realm = self._run_realm(globe)
+        sv = realm.situational_value
         for i, m in enumerate(globe.mesh.face_metadata):
             if m.get("is_water", m.get("is_ocean", False)):
                 assert sv[i] == 0.0, f"face {i} is water but situational_value = {sv[i]}"

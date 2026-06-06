@@ -21,13 +21,13 @@ Usage::
 """
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Optional
 
 import numpy as np
 
 from core.display import DisplayRegistry
 from core.params import field, param_field as _f, paramclass
-from core.pipeline import BuildContext, Stage
+from core.pipeline import BuildContext, Pipeline, Stage
 from core.world import World
 
 from realmgen.channels import SITUATIONAL_VALUE, SUITABILITY
@@ -369,52 +369,47 @@ class RealmStage(Stage):
             reg.add_scheme("Situational Value", _situational_color)
 
 
-# ── Back-compat wrapper ─────────────────────────────────────────────────────────
+# ── Pipeline ────────────────────────────────────────────────────────────────────
 
 
-class RealmBuilder:
-    """Standalone façade over :class:`RealmStage` preserving the original API.
+class RealmPipeline(Pipeline):
+    """Single-stage pipeline for the human-geography layer.
 
-    ``RealmBuilder(params).build(globe)`` returns the suitability array and
-    exposes ``.suitability`` / ``.situational_value``; ``apply_display(window)``
-    merges the realm schemes into a ``MapWindow``.
+    Wraps :class:`RealmStage` in the ``Pipeline`` protocol so it can sit
+    alongside ``GlobePipeline`` in a shared-context pipeline list.  After
+    ``build(ctx)``, ``.suitability`` and ``.situational_value`` hold the
+    computed ``(N,) float32`` arrays.
     """
 
     def __init__(self, params: RealmParams | None = None) -> None:
-        self.stage = RealmStage(params)
+        self.realm_stage = RealmStage(params)
+        super().__init__([self.realm_stage])
+        self.world: Optional[World] = None
 
     @property
     def params(self) -> RealmParams:
-        return self.stage.params
+        return self.realm_stage.params
 
     @property
     def suitability(self) -> Optional[np.ndarray]:
-        return self.stage.suitability
+        return self.realm_stage.suitability
 
     @property
     def situational_value(self) -> Optional[np.ndarray]:
-        return self.stage.situational_value
+        return self.realm_stage.situational_value
 
-    def build(
-        self,
-        globe: World,
-        progress: Optional[Callable[[str], None]] = None,
-    ) -> np.ndarray:
-        ctx = BuildContext(world=globe)
-        if progress is not None:
-            ctx.progress = progress
-        self.stage.build(ctx)
-        return self.stage.suitability
+    def build(self, ctx: BuildContext) -> None:
+        super().build(ctx)
+        self.world = ctx.world
 
-    def apply_display(self, window) -> None:
-        """Register realmgen color schemes into a MapWindow.
+    def apply_display(self, window, debug: bool = False) -> None:
+        """Merge realm color schemes into a MapWindow after build().
 
-        Call after :meth:`build` and after the worldgen display is wired so the
-        schemes are appended alongside the worldgen schemes.
+        Call after the worldgen display is wired so the schemes are appended
+        alongside the worldgen schemes.
         """
         reg = DisplayRegistry()
-        # RealmStage.register_display reads its results off the stage, not world.
-        self.stage.register_display(None, reg, debug=True)
+        self.realm_stage.register_display(None, reg, debug=debug)
         if not reg.schemes:
             return
         merged = dict(window._map._color_schemes)

@@ -36,7 +36,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import numpy as np  # noqa: E402
 
 from worldgen.climate.classification import BIOME_NAMES, N_BIOMES  # noqa: E402
-from worldgen.globe.builder import GlobeBuilder, GlobeParams  # noqa: E402
+from core.pipeline import BuildContext  # noqa: E402
+from core.world import World  # noqa: E402
+from worldgen.globe.builder import GlobePipeline, GlobeParams  # noqa: E402
 
 
 RESULTS_DIR = Path(__file__).parent / "results"
@@ -76,8 +78,9 @@ def measure_seed(seed: int) -> dict:
     """Build full pipeline for one seed; return per-biome aggregate dict."""
     params = GlobeParams()
     params.elevation.seed = seed
-    builder = GlobeBuilder(params)
-    builder.build(progress=lambda _: None)
+    ctx = BuildContext(world=World(), progress=lambda _: None)
+    builder = GlobePipeline(params)
+    builder.build(ctx)
 
     mesh = builder.globe.mesh
     fertility = mesh.face_textures["fertility"][..., 0]               # (N, H, W)

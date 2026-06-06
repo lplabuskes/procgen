@@ -5,9 +5,11 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
 
+from core.pipeline import BuildContext
+from core.world import World
 from viz.mapview.mapview import MapWindow
 from viz.params_dialog import ParamsDialog
-from worldgen.globe import GlobeBuilder, GlobeParams
+from worldgen.globe import GlobePipeline, GlobeParams
 from worldgen.globe.serialization import load_globe, save_globe
 
 
@@ -29,7 +31,7 @@ def main() -> None:
     window.setWindowTitle("Procedural World")
 
     current_params: list[GlobeParams] = [GlobeParams()]
-    current_builder: list[GlobeBuilder | None] = [None]
+    current_globe_pipeline: list[GlobePipeline | None] = [None]
 
     def _build_and_apply(params: GlobeParams) -> None:
         window.set_rebuild_enabled(False)
@@ -44,12 +46,15 @@ def main() -> None:
 
         current_params[0] = params
 
-        builder = GlobeBuilder(params)
-        globe = builder.build(progress=_progress)
-        current_builder[0] = builder
+        ctx = BuildContext(world=World(), progress=_progress)
+        pipelines = [GlobePipeline(params)]
+        for p in pipelines:
+            p.build(ctx)
+        current_globe_pipeline[0] = pipelines[0]
 
-        window.set_globe(globe)
-        builder.apply_display(window, debug=debug)
+        window.set_globe(ctx.world)
+        for p in pipelines:
+            p.apply_display(window, debug=debug)
 
         window.set_status("")
         window.set_rebuild_enabled(True)
@@ -59,12 +64,12 @@ def main() -> None:
         window.set_status(f"Loading {Path(path).name}…")
         QApplication.processEvents()
 
-        builder, globe = load_globe(path)
-        current_params[0] = builder.params
-        current_builder[0] = builder
+        globe_pipeline, globe = load_globe(path)
+        current_params[0] = globe_pipeline.params
+        current_globe_pipeline[0] = globe_pipeline
 
         window.set_globe(globe)
-        builder.apply_display(window, debug=debug)
+        globe_pipeline.apply_display(window, debug=debug)
 
         window.set_status("")
         window.set_rebuild_enabled(True)
@@ -83,8 +88,8 @@ def main() -> None:
                 _build_and_apply(new_params)
 
     def _save() -> None:
-        builder = current_builder[0]
-        if builder is None:
+        globe_pipeline = current_globe_pipeline[0]
+        if globe_pipeline is None:
             return
         path, _ = QFileDialog.getSaveFileName(
             window, "Save World", "", "World files (*.npz)"
@@ -95,7 +100,7 @@ def main() -> None:
             path += ".npz"
         window.set_status(f"Saving {Path(path).name}…")
         QApplication.processEvents()
-        save_globe(builder, path)
+        save_globe(globe_pipeline, path)
         window.set_status("")
 
     window.set_save_callback(_save)
