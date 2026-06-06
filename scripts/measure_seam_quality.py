@@ -101,15 +101,7 @@ def _build_base_textures(seed: int):
         rate_norm=p.elevation.elevation_rate_norm,
         seed=seed + 4,
     )
-    elevations = compute_erosion(
-        dual, elevations,
-        hydraulic_iterations=p.face_erosion.hydraulic_iterations,
-        hydraulic_erosion_rate=p.face_erosion.hydraulic_erosion_rate,
-        hydraulic_deposition_rate=p.face_erosion.hydraulic_deposition_rate,
-        thermal_iterations=p.face_erosion.thermal_iterations,
-        thermal_talus=p.face_erosion.thermal_talus,
-        thermal_erosion_rate=p.face_erosion.thermal_erosion_rate,
-    )
+    elevations = compute_erosion(dual, elevations, p.face_erosion)
     oceanic_mask = np.array([t == "oceanic" for t in plate_types], dtype=np.float64)
     elev_scale = (
         oceanic_mask * p.volcanism.volcanic_elevation_scale_oceanic

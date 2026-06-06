@@ -1,11 +1,16 @@
+from __future__ import annotations
+
 import math
 from collections import defaultdict, deque
-from typing import List
+from typing import List, TYPE_CHECKING
 
 import numpy as np
 
 from utils.simplex import fbm_sum, make_perm
 from core.mesh import PolygonMesh
+
+if TYPE_CHECKING:
+    from worldgen.geology.elevation_builder import FaceErosionParams
 
 
 # Baseline elevation by plate type (km, roughly)
@@ -127,12 +132,7 @@ def compute_face_elevations(
 def compute_erosion(
     mesh: PolygonMesh,
     elevations: np.ndarray,
-    hydraulic_iterations: int = 5,
-    hydraulic_erosion_rate: float = 0.4,
-    hydraulic_deposition_rate: float = 0.3,
-    thermal_iterations: int = 10,
-    thermal_talus: float = 0.5,
-    thermal_erosion_rate: float = 0.5,
+    params: "FaceErosionParams",
 ) -> np.ndarray:
     """Apply hydraulic then thermal erosion to face-level elevations.
 
@@ -147,16 +147,18 @@ def compute_erosion(
     Args:
         mesh: The dual polygon mesh.
         elevations: Per-face elevations in km, shape (n_faces,).
-        hydraulic_iterations: Number of full hydraulic fill+erode cycles.
-        hydraulic_erosion_rate: Fraction of elevation removed per unit flow at eroding faces.
-        hydraulic_deposition_rate: Fraction of transported sediment deposited per step.
-        thermal_iterations: Number of thermal erosion sweeps.
-        thermal_talus: Slope threshold (km) above which material slides.
-        thermal_erosion_rate: Fraction of excess slope transferred per sweep.
+        params: `FaceErosionParams` — hydraulic/thermal iteration counts and rates.
 
     Returns:
         float64 array of shape (n_faces,) with eroded elevations.
     """
+    hydraulic_iterations = params.hydraulic_iterations
+    hydraulic_erosion_rate = params.hydraulic_erosion_rate
+    hydraulic_deposition_rate = params.hydraulic_deposition_rate
+    thermal_iterations = params.thermal_iterations
+    thermal_talus = params.thermal_talus
+    thermal_erosion_rate = params.thermal_erosion_rate
+
     elev = elevations.copy()
     adjacency = mesh.face_adjacency
     n_faces = len(mesh.faces)

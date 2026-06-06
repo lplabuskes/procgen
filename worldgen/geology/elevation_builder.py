@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import secrets
 from typing import List, Mapping, Optional
 
 import numpy as np
@@ -142,6 +144,7 @@ class ElevationBuilder(Stage):
 
     def __init__(self, params: ElevationParams | None = None) -> None:
         self.params: ElevationParams = params or ElevationParams()
+        self._seed_base: int = 0  # set at the start of build() from params.seed
         self.mesh: Optional[PolygonMesh] = None
         self.plate_ids: Optional[List[int]] = None
         self.plate_omegas: Optional[np.ndarray] = None
@@ -155,14 +158,23 @@ class ElevationBuilder(Stage):
         self.volcano_positions: Optional[np.ndarray] = None
         self.max_speed: float = 1.0
 
-    def _sub_seed(self, offset: int) -> Optional[int]:
-        return None if self.params.seed is None else self.params.seed + offset
+    def _seed(self, name: str) -> int:
+        """Deterministic sub-seed for a named draw, derived from ``params.seed``.
+
+        Name-keyed (not positional offsets) so adding or removing a draw never
+        shifts the others. When ``params.seed is None`` the base is drawn once at
+        the start of ``build`` — reproducible within a run, random across runs.
+        """
+        h = int.from_bytes(hashlib.sha256(name.encode("utf-8")).digest()[:8], "little")
+        state = np.random.SeedSequence([self._seed_base, h]).generate_state(1)
+        return int(state[0])
 
     def build(self, ctx: BuildContext) -> PolygonMesh:
         """Run the full pipeline, set ``ctx.world.mesh``, and return the dual mesh."""
         _report = ctx.report
 
         p = self.params
+        self._seed_base = p.seed if p.seed is not None else secrets.randbits(63)
 
         if not mesh_cache.is_populated():
             _report("Building mesh cache (first run only)…")
@@ -175,13 +187,13 @@ class ElevationBuilder(Stage):
                 progress=_report,
             )
         _report("Loading mesh…")
-        dual = mesh_cache.load_random(seed=self._sub_seed(5))
+        dual = mesh_cache.load_random(seed=self._seed("mesh"))
 
         _report("Generating tectonic plates…")
         plate_ids = generate_plates(
             dual,
             n_plates=p.plates.n_plates,
-            seed=self._sub_seed(0),
+            seed=self._seed("plates"),
             compactness=p.plates.plate_compactness,
         )
         _report("Relaxing plate boundaries…")
@@ -189,7 +201,7 @@ class ElevationBuilder(Stage):
 
         _report("Assigning plate types and velocities…")
         plate_types_by_plate = assign_plate_types(
-            p.plates.n_plates, oceanic_fraction=p.plates.oceanic_fraction, seed=self._sub_seed(1)
+            p.plates.n_plates, oceanic_fraction=p.plates.oceanic_fraction, seed=self._seed("plate_types")
         )
         plate_types = [plate_types_by_plate[pid] for pid in plate_ids]
         PLATE_TYPE.write(dual, plate_types)
@@ -200,7 +212,7 @@ class ElevationBuilder(Stage):
             p.plates.n_plates,
             drift_scale=p.plate_motion.drift_scale,
             spin_scale=p.plate_motion.spin_scale,
-            seed=self._sub_seed(2),
+            seed=self._seed("plate_velocities"),
         )
         face_velocities = compute_face_velocities(dual, plate_ids, plate_omegas)
         _report("Classifying plate boundaries…")
@@ -231,19 +243,10 @@ class ElevationBuilder(Stage):
             decay_rate=p.volcanism.volcanic_decay_rate,
             max_hops=p.volcanism.volcanic_max_hops,
             rate_norm=p.elevation.elevation_rate_norm,
-            seed=self._sub_seed(4),
+            seed=self._seed("volcanism"),
         )
         _report("Applying erosion…")
-        elevations = compute_erosion(
-            dual,
-            elevations,
-            hydraulic_iterations=p.face_erosion.hydraulic_iterations,
-            hydraulic_erosion_rate=p.face_erosion.hydraulic_erosion_rate,
-            hydraulic_deposition_rate=p.face_erosion.hydraulic_deposition_rate,
-            thermal_iterations=p.face_erosion.thermal_iterations,
-            thermal_talus=p.face_erosion.thermal_talus,
-            thermal_erosion_rate=p.face_erosion.thermal_erosion_rate,
-        )
+        elevations = compute_erosion(dual, elevations, p.face_erosion)
 
         oceanic_mask = np.array([t == "oceanic" for t in plate_types], dtype=np.float64)
         elev_scale = (
@@ -259,12 +262,11 @@ class ElevationBuilder(Stage):
             dual, elevations, tex_size=p.elevation.elevation_tex_size
         )
         _report("Applying elevation noise…")
-        noise_seed = self._sub_seed(3)
         noise_deltas = compute_noise_elevation_deltas(
             dual,
             tex_size=p.elevation.elevation_tex_size,
             amplitude=p.noise.noise_amplitude,
-            seed=noise_seed or 0,
+            seed=self._seed("noise"),
             per_pixel_elevations=elevation_textures[:, :, :, 0],
             coast_sigma=p.noise.noise_coast_sigma,
         )
