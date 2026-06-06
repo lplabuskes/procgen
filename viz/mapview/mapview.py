@@ -376,6 +376,10 @@ class MapWidget(QWidget):
                 and self._globe is not None
                 and self._globe.has_feature("rare_bio")):
             self._draw_rare_bio_overlay(painter, W, H, cx, cy, scale_x, scale_y)
+        if (self._overlay_visible.get("trade_routes")
+                and self._globe is not None
+                and self._globe.has_feature("trade_routes")):
+            self._draw_trade_routes_overlay(painter, W, H, cx, cy, scale_x, scale_y)
         if (self._overlay_visible.get("settlements")
                 and self._globe is not None
                 and self._globe.has_feature("settlements")):
@@ -693,6 +697,58 @@ class MapWidget(QWidget):
                 ])
                 painter.drawPolygon(diamond)
         painter.restore()
+
+    def _draw_trade_routes_overlay(
+        self,
+        painter: QPainter,
+        W: float, H: float,
+        cx: float, cy: float,
+        scale_x: float, scale_y: float,
+    ) -> None:
+        routes = self._globe.get_feature("trade_routes")  # type: ignore[union-attr]
+        if not routes:
+            return
+
+        all_flows = np.array([r[2] for r in routes], dtype=np.float64)
+        max_flow = float(all_flows.max()) if all_flows.size > 0 else 0.0
+        if max_flow <= 0.0:
+            return
+
+        min_width, max_width = 0.4, 4.0
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        active_pen: QPen | None = None
+
+        for start_pos, end_pos, flow in routes:
+            lon0 = float(np.arctan2(start_pos[1], start_pos[0]))
+            lat0 = float(np.arcsin(np.clip(start_pos[2], -1.0, 1.0)))
+            lon1 = float(np.arctan2(end_pos[1], end_pos[0]))
+            lat1 = float(np.arcsin(np.clip(end_pos[2], -1.0, 1.0)))
+
+            if abs(lon1 - lon0) > np.pi:
+                continue  # skip antimeridian-crossing segments
+
+            proj = self._projection.project_lonlat(
+                np.array([[lon0, lat0], [lon1, lat1]], dtype=np.float32)
+            )
+            sx = (proj[:, 0] - cx) * scale_x + W * 0.5
+            sy = -(proj[:, 1] - cy) * scale_y + H * 0.5
+
+            w = (
+                min_width + (max_width - min_width) * (float(flow) / max_flow) ** 0.5
+            ) * self._zoom ** 0.4
+            if w < 0.3:
+                continue
+
+            if active_pen is None or abs(active_pen.widthF() - w) > 0.08:
+                pen = QPen(QColor(220, 180, 60, 180))
+                pen.setWidthF(w)
+                painter.setPen(pen)
+                active_pen = pen
+
+            painter.drawLine(
+                QPointF(float(sx[0]), float(sy[0])),
+                QPointF(float(sx[1]), float(sy[1])),
+            )
 
     def _draw_settlements_overlay(
         self,

@@ -7,3 +7,4 @@ from core.channels import MetaChannel
 
 SUITABILITY = MetaChannel("suitability", dtype=np.float64)
 SITUATIONAL_VALUE = MetaChannel("situational_value", dtype=np.float64)
+TRADE_FLOW = MetaChannel("trade_flow", dtype=np.float64)

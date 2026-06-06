@@ -30,7 +30,8 @@ from core.params import field, param_field as _f, paramclass
 from core.pipeline import BuildContext, Pipeline, Stage
 from core.world import World
 
-from realmgen.channels import SITUATIONAL_VALUE, SUITABILITY
+from realmgen.channels import SITUATIONAL_VALUE, SUITABILITY, TRADE_FLOW
+from realmgen.trade.network import DEFAULT_TIER_DEMANDS, compute_trade_network
 from realmgen.placement.seeder import (
     build_cost_graph,
     placement_score,
@@ -77,6 +78,12 @@ _SITUATIONAL_STOPS = [
     (0.0, (0.35, 0.33, 0.30, 1.0)),
     (0.5, (0.85, 0.75, 0.30, 1.0)),
     (1.0, (0.90, 0.55, 0.10, 1.0)),
+]
+
+_TRADE_FLOW_STOPS = [
+    (0.0, (0.30, 0.28, 0.20, 1.0)),
+    (0.4, (0.80, 0.70, 0.20, 1.0)),
+    (1.0, (0.95, 0.85, 0.10, 1.0)),
 ]
 
 
@@ -160,6 +167,15 @@ class TierParams:
 
 
 @paramclass
+class TradeParams:
+    port_cost: float = _f(5.0, label="Port cost", min=0.0, max=50.0)
+    river_switch_cost: float = _f(0.0, label="River switch cost", min=0.0, max=10.0)
+    demand_penalty: float = _f(5.0, label="Demand penalty", min=0.0, max=20.0)
+    flow_decay: float = _f(0.05, label="Flow decay", min=0.001, max=1.0)
+    hub_flow_quantile: float = _f(0.90, label="Hub quantile", min=0.5, max=0.99)
+
+
+@paramclass
 class SeederParams:
     situational_weight: float = _f(0.40, label="Situational value weight", min=0.0, max=1.0)
     tier0: TierParams = field(
@@ -203,6 +219,9 @@ class RealmParams:
     seeder: SeederParams = field(
         default_factory=SeederParams, metadata={"label": "Settlement seeder"}
     )
+    trade: TradeParams = field(
+        default_factory=TradeParams, metadata={"label": "Trade network"}
+    )
 
 
 # ── Display color schemes ───────────────────────────────────────────────────────
@@ -220,6 +239,15 @@ def _situational_color(meta: dict) -> tuple:
         return OCEAN_COLOR
     s = min(max(float(meta.get("situational_value", 0.0)), 0.0), 1.0)
     return interp_stops_scalar(s, _SITUATIONAL_STOPS)
+
+
+def _trade_flow_color(meta: dict, _max_flow: list) -> tuple:
+    if meta.get("is_water", meta.get("is_ocean", False)):
+        return OCEAN_COLOR
+    f = float(meta.get("trade_flow", 0.0))
+    mx = _max_flow[0]
+    s = min(f / mx, 1.0) if mx > 0 else 0.0
+    return interp_stops_scalar(s, _TRADE_FLOW_STOPS)
 
 
 # ── Stage ───────────────────────────────────────────────────────────────────────
@@ -242,13 +270,14 @@ class RealmStage(Stage):
         TEMPERATURE_WARMEST, TEMPERATURE_COLDEST, PRECIPITATION_ANNUAL,
         LAKE_MASK, COST_SURFACES, RIVERS, MINERALS, RARE_BIO,
     )
-    provides = (SUITABILITY, SITUATIONAL_VALUE)
+    provides = (SUITABILITY, SITUATIONAL_VALUE, TRADE_FLOW)
 
     def __init__(self, params: RealmParams | None = None) -> None:
         self.params: RealmParams = params or RealmParams()
         self.suitability: Optional[np.ndarray] = None
         self.situational_value: Optional[np.ndarray] = None
         self.settlements: Optional[list[Settlement]] = None
+        self.trade_result = None
 
     def build(self, ctx: BuildContext) -> None:
         world = ctx.world
@@ -446,6 +475,57 @@ class RealmStage(Stage):
             f"{sum(1 for s in self.settlements if s.tier == 3)} villages)."
         )
 
+        # ── Trade network ────────────────────────────────────────────────────
+        ctx.report("Building trade network…")
+        tp = p.trade
+
+        # Sea edge costs (needed for the hybrid graph)
+        if COST_SURFACES.present(world):
+            from worldgen.cost.surfaces import build_sea_edge_costs
+            cs = COST_SURFACES.read(world)
+            sea_edge_costs = build_sea_edge_costs(mesh, cs.sea_base_cost, cs.sea_passable)
+            sea_passable = cs.sea_passable
+        else:
+            sea_passable = np.zeros(n, dtype=bool)
+            sea_edge_costs = [np.empty(0, dtype=np.float64) for _ in range(n)]
+
+        # Collect good sources from minerals and rare_bio deposits
+        good_sources: list[tuple] = []
+        for channel in (MINERALS, RARE_BIO):
+            if channel.present(world):
+                positions, _, abundances = channel.read(world)
+                if len(positions) > 0:
+                    fids = _positions_to_face_ids(positions, centroids)
+                    good_sources.extend(zip(fids.tolist(), abundances.tolist()))
+
+        self.trade_result = compute_trade_network(
+            mesh,
+            self.settlements,
+            good_sources,
+            edge_costs,
+            ~is_water,   # land_passable
+            sea_edge_costs,
+            sea_passable,
+            port_cost=tp.port_cost,
+            river_switch_cost=tp.river_switch_cost,
+            demand_penalty=tp.demand_penalty,
+            flow_decay=tp.flow_decay,
+            hub_flow_quantile=tp.hub_flow_quantile,
+            tier_demands=DEFAULT_TIER_DEMANDS,
+        )
+
+        # Per-face trade_flow metadata
+        TRADE_FLOW.write(mesh, self.trade_result.face_flow)
+
+        # is_trade_hub metadata flag
+        mesh.apply_metadata_channel("is_trade_hub", self.trade_result.hub_mask)
+
+        world.add_feature("trade_routes", self.trade_result.routes)
+        ctx.report(
+            f"Trade network done: {len(self.trade_result.routes)} route segments, "
+            f"{self.trade_result.hub_mask.sum()} hub faces."
+        )
+
     def register_display(
         self, world: "World | None", reg: DisplayRegistry, *, debug: bool = False
     ) -> None:
@@ -458,8 +538,17 @@ class RealmStage(Stage):
             reg.add_scheme("Suitability", _suitability_color)
         if self.situational_value is not None:
             reg.add_scheme("Situational Value", _situational_color)
+        if self.trade_result is not None:
+            max_flow = float(self.trade_result.face_flow.max()) if self.trade_result.face_flow.size else 0.0
+            _max_flow_ref = [max_flow]
+            reg.add_scheme(
+                "Trade Flow",
+                lambda meta, _ref=_max_flow_ref: _trade_flow_color(meta, _ref),
+            )
         if self.settlements is not None:
             reg.add_overlay("settlements", "Settlements", checked=True)
+        if self.trade_result is not None and self.trade_result.routes:
+            reg.add_overlay("trade_routes", "Trade Routes", checked=True)
 
 
 # ── Pipeline ────────────────────────────────────────────────────────────────────
