@@ -122,9 +122,9 @@ class ResourceAccessParams:
 @paramclass
 class SuitabilityWeightParams:
     water_weight: float = _f(0.30, label="Water weight", min=0.0, max=1.0)
-    climate_weight: float = _f(0.30, label="Climate weight", min=0.0, max=1.0)
-    fertility_weight: float = _f(0.25, label="Fertility weight", min=0.0, max=1.0)
-    resource_weight: float = _f(0.15, label="Resource weight", min=0.0, max=1.0)
+    climate_weight: float = _f(0.20, label="Climate weight", min=0.0, max=1.0)
+    fertility_weight: float = _f(0.4, label="Fertility weight", min=0.0, max=1.0)
+    resource_weight: float = _f(0.1, label="Resource weight", min=0.0, max=1.0)
 
 
 @paramclass
@@ -187,11 +187,11 @@ class SeederParams:
         metadata={"label": "Cities"},
     )
     tier2: TierParams = field(
-        default_factory=lambda: TierParams(exclusion_radius=6.0, score_threshold=0.14),
+        default_factory=lambda: TierParams(exclusion_radius=6.0, score_threshold=0.2),
         metadata={"label": "Towns"},
     )
     tier3: TierParams = field(
-        default_factory=lambda: TierParams(exclusion_radius=3.0, score_threshold=0.05),
+        default_factory=lambda: TierParams(exclusion_radius=3.0, score_threshold=0.1),
         metadata={"label": "Villages"},
     )
 
