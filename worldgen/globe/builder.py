@@ -93,7 +93,7 @@ class GlobeBuilder:
         its slice, then hands the registry to the viz adapter for Qt wiring. The
         adapter is imported lazily so this module stays Qt-free.
         """
-        from utils.mapview.registry import apply_registry
+        from viz.mapview.registry import apply_registry
 
         world = self.globe
         assert world is not None and world.mesh is not None, (

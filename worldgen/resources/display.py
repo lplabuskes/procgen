@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from utils.color_stops import interp_stops
+from viz.color_stops import interp_stops
 from worldgen.geology.display import OCEAN_COLOR
 from worldgen.hydrology.builder import LAKE_COLOR
 from worldgen.resources.crops import CROP_NAMES, N_CROPS

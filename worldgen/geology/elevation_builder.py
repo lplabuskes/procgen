@@ -17,7 +17,7 @@ from worldgen.geology.elevation import (
     face_elevations_from_texture,
     smooth_elevation_seams,
 )
-from utils.color_stops import interp_stops_scalar
+from viz.color_stops import interp_stops_scalar
 from worldgen.geology.display import (
     BOUNDARY_COLORS,
     LAND_COLOR,

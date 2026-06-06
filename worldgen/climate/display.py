@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from utils.color_stops import interp_stops
+from viz.color_stops import interp_stops
 from worldgen.geology.display import OCEAN_COLOR
 
 _OCEAN_RGBA = np.array(OCEAN_COLOR, dtype=np.float32)

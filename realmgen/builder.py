@@ -53,7 +53,7 @@ from worldgen.climate.channels import (
     TEMPERATURE_COLDEST,
     TEMPERATURE_WARMEST,
 )
-from utils.color_stops import interp_stops_scalar
+from viz.color_stops import interp_stops_scalar
 from worldgen.cost.channels import IS_STRAIT, IS_WATER
 from worldgen.geology.channels import ELEVATION, IS_OCEAN
 from worldgen.geology.display import OCEAN_COLOR

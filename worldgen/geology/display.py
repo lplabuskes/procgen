@@ -4,7 +4,7 @@ import colorsys
 
 import numpy as np
 
-from utils.color_stops import interp_stops, interp_stops_scalar
+from viz.color_stops import interp_stops, interp_stops_scalar
 
 
 OCEAN_COLOR = (0.25, 0.55, 0.85, 1.0)

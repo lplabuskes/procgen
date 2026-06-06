@@ -3,7 +3,7 @@ import sys
 import numpy as np
 from PySide6.QtWidgets import QApplication
 
-from utils.mapview.mapview import MapWindow
+from viz.mapview.mapview import MapWindow
 from core.mesh import Mesh
 
 if __name__ == "__main__":

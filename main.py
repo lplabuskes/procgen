@@ -5,8 +5,8 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
 
-from utils.mapview.mapview import MapWindow
-from utils.params_dialog import ParamsDialog
+from viz.mapview.mapview import MapWindow
+from viz.params_dialog import ParamsDialog
 from worldgen.globe import GlobeBuilder, GlobeParams
 from worldgen.globe.serialization import load_globe, save_globe
 

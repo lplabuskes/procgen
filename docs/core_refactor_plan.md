@@ -219,8 +219,11 @@ class DisplayRegistry:
    (scripts `measure_*`, tests `test_elevation`/`test_cost`) converted to the `build(ctx)` idiom.
    **297 tests green**; verified end-to-end build, save/load round-trip, `apply_display`
    (debug + non-debug), and realm-on-top.
-7. **`viz/` extraction** (optional, last) — move `mapview`, `projections`, `params_dialog`,
-   `mesh/gui` under `viz/`; add `apply_registry(reg, window)`.
+7. **[DONE] `viz/` extraction** — moved `mapview`, `projections`, `params_dialog`, `mesh/gui`
+   under `viz/`; `apply_registry` lives in `viz/mapview/registry.py`. Back-compat shims left
+   in `utils/mapview/mapview.py`, `utils/params_dialog.py`, and `worldgen/mesh/gui.py`.
+   Callers updated: `main.py`, `worldgen/globe/builder.py`, `worldgen/mesh/main.py`,
+   `worldgen/main_mesh.py`. `pyproject.toml` testpath updated. **297 tests green.**
 8. **`humangen/`** — rename/expand `realmgen` once city/name stages exist; not required for
    the refactor itself.
 

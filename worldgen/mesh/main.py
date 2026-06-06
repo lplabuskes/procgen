@@ -4,7 +4,7 @@ import numpy as np
 from PySide6.QtWidgets import QApplication
 
 from core.mesh import Mesh
-from worldgen.mesh.gui import MainWindow
+from viz.mesh.gui import MainWindow
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 source .venv/bin/activate
 python3 main.py                     # primary entrypoint — full procedural world viewer
 python3 -m worldgen.mesh.main       # 3-D mesh viewer (dev)
-python3 -m utils.mapview.main       # 2-D map viewer (dev)
+python3 -m viz.mapview.main         # 2-D map viewer (dev)
 ```
 
 No build step or linter is configured. Run the test suites with:
@@ -22,12 +22,12 @@ No build step or linter is configured. Run the test suites with:
 ```bash
 python3 -m pytest                                       # all tests (testpaths in pyproject.toml)
 python3 -m pytest core/test/test_mymesh.py -v
-python3 -m pytest utils/mapview/test/test_mapview.py -v
+python3 -m pytest viz/mapview/test/test_mapview.py -v
 ```
 
 `core/test/test_mymesh.py` covers `Mesh` (icosphere topology, unit-sphere property, outward face normals) and `Mesh.mesh_dual` (dual topology counts, face sizes, and correct CCW winding of all fan triangles).
 
-`utils/mapview/test/test_mapview.py` covers all four projections (equator/meridian anchors, N/S and E/W symmetry, projection-specific bounds, `project` vs `project_lonlat` consistency) and `_split_at_antimeridian` (no-crossing passthrough, two-polygon split, boundary latitude continuity).
+`viz/mapview/test/test_mapview.py` covers all four projections (equator/meridian anchors, N/S and E/W symmetry, projection-specific bounds, `project` vs `project_lonlat` consistency) and `_split_at_antimeridian` (no-crossing passthrough, two-polygon split, boundary latitude continuity).
 
 ## Diagnostic Scripts
 
@@ -69,7 +69,7 @@ The top-level orchestrator is `worldgen.globe.GlobeBuilder`, which runs each sta
 - **`PolygonMesh`**: Base class for any polygon mesh. Pre-computes `face_adjacency`, `face_centroids`, `face_metadata`, and fan-triangulated render arrays at construction. Key API: `set_face_colors(colors)`, `set_face_metadata(face_idx, **kw)`, `apply_metadata_channel(key, values)` (bulk-write one metadata key across all faces), `set_face_textures(name, textures, n_channels=4)` (attach `(N, H, W, C)` float32; use `n_channels=1` for data layers like elevation, 4 for RGBA display), `face_texture_positions(h, w)` (unit-sphere 3D position of every texture pixel — starting point for any per-pixel geographic computation), `face_tangent_frames()` (raw per-face tangent-plane data for projecting arbitrary 3D points into a face's UV space).
 - **`Mesh`** (subclass of `PolygonMesh`): Triangular mesh. `icosphere(depth)` generates a subdivided icosahedron; vertices are sorted along the Z-axis for spatial locality. `.deregularize(n_swaps, n_relax, stiffness, outer_iters)` breaks regularity via random edge-swaps and spring relaxation on the unit sphere. `.mesh_dual()` returns a `PolygonMesh` by placing new vertices at face centroids (normalized to unit sphere), then for each original vertex builds a CCW-wound face from the centroids of its adjacent faces.
 
-### `worldgen/mesh/gui.py` — OpenGL/Qt renderer
+### `viz/mesh/gui.py` — OpenGL/Qt renderer
 
 - **`MeshViewer`** (`QOpenGLWidget`): Renders a `PolygonMesh` using VBOs and `glDrawArrays` (OpenGL 3.3 compatibility). Drives ~60 FPS via a timer and rotates the mesh 0.5°/frame. When the mesh has `face_textures`, `_setup_buffers` packs all per-face textures into a square grid atlas (rows × cols), uploads it as a single `GL_TEXTURE_2D`, and substitutes a UV VBO (`uv_buffer`) for the color VBO; the atlas UV coordinates account for the v-flip between numpy (row 0 = top) and OpenGL (v=0 = bottom). Without textures, the original color-array path is used.
 - **`MainWindow`** (`QMainWindow`): Hosts `MeshViewer`; exposes `set_mesh(mesh)` to swap the displayed mesh at runtime (calls `makeCurrent`/`doneCurrent` around buffer setup).
@@ -78,7 +78,7 @@ The top-level orchestrator is `worldgen.globe.GlobeBuilder`, which runs each sta
 
 Creates an `icosphere(depth=4)`, deregularizes it, computes its dual, builds a radial-gradient per-face texture tinted by each face's random color, and opens the viewer.
 
-### `utils/mapview/projections.py` — Map projections
+### `viz/mapview/projections.py` — Map projections
 
 All projections share a `Projection` base class with `project(ecef_vertices)` and `project_lonlat(lonlat)` methods (ECEF convention: Z is north, lon=0 at +X). Output is `float32 (N, 2)` in normalized map coordinates.
 
@@ -87,13 +87,13 @@ All projections share a `Projection` base class with `project(ecef_vertices)` an
 - **`MollweideProjection`**: Equal-area pseudocylindrical; solved via Newton iteration for auxiliary angle θ. Fits an ellipse with semi-axes √2 (u) and √2 (v).
 - **`RobinsonProjection`**: Table-based compromise; parallel lengths and y-offsets interpolated from the original Robinson lookup tables at 5° latitude steps.
 
-### `utils/mapview/mapview.py` — Qt map widget
+### `viz/mapview/mapview.py` — Qt map widget
 
 - **`_split_at_antimeridian(face_ecef, face_uv=None)`**: Splits a unit-sphere polygon at the ±180° meridian; with `face_uv`, also interpolates UVs at crossing points and returns `(lonlat, uv)` pairs.
 - **`MapWidget`** (`QWidget`): `QPainter`-based projected polygon renderer with pan/zoom. Renders faces as solid color, named color schemes (callables over `face_metadata`), or per-face textures (affine UV mapping via `QBrush`/`QTransform` per fan triangle). Draws vector overlays from `Globe.features` on top; the `"rivers"` overlay scales line width by flow and skips `in_lake` segments. Hover hit-testing via bbox pre-filter + point-in-polygon + barycentric UV (`set_hover_callback`).
 - **`MapWindow`** (`QMainWindow`): Hosts `MapWidget` with projection selector, color scheme selector, overlay checkboxes, legend panel, Re-run/Params/Save buttons, and status bar.
 
-### `utils/mapview/main.py` — Entry point
+### `viz/mapview/main.py` — Entry point
 
 Creates an `icosphere(depth=4)`, deregularizes it, computes its dual, builds a radial-gradient per-face texture tinted by each face's random color, and opens the map viewer.
 
@@ -157,7 +157,7 @@ Final physical stage. Converts already-computed data into the **base** land + se
 
 - **`Globe`** ([globe.py](worldgen/globe/globe.py)): Container for a generated world. Holds `mesh: PolygonMesh` plus a generic feature registry: `add_feature(name, data)`, `get_feature(name)`, `has_feature(name)`, `remove_feature(name)`, `feature_names()`. Use the registry for vector-style overlays (rivers, coastlines) that don't fit the per-face structure.
 - **`GlobeParams`** ([builder.py](worldgen/globe/builder.py)): Composes per-stage params dataclasses. Exposes `elevation: ElevationParams`, `climate: ClimateParams`, `hydrology: HydrologyParams`, `resources: ResourcesParams`, and `cost: CostParams`; add new stages as new fields.
-- **`GlobeBuilder`** ([builder.py](worldgen/globe/builder.py)): Owns a `GlobeParams`, instantiates `elevation_builder: ElevationBuilder`, `climate_builder: ClimateBuilder`, `hydrology_builder: HydrologyBuilder`, `resources_builder: ResourcesBuilder`, and `cost_builder: CostBuilder` — **each is itself a `Stage`** — and composes them into a `Pipeline([elevation, climate, hydrology, climate.lake_feedback_stage(), resources, cost])`. `build(progress=...)` creates a `World` + `BuildContext` and runs `pipeline.build(ctx)`; each stage reads its inputs from the context and registers its own features (so there is no manual orchestration or hand-registration). Returns the `World`. The climate lake-feedback second pass is the explicit node after hydrology. Stage builders remain accessible as attributes. Also registers wind vectors as a `"winds"` globe feature: a list of `(centroids, wind_vectors)` tuples, one per season; and (when currents are enabled) a `"currents"` feature as a one-element list `[(centroids, current_vectors, temperature_delta)]` (3-tuple carrying the annual-mean current and per-face ΔT). `apply_display(window, debug=False)` builds a `DisplayRegistry` by calling each pipeline stage's `register_display(world, reg, debug=...)`, then hands it to the viz adapter (`utils/mapview/registry.py:apply_registry`) for Qt wiring — call this after `build()`. By default only **Elevation** and **Biome** (plus **Dominant Crop**) schemes are registered; with `debug=True` the full set is added: Plates, Plate Type, Speed, Boundary, Volcanic Activity, Annual Temperature, Summer Temperature, Winter Temperature, Annual Precipitation, Humidity, Fertility, Forest Density, Land Cost, Sea Cost (the last two read the per-face cost metadata; Land Cost treats ocean ∪ lake as water, Sea Cost shows all sailable water — ocean, lakes, navigable rivers — highlighting strait chokepoints), plus hover callback on the status bar and winds/currents overlays. The single-channel→RGBA display-texture helpers `build_elevation_display_texture(mesh)` (in `worldgen/geology/display.py`) and `build_biome_display_texture(mesh)` (in `worldgen/climate/display.py`) are re-exported from `worldgen.globe.builder` for back-compat.
+- **`GlobeBuilder`** ([builder.py](worldgen/globe/builder.py)): Owns a `GlobeParams`, instantiates `elevation_builder: ElevationBuilder`, `climate_builder: ClimateBuilder`, `hydrology_builder: HydrologyBuilder`, `resources_builder: ResourcesBuilder`, and `cost_builder: CostBuilder` — **each is itself a `Stage`** — and composes them into a `Pipeline([elevation, climate, hydrology, climate.lake_feedback_stage(), resources, cost])`. `build(progress=...)` creates a `World` + `BuildContext` and runs `pipeline.build(ctx)`; each stage reads its inputs from the context and registers its own features (so there is no manual orchestration or hand-registration). Returns the `World`. The climate lake-feedback second pass is the explicit node after hydrology. Stage builders remain accessible as attributes. Also registers wind vectors as a `"winds"` globe feature: a list of `(centroids, wind_vectors)` tuples, one per season; and (when currents are enabled) a `"currents"` feature as a one-element list `[(centroids, current_vectors, temperature_delta)]` (3-tuple carrying the annual-mean current and per-face ΔT). `apply_display(window, debug=False)` builds a `DisplayRegistry` by calling each pipeline stage's `register_display(world, reg, debug=...)`, then hands it to the viz adapter (`viz/mapview/registry.py:apply_registry`) for Qt wiring — call this after `build()`. By default only **Elevation** and **Biome** (plus **Dominant Crop**) schemes are registered; with `debug=True` the full set is added: Plates, Plate Type, Speed, Boundary, Volcanic Activity, Annual Temperature, Summer Temperature, Winter Temperature, Annual Precipitation, Humidity, Fertility, Forest Density, Land Cost, Sea Cost (the last two read the per-face cost metadata; Land Cost treats ocean ∪ lake as water, Sea Cost shows all sailable water — ocean, lakes, navigable rivers — highlighting strait chokepoints), plus hover callback on the status bar and winds/currents overlays. The single-channel→RGBA display-texture helpers `build_elevation_display_texture(mesh)` (in `worldgen/geology/display.py`) and `build_biome_display_texture(mesh)` (in `worldgen/climate/display.py`) are re-exported from `worldgen.globe.builder` for back-compat.
 
 ### `worldgen/geology/tectonics.py` — Plate tectonics simulation
 

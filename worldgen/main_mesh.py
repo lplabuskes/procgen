@@ -4,7 +4,7 @@ from PySide6.QtWidgets import QApplication
 
 from worldgen.geology.display import build_elevation_display_texture
 from worldgen.globe import GlobeBuilder, GlobeParams
-from worldgen.mesh.gui import MainWindow
+from viz.mesh.gui import MainWindow
 
 
 def main() -> None:
