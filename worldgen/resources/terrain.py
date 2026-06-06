@@ -116,3 +116,21 @@ def volcanic_faces(mesh: PolygonMesh, threshold: float) -> np.ndarray:
     stage). Faces without the key are treated as non-volcanic.
     """
     return VOLCANIC_ACTIVITY.read(mesh) >= threshold
+
+
+def coastal_ocean_faces(mesh: PolygonMesh, is_ocean: np.ndarray) -> np.ndarray:
+    """Bool mask of ocean faces that border at least one non-ocean face.
+
+    Used as BFS seeds for computing ocean depth (distance from coast into open
+    water), which drives the coastal-proximity factor in aquatic fertility.
+    """
+    n = len(mesh.faces)
+    mask = np.zeros(n, dtype=bool)
+    for i in range(n):
+        if not is_ocean[i]:
+            continue
+        for nb in mesh.face_adjacency[i]:
+            if not is_ocean[nb]:
+                mask[i] = True
+                break
+    return mask

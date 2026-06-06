@@ -19,7 +19,7 @@ from core.display import DisplayRegistry
 from core.pipeline import BuildContext, Stage
 from core.world import World
 from worldgen.climate.channels import BIOME, PRECIPITATION, TEMPERATURE
-from worldgen.geology.channels import ELEVATION, OCEAN_MASK
+from worldgen.geology.channels import ELEVATION, IS_OCEAN, OCEAN_MASK
 from worldgen.hydrology.channels import LAKE_MASK, RIVER_OBJECTS
 from worldgen.resources.channels import FERTILITY_MEAN, MINERALS, RARE_BIO
 from worldgen.resources.crops import classify_crops
@@ -36,11 +36,12 @@ from worldgen.resources.display import (
     mineral_legend_entries,
     rare_bio_legend_entries,
 )
-from worldgen.resources.fertility import compute_fertility
+from worldgen.resources.fertility import compute_aquatic_fertility, compute_fertility
 from worldgen.resources.forest import compute_forest_density
 from worldgen.resources.minerals import place_mineral_deposits
 from worldgen.resources.rare_bio import place_rare_bio_resources
 from worldgen.resources.terrain import (
+    coastal_ocean_faces,
     face_elevation_range,
     face_hops_from_seeds,
     lake_containing_faces,
@@ -67,6 +68,18 @@ class FertilityParams:
     forest_penalty_strength: float = _f(
         0.30, label="Forest penalty strength", min=0.0, max=1.0
     )
+    ocean_coast_decay_per_hop: float = _f(0.20, label="Ocean coast decay/hop", min=0.01, max=2.0)
+    ocean_coast_max_hops: int = _f(8, label="Ocean coast max hops", min=1, max=20)
+    ocean_optimal_temperature_c: float = _f(8.0, label="Ocean optimal T (°C)", min=-10.0, max=25.0)
+    ocean_temperature_sigma_c: float = _f(12.0, label="Ocean T σ (°C)", min=1.0, max=30.0)
+    ocean_upwelling_bonus: float = _f(0.6, label="Upwelling bonus", min=0.0, max=2.0)
+    ocean_upwelling_scale_c: float = _f(4.0, label="Upwelling scale (°C)", min=1.0, max=20.0)
+    lake_base_fertility: float = _f(0.40, label="Lake base fertility", min=0.0, max=1.0)
+    lake_river_bonus: float = _f(0.40, label="Lake river bonus", min=0.0, max=2.0)
+    lake_river_decay_per_hop: float = _f(0.40, label="Lake river decay/hop", min=0.05, max=3.0)
+    lake_river_max_hops: int = _f(6, label="Lake river max hops", min=0, max=16)
+    lake_optimal_temperature_c: float = _f(15.0, label="Lake optimal T (°C)", min=-5.0, max=30.0)
+    lake_temperature_sigma_c: float = _f(10.0, label="Lake T σ (°C)", min=1.0, max=30.0)
 
 
 @paramclass
@@ -199,16 +212,31 @@ class ResourcesBuilder(Stage):
         lake_mask_tex = LAKE_MASK.read(mesh) if LAKE_MASK.present(mesh) else None
 
         face_biome = BIOME.read(mesh)
+        is_ocean = IS_OCEAN.read(mesh)                             # (N,) bool
+        is_lake_face = (
+            lake_containing_faces(lake_mask_tex)
+            if lake_mask_tex is not None
+            else np.zeros(n, dtype=bool)
+        )                                                          # (N,) bool
 
         _report("Computing terrain ruggedness…")
         face_elev_range = face_elevation_range(elevation_tex)      # (N,) km
 
         _report("Computing water-proximity hops…")
-        water_seed_mask = river_traversed_faces(rivers, n_faces=n)
+        river_seed_mask = river_traversed_faces(rivers, n_faces=n)
+        river_hops = face_hops_from_seeds(
+            mesh, river_seed_mask, max_hops=fp.lake_river_max_hops
+        )
+        water_seed_mask = river_seed_mask.copy()
         if lake_mask_tex is not None:
             water_seed_mask |= lake_containing_faces(lake_mask_tex)
         water_max_hops = max(fp.floodplain_max_hops, gp.riparian_max_hops)
         water_hops = face_hops_from_seeds(mesh, water_seed_mask, max_hops=water_max_hops)
+
+        _report("Computing ocean depth hops…")
+        ocean_depth_hops = face_hops_from_seeds(
+            mesh, coastal_ocean_faces(mesh, is_ocean), max_hops=fp.ocean_coast_max_hops
+        )
 
         _report("Computing volcanism-proximity hops…")
         volcanism_seed_mask = volcanic_faces(mesh, fp.volcanism_threshold)
@@ -245,6 +273,29 @@ class ResourcesBuilder(Stage):
             forest_density_tex=forest,
             mesh=mesh,
         )                                                          # (N, H, W, 1)
+
+        _report("Computing aquatic fertility…")
+        current_temp_delta: np.ndarray | None = None
+        if ctx.world.has_feature("currents"):
+            currents_list = ctx.world.get_feature("currents")
+            if currents_list:
+                _, _, current_temp_delta = currents_list[0]
+        aquatic_fert = compute_aquatic_fertility(
+            temperature_tex=temperature_tex,
+            is_ocean=is_ocean,
+            is_lake=is_lake_face,
+            ocean_depth_hops=ocean_depth_hops,
+            river_hops=river_hops,
+            current_temp_delta=current_temp_delta,
+            params=fp,
+        )                                                          # (N,) float32
+        fert_arr = fertility[..., 0]                               # (N, H, W)
+        ocean_px = ocean_mask_tex[..., 0] > 0
+        fert_arr = np.where(ocean_px, aquatic_fert[:, None, None], fert_arr)
+        if lake_mask_tex is not None:
+            lake_px = lake_mask_tex[..., 0] > 0
+            fert_arr = np.where(lake_px, aquatic_fert[:, None, None], fert_arr)
+        fertility = fert_arr[..., None].astype(np.float32)         # (N, H, W, 1)
 
         _report("Computing crop suitability…")
         dominant_crop = classify_crops(

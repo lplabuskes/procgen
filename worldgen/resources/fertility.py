@@ -135,6 +135,82 @@ def _hop_bonus(hops: np.ndarray, bonus: float, decay_per_hop: float, max_hops: i
     return factor.astype(np.float32)
 
 
+def compute_aquatic_fertility(
+    *,
+    temperature_tex: np.ndarray,
+    is_ocean: np.ndarray,
+    is_lake: np.ndarray,
+    ocean_depth_hops: np.ndarray,
+    river_hops: np.ndarray,
+    current_temp_delta: np.ndarray | None,
+    params: "FertilityParams",
+) -> np.ndarray:
+    """Per-face fishing productivity in [0, 1] for ocean and lake faces.
+
+    Ocean: coastal_proximity × SST_factor × (1 + upwelling_bonus).
+      - Coastal proximity decays exponentially with BFS hops from shore.
+      - SST factor peaks in cold-temperate water (~8 °C); open tropical ocean scores low.
+      - Upwelling bonus scales with negative current temperature delta (cold currents).
+
+    Lake: base × river_proximity × temperature_factor.
+      - River-proximity bonus rewards lakes fed by rivers (nutrient input).
+      - Temperature factor penalises permanently frozen lakes.
+
+    Land faces return 0.
+
+    Args:
+        temperature_tex: (N, H, W, K) float32 °C.
+        is_ocean: (N,) bool — per-face ocean flag.
+        is_lake: (N,) bool — per-face lake flag (≥5 % of pixels lake).
+        ocean_depth_hops: (N,) int — BFS hops from coastal ocean faces.
+        river_hops: (N,) int — BFS hops from river-traversed faces only.
+        current_temp_delta: (N,) float32 or None — ocean-current ΔT; None when
+            currents are disabled.
+        params: FertilityParams — aquatic knobs.
+
+    Returns:
+        (N,) float32 in [0, 1].
+    """
+    p = params
+    n = len(is_ocean)
+    result = np.zeros(n, dtype=np.float32)
+
+    t_annual = temperature_tex.mean(axis=-1).mean(axis=(1, 2)).astype(np.float32)
+
+    if is_ocean.any():
+        coastal = np.exp(
+            -ocean_depth_hops.astype(np.float32) * p.ocean_coast_decay_per_hop
+        )
+        t_factor = np.exp(
+            -0.5 * ((t_annual - p.ocean_optimal_temperature_c) /
+                    max(p.ocean_temperature_sigma_c, 1e-3)) ** 2
+        )
+        if current_temp_delta is not None:
+            cold_delta = np.maximum(0.0, -current_temp_delta.astype(np.float32))
+            upwelling = p.ocean_upwelling_bonus * np.tanh(
+                cold_delta / max(p.ocean_upwelling_scale_c, 1e-3)
+            )
+        else:
+            upwelling = np.zeros(n, dtype=np.float32)
+        ocean_fert = (coastal * t_factor * (1.0 + upwelling)).astype(np.float32)
+        result = np.where(is_ocean, ocean_fert, result).astype(np.float32)
+
+    if is_lake.any():
+        river_prox = 1.0 + p.lake_river_bonus * np.exp(
+            -river_hops.astype(np.float32) * p.lake_river_decay_per_hop
+        )
+        river_prox = river_prox.astype(np.float32)
+        river_prox[river_hops > p.lake_river_max_hops] = 1.0
+        t_factor_lake = np.exp(
+            -0.5 * ((t_annual - p.lake_optimal_temperature_c) /
+                    max(p.lake_temperature_sigma_c, 1e-3)) ** 2
+        ).astype(np.float32)
+        lake_fert = (p.lake_base_fertility * river_prox * t_factor_lake).astype(np.float32)
+        result = np.where(is_lake, lake_fert, result).astype(np.float32)
+
+    return np.clip(result, 0.0, 1.0).astype(np.float32)
+
+
 def compute_fertility(
     *,
     temperature_tex: np.ndarray,
