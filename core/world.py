@@ -4,8 +4,7 @@ Holds the surface ``mesh`` (rasterized per-face data: textures + metadata) plus 
 generic feature registry for vector/point/graph entities (rivers, minerals,
 coastlines, and future cities/roads/realms) that don't fit the per-face raster.
 
-This is the promoted form of the old ``worldgen.globe.Globe`` (which now aliases
-``World``). The mesh is ``Optional`` because the mesh-producing stage (elevation)
+This is the promoted form of the old ``worldgen.globe.Globe``. The mesh is ``Optional`` because the mesh-producing stage (elevation)
 sets it during ``Pipeline.build``; ``BuildContext.mesh`` guards access before then.
 """
 from __future__ import annotations

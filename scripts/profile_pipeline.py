@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from core.pipeline import BuildContext  # noqa: E402
 from core.world import World  # noqa: E402
-from worldgen.globe.builder import GlobePipeline, GlobeParams  # noqa: E402
+from worldgen import GlobePipeline, GlobeParams  # noqa: E402
 from core import mesh_cache  # noqa: E402
 
 

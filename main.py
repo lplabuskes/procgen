@@ -9,8 +9,7 @@ from core.pipeline import BuildContext
 from core.world import World
 from viz.mapview.mapview import MapWindow
 from viz.params_dialog import ParamsDialog
-from worldgen.globe import GlobePipeline, GlobeParams
-from worldgen.globe.serialization import load_globe, save_globe
+from worldgen import GlobePipeline, GlobeParams, load_globe, save_globe
 
 
 class GlobeParamsDialog(ParamsDialog):

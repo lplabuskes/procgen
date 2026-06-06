@@ -22,7 +22,7 @@ from realmgen.builder import (
     RealmPipeline,
     SituationalValueWeightParams,
 )
-from worldgen.globe.builder import GlobePipeline, GlobeParams
+from worldgen import GlobePipeline, GlobeParams
 
 
 def _norm(v) -> np.ndarray:

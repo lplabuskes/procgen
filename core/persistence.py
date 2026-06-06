@@ -12,8 +12,8 @@ A ``.npz`` therefore contains:
   * ``face_metadata_json``                  — per-face metadata dicts
   * whatever keys each stage's ``serialize`` contributes
 
-A domain layer (``worldgen.globe.serialization``) supplies the params class and a
-builder factory; this module stays free of ``worldgen`` imports so the
+A domain layer (``worldgen.builder``) supplies the params class and a builder
+factory; this module stays free of ``worldgen`` imports so the
 ``worldgen -> core`` dependency edge is never reversed.
 """
 from __future__ import annotations

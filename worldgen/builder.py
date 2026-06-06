@@ -1,30 +1,29 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from pathlib import Path
+from typing import Optional, Union
 
 from core.display import DisplayRegistry
+from core.persistence import load_world, save_world
 from core.pipeline import BuildContext, Pipeline
+from core.world import World
 from worldgen.climate.builder import ClimateBuilder, ClimateParams
 from worldgen.cost.builder import CostBuilder, CostParams
 from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams
 from worldgen.hydrology.builder import HydrologyBuilder, HydrologyParams
 from worldgen.resources.builder import ResourcesBuilder, ResourcesParams
-from core.world import World
 
 __all__ = [
     "GlobeParams",
     "GlobePipeline",
+    "save_globe",
+    "load_globe",
 ]
 
 
 @dataclass
 class GlobeParams:
-    """Top-level parameters for the full globe-generation pipeline.
-
-    Stage-specific params are nested. New stages add their own params
-    dataclass as a new field here.
-    """
     elevation: ElevationParams = field(default_factory=ElevationParams)
     climate: ClimateParams = field(default_factory=ClimateParams, metadata={"label": "Climate"})
     hydrology: HydrologyParams = field(default_factory=HydrologyParams, metadata={"label": "Hydrology"})
@@ -33,13 +32,6 @@ class GlobeParams:
 
 
 class GlobePipeline(Pipeline):
-    """Ordered pipeline of every worldgen stage.
-
-    Each stage builder is stored as an attribute so callers can read
-    intermediate results without re-running work. Call ``build(ctx)``
-    with a shared ``BuildContext`` to run all stages in order.
-    """
-
     def __init__(self, params: GlobeParams | None = None) -> None:
         self.params: GlobeParams = params or GlobeParams()
         self.elevation_builder: ElevationBuilder = ElevationBuilder(self.params.elevation)
@@ -48,8 +40,7 @@ class GlobePipeline(Pipeline):
         self.resources_builder: ResourcesBuilder = ResourcesBuilder(self.params.resources)
         self.cost_builder: CostBuilder = CostBuilder(self.params.cost)
 
-        # The climate lake-feedback second pass is an explicit node placed after
-        # hydrology, sharing the climate builder instance.
+        # Lake-feedback second pass is placed after hydrology, sharing the climate builder.
         super().__init__([
             self.elevation_builder,
             self.climate_builder,
@@ -65,12 +56,6 @@ class GlobePipeline(Pipeline):
         self.globe = ctx.world
 
     def apply_display(self, window, debug: bool = False) -> None:
-        """Wire color schemes, overlays, and hover into a MapWindow after build().
-
-        Builds a ``DisplayRegistry`` by asking each pipeline stage to contribute
-        its slice, then hands the registry to the viz adapter for Qt wiring. The
-        adapter is imported lazily so this module stays Qt-free.
-        """
         from viz.mapview.registry import apply_registry
 
         world = self.globe
@@ -81,3 +66,19 @@ class GlobePipeline(Pipeline):
         for stage in self:
             stage.register_display(world, reg, debug=debug)
         apply_registry(reg, window, world)
+
+
+def save_globe(pipeline: GlobePipeline, path: Union[str, Path]) -> None:
+    if pipeline.globe is None:
+        raise RuntimeError("GlobePipeline.build() must be called before save_globe()")
+    save_world(pipeline.globe, pipeline.params, pipeline, path)
+
+
+def load_globe(path: Union[str, Path]) -> tuple[GlobePipeline, World]:
+    params, world, data = load_world(path, GlobeParams)
+    pipeline = GlobePipeline(params)
+    ctx = BuildContext(world=world)
+    for stage in pipeline:
+        stage.load(data, ctx)
+    pipeline.globe = world
+    return pipeline, world

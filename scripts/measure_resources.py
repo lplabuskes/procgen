@@ -38,7 +38,7 @@ import numpy as np  # noqa: E402
 from worldgen.climate.classification import BIOME_NAMES, N_BIOMES  # noqa: E402
 from core.pipeline import BuildContext  # noqa: E402
 from core.world import World  # noqa: E402
-from worldgen.globe.builder import GlobePipeline, GlobeParams  # noqa: E402
+from worldgen import GlobePipeline, GlobeParams  # noqa: E402
 
 
 RESULTS_DIR = Path(__file__).parent / "results"

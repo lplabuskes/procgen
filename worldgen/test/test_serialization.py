@@ -18,9 +18,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from worldgen.globe.serialization import load_globe, save_globe
+from worldgen import load_globe, save_globe
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 LEGACY_WORLD = REPO_ROOT / "saved_worlds" / "test.npz"
 
 

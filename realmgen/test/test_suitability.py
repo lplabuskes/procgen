@@ -28,7 +28,7 @@ from realmgen.builder import (
     SuitabilityWeightParams,
     WaterProximityParams,
 )
-from worldgen.globe.builder import GlobePipeline, GlobeParams
+from worldgen import GlobePipeline, GlobeParams
 
 
 def _norm(v) -> np.ndarray:
