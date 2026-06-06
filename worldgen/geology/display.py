@@ -4,6 +4,8 @@ import colorsys
 
 import numpy as np
 
+from utils.color_stops import interp_stops, interp_stops_scalar
+
 
 OCEAN_COLOR = (0.25, 0.55, 0.85, 1.0)
 LAND_COLOR = (0.72, 0.52, 0.25, 1.0)
@@ -43,28 +45,11 @@ def _plate_palette(n: int) -> np.ndarray:
     return rgba
 
 
-def _interp_stops_scalar(e: float, stops: list) -> tuple:
-    """Interpolate a scalar elevation through a stops list."""
-    if e <= stops[0][0]:
-        return stops[0][1]
-    if e >= stops[-1][0]:
-        return stops[-1][1]
-    for i in range(len(stops) - 1):
-        e0, c0 = stops[i]
-        e1, c1 = stops[i + 1]
-        if e0 == e1:
-            continue
-        if e0 <= e <= e1:
-            t = (e - e0) / (e1 - e0)
-            return tuple(c0[j] + t * (c1[j] - c0[j]) for j in range(4))
-    return stops[-1][1]
-
-
 def _elevation_color(meta: dict) -> tuple:
     e = meta["elevation"]
     is_ocean = bool(meta.get("is_ocean", e < 0.0))
     stops = _OCEAN_ELEVATION_STOPS if is_ocean else _LAND_ELEVATION_STOPS
-    return _interp_stops_scalar(e, stops)
+    return interp_stops_scalar(e, stops)
 
 
 def elevation_legend_entries(n: int = 5) -> list[tuple[str, tuple]]:
@@ -78,31 +63,10 @@ def elevation_legend_entries(n: int = 5) -> list[tuple[str, tuple]]:
     elevations = np.linspace(e_min, e_max, n)
     entries = []
     for e in elevations:
-        color = _interp_stops_scalar(e, _LAND_ELEVATION_STOPS)
+        color = interp_stops_scalar(e, _LAND_ELEVATION_STOPS)
         label = f"{e:+.1f} km" if e != 0.0 else "0 km"
         entries.append((label, color))
     return entries
-
-
-def _apply_stops_vec(elevs: np.ndarray, stops: list) -> np.ndarray:
-    """Linear interpolation through stops for an arbitrary-shape elevation array.
-
-    Returns (..., 4) float32.
-    """
-    shape = elevs.shape
-    result = np.full((*shape, 4), stops[-1][1], dtype=np.float32)
-    for i in range(len(stops) - 2, -1, -1):
-        e0, c0 = stops[i]
-        e1, c1 = stops[i + 1]
-        if e0 == e1:
-            continue
-        mask = (elevs >= e0) & (elevs <= e1)
-        t = np.where(mask, (elevs - e0) / (e1 - e0), 0.0)
-        for ch in range(4):
-            result[..., ch] = np.where(mask, c0[ch] + t * (c1[ch] - c0[ch]), result[..., ch])
-    result[elevs <= stops[0][0]] = np.array(stops[0][1], dtype=np.float32)
-    result[elevs >= stops[-1][0]] = np.array(stops[-1][1], dtype=np.float32)
-    return result
 
 
 def _elevation_color_vec(elevs: np.ndarray, ocean_mask: np.ndarray | None = None) -> np.ndarray:
@@ -120,8 +84,8 @@ def _elevation_color_vec(elevs: np.ndarray, ocean_mask: np.ndarray | None = None
         ocean_mask = elevs < 0.0
     is_ocean = ocean_mask.astype(bool)
     result = np.empty((*elevs.shape, 4), dtype=np.float32)
-    result[is_ocean] = _apply_stops_vec(elevs[is_ocean], _OCEAN_ELEVATION_STOPS)
-    result[~is_ocean] = _apply_stops_vec(elevs[~is_ocean], _LAND_ELEVATION_STOPS)
+    result[is_ocean] = interp_stops(elevs[is_ocean], _OCEAN_ELEVATION_STOPS)
+    result[~is_ocean] = interp_stops(elevs[~is_ocean], _LAND_ELEVATION_STOPS)
     return result
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from utils.color_stops import interp_stops
 from worldgen.geology.display import OCEAN_COLOR
 
 _OCEAN_RGBA = np.array(OCEAN_COLOR, dtype=np.float32)
@@ -46,23 +47,6 @@ _PRECIP_STOPS_MM = [
 ]
 
 
-def _interp_stops(values: np.ndarray, stops) -> np.ndarray:
-    """Linear interpolation through a list of (anchor, RGBA) stops."""
-    shape = values.shape
-    result = np.empty((*shape, 4), dtype=np.float32)
-    result[...] = stops[-1][1]
-    for i in range(len(stops) - 1):
-        a0, c0 = stops[i]
-        a1, c1 = stops[i + 1]
-        mask = (values >= a0) & (values < a1)
-        t = np.where(mask, (values - a0) / max(a1 - a0, 1e-9), 0.0)
-        for ch in range(4):
-            result[..., ch] = np.where(mask, c0[ch] + t * (c1[ch] - c0[ch]), result[..., ch])
-    result[values <= stops[0][0]] = np.array(stops[0][1], dtype=np.float32)
-    result[values >= stops[-1][0]] = np.array(stops[-1][1], dtype=np.float32)
-    return result
-
-
 # Humidity sequential palette: arid tan → moist blue-green.
 # Anchors are in dimensionless q_air units (evaporation_scale=1 gives
 # source values ~[0.3, 1.0]; ITCZ convergence can reach ~2.0).
@@ -86,7 +70,7 @@ def temperature_color(meta: dict, key: str = "temperature_annual") -> tuple:
     if _is_ocean_face(meta):
         return OCEAN_COLOR
     t = float(meta.get(key, 0.0))
-    return tuple(_interp_stops(np.array(t, dtype=np.float32), _TEMP_STOPS).tolist())
+    return tuple(interp_stops(np.array(t, dtype=np.float32), _TEMP_STOPS).tolist())
 
 
 def precipitation_color(meta: dict) -> tuple:
@@ -95,7 +79,7 @@ def precipitation_color(meta: dict) -> tuple:
         return OCEAN_COLOR
     p = max(float(meta.get("precipitation_annual", 0.0)), 1.0)
     log_stops = [(np.log10(a), c) for a, c in _PRECIP_STOPS_MM]
-    return tuple(_interp_stops(np.array(np.log10(p), dtype=np.float32), log_stops).tolist())
+    return tuple(interp_stops(np.array(np.log10(p), dtype=np.float32), log_stops).tolist())
 
 
 def humidity_color(meta: dict) -> tuple:
@@ -103,7 +87,7 @@ def humidity_color(meta: dict) -> tuple:
     if _is_ocean_face(meta):
         return OCEAN_COLOR
     h = float(meta.get("humidity_annual", 0.0))
-    return tuple(_interp_stops(np.array(h, dtype=np.float32), _HUMIDITY_STOPS).tolist())
+    return tuple(interp_stops(np.array(h, dtype=np.float32), _HUMIDITY_STOPS).tolist())
 
 
 def biome_color(meta: dict) -> tuple:
@@ -164,7 +148,7 @@ def build_temperature_display_texture(temperature_tex: np.ndarray,
         values = temperature_tex.mean(axis=-1)
     else:
         values = temperature_tex[..., season]
-    rgba = _interp_stops(values, _TEMP_STOPS)
+    rgba = interp_stops(values, _TEMP_STOPS)
     return _apply_ocean_mask(rgba, elevation_tex, ocean_mask_tex)
 
 
@@ -174,7 +158,7 @@ def build_precipitation_display_texture(precipitation_tex: np.ndarray,
     """Convert (N, H, W, K) mm/season texture to (N, H, W, 4) RGBA (annual log scale)."""
     annual = np.maximum(precipitation_tex.sum(axis=-1), 1.0)
     log_stops = [(np.log10(a), c) for a, c in _PRECIP_STOPS_MM]
-    rgba = _interp_stops(np.log10(annual), log_stops)
+    rgba = interp_stops(np.log10(annual), log_stops)
     return _apply_ocean_mask(rgba, elevation_tex, ocean_mask_tex)
 
 

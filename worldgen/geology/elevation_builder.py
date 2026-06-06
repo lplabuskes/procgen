@@ -17,6 +17,7 @@ from worldgen.geology.elevation import (
     face_elevations_from_texture,
     smooth_elevation_seams,
 )
+from utils.color_stops import interp_stops_scalar
 from worldgen.geology.display import (
     BOUNDARY_COLORS,
     LAND_COLOR,
@@ -26,6 +27,17 @@ from worldgen.geology.display import (
     build_elevation_display_texture,
     elevation_legend_entries,
 )
+
+_SPEED_STOPS = [
+    (0.0, (0.00, 0.50, 1.00, 1.0)),
+    (1.0, (1.00, 0.20, 0.00, 1.0)),
+]
+
+_VOLCANIC_STOPS = [
+    (0.0, (0.35, 0.35, 0.35, 1.0)),
+    (0.5, (0.95, 0.25, 0.00, 1.0)),
+    (1.0, (0.95, 0.05, 0.00, 1.0)),
+]
 from worldgen.geology.volcanism import compute_volcanism, generate_volcano_positions
 from worldgen.geology.tectonics import (
     assign_plate_types,
@@ -303,19 +315,11 @@ class ElevationBuilder(Stage):
         max_speed = self.max_speed
 
         def _speed_color(meta: dict) -> tuple:
-            t = meta["surface_speed"] / max_speed
-            return (t, 0.2 + 0.3 * (1.0 - t), 1.0 - t, 1.0)
+            t = min(max(meta["surface_speed"] / max_speed, 0.0), 1.0)
+            return interp_stops_scalar(t, _SPEED_STOPS)
 
         def _volcanic_color(meta: dict) -> tuple:
-            t = meta["volcanic_activity"]
-            if t <= 0.0:
-                return (0.35, 0.35, 0.35, 1.0)
-            elif t < 0.5:
-                s = t / 0.5
-                return (0.35 + 0.60 * s, 0.35 - 0.10 * s, 0.35 - 0.35 * s, 1.0)
-            else:
-                s = (t - 0.5) / 0.5
-                return (0.95, 0.25 - 0.20 * s, 0.0, 1.0)
+            return interp_stops_scalar(meta["volcanic_activity"], _VOLCANIC_STOPS)
 
         reg.add_scheme("Plates", lambda meta: tuple(palette[meta["plate_id"]]))
         reg.add_scheme(

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from worldgen.climate.display import _interp_stops
+from utils.color_stops import interp_stops
 from worldgen.geology.display import OCEAN_COLOR
 from worldgen.hydrology.builder import LAKE_COLOR
 from worldgen.resources.crops import CROP_NAMES, N_CROPS
@@ -46,7 +46,7 @@ def fertility_color(meta: dict) -> tuple:
     if _is_ocean_face(meta):
         return OCEAN_COLOR
     v = float(meta.get("fertility_mean", 0.0))
-    return tuple(_interp_stops(np.array(v, dtype=np.float32), _FERTILITY_STOPS).tolist())
+    return tuple(interp_stops(np.array(v, dtype=np.float32), _FERTILITY_STOPS).tolist())
 
 
 def forest_density_color(meta: dict) -> tuple:
@@ -54,7 +54,7 @@ def forest_density_color(meta: dict) -> tuple:
     if _is_ocean_face(meta):
         return OCEAN_COLOR
     v = float(meta.get("forest_density_mean", 0.0))
-    return tuple(_interp_stops(np.array(v, dtype=np.float32), _FOREST_STOPS).tolist())
+    return tuple(interp_stops(np.array(v, dtype=np.float32), _FOREST_STOPS).tolist())
 
 
 def fertility_legend_entries() -> list[tuple[str, tuple]]:
@@ -93,7 +93,7 @@ def build_fertility_display_texture(
 ) -> np.ndarray:
     """Convert (N, H, W, 1) fertility texture to (N, H, W, 4) RGBA."""
     values = fertility_tex[..., 0]
-    rgba = _interp_stops(values, _FERTILITY_STOPS)
+    rgba = interp_stops(values, _FERTILITY_STOPS)
     return _apply_water_masks(rgba, elevation_tex, ocean_mask_tex, lake_mask_tex)
 
 
@@ -152,5 +152,5 @@ def build_forest_density_display_texture(
 ) -> np.ndarray:
     """Convert (N, H, W, 1) forest density texture to (N, H, W, 4) RGBA."""
     values = forest_tex[..., 0]
-    rgba = _interp_stops(values, _FOREST_STOPS)
+    rgba = interp_stops(values, _FOREST_STOPS)
     return _apply_water_masks(rgba, elevation_tex, ocean_mask_tex, lake_mask_tex)

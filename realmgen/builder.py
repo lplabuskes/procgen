@@ -53,12 +53,25 @@ from worldgen.climate.channels import (
     TEMPERATURE_COLDEST,
     TEMPERATURE_WARMEST,
 )
+from utils.color_stops import interp_stops_scalar
 from worldgen.cost.channels import IS_STRAIT, IS_WATER
 from worldgen.geology.channels import ELEVATION, IS_OCEAN
 from worldgen.geology.display import OCEAN_COLOR
 from worldgen.hydrology.channels import LAKE_MASK
 from worldgen.resources.channels import FERTILITY_MEAN
 from worldgen.resources.terrain import face_elevation_range
+
+_SUITABILITY_STOPS = [
+    (0.0, (0.45, 0.38, 0.28, 1.0)),
+    (0.5, (0.65, 0.80, 0.20, 1.0)),
+    (1.0, (0.10, 0.60, 0.20, 1.0)),
+]
+
+_SITUATIONAL_STOPS = [
+    (0.0, (0.35, 0.33, 0.30, 1.0)),
+    (0.5, (0.85, 0.75, 0.30, 1.0)),
+    (1.0, (0.90, 0.55, 0.10, 1.0)),
+]
 
 
 # ── Params ────────────────────────────────────────────────────────────────────
@@ -163,22 +176,14 @@ def _suitability_color(meta: dict) -> tuple:
     if meta.get("is_water", meta.get("is_ocean", False)):
         return OCEAN_COLOR
     s = min(max(float(meta.get("suitability", 0.0)), 0.0), 1.0)
-    if s < 0.5:
-        t = s / 0.5
-        return (0.45 + 0.20 * t, 0.38 + 0.42 * t, 0.28 - 0.08 * t, 1.0)
-    t = (s - 0.5) / 0.5
-    return (0.65 - 0.55 * t, 0.80 - 0.20 * t, 0.20, 1.0)
+    return interp_stops_scalar(s, _SUITABILITY_STOPS)
 
 
 def _situational_color(meta: dict) -> tuple:
     if meta.get("is_water", meta.get("is_ocean", False)):
         return OCEAN_COLOR
     s = min(max(float(meta.get("situational_value", 0.0)), 0.0), 1.0)
-    if s < 0.5:
-        t = s / 0.5
-        return (0.35 + 0.50 * t, 0.33 + 0.42 * t, 0.30 + 0.00 * t, 1.0)
-    t = (s - 0.5) / 0.5
-    return (0.85 + 0.05 * t, 0.75 - 0.20 * t, 0.30 - 0.20 * t, 1.0)
+    return interp_stops_scalar(s, _SITUATIONAL_STOPS)
 
 
 # ── Stage ───────────────────────────────────────────────────────────────────────
