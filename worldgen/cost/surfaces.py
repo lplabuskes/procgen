@@ -481,21 +481,63 @@ def compute_sea_distance_to_coast(mesh, is_water: np.ndarray) -> np.ndarray:
     return dist.astype(np.float32)
 
 
+def compute_ice_penalty(
+    temperature_tex: np.ndarray,
+    *,
+    freeze_threshold_celsius: float = 0.0,
+    penalty_strength: float = 5.0,
+) -> np.ndarray:
+    """Per-face ice penalty multiplier based on fraction of seasons below freezing.
+
+    Args:
+        temperature_tex: (N, H, W, K=4) float32 — per-season temperatures (°C).
+        freeze_threshold_celsius: temperature below which water is icebound.
+        penalty_strength: multiplier applied per freezing season
+            (1 + freezing_fraction × penalty_strength).
+
+    Returns:
+        (N,) float32 multipliers ≥ 1.0; 1.0 where water never freezes.
+    """
+    temp = np.asarray(temperature_tex, dtype=np.float64)
+    n_faces = temp.shape[0]
+    freeze_thresh = float(freeze_threshold_celsius)
+    strength = float(penalty_strength)
+
+    if temp.shape[-1] < 1:
+        return np.ones(n_faces, dtype=np.float32)
+
+    # Count seasons below freezing per face (mean temperature per season per face).
+    season_temps = temp.reshape(n_faces, -1, temp.shape[-1])  # (N, H*W, K)
+    mean_season_temps = season_temps.mean(axis=1)  # (N, K)
+    freezing_seasons = np.sum(mean_season_temps < freeze_thresh, axis=1)  # (N,)
+    n_seasons = mean_season_temps.shape[1]
+
+    # Fraction of year below freezing: 0 if never, 1 if always.
+    freezing_fraction = np.clip(freezing_seasons / max(n_seasons, 1), 0.0, 1.0)
+
+    # Penalty: 1 + fraction × strength, so ice-locked water has ~1+strength cost.
+    penalty = 1.0 + freezing_fraction * strength
+    return penalty.astype(np.float32)
+
+
 def compute_sea_cost(
     is_water: np.ndarray,
     sea_distance_to_coast_km: np.ndarray,
     strait_mask: np.ndarray,
     *,
     params: "SeaCostParams",
+    temperature_tex: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Per-face sea cost: coastal water cheapest, open ocean dearer, straits discounted.
 
     Cost ramps linearly from ``params.coastal_cost`` at the shore to
     ``params.open_ocean_cost`` at ``params.open_ocean_distance_km`` and beyond;
     strait faces are multiplied by ``params.strait_discount`` (near-free
-    crossings). Pass distances from :func:`compute_sea_distance_to_coast`
-    (open-ocean → coast), *not* the climate stage's land → ocean
-    ``distance_to_coast``.
+    crossings). If ``temperature_tex`` is provided, an ice penalty is applied
+    based on the fraction of seasons below freezing.
+
+    Pass distances from :func:`compute_sea_distance_to_coast` (open-ocean → coast),
+    *not* the climate stage's land → ocean ``distance_to_coast``.
 
     ``is_water`` is the sailable mask — ocean ∪ lake ∪ navigable rivers; lakes and
     navigable rivers read as coastal (distance ~0) and so come out cheap.
@@ -513,6 +555,15 @@ def compute_sea_cost(
     )
     cost = p.coastal_cost + (p.open_ocean_cost - p.coastal_cost) * t
     cost = np.where(np.asarray(strait_mask, dtype=bool), cost * p.strait_discount, cost)
+
+    if temperature_tex is not None:
+        ice_penalty = compute_ice_penalty(
+            temperature_tex,
+            freeze_threshold_celsius=p.ice_freeze_threshold,
+            penalty_strength=p.ice_penalty_strength,
+        )
+        cost = cost * ice_penalty
+
     cost = np.where(sea_passable, cost, 0.0).astype(np.float32)
     return cost, sea_passable
 

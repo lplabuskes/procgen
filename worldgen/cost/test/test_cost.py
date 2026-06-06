@@ -16,6 +16,7 @@ from worldgen.cost.surfaces import (
     BIOME_TRAVERSAL_COST,
     build_land_edge_costs,
     build_sea_edge_costs,
+    compute_ice_penalty,
     compute_land_base_cost,
     compute_river_flow_field,
     compute_river_navigability,
@@ -456,6 +457,39 @@ class TestSeaCost:
         assert cost[2] == pytest.approx(1.0)    # t clamped to 1 → 2.0, strait ×0.5
         assert cost[3] == pytest.approx(0.0)    # land
         assert passable.tolist() == [True, True, True, False]
+
+
+class TestIcePenalty:
+    def test_no_freezing_returns_one(self):
+        temp = np.full((3, 4, 4, 4), 10.0, dtype=np.float32)
+        penalty = compute_ice_penalty(temp, freeze_threshold_celsius=0.0)
+        assert np.allclose(penalty, 1.0)
+
+    def test_always_freezing_returns_max_penalty(self):
+        temp = np.full((3, 4, 4, 4), -10.0, dtype=np.float32)
+        penalty = compute_ice_penalty(temp, freeze_threshold_celsius=0.0, penalty_strength=5.0)
+        assert np.allclose(penalty, 6.0)
+
+    def test_half_year_freezing_returns_half_penalty(self):
+        temp = np.zeros((3, 4, 4, 4), dtype=np.float32)
+        temp[:, :, :, :2] = -10.0  # 2 cold seasons
+        temp[:, :, :, 2:] = 10.0   # 2 warm seasons
+        penalty = compute_ice_penalty(temp, freeze_threshold_celsius=0.0, penalty_strength=5.0)
+        assert np.allclose(penalty, 3.5)  # 1 + 0.5 * 5
+
+    def test_penalty_strength_scales_effect(self):
+        temp = np.full((3, 4, 4, 4), -5.0, dtype=np.float32)
+        p1 = compute_ice_penalty(temp, freeze_threshold_celsius=0.0, penalty_strength=2.0)
+        p2 = compute_ice_penalty(temp, freeze_threshold_celsius=0.0, penalty_strength=4.0)
+        assert np.allclose(p1, 3.0)  # 1 + 1 * 2
+        assert np.allclose(p2, 5.0)  # 1 + 1 * 4
+
+    def test_different_freeze_threshold(self):
+        temp = np.full((3, 4, 4, 4), 5.0, dtype=np.float32)
+        p_above = compute_ice_penalty(temp, freeze_threshold_celsius=10.0, penalty_strength=5.0)
+        p_below = compute_ice_penalty(temp, freeze_threshold_celsius=0.0, penalty_strength=5.0)
+        assert np.allclose(p_above, 6.0)  # all seasons below 10°C
+        assert np.allclose(p_below, 1.0)  # no seasons below 0°C
 
 
 class TestSeaDistanceToCoast:

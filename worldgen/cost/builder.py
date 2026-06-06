@@ -31,7 +31,7 @@ from core.mesh import PolygonMesh
 from core.params import field, param_field as _f, paramclass
 from core.pipeline import BuildContext, Stage
 from core.world import World
-from worldgen.climate.channels import BIOME
+from worldgen.climate.channels import BIOME, TEMPERATURE
 from worldgen.cost.channels import COST_SURFACES, IS_STRAIT, IS_WATER
 from worldgen.geology.channels import ELEVATION, IS_OCEAN
 from worldgen.geology.display import LAND_COLOR, OCEAN_COLOR
@@ -61,6 +61,8 @@ class SeaCostParams:
     navigable_flow_min: float = _f(
         500.0, label="Navigable river flow min", min=1.0, max=20000.0
     )
+    ice_penalty_strength: float = _f(5.0, label="Ice penalty strength", min=0.0, max=20.0)
+    ice_freeze_threshold: float = _f(0.0, label="Ice freeze threshold (°C)", min=-10.0, max=10.0)
 
 
 @paramclass
@@ -130,6 +132,7 @@ class CostBuilder(Stage):
         is_lake = _face_lake_mask(mesh)
         is_water = is_ocean | is_lake          # sailable, impassable on land
         elev_range = _face_elevation_range_km(ELEVATION.read(mesh))
+        temperature_tex = TEMPERATURE.read(mesh) if TEMPERATURE.present(mesh) else None
 
         _report("Computing land base cost…")
         land_cost, land_passable = compute_land_base_cost(
@@ -175,6 +178,7 @@ class CostBuilder(Stage):
             sea_dist,
             strait_mask,
             params=p.sea,
+            temperature_tex=temperature_tex,
         )
 
         surfaces = CostSurfaces(
