@@ -9,15 +9,25 @@ from core.pipeline import BuildContext
 from core.world import World
 from viz.mapview.mapview import MapWindow
 from viz.params_dialog import ParamsDialog
-from realmgen.builder import RealmPipeline
+from realmgen.builder import RealmParams, RealmPipeline
 from worldgen import GlobePipeline, GlobeParams, load_globe, save_globe
 
 
-class GlobeParamsDialog(ParamsDialog):
-    def __init__(self, params: GlobeParams, parent: "QWidget | None" = None) -> None:
-        super().__init__(params, title="World Parameters", parent=parent)
+@dataclasses.dataclass
+class AppParams:
+    globe: GlobeParams = dataclasses.field(
+        default_factory=GlobeParams, metadata={"label": "World"}
+    )
+    realm: RealmParams = dataclasses.field(
+        default_factory=RealmParams, metadata={"label": "Realm / Settlements"}
+    )
 
-    def result_params(self, base: GlobeParams) -> GlobeParams:  # type: ignore[override]
+
+class AppParamsDialog(ParamsDialog):
+    def __init__(self, params: AppParams, parent: "QWidget | None" = None) -> None:
+        super().__init__(params, title="Parameters", parent=parent)
+
+    def result_params(self, base: AppParams) -> AppParams:  # type: ignore[override]
         return super().result_params(base)
 
 
@@ -30,28 +40,29 @@ def main() -> None:
     window = MapWindow()
     window.setWindowTitle("Procedural World")
 
-    current_params: list[GlobeParams] = [GlobeParams()]
+    current_params: list[AppParams] = [AppParams()]
     current_globe_pipeline: list[GlobePipeline | None] = [None]
 
-    def _build_and_apply(params: GlobeParams) -> None:
+    def _build_and_apply(params: AppParams) -> None:
         window.set_rebuild_enabled(False)
 
         def _progress(msg: str) -> None:
             window.set_status(msg)
             QApplication.processEvents()
 
-        if params.seed is None:
-            params = dataclasses.replace(params, seed=random.randint(0, 2**31 - 1))
+        globe_params = params.globe
+        if globe_params.seed is None:
+            globe_params = dataclasses.replace(globe_params, seed=random.randint(0, 2**31 - 1))
 
-        current_params[0] = params
+        current_params[0] = dataclasses.replace(params, globe=globe_params)
 
-        world = World(params.mesh, seed=params.seed, progress=_progress)
+        world = World(globe_params.mesh, seed=globe_params.seed, progress=_progress)
         ctx = BuildContext(world=world, progress=_progress)
-        globe_pipeline = GlobePipeline(params)
+        globe_pipeline = GlobePipeline(globe_params)
         globe_pipeline.build(ctx)
         current_globe_pipeline[0] = globe_pipeline
 
-        realm_pipeline = RealmPipeline()
+        realm_pipeline = RealmPipeline(params.realm)
         realm_pipeline.build(ctx)
 
         prev_scheme = window.active_scheme
@@ -70,7 +81,7 @@ def main() -> None:
         QApplication.processEvents()
 
         globe_pipeline, globe = load_globe(path)
-        current_params[0] = globe_pipeline.params
+        current_params[0] = AppParams(globe=globe_pipeline.params)
         current_globe_pipeline[0] = globe_pipeline
 
         window.set_globe(globe)
@@ -80,12 +91,13 @@ def main() -> None:
         window.set_rebuild_enabled(True)
 
     def _rerun() -> None:
-        fresh = dataclasses.replace(current_params[0], seed=None)
+        p = current_params[0]
+        fresh = dataclasses.replace(p, globe=dataclasses.replace(p.globe, seed=None))
         _build_and_apply(fresh)
 
     def _open_params() -> None:
-        dialog = GlobeParamsDialog(current_params[0], parent=window)
-        if dialog.exec() == GlobeParamsDialog.DialogCode.Accepted:
+        dialog = AppParamsDialog(current_params[0], parent=window)
+        if dialog.exec() == AppParamsDialog.DialogCode.Accepted:
             new_params = dialog.result_params(current_params[0])
             if new_params != current_params[0]:
                 _build_and_apply(new_params)
@@ -113,7 +125,7 @@ def main() -> None:
     if file_arg:
         _load_from_file(file_arg)
     else:
-        _build_and_apply(GlobeParams())
+        _build_and_apply(AppParams())
 
     window.showFullScreen()
     sys.exit(app.exec())

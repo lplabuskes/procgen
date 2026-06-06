@@ -31,6 +31,12 @@ from core.pipeline import BuildContext, Pipeline, Stage
 from core.world import World
 
 from realmgen.channels import SITUATIONAL_VALUE, SUITABILITY
+from realmgen.placement.seeder import (
+    build_cost_graph,
+    placement_score,
+    seed_settlements,
+)
+from realmgen.placement.types import Settlement, TIER_NAMES
 from realmgen.scoring.situational_value import (
     combine_situational_value,
     compute_harbor_quality,
@@ -148,6 +154,33 @@ class SituationalValueParams:
 
 
 @paramclass
+class TierParams:
+    exclusion_radius: float = _f(20.0, label="Exclusion radius (cost-dist)", min=0.5, max=100.0)
+    score_threshold: float = _f(0.30, label="Min score to place", min=0.0, max=1.0)
+
+
+@paramclass
+class SeederParams:
+    situational_weight: float = _f(0.40, label="Situational value weight", min=0.0, max=1.0)
+    tier0: TierParams = field(
+        default_factory=lambda: TierParams(exclusion_radius=25.0, score_threshold=0.45),
+        metadata={"label": "Capitals"},
+    )
+    tier1: TierParams = field(
+        default_factory=lambda: TierParams(exclusion_radius=12.0, score_threshold=0.28),
+        metadata={"label": "Cities"},
+    )
+    tier2: TierParams = field(
+        default_factory=lambda: TierParams(exclusion_radius=6.0, score_threshold=0.14),
+        metadata={"label": "Towns"},
+    )
+    tier3: TierParams = field(
+        default_factory=lambda: TierParams(exclusion_radius=3.0, score_threshold=0.05),
+        metadata={"label": "Villages"},
+    )
+
+
+@paramclass
 class RealmParams:
     water: WaterProximityParams = field(
         default_factory=WaterProximityParams, metadata={"label": "Water proximity"}
@@ -166,6 +199,9 @@ class RealmParams:
     )
     situational: SituationalValueParams = field(
         default_factory=SituationalValueParams, metadata={"label": "Situational value"}
+    )
+    seeder: SeederParams = field(
+        default_factory=SeederParams, metadata={"label": "Settlement seeder"}
     )
 
 
@@ -212,6 +248,7 @@ class RealmStage(Stage):
         self.params: RealmParams = params or RealmParams()
         self.suitability: Optional[np.ndarray] = None
         self.situational_value: Optional[np.ndarray] = None
+        self.settlements: Optional[list[Settlement]] = None
 
     def build(self, ctx: BuildContext) -> None:
         world = ctx.world
@@ -354,20 +391,75 @@ class RealmStage(Stage):
         self.situational_value = situational_value
         SITUATIONAL_VALUE.write(mesh, situational_value)
 
-        ctx.report("Situational value done.")
+        # ── Settlement seeder ────────────────────────────────────────────────
+        ctx.report("Building land cost graph…")
+        sp = p.seeder
+        if COST_SURFACES.present(world):
+            from worldgen.cost.surfaces import build_land_edge_costs
+            cs = COST_SURFACES.read(world)
+            edge_costs = build_land_edge_costs(
+                mesh,
+                cs.land_base_cost,
+                cs.land_passable,
+                cs.river_flow_dir,
+                cs.river_flow_mag,
+                cs.river_navigability,
+            )
+        else:
+            # Fallback: uniform cost 1.5 on land, impassable on water.
+            base = np.where(is_water, np.inf, 1.5)
+            edge_costs = [
+                np.array([0.5 * (base[i] + base[j]) for j in adj], dtype=np.float64)
+                for i, adj in enumerate(mesh.face_adjacency)
+            ]
+
+        combined = placement_score(
+            suitability,
+            situational_value,
+            situational_weight=sp.situational_weight,
+        )
+        cost_graph = build_cost_graph(mesh.face_adjacency, edge_costs)
+        tier_configs = [
+            (sp.tier0.exclusion_radius, sp.tier0.score_threshold),
+            (sp.tier1.exclusion_radius, sp.tier1.score_threshold),
+            (sp.tier2.exclusion_radius, sp.tier2.score_threshold),
+            (sp.tier3.exclusion_radius, sp.tier3.score_threshold),
+        ]
+
+        ctx.report("Seeding settlements…")
+        self.settlements = seed_settlements(
+            combined, is_water, centroids, cost_graph, tier_configs,
+        )
+
+        # Per-face metadata: settlement_tier = tier index or -1.
+        tier_arr = np.full(n, -1, dtype=np.int32)
+        for s in self.settlements:
+            tier_arr[s.face_id] = s.tier
+        mesh.apply_metadata_channel("settlement_tier", tier_arr)
+
+        world.add_feature("settlements", self.settlements)
+        ctx.report(
+            f"Seeder done: {len(self.settlements)} settlements "
+            f"({sum(1 for s in self.settlements if s.tier == 0)} capitals, "
+            f"{sum(1 for s in self.settlements if s.tier == 1)} cities, "
+            f"{sum(1 for s in self.settlements if s.tier == 2)} towns, "
+            f"{sum(1 for s in self.settlements if s.tier == 3)} villages)."
+        )
 
     def register_display(
         self, world: "World | None", reg: DisplayRegistry, *, debug: bool = False
     ) -> None:
-        """Contribute realm color schemes (always shown — realm is an output).
+        """Contribute realm color schemes and overlays (always shown — realm is an output).
 
         ``world`` is unused — results are read off the stage — so a façade caller
         may pass ``None``.
         """
         if self.suitability is not None:
             reg.add_scheme("Suitability", _suitability_color)
-        if debug and self.situational_value is not None:
+        if self.situational_value is not None:
             reg.add_scheme("Situational Value", _situational_color)
+        if self.settlements is not None:
+            reg.add_overlay("settlements", "Settlements", checked=True)
 
 
 # ── Pipeline ────────────────────────────────────────────────────────────────────
@@ -404,18 +496,24 @@ class RealmPipeline(Pipeline):
         self.world = ctx.world
 
     def apply_display(self, window, debug: bool = False) -> None:
-        """Merge realm color schemes and hover into a MapWindow after build().
+        """Merge realm color schemes, overlays, and hover into a MapWindow after build().
 
         Call after the worldgen display is wired so the schemes are appended
         alongside the worldgen schemes.
         """
         reg = DisplayRegistry()
         self.realm_stage.register_display(None, reg, debug=debug)
+
+        # Merge color schemes with any already registered by worldgen.
         if reg.schemes:
             merged = dict(window._map._color_schemes)
             for name, spec in reg.schemes.items():
                 merged[name] = spec.fn
             window.set_color_schemes(merged)
+
+        # Register feature overlays (settlements, etc.).
+        for ov in reg.overlays:
+            window.add_overlay(ov.feature, label=ov.label, checked=ov.checked)
 
         mesh = self.world.mesh if self.world else None
         if mesh is None:
@@ -431,11 +529,17 @@ class RealmPipeline(Pipeline):
             meta = mesh.face_metadata[face_src]
             if meta.get("is_water", meta.get("is_ocean", False)):
                 return
+            parts: list[str] = []
             suit = meta.get("suitability")
-            if suit is None:
-                return
-            fragment = f"Suit: {float(suit):.2f}"
-            cur = window._status_label.text()
-            window.set_status(f"{cur}  |  {fragment}" if cur else fragment)
+            if suit is not None:
+                parts.append(f"Suit: {float(suit):.2f}")
+            tier = meta.get("settlement_tier")
+            if tier is not None and int(tier) >= 0:
+                t = int(tier)
+                parts.append(TIER_NAMES[min(t, len(TIER_NAMES) - 1)])
+            if parts:
+                cur = window._status_label.text()
+                fragment = "  ".join(parts)
+                window.set_status(f"{cur}  |  {fragment}" if cur else fragment)
 
         window.set_hover_callback(_realm_hover)

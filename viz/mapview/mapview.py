@@ -376,6 +376,10 @@ class MapWidget(QWidget):
                 and self._globe is not None
                 and self._globe.has_feature("rare_bio")):
             self._draw_rare_bio_overlay(painter, W, H, cx, cy, scale_x, scale_y)
+        if (self._overlay_visible.get("settlements")
+                and self._globe is not None
+                and self._globe.has_feature("settlements")):
+            self._draw_settlements_overlay(painter, W, H, cx, cy, scale_x, scale_y)
 
         self._draw_legend(painter, W, H)
 
@@ -688,6 +692,51 @@ class MapWidget(QWidget):
                     QPointF(cx_i - r, cy_i),
                 ])
                 painter.drawPolygon(diamond)
+        painter.restore()
+
+    def _draw_settlements_overlay(
+        self,
+        painter: QPainter,
+        W: float, H: float,
+        cx: float, cy: float,
+        scale_x: float, scale_y: float,
+    ) -> None:
+        from realmgen.placement.types import TIER_COLORS, TIER_RADII
+        feature = self._globe.get_feature("settlements")  # type: ignore[union-attr]
+        if not feature:
+            return
+        positions = np.array([s.position for s in feature], dtype=np.float64)
+        tiers = np.array([s.tier for s in feature], dtype=np.int32)
+        lon = np.arctan2(positions[:, 1], positions[:, 0])
+        lat = np.arcsin(np.clip(positions[:, 2], -1.0, 1.0))
+        proj = self._projection.project_lonlat(np.column_stack([lon, lat]))
+        sx = (proj[:, 0] - cx) * scale_x + W * 0.5
+        sy = -(proj[:, 1] - cy) * scale_y + H * 0.5
+        zoom_scale = max(1.0, self._zoom ** 0.3)
+        painter.save()
+        n_tiers = len(TIER_COLORS)
+        for tier_idx in range(n_tiers):
+            mask = tiers == tier_idx
+            if not mask.any():
+                continue
+            rgba = TIER_COLORS[tier_idx]
+            r_fill = int(rgba[0] * 255)
+            g_fill = int(rgba[1] * 255)
+            b_fill = int(rgba[2] * 255)
+            r_pen = max(0, r_fill - 70)
+            g_pen = max(0, g_fill - 70)
+            b_pen = max(0, b_fill - 70)
+            pen_width = 1.5 if tier_idx == 0 else 1.0
+            painter.setPen(QPen(QColor(r_pen, g_pen, b_pen, 230), pen_width))
+            painter.setBrush(QBrush(QColor(r_fill, g_fill, b_fill, 220)))
+            base_r = TIER_RADII[tier_idx] * zoom_scale
+            t_sx = sx[mask]
+            t_sy = sy[mask]
+            for i in range(len(t_sx)):
+                r = base_r
+                painter.drawEllipse(QRectF(
+                    float(t_sx[i]) - r, float(t_sy[i]) - r, 2 * r, 2 * r,
+                ))
         painter.restore()
 
     def _draw_rivers_overlay(

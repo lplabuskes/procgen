@@ -155,8 +155,8 @@ DangerField (procedural default), danger overlay on both surfaces, suitability s
 
 Suitability scorer (`realmgen/suitability.py`, orchestrated by `RealmBuilder`): five independent per-face factors (water proximity via BFS hop-decay from river+lake seeds + coastal exponential decay; climate habitability as piecewise T_warmest × T_coldest × P_annual; fertility direct from `fertility_mean`; defensibility as tanh of `face_elevation_range`; resource access via BFS hop-decay from mineral+rare_bio faces) combined as a tunable weighted sum; water faces forced to 0. Remaining items (DangerField, danger overlay, static situational value) not yet implemented.
 
-**Stage 2 — Placement**
-Settlement seeder using the combined score, hierarchical with cost-distance exclusion radii.
+**Stage 2 — Placement** *(settlement seeder implemented)*
+Settlement seeder using the combined score, hierarchical with cost-distance exclusion radii. `placement_score` blends suitability + situational value; `build_cost_graph` converts per-face edge costs to a scipy CSR matrix; `seed_settlements` runs hierarchical greedy Dijkstra-exclusion placement (4 tiers, cumulative forbidden mask). Settlements registered as `"settlements"` globe feature (list of `Settlement` objects with `face_id`, `position`, `tier`, `score`); `settlement_tier` written to `face_metadata`; Settlements overlay checkbox added to the map viewer.
 *Done when:* settlements appear at reasonable density, spacing feels varied, no clustering or desert-of-nothing regions.
 
 **Stage 3 — Trade**
