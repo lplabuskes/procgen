@@ -11,8 +11,8 @@ from scipy.sparse import csr_matrix
 from realmgen.placement.types import Settlement
 from realmgen.population.calibration import (
     apply_population_to_settlements,
-    assign_hinterlands,
     compute_carrying_capacity,
+    compute_hinterland_shares,
     compute_population,
     compute_trade_wealth,
     cull_settlements,
@@ -60,111 +60,149 @@ def _settlement(
     )
 
 
-# ── assign_hinterlands ────────────────────────────────────────────────────────
+# ── compute_hinterland_shares ───────────────────────────────────────────────────
 
 
-class TestAssignHinterlands:
-    def test_empty_settlements_all_minus_one(self):
+class TestHinterlandShares:
+    def test_empty_settlements(self):
         g = _uniform_graph(5)
-        result = assign_hinterlands(5, [], g)
-        assert (result == -1).all()
+        shares, owner = compute_hinterland_shares(5, [], g, max_distance=10.0)
+        assert shares.shape == (0, 5)
+        assert (owner == -1).all()
 
-    def test_single_settlement_claims_all_reachable(self):
+    def test_single_settlement_claims_all_in_range(self):
         n = 5
-        g = _uniform_graph(n)
+        g = _uniform_graph(n)  # every face one hop from face 2 (dist ≤ 1)
         settlements = [_settlement(2, tier=0)]
-        result = assign_hinterlands(n, settlements, g)
-        # All faces reachable → all assigned to settlement 0.
-        assert (result >= 0).all()
-        assert (result == 0).all()
+        shares, owner = compute_hinterland_shares(n, settlements, g, max_distance=10.0)
+        assert (owner == 0).all()
+        # Sole bidder → it gets the full share of every in-range face.
+        np.testing.assert_allclose(shares[0], 1.0)
 
-    def test_two_settlements_split_line(self):
-        # Line graph: 0—1—2—3—4 with uniform cost.
-        # Settlement at 0 and 4 should split roughly in the middle.
+    def test_shares_sum_to_one_in_range(self):
         n = 5
         g = _line_graph(n)
-        settlements = [_settlement(0, tier=0), _settlement(4, tier=0)]
-        result = assign_hinterlands(n, settlements, g)
-        assert result[0] == 0  # closest to settlement at face 0
-        assert result[4] == 1  # closest to settlement at face 4
-        # The split is symmetric — every face is assigned.
-        assert (result >= 0).all()
+        settlements = [_settlement(0), _settlement(4)]
+        shares, owner = compute_hinterland_shares(n, settlements, g, max_distance=10.0)
+        col_sums = shares.sum(axis=0)
+        np.testing.assert_allclose(col_sums, 1.0)  # all faces within range
 
-    def test_influence_widens_low_influence_territory(self):
-        # Line graph 0—1—2—3—4.  Settlements at the two ends.
-        # s0 at face 0 (influence 0.0), s1 at face 4 (influence 2.0).
-        # Without influence the graph is symmetric; with influence s0 should
-        # claim more faces since its effective cost is uniformly 2.0 lower.
-        #
-        # Effective costs to each face:
-        #   face 0: s0=0+0=0, s1=4+2=6  → s0
-        #   face 1: s0=1+0=1, s1=3+2=5  → s0
-        #   face 2: s0=2+0=2, s1=2+2=4  → s0
-        #   face 3: s0=3+0=3, s1=1+2=3  → tie (s0 wins via argmin with index 0)
-        #   face 4: s0=4+0=4, s1=0+2=2  → s1
+    def test_two_settlements_own_their_ends(self):
+        n = 5
+        g = _line_graph(n)
+        settlements = [_settlement(0), _settlement(4)]
+        _shares, owner = compute_hinterland_shares(n, settlements, g, max_distance=10.0)
+        assert owner[0] == 0
+        assert owner[4] == 1
+        assert (owner >= 0).all()
+
+    def test_higher_pull_claims_contested_middle(self):
+        # Line 0—1—2—3—4.  s0 (influence 0, pull 1) vs s1 (influence 8).
+        # At the middle face 2 both are equidistant, so the higher-pull s0 wins
+        # and claims more faces overall.  The pull gap is large enough that s0
+        # even out-bids s1 at s1's own face — but s1 keeps a positive share.
         n = 5
         g = _line_graph(n, cost=1.0)
-        s0 = _settlement(0, tier=0, influence=0.0)
-        s1 = _settlement(4, tier=1, influence=2.0)
-        result = assign_hinterlands(n, [s0, s1], g)
-        s0_count = int((result == 0).sum())
-        s1_count = int((result == 1).sum())
-        assert s0_count > s1_count, f"Expected s0 to claim more ({s0_count} vs {s1_count})"
-        assert result[4] == 1  # s1 claims its own face
+        s0 = _settlement(0, influence=0.0)
+        s1 = _settlement(4, influence=8.0)
+        shares, owner = compute_hinterland_shares(
+            n, [s0, s1], g, max_distance=10.0, influence_scale=8.0,
+        )
+        assert owner[2] == 0  # s0 wins the equidistant middle face
+        assert int((owner == 0).sum()) > int((owner == 1).sum())
+        assert shares[1, 4] > 0.0  # s1 retains a share even where out-bid
+
+    def test_low_pull_settlement_keeps_a_share(self):
+        # The key feature: a low-pull village beside a high-pull city still
+        # captures a nonzero share of nearby land, even though the city is the
+        # displayed owner of those faces.
+        n = 3
+        g = _line_graph(n)  # city — — village  (0 — 1 — 2)
+        city = _settlement(0, influence=0.0)     # pull = 1
+        village = _settlement(2, influence=15.0)  # pull = exp(-15/8) ≈ 0.15
+        shares, owner = compute_hinterland_shares(
+            n, [city, village], g, max_distance=10.0, influence_scale=8.0,
+        )
+        # City out-bids the village even at the village's own face …
+        assert owner[2] == 0
+        # … yet the village still holds a positive share there.
+        assert shares[1, 2] > 0.0
+
+    def test_max_distance_gates_reach(self):
+        # Line 0—1—2—3—4, single settlement at 0.  With max_distance 2.5,
+        # faces 3 and 4 (dist 3, 4) are out of range → owner -1, share 0.
+        n = 5
+        g = _line_graph(n, cost=1.0)
+        shares, owner = compute_hinterland_shares(
+            n, [_settlement(0)], g, max_distance=2.5,
+        )
+        assert owner[0] == 0 and owner[1] == 0 and owner[2] == 0
+        assert owner[3] == -1 and owner[4] == -1
+        assert shares[0, 3] == 0.0 and shares[0, 4] == 0.0
 
     def test_disjoint_graph_unreachable_faces_minus_one(self):
-        # Two disconnected components: faces 0-1 and faces 2-3.
-        # Settlement only in component 0—1.
         rows = [0, 1]
         cols = [1, 0]
         data = [1.0, 1.0]
         g = csr_matrix((data, (rows, cols)), shape=(4, 4), dtype=np.float64)
-        settlements = [_settlement(0, tier=0)]
-        result = assign_hinterlands(4, settlements, g)
-        assert result[0] == 0
-        assert result[1] == 0
-        assert result[2] == -1
-        assert result[3] == -1
+        shares, owner = compute_hinterland_shares(
+            4, [_settlement(0)], g, max_distance=10.0,
+        )
+        assert owner[0] == 0 and owner[1] == 0
+        assert owner[2] == -1 and owner[3] == -1
+        assert (shares[0, 2:] == 0.0).all()
 
-    def test_returns_int32(self):
-        n = 4
-        g = _uniform_graph(n)
-        result = assign_hinterlands(n, [_settlement(0)], g)
-        assert result.dtype == np.int32
+    def test_owner_returns_int32(self):
+        g = _uniform_graph(4)
+        _shares, owner = compute_hinterland_shares(
+            4, [_settlement(0)], g, max_distance=10.0,
+        )
+        assert owner.dtype == np.int32
 
 
 # ── compute_carrying_capacity ──────────────────────────────────────────────────
 
 
 class TestComputeCarryingCapacity:
-    def test_basic_sum(self):
-        # Two settlements: s0 owns faces 0, 1; s1 owns faces 2, 3.
-        hinterland = np.array([0, 0, 1, 1], dtype=np.int32)
+    def test_basic_sum_from_shares(self):
+        # Hard shares: s0 owns faces 0, 1; s1 owns faces 2, 3.
+        shares = np.array([
+            [1.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 1.0],
+        ], dtype=np.float64)
         fertility = np.array([0.5, 0.5, 1.0, 1.0], dtype=np.float32)
         areas = np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float64)
-        cap = compute_carrying_capacity(hinterland, fertility, areas, 2)
+        cap = compute_carrying_capacity(shares, fertility, areas)
         assert cap[0] == pytest.approx(1.0)
         assert cap[1] == pytest.approx(2.0)
 
-    def test_unassigned_faces_excluded(self):
-        hinterland = np.array([-1, 0, -1], dtype=np.int32)
+    def test_fractional_shares_split_capacity(self):
+        # One face split 0.25 / 0.75 between two settlements.
+        shares = np.array([[0.25], [0.75]], dtype=np.float64)
+        fertility = np.array([0.8], dtype=np.float32)
+        areas = np.array([2.0], dtype=np.float64)
+        cap = compute_carrying_capacity(shares, fertility, areas)
+        assert cap[0] == pytest.approx(0.25 * 0.8 * 2.0)
+        assert cap[1] == pytest.approx(0.75 * 0.8 * 2.0)
+
+    def test_unclaimed_faces_excluded(self):
+        # Middle face (column 0) claimed by nobody → contributes nothing.
+        shares = np.array([[0.0, 1.0, 0.0]], dtype=np.float64)
         fertility = np.array([1.0, 0.8, 1.0], dtype=np.float32)
         areas = np.array([2.0, 2.0, 2.0], dtype=np.float64)
-        cap = compute_carrying_capacity(hinterland, fertility, areas, 1)
+        cap = compute_carrying_capacity(shares, fertility, areas)
         assert cap[0] == pytest.approx(1.6)  # only face 1: 0.8 × 2.0
 
-    def test_all_unassigned_returns_zeros(self):
-        hinterland = np.array([-1, -1, -1], dtype=np.int32)
-        fertility = np.ones(3, dtype=np.float32)
-        areas = np.ones(3, dtype=np.float64)
-        cap = compute_carrying_capacity(hinterland, fertility, areas, 2)
-        assert (cap == 0.0).all()
+    def test_no_settlements_returns_empty(self):
+        shares = np.zeros((0, 3), dtype=np.float64)
+        cap = compute_carrying_capacity(shares, np.ones(3), np.ones(3))
+        assert cap.shape == (0,)
 
     def test_area_weighted(self):
-        hinterland = np.array([0, 0], dtype=np.int32)
+        shares = np.array([[1.0, 1.0]], dtype=np.float64)
         fertility = np.array([0.5, 0.5], dtype=np.float32)
         areas = np.array([1.0, 3.0], dtype=np.float64)
-        cap = compute_carrying_capacity(hinterland, fertility, areas, 1)
+        cap = compute_carrying_capacity(shares, fertility, areas)
         assert cap[0] == pytest.approx(2.0)  # 0.5×1 + 0.5×3
 
 

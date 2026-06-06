@@ -33,8 +33,8 @@ from core.world import World
 from realmgen.channels import HINTERLAND_ID, POPULATION, SITUATIONAL_VALUE, SUITABILITY, TRADE_FLOW
 from realmgen.population.calibration import (
     apply_population_to_settlements,
-    assign_hinterlands,
     compute_carrying_capacity,
+    compute_hinterland_shares,
     compute_population,
     compute_trade_wealth,
     cull_settlements,
@@ -210,6 +210,8 @@ class PopulationParams:
     relaxation_passes: int = _f(2, label="Relaxation passes", min=1, max=5)
     trade_weight: float = _f(1.5, label="Trade wealth weight", min=0.0, max=5.0)
     min_pop_fraction: float = _f(0.005, label="Min pop fraction (cull)", min=0.0, max=0.1)
+    hinterland_max_distance: float = _f(40.0, label="Hinterland max distance", min=5.0, max=200.0)
+    hinterland_influence_scale: float = _f(8.0, label="Hinterland influence scale", min=0.5, max=30.0)
     trade_spawn: TradeSpawnParams = field(
         default_factory=TradeSpawnParams, metadata={"label": "Trade-spawn settlements"}
     )
@@ -610,11 +612,13 @@ class RealmStage(Stage):
 
         # ── Population & Calibration ─────────────────────────────────────────
         ctx.report("Computing hinterland assignment…")
-        self.hinterland = assign_hinterlands(n, self.settlements, cost_graph)
         face_areas = np.asarray(mesh.face_areas, dtype=np.float64)
-        carrying_cap = compute_carrying_capacity(
-            self.hinterland, fertility, face_areas, len(self.settlements),
+        shares, self.hinterland = compute_hinterland_shares(
+            n, self.settlements, cost_graph,
+            max_distance=pp.hinterland_max_distance,
+            influence_scale=pp.hinterland_influence_scale,
         )
+        carrying_cap = compute_carrying_capacity(shares, fertility, face_areas)
 
         # Closure to recompute trade with updated settlement demands.
         def _compute_trade(settlements, settlement_demands=None):
@@ -657,8 +661,12 @@ class RealmStage(Stage):
         self.settlements = apply_population_to_settlements(self.settlements, population)
         self.population = population
 
-        # Recompute hinterland for the culled settlement list.
-        self.hinterland = assign_hinterlands(n, self.settlements, cost_graph)
+        # Recompute hinterland (display owner) for the culled settlement list.
+        _shares, self.hinterland = compute_hinterland_shares(
+            n, self.settlements, cost_graph,
+            max_distance=pp.hinterland_max_distance,
+            influence_scale=pp.hinterland_influence_scale,
+        )
 
         # Run one final trade pass with the culled settlement list so routes
         # reflect the final geography.

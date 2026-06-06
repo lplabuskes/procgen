@@ -2,9 +2,13 @@
 
 Two responsibilities:
 
-1. **Hinterland assignment** — each land face is assigned to the settlement
-   that can reach it most cheaply on the land cost graph.  Settlements with
-   a lower ``influence`` offset claim wider territories.
+1. **Hinterland assignment** — soft, fractional.  Each settlement bids for
+   every land face within ``max_distance`` cost-distance; the bid combines a
+   linear proximity falloff with an influence-derived pull, and each face's
+   carrying capacity is split among bidders in proportion to their bids.  A
+   village beside a city therefore still captures a share of the surrounding
+   land instead of being shut out, so it can survive in the city's shadow.
+   The *displayed* hinterland is the single highest bidder per face.
 
 2. **Iterative relaxation** — carrying capacity (hinterland fertility × area)
    and trade wealth (face flow at the settlement's face) combine into a per-
@@ -25,73 +29,101 @@ from scipy.sparse.csgraph import dijkstra as sp_dijkstra
 from realmgen.placement.types import Settlement
 
 
-def assign_hinterlands(
+def compute_hinterland_shares(
     n_faces: int,
     settlements: List[Settlement],
     cost_graph: csr_matrix,
-) -> np.ndarray:
-    """Assign each land face to its nearest settlement on the land cost graph.
+    *,
+    max_distance: float,
+    influence_scale: float = 8.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Soft hinterland assignment — fractional capacity shares + display owner.
 
-    Runs undirected multi-source Dijkstra from all settlement nodes.  The
-    effective claim cost for settlement *k* reaching face *i* is:
+    Runs undirected multi-source Dijkstra from all settlement nodes, then has
+    each settlement *k* bid for every face *i*::
 
-        dist[k, i] + settlements[k].influence
+        proximity[k, i] = relu(1 - dist[k, i] / max_distance)   # in [0, 1]
+        pull[k]         = exp(-influence[k] / influence_scale)   # in (0, 1]
+        bid[k, i]       = proximity[k, i] * pull[k]
 
-    The settlement with the smallest effective cost wins.  Settlements with
-    lower ``influence`` (e.g. capitals at 0.0) claim wider territories when
-    distances are otherwise equal.
+    ``max_distance`` is a uniform hard cap on land-cost distance — every
+    settlement's reach falls linearly to zero there.  ``pull`` weights more
+    important settlements (capitals at ``influence`` 0 pull hardest).  Each
+    face's carrying capacity is divided among its bidders in proportion to
+    their bids, so a low-pull village next to a high-pull city still claims a
+    nonzero share of the nearby land (and can survive culling) even when the
+    city is the displayed owner of those faces.
 
     Args:
         n_faces: number of mesh faces (N).
-        settlements: list of :class:`~realmgen.placement.types.Settlement`.
+        settlements: list of :class:`~realmgen.placement.types.Settlement`
+            (reads ``face_id`` and ``influence``).
         cost_graph: (N, N) directed land-cost CSR matrix — used undirected.
+        max_distance: hard cap (cost-distance) on how far a hinterland spreads.
+        influence_scale: e-folding scale mapping ``influence`` to ``pull``;
+            larger flattens the importance gap between tiers.
 
     Returns:
-        (N,) int32 — index into *settlements* for the owning settlement, or
-        -1 for faces that are unreachable from any settlement.
+        ``(shares, owner)`` where:
+
+        * ``shares`` is ``(S, N)`` float64 — fraction of face *i*'s capacity
+          claimed by settlement *k*; each column sums to 1 where any settlement
+          is in range, else all zero.
+        * ``owner`` is ``(N,)`` int32 — index of the single highest bidder per
+          face (for display), or -1 where no settlement is within range.
     """
     if not settlements:
-        return np.full(n_faces, -1, dtype=np.int32)
+        return (
+            np.zeros((0, n_faces), dtype=np.float64),
+            np.full(n_faces, -1, dtype=np.int32),
+        )
 
     s_nodes = np.array([s.face_id for s in settlements], dtype=np.int32)
     influence = np.array([s.influence for s in settlements], dtype=np.float64)
 
-    # dist[k, i] = undirected cost-distance from settlements[k] to face i.
+    # dist[k, i] = undirected cost-distance from settlements[k] to face i
+    # (+inf where unreachable).
     dist = sp_dijkstra(
         cost_graph, directed=False, indices=s_nodes, return_predecessors=False,
-    )
-    # shape: (S, N)
+    )  # (S, N)
 
-    effective = dist + influence[:, np.newaxis]  # (S, N) — lower = better claim
-    best_k = np.argmin(effective, axis=0).astype(np.int32)  # (N,)
-    reachable = np.isfinite(effective[best_k, np.arange(n_faces)])
+    md = max(float(max_distance), 1e-9)
+    scale = max(float(influence_scale), 1e-9)
+    proximity = np.maximum(1.0 - dist / md, 0.0)            # (S, N); inf → 0
+    pull = np.exp(-influence / scale)                       # (S,)
+    bid = proximity * pull[:, np.newaxis]                   # (S, N)
 
-    return np.where(reachable, best_k, np.int32(-1))
+    total = bid.sum(axis=0)                                 # (N,)
+    in_range = total > 0.0
+    shares = np.zeros_like(bid)
+    np.divide(bid, total, out=shares, where=in_range)       # broadcast over rows
+
+    owner = np.where(in_range, np.argmax(bid, axis=0), -1).astype(np.int32)
+    return shares, owner
 
 
 def compute_carrying_capacity(
-    hinterland: np.ndarray,
+    shares: np.ndarray,
     fertility: np.ndarray,
     face_areas: np.ndarray,
-    n_settlements: int,
 ) -> np.ndarray:
-    """Sum fertility × face_area over each settlement's hinterland.
+    """Per-settlement carrying capacity from fractional hinterland shares.
+
+    ``cap[k] = Σ_i shares[k, i] · fertility[i] · face_area[i]``.
 
     Args:
-        hinterland: (N,) int32 from :func:`assign_hinterlands` — settlement
-            index per face, -1 for unassigned.
+        shares: (S, N) float64 from :func:`compute_hinterland_shares`.
         fertility: (N,) float in [0, 1] — per-face ``fertility_mean``.
         face_areas: (N,) float64 — per-face solid-angle areas (unit-sphere).
-        n_settlements: total settlement count S.
 
     Returns:
         (S,) float64 — raw carrying capacity (arbitrary units).
     """
-    cap = np.zeros(n_settlements, dtype=np.float64)
+    shares = np.asarray(shares, dtype=np.float64)
+    if shares.size == 0:
+        return np.zeros(shares.shape[0], dtype=np.float64)
     contribution = np.asarray(fertility, dtype=np.float64) * np.asarray(face_areas, dtype=np.float64)
-    valid = hinterland >= 0
-    np.add.at(cap, hinterland[valid], contribution[valid])
-    return cap
+    return shares @ contribution
 
 
 def compute_trade_wealth(
