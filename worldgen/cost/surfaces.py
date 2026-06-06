@@ -4,8 +4,8 @@ Two surfaces, per the realmgen design (docs/settlement_generation_design.md):
 
   * **Land surface** — an isotropic per-face cost (biome difficulty + ruggedness)
     plus an *anisotropic* river term (cheap to travel *along* a navigable valley,
-    expensive to *ford across* it). All open water — ocean **and lakes** — is
-    impassable on land.
+    expensive to *ford across* it). Open water — ocean **and lakes** — is expensive
+    but passable (``water_crossing_cost``, default 20), enabling island connections.
   * **Sea surface** — water is the cheap medium (coastal water cheapest, open
     ocean dearer with distance from coast), land impassable, narrow straits
     tagged and discounted. Lakes are sailable like the ocean, and **navigable
@@ -75,15 +75,14 @@ class CostSurfaces:
     passability mask is True.
 
     A *navigable-river* face is passable on **both** surfaces — it is the only
-    overlap. Recover the constituent masks from the two passability arrays:
-    ``is_water = ~land_passable`` (ocean ∪ lake), and
-    ``navigable_river = land_passable & sea_passable``.
+    overlap. ``navigable_river = sea_passable & ~is_ocean & ~is_lake`` (water faces
+    are not exposed directly via ``land_passable`` since all faces are now passable).
 
     Attributes:
         land_base_cost:  (N,) float32 — isotropic land cost (biome + ruggedness),
             meaningful where ``land_passable``. The river term is *not* baked in;
             it is directional and applied per-edge by ``build_land_edge_costs``.
-        land_passable:   (N,) bool — False on open water (ocean ∪ lake).
+        land_passable:   (N,) bool — True for all faces (water is expensive, not impassable).
         river_flow_dir:  (N, 3) float32 — unit tangent-plane flow direction
             (downstream) per face; ``(0, 0, 0)`` where no river passes.
         river_flow_mag:  (N,) float32 — representative (max) upstream-flow value
@@ -119,25 +118,32 @@ def compute_land_base_cost(
     *,
     biome_cost_scale: float = 1.0,
     ruggedness_cost_per_km: float = 1.5,
+    water_crossing_cost: float = 20.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Isotropic per-face land cost = biome difficulty + ruggedness.
+
+    Water faces (ocean ∪ lake) are passable but expensive, enabling island
+    kingdoms and coastal connections at high cost.
 
     Args:
         face_biome: (N,) int — biome index per face.
         face_elev_range_km: (N,) float — per-face pixel elevation span (km), the
             ruggedness proxy (per-pixel slope is noise-dominated; see terrain.py).
-        is_water: (N,) bool — open water (ocean ∪ lake) is impassable on land.
+        is_water: (N,) bool — open water (ocean ∪ lake).
+        water_crossing_cost: flat cost assigned to water faces on the land surface.
 
     Returns:
-        (land_base_cost (N,) float32, land_passable (N,) bool). Water faces keep a
-        finite (meaningless) cost value; use the mask to gate them.
+        (land_base_cost (N,) float32, land_passable (N,) bool). All faces are
+        passable; water faces carry ``water_crossing_cost`` instead of a biome cost.
     """
     biome = np.clip(np.asarray(face_biome).astype(np.int64), 0, N_BIOMES - 1)
-    cost = (
+    land_cost = (
         biome_cost_scale * BIOME_TRAVERSAL_COST[biome]
         + ruggedness_cost_per_km * np.maximum(np.asarray(face_elev_range_km, dtype=np.float64), 0.0)
     ).astype(np.float32)
-    passable = ~np.asarray(is_water, dtype=bool)
+    water = np.asarray(is_water, dtype=bool)
+    cost = np.where(water, np.float32(water_crossing_cost), land_cost)
+    passable = np.ones(len(cost), dtype=bool)
     return cost, passable
 
 
@@ -311,8 +317,7 @@ def build_land_edge_costs(
     """Directional per-edge land traversal cost (mirrors ``mesh.face_adjacency``).
 
     Returns a list ``costs`` where ``costs[i][k]`` is the cost of stepping from
-    face ``i`` to ``mesh.face_adjacency[i][k]``. An edge with either endpoint not
-    ``land_passable`` is ``np.inf``.
+    face ``i`` to ``mesh.face_adjacency[i][k]``.
 
     ``cost = mean(land_cost over the two faces) × river_multiplier``. The
     multiplier comes from how each river face's flow aligns with the step
