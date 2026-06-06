@@ -18,6 +18,10 @@ import numpy as np
 from core.display import DisplayRegistry
 from core.pipeline import BuildContext, Stage
 from core.world import World
+from worldgen.climate.channels import BIOME, PRECIPITATION, TEMPERATURE
+from worldgen.geology.channels import ELEVATION, OCEAN_MASK
+from worldgen.hydrology.channels import LAKE_MASK, RIVER_OBJECTS
+from worldgen.resources.channels import FERTILITY_MEAN, MINERALS, RARE_BIO
 from worldgen.resources.crops import classify_crops
 from worldgen.resources.display import (
     build_dominant_crop_display_texture,
@@ -181,23 +185,20 @@ class ResourcesBuilder(Stage):
 
     def build(self, ctx: BuildContext) -> None:
         mesh = ctx.mesh
-        rivers = ctx.world.get_feature("river_objects")
+        rivers = RIVER_OBJECTS.read(ctx.world)
         _report = ctx.report
 
         p = self.params
         fp, gp = p.fertility, p.forest_density
         n = len(mesh.faces)
 
-        elevation_tex = mesh.face_textures["elevation"]            # (N, H, W, 1) km
-        temperature_tex = mesh.face_textures["temperature"]        # (N, H, W, K) °C
-        precipitation_tex = mesh.face_textures["precipitation"]    # (N, H, W, K) mm/season
-        ocean_mask_tex = mesh.face_textures["ocean_mask"]          # (N, H, W, 1)
-        lake_mask_tex = mesh.face_textures.get("lake_mask")        # may be None
+        elevation_tex = ELEVATION.read(mesh)                       # (N, H, W, 1) km
+        temperature_tex = TEMPERATURE.read(mesh)                   # (N, H, W, K) °C
+        precipitation_tex = PRECIPITATION.read(mesh)               # (N, H, W, K) mm/season
+        ocean_mask_tex = OCEAN_MASK.read(mesh)                     # (N, H, W, 1)
+        lake_mask_tex = LAKE_MASK.read(mesh) if LAKE_MASK.present(mesh) else None
 
-        face_biome = np.array(
-            [int(mesh.face_metadata[i].get("biome", 0)) for i in range(n)],
-            dtype=np.int32,
-        )
+        face_biome = BIOME.read(mesh)
 
         _report("Computing terrain ruggedness…")
         face_elev_range = face_elevation_range(elevation_tex)      # (N,) km
@@ -262,7 +263,7 @@ class ResourcesBuilder(Stage):
         forest_mean = forest[..., 0].mean(axis=(1, 2)).astype(np.float32)
         # Per-face dominant crop: mode of land pixels.
         dominant_crop_face = _face_modal_crop(dominant_crop[..., 0], ocean_mask_tex[..., 0])
-        mesh.apply_metadata_channel("fertility_mean", fertility_mean.tolist())
+        FERTILITY_MEAN.write(mesh, fertility_mean)
         mesh.apply_metadata_channel("forest_density_mean", forest_mean.tolist())
         mesh.apply_metadata_channel("dominant_crop", dominant_crop_face.tolist())
 
@@ -289,9 +290,9 @@ class ResourcesBuilder(Stage):
         self.volcanism_hops = volcanism_hops
 
         if self.minerals is not None and len(self.minerals[0]) > 0:
-            ctx.world.add_feature("minerals", self.minerals)
+            MINERALS.write(ctx.world, self.minerals)
         if self.rare_bio is not None and len(self.rare_bio[0]) > 0:
-            ctx.world.add_feature("rare_bio", self.rare_bio)
+            RARE_BIO.write(ctx.world, self.rare_bio)
 
         _report("Resources done.")
 
@@ -430,11 +431,11 @@ class ResourcesBuilder(Stage):
                 arrays["mineral_kinds"],
                 arrays["mineral_abundances"],
             )
-            ctx.world.add_feature("minerals", self.minerals)
+            MINERALS.write(ctx.world, self.minerals)
         if "rare_bio_positions" in arrays:
             self.rare_bio = (
                 arrays["rare_bio_positions"],
                 arrays["rare_bio_kinds"],
                 arrays["rare_bio_abundances"],
             )
-            ctx.world.add_feature("rare_bio", self.rare_bio)
+            RARE_BIO.write(ctx.world, self.rare_bio)

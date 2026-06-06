@@ -14,7 +14,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 source .venv/bin/activate
 python3 main.py                     # primary entrypoint — full procedural world viewer
-python3 -m worldgen.mesh.main       # 3-D mesh viewer (dev)
 python3 -m viz.mapview.main         # 2-D map viewer (dev)
 ```
 
@@ -74,10 +73,6 @@ The top-level orchestrator is `worldgen.globe.GlobeBuilder`, which runs each sta
 
 - **`MeshViewer`** (`QOpenGLWidget`): Renders a `PolygonMesh` using VBOs and `glDrawArrays` (OpenGL 3.3 compatibility). Drives ~60 FPS via a timer and rotates the mesh 0.5°/frame. When the mesh has `face_textures`, `_setup_buffers` packs all per-face textures into a square grid atlas (rows × cols), uploads it as a single `GL_TEXTURE_2D`, and substitutes a UV VBO (`uv_buffer`) for the color VBO; the atlas UV coordinates account for the v-flip between numpy (row 0 = top) and OpenGL (v=0 = bottom). Without textures, the original color-array path is used.
 - **`MainWindow`** (`QMainWindow`): Hosts `MeshViewer`; exposes `set_mesh(mesh)` to swap the displayed mesh at runtime (calls `makeCurrent`/`doneCurrent` around buffer setup).
-
-### `worldgen/mesh/main.py` — Entry point
-
-Creates an `icosphere(depth=4)`, deregularizes it, computes its dual, builds a radial-gradient per-face texture tinted by each face's random color, and opens the viewer.
 
 ### `viz/mapview/projections.py` — Map projections
 

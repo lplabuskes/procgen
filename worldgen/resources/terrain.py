@@ -14,6 +14,7 @@ from collections import deque
 import numpy as np
 
 from core.mesh import PolygonMesh
+from worldgen.geology.channels import VOLCANIC_ACTIVITY
 
 
 def face_elevation_range(elevation_tex: np.ndarray) -> np.ndarray:
@@ -114,10 +115,4 @@ def volcanic_faces(mesh: PolygonMesh, threshold: float) -> np.ndarray:
     Reads `volcanic_activity` from per-face metadata (written by the geology
     stage). Faces without the key are treated as non-volcanic.
     """
-    n = len(mesh.faces)
-    result = np.zeros(n, dtype=bool)
-    for i in range(n):
-        v = mesh.face_metadata[i].get("volcanic_activity", 0.0)
-        if float(v) >= threshold:
-            result[i] = True
-    return result
+    return VOLCANIC_ACTIVITY.read(mesh) >= threshold

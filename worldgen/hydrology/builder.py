@@ -4,6 +4,9 @@ from typing import List, Mapping, Optional
 
 import numpy as np
 
+from worldgen.climate.channels import PRECIPITATION, TEMPERATURE
+from worldgen.geology.channels import ELEVATION, OCEAN_MASK
+from worldgen.hydrology.channels import LAKE_MASK, RIVER_OBJECTS, RIVERS
 from worldgen.hydrology.rivers import River, RiverGenerator
 from core.display import DisplayRegistry
 from core.params import param_field as _f, paramclass
@@ -52,13 +55,13 @@ class HydrologyBuilder(Stage):
     def build(self, ctx: BuildContext) -> None:
         """Run the hydrology pipeline, attach results to the mesh, register features."""
         mesh = ctx.mesh
-        elevation_textures = mesh.face_textures["elevation"]
+        elevation_textures = ELEVATION.read(mesh)
         _report = ctx.report
 
         _report("Computing rivers and lakes…")
-        precip_tex = mesh.face_textures.get("precipitation")
-        temperature_tex = mesh.face_textures.get("temperature")
-        ocean_mask_tex = mesh.face_textures.get("ocean_mask")
+        precip_tex = PRECIPITATION.read(mesh) if PRECIPITATION.present(mesh) else None
+        temperature_tex = TEMPERATURE.read(mesh) if TEMPERATURE.present(mesh) else None
+        ocean_mask_tex = OCEAN_MASK.read(mesh) if OCEAN_MASK.present(mesh) else None
         river_gen = RiverGenerator(
             mesh,
             elevation_textures,
@@ -78,7 +81,7 @@ class HydrologyBuilder(Stage):
         filled_height = river_gen.get_filled_height_texture()  # (N, H, W, 1)
         lake_mask = river_gen.get_lake_mask_texture()          # (N, H, W, 1)
         mesh.set_face_textures("filled_height", filled_height.astype(np.float16), n_channels=1)
-        mesh.set_face_textures("lake_mask", lake_mask, n_channels=1)
+        LAKE_MASK.write(mesh, lake_mask)
 
         delta_pts: list[np.ndarray] = []
         res = river_gen.resolution
@@ -112,11 +115,11 @@ class HydrologyBuilder(Stage):
         if self.rivers:
             # Rich River objects for downstream stages (resources, cost); the
             # flattened polylines for rendering + serialization.
-            ctx.world.add_feature("river_objects", self.rivers)
+            RIVER_OBJECTS.write(ctx.world, self.rivers)
             paths_with_flow = self._flatten_rivers()
             if paths_with_flow:
                 self._river_feature = paths_with_flow
-                ctx.world.add_feature("rivers", paths_with_flow)
+                RIVERS.write(ctx.world, paths_with_flow)
         if self.lake_polygons:
             ctx.world.add_feature("lakes", self.lake_polygons)
         if self.delta_positions is not None and len(self.delta_positions) > 0:
@@ -195,7 +198,7 @@ class HydrologyBuilder(Stage):
             ]
             self.rivers = paths_with_flow
             self._river_feature = paths_with_flow
-            ctx.world.add_feature("rivers", paths_with_flow)
+            RIVERS.write(ctx.world, paths_with_flow)
         if "lake_poly_offsets" in arrays:
             poly_flat = arrays["lake_polys_flat"]
             poly_offs = arrays["lake_poly_offsets"]

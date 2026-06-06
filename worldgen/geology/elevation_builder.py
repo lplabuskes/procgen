@@ -38,6 +38,15 @@ _VOLCANIC_STOPS = [
     (0.5, (0.95, 0.25, 0.00, 1.0)),
     (1.0, (0.95, 0.05, 0.00, 1.0)),
 ]
+from worldgen.geology.channels import (
+    BOUNDARY_TYPE,
+    ELEVATION,
+    ELEVATION_FACE,
+    IS_OCEAN,
+    OCEAN_MASK,
+    PLATE_TYPE,
+    VOLCANIC_ACTIVITY,
+)
 from worldgen.geology.volcanism import compute_volcanism, generate_volcano_positions
 from worldgen.geology.tectonics import (
     assign_plate_types,
@@ -183,7 +192,7 @@ class ElevationBuilder(Stage):
             p.plates.n_plates, oceanic_fraction=p.plates.oceanic_fraction, seed=self._sub_seed(1)
         )
         plate_types = [plate_types_by_plate[pid] for pid in plate_ids]
-        dual.apply_metadata_channel("plate_type", plate_types)
+        PLATE_TYPE.write(dual, plate_types)
 
         plate_omegas = generate_plate_velocities(
             dual,
@@ -200,7 +209,7 @@ class ElevationBuilder(Stage):
 
         speeds = np.linalg.norm(face_velocities, axis=1)
         dual.apply_metadata_channel("plate_id", plate_ids)
-        dual.apply_metadata_channel("boundary_type", boundary_types)
+        BOUNDARY_TYPE.write(dual, boundary_types)
         dual.apply_metadata_channel("surface_speed", speeds.tolist())
 
         _report("Computing elevations…")
@@ -242,8 +251,8 @@ class ElevationBuilder(Stage):
             + (1.0 - oceanic_mask) * p.volcanism.volcanic_elevation_scale
         )
         elevations += volcanism * elev_scale
-        dual.apply_metadata_channel("volcanic_activity", volcanism.tolist())
-        dual.apply_metadata_channel("elevation", elevations.tolist())
+        VOLCANIC_ACTIVITY.write(dual, volcanism)
+        ELEVATION_FACE.write(dual, elevations)
 
         _report("Generating elevation textures…")
         elevation_textures = compute_elevation_textures(
@@ -267,13 +276,13 @@ class ElevationBuilder(Stage):
         # Derive per-face elevations from the final texture for land/ocean masking.
         final_elevations = face_elevations_from_texture(elevation_textures)
 
-        dual.set_face_textures("elevation", elevation_textures.astype(np.float16), n_channels=1)
+        ELEVATION.write(dual, elevation_textures.astype(np.float32))
 
         _report("Computing ocean mask…")
         ocean_mask = compute_ocean_mask_texture(dual, elevation_textures)
-        dual.set_face_textures("ocean_mask", ocean_mask, n_channels=1)
+        OCEAN_MASK.write(dual, ocean_mask)
         is_ocean_per_face = ocean_mask[:, :, :, 0].mean(axis=(1, 2)) > 0.5
-        dual.apply_metadata_channel("is_ocean", is_ocean_per_face.tolist())
+        IS_OCEAN.write(dual, is_ocean_per_face)
 
         self.mesh = dual
         self.plate_ids = plate_ids

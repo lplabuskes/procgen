@@ -31,7 +31,11 @@ from core.mesh import PolygonMesh
 from core.params import field, param_field as _f, paramclass
 from core.pipeline import BuildContext, Stage
 from core.world import World
+from worldgen.climate.channels import BIOME
+from worldgen.cost.channels import COST_SURFACES, IS_STRAIT, IS_WATER
+from worldgen.geology.channels import ELEVATION, IS_OCEAN
 from worldgen.geology.display import LAND_COLOR, OCEAN_COLOR
+from worldgen.hydrology.channels import LAKE_MASK, RIVER_OBJECTS
 
 
 @paramclass
@@ -86,10 +90,10 @@ def _face_lake_mask(mesh: PolygonMesh, threshold: float = 0.5) -> np.ndarray:
     sliver of shoreline lake does not turn a land face impassable. Returns all
     False when no lake texture is present.
     """
-    tex = mesh.face_textures.get("lake_mask")
     n = len(mesh.faces)
-    if tex is None:
+    if not LAKE_MASK.present(mesh):
         return np.zeros(n, dtype=bool)
+    tex = LAKE_MASK.read(mesh)
     return tex[..., 0].mean(axis=(1, 2)) >= threshold
 
 
@@ -115,24 +119,17 @@ class CostBuilder(Stage):
 
     def build(self, ctx: BuildContext) -> CostSurfaces:
         mesh = ctx.mesh
-        rivers = ctx.world.get_feature("river_objects")
+        rivers = RIVER_OBJECTS.read(ctx.world)
         _report = ctx.report
 
         p = self.params
-        n = len(mesh.faces)
 
         _report("Reading physical layers for cost…")
-        face_biome = np.array(
-            [int(mesh.face_metadata[i].get("biome", 0)) for i in range(n)],
-            dtype=np.int32,
-        )
-        is_ocean = np.array(
-            [bool(mesh.face_metadata[i].get("is_ocean", False)) for i in range(n)],
-            dtype=bool,
-        )
+        face_biome = BIOME.read(mesh)
+        is_ocean = IS_OCEAN.read(mesh)
         is_lake = _face_lake_mask(mesh)
         is_water = is_ocean | is_lake          # sailable, impassable on land
-        elev_range = _face_elevation_range_km(mesh.face_textures["elevation"])
+        elev_range = _face_elevation_range_km(ELEVATION.read(mesh))
 
         _report("Computing land base cost…")
         land_cost, land_passable = compute_land_base_cost(
@@ -194,14 +191,14 @@ class CostBuilder(Stage):
 
         mesh.apply_metadata_channel("land_base_cost", land_cost.astype(float).tolist())
         mesh.apply_metadata_channel("sea_base_cost", sea_cost.astype(float).tolist())
-        mesh.apply_metadata_channel("is_strait", strait_mask.tolist())
-        mesh.apply_metadata_channel("is_water", is_water.tolist())
+        IS_STRAIT.write(mesh, strait_mask)
+        IS_WATER.write(mesh, is_water)
         mesh.apply_metadata_channel("is_navigable_river", river_navigable.tolist())
         mesh.apply_metadata_channel(
             "river_navigability", river_navigability.astype(float).tolist()
         )
 
-        ctx.world.add_feature("cost_surfaces", surfaces)
+        COST_SURFACES.write(ctx.world, surfaces)
 
         _report("Cost surfaces done.")
         return surfaces
@@ -296,4 +293,4 @@ class CostBuilder(Stage):
             strait_mask=arrays["cost_strait_mask"],
         )
         self.surfaces = cs
-        ctx.world.add_feature("cost_surfaces", cs)
+        COST_SURFACES.write(ctx.world, cs)

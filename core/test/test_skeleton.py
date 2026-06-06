@@ -3,7 +3,7 @@ Pipeline, and DisplayRegistry. No Qt — pure logic."""
 import numpy as np
 import pytest
 
-from core.channels import MetaChannel, TextureChannel
+from core.channels import FeatureChannel, MetaChannel, TextureChannel
 from core.display import DisplayRegistry
 from core.pipeline import BuildContext, Pipeline, Stage
 from core.world import World
@@ -26,11 +26,6 @@ class _FakeMesh:
         self.face_textures[name] = tex
 
 
-def _world(n=5):
-    w = World(mesh=_FakeMesh(n))
-    return w
-
-
 # ── World ──────────────────────────────────────────────────────────────────────
 
 def test_world_feature_registry():
@@ -46,28 +41,40 @@ def test_world_feature_registry():
     assert not w.has_feature("rivers")
 
 
-# ── MetaChannel ─────────────────────────────────────────────────────────────────
+# ── MetaChannel / TextureChannel (mesh-based) ────────────────────────────────────
 
 def test_meta_channel_round_trip():
-    w = _world(4)
+    mesh = _FakeMesh(4)
     ch = MetaChannel("fertility", dtype=np.float64)
-    assert not ch.present(w)
+    assert not ch.present(mesh)
     # Absent → default-filled read.
-    np.testing.assert_array_equal(ch.read(w), np.zeros(4))
-    ch.write(w, np.array([0.1, 0.2, 0.3, 0.4]))
-    assert ch.present(w)
-    np.testing.assert_allclose(ch.read(w), [0.1, 0.2, 0.3, 0.4])
+    np.testing.assert_array_equal(ch.read(mesh), np.zeros(4))
+    ch.write(mesh, np.array([0.1, 0.2, 0.3, 0.4]))
+    assert ch.present(mesh)
+    np.testing.assert_allclose(ch.read(mesh), [0.1, 0.2, 0.3, 0.4])
 
 
 def test_texture_channel_round_trip():
-    w = _world(2)
+    mesh = _FakeMesh(2)
     ch = TextureChannel("elevation", n_channels=1)
-    assert not ch.present(w)
+    assert not ch.present(mesh)
     tex = np.zeros((2, 4, 4, 1), dtype=np.float32)
     tex[1] = 3.0
-    ch.write(w, tex)
+    ch.write(mesh, tex)
+    assert ch.present(mesh)
+    np.testing.assert_array_equal(ch.read(mesh), tex)
+
+
+# ── FeatureChannel (world-based) ─────────────────────────────────────────────────
+
+def test_feature_channel_round_trip():
+    w = World()
+    ch = FeatureChannel("rivers")
+    assert not ch.present(w)
+    assert ch.read(w) is None
+    ch.write(w, [1, 2, 3])
     assert ch.present(w)
-    np.testing.assert_array_equal(ch.read(w), tex)
+    assert ch.read(w) == [1, 2, 3]
 
 
 # ── BuildContext ────────────────────────────────────────────────────────────────

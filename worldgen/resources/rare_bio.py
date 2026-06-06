@@ -27,6 +27,14 @@ import numpy as np
 
 from utils.simplex import fbm_sum, make_perm
 from core.mesh import PolygonMesh
+from worldgen.climate.channels import (
+    BIOME,
+    DISTANCE_TO_COAST,
+    PRECIPITATION_ANNUAL,
+    TEMPERATURE_ANNUAL,
+)
+from worldgen.geology.channels import ELEVATION_FACE, IS_OCEAN
+from worldgen.hydrology.channels import LAKE_MASK
 from worldgen.resources.terrain import face_hops_from_seeds, lake_containing_faces
 
 if TYPE_CHECKING:
@@ -130,33 +138,19 @@ def place_rare_bio_resources(
     centroids = mesh.face_centroids.astype(np.float32)
 
     # ── read face metadata into flat arrays ─────────────────────────────────
-    biome = np.array(
-        [int(mesh.face_metadata[i].get("biome", 0)) for i in range(n)],
-        dtype=np.int32,
-    )
-    t_annual = np.array(
-        [float(mesh.face_metadata[i].get("temperature_annual", 0.0)) for i in range(n)],
-        dtype=np.float32,
-    )
-    p_annual = np.array(
-        [float(mesh.face_metadata[i].get("precipitation_annual", 0.0)) for i in range(n)],
-        dtype=np.float32,
-    )
-    elevation = np.array(
-        [float(mesh.face_metadata[i].get("elevation", 0.0)) for i in range(n)],
-        dtype=np.float32,
-    )
-    is_ocean = np.array(
-        [bool(mesh.face_metadata[i].get("is_ocean", False)) for i in range(n)],
-        dtype=bool,
-    )
-    dist_coast = np.array(
-        [float(mesh.face_metadata[i].get("distance_to_coast", 9999.0)) for i in range(n)],
-        dtype=np.float32,
+    biome = BIOME.read(mesh)
+    t_annual = TEMPERATURE_ANNUAL.read(mesh).astype(np.float32)
+    p_annual = PRECIPITATION_ANNUAL.read(mesh).astype(np.float32)
+    elevation = ELEVATION_FACE.read(mesh).astype(np.float32)
+    is_ocean = IS_OCEAN.read(mesh)
+    dist_coast = (
+        DISTANCE_TO_COAST.read(mesh).astype(np.float32)
+        if DISTANCE_TO_COAST.present(mesh)
+        else np.full(n, 9999.0, dtype=np.float32)
     )
 
     # Exclude both ocean faces and lake faces from land-resource eligibility.
-    lake_mask_tex = mesh.face_textures.get("lake_mask")
+    lake_mask_tex = LAKE_MASK.read(mesh) if LAKE_MASK.present(mesh) else None
     if lake_mask_tex is not None:
         is_lake = lake_containing_faces(lake_mask_tex)
     else:

@@ -54,11 +54,11 @@ from worldgen.climate.channels import (
     TEMPERATURE_WARMEST,
 )
 from viz.color_stops import interp_stops_scalar
-from worldgen.cost.channels import IS_STRAIT, IS_WATER
+from worldgen.cost.channels import COST_SURFACES, IS_STRAIT, IS_WATER
 from worldgen.geology.channels import ELEVATION, IS_OCEAN
 from worldgen.geology.display import OCEAN_COLOR
-from worldgen.hydrology.channels import LAKE_MASK
-from worldgen.resources.channels import FERTILITY_MEAN
+from worldgen.hydrology.channels import LAKE_MASK, RIVERS
+from worldgen.resources.channels import FERTILITY_MEAN, MINERALS, RARE_BIO
 from worldgen.resources.terrain import face_elevation_range
 
 _SUITABILITY_STOPS = [
@@ -204,6 +204,7 @@ class RealmStage(Stage):
         IS_WATER, IS_OCEAN, IS_STRAIT, ELEVATION,
         DISTANCE_TO_COAST, FERTILITY_MEAN,
         TEMPERATURE_WARMEST, TEMPERATURE_COLDEST, PRECIPITATION_ANNUAL,
+        LAKE_MASK, COST_SURFACES, RIVERS, MINERALS, RARE_BIO,
     )
     provides = (SUITABILITY, SITUATIONAL_VALUE)
 
@@ -221,41 +222,41 @@ class RealmStage(Stage):
         # ── Open-water mask (impassable for settlement) ──────────────────────
         ctx.report("Reading physical layers…")
         # IS_WATER (ocean ∪ lake) falls back to is_ocean for pre-cost worlds.
-        is_water = IS_WATER.read(world)
+        is_water = IS_WATER.read(mesh)
 
         # ── Freshwater seed mask (rivers + lakes) ───────────────────────────
         # Rivers: cost_surfaces.river_flow_mag > 0 covers all non-in_lake river
         # segments (the most accurate signal available).
         river_mask = np.zeros(n, dtype=bool)
-        if world.has_feature("cost_surfaces"):
-            river_mask = world.get_feature("cost_surfaces").river_flow_mag > 0.0
+        if COST_SURFACES.present(world):
+            river_mask = COST_SURFACES.read(world).river_flow_mag > 0.0
 
         # Lakes: use the lake_mask texture if present, else any non-ocean water.
-        if LAKE_MASK.present(world):
-            lake_tex = LAKE_MASK.read(world)
+        if LAKE_MASK.present(mesh):
+            lake_tex = LAKE_MASK.read(mesh)
             lake_mask = lake_tex[..., 0].mean(axis=(1, 2)) >= 0.5
         else:
-            lake_mask = is_water & ~IS_OCEAN.read(world)
+            lake_mask = is_water & ~IS_OCEAN.read(mesh)
 
         freshwater_mask = river_mask | lake_mask
 
         # ── Per-face climate and fertility ───────────────────────────────────
-        dist_coast_km = DISTANCE_TO_COAST.read(world)
-        fertility = FERTILITY_MEAN.read(world).clip(0.0, 1.0)
-        t_warmest = TEMPERATURE_WARMEST.read(world)
-        t_coldest = TEMPERATURE_COLDEST.read(world)
-        p_annual = PRECIPITATION_ANNUAL.read(world)
+        dist_coast_km = DISTANCE_TO_COAST.read(mesh)
+        fertility = FERTILITY_MEAN.read(mesh).clip(0.0, 1.0)
+        t_warmest = TEMPERATURE_WARMEST.read(mesh)
+        t_coldest = TEMPERATURE_COLDEST.read(mesh)
+        p_annual = PRECIPITATION_ANNUAL.read(mesh)
 
         # ── Elevation range for ruggedness penalty ───────────────────────────
-        elev_range = face_elevation_range(ELEVATION.read(world))
+        elev_range = face_elevation_range(ELEVATION.read(mesh))
 
         # ── Resource deposit positions → face seeds ─────────────────────────
         ctx.report("Mapping resource deposits to faces…")
         resource_mask = np.zeros(n, dtype=bool)
         centroids = np.asarray(mesh.face_centroids, dtype=np.float64)
-        for feature_name in ("minerals", "rare_bio"):
-            if world.has_feature(feature_name):
-                positions, _, _ = world.get_feature(feature_name)
+        for channel in (MINERALS, RARE_BIO):
+            if channel.present(world):
+                positions, _, _ = channel.read(world)
                 if len(positions) > 0:
                     fids = _positions_to_face_ids(positions, centroids)
                     resource_mask[fids] = True
@@ -302,15 +303,15 @@ class RealmStage(Stage):
         suitability = (suitability * ruggedness_mult).astype(np.float32)
 
         self.suitability = suitability
-        SUITABILITY.write(world, suitability)
+        SUITABILITY.write(mesh, suitability)
 
         # ── Situational value ────────────────────────────────────────────────
         ctx.report("Computing situational value…")
         sp = p.situational
 
         # Harbor quality: needs per-face mean elevation and ocean mask.
-        is_ocean = IS_OCEAN.read(world)
-        face_mean_elev_km = ELEVATION.read(world)[..., 0].mean(axis=(1, 2))
+        is_ocean = IS_OCEAN.read(mesh)
+        face_mean_elev_km = ELEVATION.read(mesh)[..., 0].mean(axis=(1, 2))
         harbor_score = compute_harbor_quality(
             mesh, is_ocean, face_mean_elev_km,
             depth_scale_km=sp.harbor.depth_scale_km,
@@ -318,26 +319,26 @@ class RealmStage(Stage):
 
         # River confluences and navigable heads use the world's rivers feature
         # (positions/flows/in_lake tuples) with a centroid lookup.
-        rivers = world.get_feature("rivers") if world.has_feature("rivers") else None
+        rivers = RIVERS.read(world) if RIVERS.present(world) else None
         confluence_score = compute_river_confluences(rivers, centroids, n)
 
         # Navigable river heads: fall-line faces per river.
         river_navigability = np.zeros(n, dtype=np.float32)
-        if world.has_feature("cost_surfaces"):
-            river_navigability = world.get_feature("cost_surfaces").river_navigability
+        if COST_SURFACES.present(world):
+            river_navigability = COST_SURFACES.read(world).river_navigability
         nav_head_score = compute_navigable_heads(rivers, centroids, river_navigability, n)
 
         # Mountain passes: local land-cost minima in high-cost terrain.
         land_base_cost = np.zeros(n, dtype=np.float32)
-        if world.has_feature("cost_surfaces"):
-            land_base_cost = world.get_feature("cost_surfaces").land_base_cost
+        if COST_SURFACES.present(world):
+            land_base_cost = COST_SURFACES.read(world).land_base_cost
         pass_score = compute_mountain_passes(
             mesh, land_base_cost, is_water,
             params=sp.passes,
         )
 
         # Strait adjacency: land faces bordering tagged strait ocean faces.
-        is_strait = IS_STRAIT.read(world)
+        is_strait = IS_STRAIT.read(mesh)
         strait_score = compute_strait_adjacency(mesh, is_strait, is_water)
 
         situational_value = combine_situational_value(
@@ -351,7 +352,7 @@ class RealmStage(Stage):
         )
 
         self.situational_value = situational_value
-        SITUATIONAL_VALUE.write(world, situational_value)
+        SITUATIONAL_VALUE.write(mesh, situational_value)
 
         ctx.report("Situational value done.")
 

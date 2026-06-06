@@ -16,7 +16,19 @@ from worldgen.climate.classification import (
     N_BIOMES,
     classify_textures,
 )
+from worldgen.climate.channels import (
+    BIOME,
+    DISTANCE_TO_COAST,
+    PRECIPITATION,
+    PRECIPITATION_ANNUAL,
+    TEMPERATURE,
+    TEMPERATURE_ANNUAL,
+    TEMPERATURE_COLDEST,
+    TEMPERATURE_WARMEST,
+)
 from worldgen.climate.currents import CurrentsResult, compute_currents
+from worldgen.geology.channels import ELEVATION, OCEAN_MASK
+from worldgen.hydrology.channels import LAKE_MASK
 from worldgen.climate.insolation import (
     SEASON_DECLINATIONS_DEG,
     face_latitudes,
@@ -194,7 +206,7 @@ class ClimateBuilder(Stage):
 
     def build(self, ctx: BuildContext) -> None:
         mesh = ctx.mesh
-        elevation_textures = mesh.face_textures["elevation"]
+        elevation_textures = ELEVATION.read(mesh)
         _report = ctx.report
 
         p = self.params
@@ -210,8 +222,8 @@ class ClimateBuilder(Stage):
 
         _report("Computing distance to coast…")
         is_ocean_face: np.ndarray | None = None
-        if "ocean_mask" in mesh.face_textures:
-            omask = mesh.face_textures["ocean_mask"]
+        if OCEAN_MASK.present(mesh):
+            omask = OCEAN_MASK.read(mesh)
             is_ocean_face = omask[:, :, :, 0].mean(axis=(1, 2)) > 0.5
         dist_coast = _distance_to_coast_km(mesh, face_elev, is_ocean=is_ocean_face)  # (N,)
 
@@ -327,8 +339,8 @@ class ClimateBuilder(Stage):
         if biome_tex.dtype != np.uint8:
             biome_tex = biome_tex.astype(np.uint8)
 
-        mesh.set_face_textures("temperature", t_pixel.astype(np.float16), n_channels=N_SEASONS)
-        mesh.set_face_textures("precipitation", p_pixel.astype(np.float16), n_channels=N_SEASONS)
+        TEMPERATURE.write(mesh, t_pixel.astype(np.float16))
+        PRECIPITATION.write(mesh, p_pixel.astype(np.float16))
         mesh.set_face_textures("humidity", h_pixel.astype(np.float16), n_channels=N_SEASONS)
         mesh.set_face_textures("biome", biome_tex, n_channels=1)
 
@@ -340,12 +352,12 @@ class ClimateBuilder(Stage):
         p_annual = p_face.sum(axis=1)
         biome_face = _dominant_biome_per_face(biome_tex)
 
-        mesh.apply_metadata_channel("temperature_annual", t_annual.tolist())
-        mesh.apply_metadata_channel("temperature_warmest", t_warmest.tolist())
-        mesh.apply_metadata_channel("temperature_coldest", t_coldest.tolist())
-        mesh.apply_metadata_channel("precipitation_annual", p_annual.tolist())
-        mesh.apply_metadata_channel("biome", [int(b) for b in biome_face])
-        mesh.apply_metadata_channel("distance_to_coast", dist_coast.tolist())
+        TEMPERATURE_ANNUAL.write(mesh, t_annual)
+        TEMPERATURE_WARMEST.write(mesh, t_warmest)
+        TEMPERATURE_COLDEST.write(mesh, t_coldest)
+        PRECIPITATION_ANNUAL.write(mesh, p_annual)
+        BIOME.write(mesh, biome_face)
+        DISTANCE_TO_COAST.write(mesh, dist_coast)
         mesh.apply_metadata_channel("humidity_annual", q_air.mean(axis=1).tolist())
 
         self.insolation = insolation
@@ -441,7 +453,7 @@ class ClimateBuilder(Stage):
         self.humidity_face = q_updated
 
         # Re-rasterize humidity → precipitation → biomes.
-        elev_tex = mesh.face_textures["elevation"]                     # (N, H, W, 1)
+        elev_tex = ELEVATION.read(mesh)                                # (N, H, W, 1)
         n_h = elev_tex.shape[1]
 
         if self.currents is not None:
@@ -469,7 +481,7 @@ class ClimateBuilder(Stage):
         if biome_tex.dtype != np.uint8:
             biome_tex = biome_tex.astype(np.uint8)
 
-        mesh.set_face_textures("precipitation", p_pixel.astype(np.float16), n_channels=N_SEASONS)
+        PRECIPITATION.write(mesh, p_pixel.astype(np.float16))
         mesh.set_face_textures("humidity", h_pixel.astype(np.float16), n_channels=N_SEASONS)
         mesh.set_face_textures("biome", biome_tex, n_channels=1)
 
@@ -477,8 +489,8 @@ class ClimateBuilder(Stage):
         p_face = p_pixel.mean(axis=(1, 2))                             # (N, K)
         p_annual = p_face.sum(axis=1)
         biome_face = _dominant_biome_per_face(biome_tex)
-        mesh.apply_metadata_channel("precipitation_annual", p_annual.tolist())
-        mesh.apply_metadata_channel("biome", [int(b) for b in biome_face])
+        PRECIPITATION_ANNUAL.write(mesh, p_annual)
+        BIOME.write(mesh, biome_face)
         mesh.apply_metadata_channel("humidity_annual", q_updated.mean(axis=1).tolist())
         self.precipitation_face = p_face
 
@@ -621,9 +633,9 @@ class ClimateLakeFeedbackStage(Stage):
 
     def build(self, ctx: BuildContext) -> None:
         mesh = ctx.mesh
-        if "lake_mask" in mesh.face_textures:
+        if LAKE_MASK.present(mesh):
             self.builder.apply_lake_humidity_feedback(
-                mesh, mesh.face_textures["lake_mask"], progress=ctx.report
+                mesh, LAKE_MASK.read(mesh), progress=ctx.report
             )
 
 

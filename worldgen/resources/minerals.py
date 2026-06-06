@@ -26,6 +26,14 @@ import numpy as np
 
 from utils.simplex import fbm_sum, make_perm
 from core.mesh import PolygonMesh
+from worldgen.climate.channels import BIOME
+from worldgen.geology.channels import (
+    BOUNDARY_TYPE,
+    ELEVATION_FACE,
+    IS_OCEAN,
+    PLATE_TYPE,
+    VOLCANIC_ACTIVITY,
+)
 from worldgen.resources.terrain import face_hops_from_seeds
 
 if TYPE_CHECKING:
@@ -110,28 +118,12 @@ def place_mineral_deposits(
     centroids = mesh.face_centroids.astype(np.float32)
 
     # ── read face metadata into flat arrays ─────────────────────────────
-    boundary_type = np.array(
-        [mesh.face_metadata[i].get("boundary_type", "interior") for i in range(n)]
-    )
-    plate_type = np.array(
-        [mesh.face_metadata[i].get("plate_type", "oceanic") for i in range(n)]
-    )
-    volcanic = np.array(
-        [float(mesh.face_metadata[i].get("volcanic_activity", 0.0)) for i in range(n)],
-        dtype=np.float32,
-    )
-    elevation = np.array(
-        [float(mesh.face_metadata[i].get("elevation", 0.0)) for i in range(n)],
-        dtype=np.float32,
-    )
-    is_ocean = np.array(
-        [bool(mesh.face_metadata[i].get("is_ocean", False)) for i in range(n)],
-        dtype=bool,
-    )
-    biome = np.array(
-        [int(mesh.face_metadata[i].get("biome", 0)) for i in range(n)],
-        dtype=np.int32,
-    )
+    boundary_type = BOUNDARY_TYPE.read(mesh)
+    plate_type = PLATE_TYPE.read(mesh)
+    volcanic = VOLCANIC_ACTIVITY.read(mesh).astype(np.float32)
+    elevation = ELEVATION_FACE.read(mesh).astype(np.float32)
+    is_ocean = IS_OCEAN.read(mesh)
+    biome = BIOME.read(mesh)
 
     # ── geological candidate masks ───────────────────────────────────────
     is_convergent  = boundary_type == "convergent"
