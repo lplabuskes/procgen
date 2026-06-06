@@ -366,7 +366,7 @@ class RealmStage(Stage):
         """
         if self.suitability is not None:
             reg.add_scheme("Suitability", _suitability_color)
-        if self.situational_value is not None:
+        if debug and self.situational_value is not None:
             reg.add_scheme("Situational Value", _situational_color)
 
 
@@ -404,16 +404,38 @@ class RealmPipeline(Pipeline):
         self.world = ctx.world
 
     def apply_display(self, window, debug: bool = False) -> None:
-        """Merge realm color schemes into a MapWindow after build().
+        """Merge realm color schemes and hover into a MapWindow after build().
 
         Call after the worldgen display is wired so the schemes are appended
         alongside the worldgen schemes.
         """
         reg = DisplayRegistry()
         self.realm_stage.register_display(None, reg, debug=debug)
-        if not reg.schemes:
+        if reg.schemes:
+            merged = dict(window._map._color_schemes)
+            for name, spec in reg.schemes.items():
+                merged[name] = spec.fn
+            window.set_color_schemes(merged)
+
+        mesh = self.world.mesh if self.world else None
+        if mesh is None:
             return
-        merged = dict(window._map._color_schemes)
-        for name, spec in reg.schemes.items():
-            merged[name] = spec.fn
-        window.set_color_schemes(merged)
+
+        prev_hover = window._map._hover_callback
+
+        def _realm_hover(face_src, uv=None):
+            if prev_hover is not None:
+                prev_hover(face_src, uv)
+            if face_src is None:
+                return
+            meta = mesh.face_metadata[face_src]
+            if meta.get("is_water", meta.get("is_ocean", False)):
+                return
+            suit = meta.get("suitability")
+            if suit is None:
+                return
+            fragment = f"Suit: {float(suit):.2f}"
+            cur = window._status_label.text()
+            window.set_status(f"{cur}  |  {fragment}" if cur else fragment)
+
+        window.set_hover_callback(_realm_hover)

@@ -9,6 +9,7 @@ from core.pipeline import BuildContext
 from core.world import World
 from viz.mapview.mapview import MapWindow
 from viz.params_dialog import ParamsDialog
+from realmgen.builder import RealmPipeline
 from worldgen import GlobePipeline, GlobeParams, load_globe, save_globe
 
 
@@ -46,14 +47,19 @@ def main() -> None:
 
         world = World(params.mesh, seed=params.seed, progress=_progress)
         ctx = BuildContext(world=world, progress=_progress)
-        pipelines = [GlobePipeline(params)]
-        for p in pipelines:
-            p.build(ctx)
-        current_globe_pipeline[0] = pipelines[0]
+        globe_pipeline = GlobePipeline(params)
+        globe_pipeline.build(ctx)
+        current_globe_pipeline[0] = globe_pipeline
 
+        realm_pipeline = RealmPipeline()
+        realm_pipeline.build(ctx)
+
+        prev_scheme = window.active_scheme
         window.set_globe(ctx.world)
-        for p in pipelines:
-            p.apply_display(window, debug=debug)
+        globe_pipeline.apply_display(window, debug=debug)
+        realm_pipeline.apply_display(window, debug=debug)
+        if prev_scheme:
+            window.set_active_scheme(prev_scheme)
 
         window.set_status("")
         window.set_rebuild_enabled(True)
@@ -109,7 +115,7 @@ def main() -> None:
     else:
         _build_and_apply(GlobeParams())
 
-    window.show()
+    window.showFullScreen()
     sys.exit(app.exec())
 
 

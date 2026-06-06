@@ -1089,6 +1089,15 @@ class MapWindow(QMainWindow):
         self._overlays_btn.setVisible(True)
         self._map.set_overlay_visible(name, checked)
 
+    @property
+    def active_scheme(self) -> "str | None":
+        return self._map._active_scheme
+
+    def set_active_scheme(self, name: str) -> None:
+        """Switch to a named scheme if it exists in the current scheme list."""
+        if name and name in self._map._color_schemes:
+            self._color_combo.setCurrentText(name)
+
     def set_color_schemes(self, schemes: dict[str, Callable[[dict], Sequence[float]]]) -> None:
         prev_scheme = self._color_combo.currentText()
         self._color_combo.blockSignals(True)
