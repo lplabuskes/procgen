@@ -39,6 +39,7 @@ from realmgen.population.calibration import (
     compute_trade_wealth,
     cull_settlements,
 )
+from realmgen.population.trade_spawn import spawn_trade_settlements
 from realmgen.trade.network import compute_trade_network
 from realmgen.placement.seeder import (
     build_cost_graph,
@@ -195,10 +196,23 @@ class TradeParams:
 
 
 @paramclass
+class TradeSpawnParams:
+    hub_flow_quantile: float = _f(0.97, label="Hub flow quantile", min=0.80, max=1.00)
+    hub_min_suitability: float = _f(0.15, label="Hub min suitability", min=0.0, max=0.5)
+    hub_exclusion: float = _f(5.0, label="Hub exclusion radius", min=1.0, max=30.0)
+    waypoint_min_cost: float = _f(30.0, label="Waypoint min cost dist", min=5.0, max=200.0)
+    waypoint_min_suitability: float = _f(0.10, label="Waypoint min suitability", min=0.0, max=0.5)
+    waypoint_exclusion: float = _f(3.0, label="Waypoint exclusion radius", min=1.0, max=20.0)
+
+
+@paramclass
 class PopulationParams:
     relaxation_passes: int = _f(2, label="Relaxation passes", min=1, max=5)
     trade_weight: float = _f(1.5, label="Trade wealth weight", min=0.0, max=5.0)
     min_pop_fraction: float = _f(0.005, label="Min pop fraction (cull)", min=0.0, max=0.1)
+    trade_spawn: TradeSpawnParams = field(
+        default_factory=TradeSpawnParams, metadata={"label": "Trade-spawn settlements"}
+    )
 
 
 @paramclass
@@ -567,9 +581,35 @@ class RealmStage(Stage):
             f"{self.trade_result.hub_mask.sum()} hub faces."
         )
 
+        # ── Trade-driven settlement spawning ─────────────────────────────────
+        ctx.report("Spawning trade-driven settlements…")
+        pp = p.population
+        tsp = pp.trade_spawn
+        new_settlements = spawn_trade_settlements(
+            n,
+            self.settlements,
+            self.trade_result.face_flow,
+            suitability,
+            is_water,
+            cost_graph,
+            centroids,
+            tier_configs,
+            hub_flow_quantile=tsp.hub_flow_quantile,
+            hub_min_suitability=tsp.hub_min_suitability,
+            hub_exclusion=tsp.hub_exclusion,
+            waypoint_min_cost=tsp.waypoint_min_cost,
+            waypoint_min_suitability=tsp.waypoint_min_suitability,
+            waypoint_exclusion=tsp.waypoint_exclusion,
+        )
+        if new_settlements:
+            self.settlements = self.settlements + new_settlements
+            ctx.report(
+                f"Trade-spawn: added {len(new_settlements)} settlements "
+                f"({len(self.settlements)} total)."
+            )
+
         # ── Population & Calibration ─────────────────────────────────────────
         ctx.report("Computing hinterland assignment…")
-        pp = p.population
         self.hinterland = assign_hinterlands(n, self.settlements, cost_graph)
         face_areas = np.asarray(mesh.face_areas, dtype=np.float64)
         carrying_cap = compute_carrying_capacity(
