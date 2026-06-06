@@ -222,23 +222,14 @@ class ClimateBuilder(Stage):
             insolation,
             face_elev,
             dist_coast.astype(np.float64),
-            equator_annual_c=tp.equator_annual_c,
-            pole_annual_c=tp.pole_annual_c,
-            anomaly_scale=tp.anomaly_scale,
-            lapse_rate_c_per_km=tp.lapse_rate_c_per_km,
-            ocean_inertia=tp.ocean_inertia,
-            land_inertia=tp.land_inertia,
-            inertia_distance_km=tp.inertia_distance_km,
+            params=tp,
         )
 
         _report("Computing prevailing winds…")
         winds = zonal_winds(
             mesh.face_centroids.astype(np.float64),
             latitudes_rad,
-            trade_speed=wp.trade_speed,
-            westerly_speed=wp.westerly_speed,
-            polar_speed=wp.polar_speed,
-            itcz_shift_deg=wp.itcz_shift_deg,
+            params=wp,
         )
         # Land/sea thermal contrast → seasonal pressure systems → cross-isobar
         # flow. Added on top of the zonal base; ocean inertia damps the anomaly
@@ -274,13 +265,8 @@ class ClimateBuilder(Stage):
                 mesh.face_centroids.astype(np.float64),
                 winds,
                 insolation.mean(axis=1),
+                params=cp,
                 is_ocean=is_ocean_face,
-                beta_scale=cp.beta_scale,
-                advection_alpha=cp.advection_alpha,
-                advection_iterations=cp.advection_iterations,
-                temperature_scale=cp.temperature_scale,
-                precipitation_scale=cp.precipitation_scale,
-                inland_decay_km=cp.inland_decay_km,
             )
 
             # Second-pass T and P with the current-driven deltas broadcast across seasons.
@@ -290,13 +276,7 @@ class ClimateBuilder(Stage):
                 insolation,
                 face_elev,
                 dist_coast.astype(np.float64),
-                equator_annual_c=tp.equator_annual_c,
-                pole_annual_c=tp.pole_annual_c,
-                anomaly_scale=tp.anomaly_scale,
-                lapse_rate_c_per_km=tp.lapse_rate_c_per_km,
-                ocean_inertia=tp.ocean_inertia,
-                land_inertia=tp.land_inertia,
-                inertia_distance_km=tp.inertia_distance_km,
+                params=tp,
                 coastal_current_temp_delta=temp_delta,
             )
             # Second-pass humidity: updated SST → more evaporation from warm currents.

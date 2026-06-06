@@ -8,6 +8,7 @@ from worldgen.resources.forest import (
     BIOME_PRECIP_REFERENCE_MM,
     compute_forest_density,
 )
+from worldgen.resources.builder import ForestDensityParams
 
 
 TUNDRA = 1
@@ -17,7 +18,12 @@ DESERT = 8
 
 
 def _default_kwargs(**overrides):
-    kw = dict(
+    """Return the keyword args for ``compute_forest_density`` — ``params=…`` + ``seed=…``.
+
+    ``overrides`` set individual ``ForestDensityParams`` fields, or ``seed``.
+    """
+    seed = overrides.pop("seed", 42)
+    defaults = dict(
         precipitation_modulation_strength=0.3,
         treeline_elevation_km=3.0,
         treeline_falloff_km=0.5,
@@ -26,10 +32,9 @@ def _default_kwargs(**overrides):
         riparian_max_hops=2,
         noise_amplitude=0.0,  # disable noise by default in tests
         noise_octaves=3,
-        seed=42,
     )
-    kw.update(overrides)
-    return kw
+    defaults.update(overrides)
+    return dict(params=ForestDensityParams(**defaults), seed=seed)
 
 
 def _build_inputs(

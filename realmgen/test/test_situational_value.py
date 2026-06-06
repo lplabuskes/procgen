@@ -15,7 +15,11 @@ from realmgen.situational_value import (
     compute_river_confluences,
     compute_strait_adjacency,
 )
-from realmgen.builder import RealmBuilder
+from realmgen.builder import (
+    MountainPassParams,
+    RealmBuilder,
+    SituationalValueWeightParams,
+)
 from worldgen.globe.builder import GlobeBuilder, GlobeParams
 
 
@@ -197,7 +201,7 @@ class TestMountainPasses:
         cost = np.array(cost, dtype=np.float32)
         if is_water is None:
             is_water = np.zeros(5, dtype=bool)
-        return compute_mountain_passes(mesh, cost, is_water, **kw)
+        return compute_mountain_passes(mesh, cost, is_water, params=MountainPassParams(**kw))
 
     def test_low_cost_amid_high_cost_scores_positive(self):
         # MID=1.0 surrounded by arms at 4.0 (above threshold)
@@ -281,6 +285,7 @@ class TestCombineSituationalValue:
         out = combine_situational_value(
             is_water,
             self._ones(), self._ones(), self._ones(), self._ones(), self._ones(),
+            params=SituationalValueWeightParams(),
         )
         assert out[0] == 0.0
         assert out[1] > 0.0
@@ -290,6 +295,7 @@ class TestCombineSituationalValue:
         out = combine_situational_value(
             is_water,
             self._ones(), self._ones(), self._ones(), self._ones(), self._ones(),
+            params=SituationalValueWeightParams(),
         )
         assert np.allclose(out, 1.0)
 
@@ -303,6 +309,7 @@ class TestCombineSituationalValue:
             rng.random(n).astype(np.float32),
             rng.random(n).astype(np.float32),
             rng.random(n).astype(np.float32),
+            params=SituationalValueWeightParams(),
         )
         assert out.min() >= 0.0
         assert out.max() <= 1.0
@@ -315,8 +322,9 @@ class TestCombineSituationalValue:
         out = combine_situational_value(
             np.zeros(n, dtype=bool),
             self._ones(n), self._zeros(n), self._zeros(n), self._zeros(n), self._zeros(n),
-            harbor_weight=hw, confluence_weight=0.20, nav_head_weight=0.20,
-            pass_weight=0.20, strait_weight=0.15,
+            params=SituationalValueWeightParams(
+                harbor_weight=hw, confluence_weight=0.20, nav_head_weight=0.20,
+                pass_weight=0.20, strait_weight=0.15),
         )
         assert out[0] == pytest.approx(hw / total, abs=1e-5)
 

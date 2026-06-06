@@ -28,7 +28,7 @@ from worldgen.hydrology.types import River, RiverNode, RiverSegment
 from core.mesh import Mesh
 from core.pipeline import BuildContext
 from core.world import World
-from worldgen.cost.builder import CostBuilder
+from worldgen.cost.builder import CostBuilder, SeaCostParams, StraitParams
 from worldgen.climate.classification import N_BIOMES
 
 
@@ -400,7 +400,7 @@ class TestDetectStraits:
         adj = [[1, 2, 3, 4], [0], [0], [0], [0]]
         mesh = self._mesh(centroids, adj)
         is_ocean = np.array([True, False, False, True, True])
-        strait = detect_straits(mesh, is_ocean)
+        strait = detect_straits(mesh, is_ocean, params=StraitParams())
         assert strait[0]
         assert not strait[1:].any()
 
@@ -411,19 +411,19 @@ class TestDetectStraits:
         adj = [[1, 2, 3, 4], [0], [0], [0], [0]]
         mesh = self._mesh(centroids, adj)
         is_ocean = np.array([True, False, False, True, True])
-        assert not detect_straits(mesh, is_ocean)[0]
+        assert not detect_straits(mesh, is_ocean, params=StraitParams())[0]
 
     def test_open_ocean_not_strait(self):
         centroids = [_norm((0, 0, 1)), _norm((0.25, 0, 1)), _norm((-0.25, 0, 1))]
         adj = [[1, 2], [0], [0]]
         mesh = self._mesh(centroids, adj)
-        assert not detect_straits(mesh, np.array([True, True, True])).any()
+        assert not detect_straits(mesh, np.array([True, True, True]), params=StraitParams()).any()
 
     def test_land_face_is_never_strait(self):
         centroids = [_norm((0, 0, 1)), _norm((0.25, 0, 1)), _norm((-0.25, 0, 1))]
         adj = [[1, 2], [0], [0]]
         mesh = self._mesh(centroids, adj)
-        assert not detect_straits(mesh, np.array([False, False, False])).any()
+        assert not detect_straits(mesh, np.array([False, False, False]), params=StraitParams()).any()
 
     def test_min_water_neighbors_required(self):
         # Pinched by land on both sides but no water neighbour → enclosed, not a
@@ -432,8 +432,8 @@ class TestDetectStraits:
         adj = [[1, 2], [0], [0]]
         mesh = self._mesh(centroids, adj)
         is_water = np.array([True, False, False])
-        assert not detect_straits(mesh, is_water, min_water_neighbors=1)[0]
-        assert detect_straits(mesh, is_water, min_water_neighbors=0)[0]
+        assert not detect_straits(mesh, is_water, params=StraitParams(min_water_neighbors=1))[0]
+        assert detect_straits(mesh, is_water, params=StraitParams(min_water_neighbors=0))[0]
 
 
 # ── Sea cost ─────────────────────────────────────────────────────────────────
@@ -446,8 +446,10 @@ class TestSeaCost:
         strait = np.array([False, False, True, False])
         cost, passable = compute_sea_cost(
             is_ocean, dist, strait,
-            coastal_cost=0.5, open_ocean_cost=2.0,
-            open_ocean_distance_km=2000.0, strait_discount=0.5,
+            params=SeaCostParams(
+                coastal_cost=0.5, open_ocean_cost=2.0,
+                open_ocean_distance_km=2000.0, strait_discount=0.5,
+            ),
         )
         assert cost[0] == pytest.approx(0.5)    # at the shore
         assert cost[1] == pytest.approx(1.25)   # halfway to open ocean

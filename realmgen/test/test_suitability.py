@@ -20,7 +20,12 @@ from realmgen.suitability import (
     compute_ruggedness_penalty,
     compute_water_proximity,
 )
-from realmgen.builder import RealmBuilder
+from realmgen.builder import (
+    ClimateHabitabilityParams,
+    RealmBuilder,
+    SuitabilityWeightParams,
+    WaterProximityParams,
+)
 from worldgen.globe.builder import GlobeBuilder, GlobeParams
 
 
@@ -62,7 +67,9 @@ class TestWaterProximity:
         n = 5
         if dist_coast is None:
             dist_coast = np.full(n, 10000.0)  # far from coast by default
-        return compute_water_proximity(mesh, freshwater_mask, dist_coast, **kw)
+        return compute_water_proximity(
+            mesh, freshwater_mask, dist_coast, params=WaterProximityParams(**kw)
+        )
 
     def test_seed_face_scores_one(self):
         mask = np.array([True, False, False, False, False])
@@ -102,7 +109,8 @@ class TestWaterProximity:
 class TestClimateHabitability:
     def _run(self, tw, tc, pa, **kw):
         return compute_climate_habitability(
-            np.atleast_1d(tw), np.atleast_1d(tc), np.atleast_1d(pa), **kw
+            np.atleast_1d(tw), np.atleast_1d(tc), np.atleast_1d(pa),
+            params=ClimateHabitabilityParams(**kw),
         )
 
     def test_optimal_climate_scores_one(self):
@@ -136,7 +144,7 @@ class TestClimateHabitability:
         tw = np.array([20.0, -5.0, 30.0])
         tc = np.array([5.0, -35.0, 10.0])
         pa = np.array([800.0, 200.0, 50.0])
-        out = compute_climate_habitability(tw, tc, pa)
+        out = compute_climate_habitability(tw, tc, pa, params=ClimateHabitabilityParams())
         assert out.shape == (3,)
         assert out[0] == pytest.approx(1.0, abs=1e-5)  # optimal
         assert out[1] == 0.0   # cold winter kills it
@@ -231,7 +239,8 @@ class TestCombineSuitability:
         is_water = np.array([True, False, False, False, False])
         out = combine_suitability(is_water,
                                   self._ones(), self._ones(),
-                                  self._ones(), self._ones())
+                                  self._ones(), self._ones(),
+                                  params=SuitabilityWeightParams())
         assert out[0] == 0.0
         assert out[1] > 0.0
 
@@ -239,7 +248,8 @@ class TestCombineSuitability:
         n = 5
         out = combine_suitability(np.zeros(n, dtype=bool),
                                   self._ones(), self._ones(),
-                                  self._ones(), self._ones())
+                                  self._ones(), self._ones(),
+                                  params=SuitabilityWeightParams())
         assert np.allclose(out, 1.0)
 
     def test_bounded_in_zero_one(self):
@@ -251,6 +261,7 @@ class TestCombineSuitability:
             rng.random(n).astype(np.float32),
             rng.random(n).astype(np.float32),
             rng.random(n).astype(np.float32),
+            params=SuitabilityWeightParams(),
         )
         assert out.min() >= 0.0
         assert out.max() <= 1.0
@@ -264,8 +275,9 @@ class TestCombineSuitability:
         out = combine_suitability(is_water,
                                   self._ones(n), self._zeros(n),
                                   self._zeros(n), self._zeros(n),
-                                  water_weight=ww, climate_weight=0.30,
-                                  fertility_weight=0.25, resource_weight=0.15)
+                                  params=SuitabilityWeightParams(
+                                      water_weight=ww, climate_weight=0.30,
+                                      fertility_weight=0.25, resource_weight=0.15))
         assert out[0] == pytest.approx(ww / total, abs=1e-5)
 
 

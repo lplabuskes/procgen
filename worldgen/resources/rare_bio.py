@@ -21,11 +21,16 @@ Ocean resource:
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from utils.simplex import fbm_sum, make_perm
 from core.mesh import PolygonMesh
 from worldgen.resources.terrain import face_hops_from_seeds, lake_containing_faces
+
+if TYPE_CHECKING:
+    from worldgen.resources.builder import RareBioParams
 
 
 # Biome index constants — must match worldgen/climate/classification.py BIOME_NAMES order.
@@ -103,32 +108,15 @@ def _cap_to_top_n(deposit_mask: np.ndarray, scores: np.ndarray, max_count: int) 
 def place_rare_bio_resources(
     mesh: PolygonMesh,
     *,
-    noise_frequency: float = 4.0,
-    base_threshold: float = 0.70,
-    max_spices: int = 8,
-    max_tea: int = 8,
-    max_silk: int = 5,
-    max_ivory: int = 6,
-    max_furs: int = 10,
-    max_incense: int = 6,
-    max_dyes: int = 12,
-    max_amber: int = 5,
-    max_rubber: int = 6,
-    max_pearls: int = 6,
+    params: "RareBioParams",
     seed: int = 0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Place rare biological resource deposits on the globe.
 
     Args:
         mesh: fully-built dual mesh (geology + climate + hydrology metadata present).
-        noise_frequency: spatial frequency of the clustering noise field.
-            Lower values produce larger regional pockets; higher values scatter
-            smaller spots more evenly.
-        base_threshold: minimum [0,1] noise score for a candidate face to
-            become a deposit site.  Higher = fewer total sites before the cap.
-        max_*: global cap on the number of deposit faces for each resource type.
-            The top-scoring candidates are kept; the rest are discarded even if
-            they are above the threshold.
+        params: RareBioParams — noise frequency, base threshold, and the per-type
+            global caps (``max_spices`` … ``max_pearls``).
         seed: base RNG seed; each resource type gets seed + offset so their
             noise draws are spatially independent.
 
@@ -137,6 +125,7 @@ def place_rare_bio_resources(
         kinds:       (M,)   int8     — RARE_BIO_* index.
         abundances:  (M,)   float32  — [0, 1], normalised excess above threshold.
     """
+    p = params
     n = len(mesh.faces)
     centroids = mesh.face_centroids.astype(np.float32)
 
@@ -269,16 +258,16 @@ def place_rare_bio_resources(
 
     # ── (kind, candidate_mask, seed_offset, max_count) ──────────────────────
     specs: list[tuple[int, np.ndarray, int, int]] = [
-        (SPICES,  spices_mask,  0, max_spices),
-        (TEA,     tea_mask,     1, max_tea),
-        (SILK,    silk_mask,    2, max_silk),
-        (IVORY,   ivory_mask,   3, max_ivory),
-        (FURS,    furs_mask,    4, max_furs),
-        (INCENSE, incense_mask, 5, max_incense),
-        (DYES,    dyes_mask,    6, max_dyes),
-        (AMBER,   amber_mask,   7, max_amber),
-        (RUBBER,  rubber_mask,  8, max_rubber),
-        (PEARLS,  pearls_mask,  9, max_pearls),
+        (SPICES,  spices_mask,  0, p.max_spices),
+        (TEA,     tea_mask,     1, p.max_tea),
+        (SILK,    silk_mask,    2, p.max_silk),
+        (IVORY,   ivory_mask,   3, p.max_ivory),
+        (FURS,    furs_mask,    4, p.max_furs),
+        (INCENSE, incense_mask, 5, p.max_incense),
+        (DYES,    dyes_mask,    6, p.max_dyes),
+        (AMBER,   amber_mask,   7, p.max_amber),
+        (RUBBER,  rubber_mask,  8, p.max_rubber),
+        (PEARLS,  pearls_mask,  9, p.max_pearls),
     ]
 
     all_positions: list[np.ndarray] = []
@@ -289,9 +278,9 @@ def place_rare_bio_resources(
         if not candidate_mask.any():
             continue
 
-        noise = _fbm_noise(centroids, noise_frequency, seed + offset * 1000 + 77777)
+        noise = _fbm_noise(centroids, p.noise_frequency, seed + offset * 1000 + 77777)
 
-        deposit_mask = candidate_mask & (noise > base_threshold)
+        deposit_mask = candidate_mask & (noise > p.base_threshold)
 
         if not deposit_mask.any():
             continue
@@ -299,8 +288,8 @@ def place_rare_bio_resources(
         # Apply global cap: keep only the top-scoring faces.
         deposit_mask = _cap_to_top_n(deposit_mask, noise, max_count)
 
-        excess = noise[deposit_mask] - base_threshold
-        abundance = np.clip(excess / max(1.0 - base_threshold, 1e-6), 0.0, 1.0)
+        excess = noise[deposit_mask] - p.base_threshold
+        abundance = np.clip(excess / max(1.0 - p.base_threshold, 1e-6), 0.0, 1.0)
 
         all_positions.append(centroids[deposit_mask])
         all_kinds.append(np.full(int(deposit_mask.sum()), kind_idx, dtype=np.int8))

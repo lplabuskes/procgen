@@ -167,12 +167,7 @@ class CostBuilder(Stage):
         is_sailable = is_water | river_navigable
 
         _report("Detecting straits…")
-        strait_mask = detect_straits(
-            mesh,
-            is_water,
-            opposite_dot_threshold=p.strait.opposite_dot_threshold,
-            min_water_neighbors=p.strait.min_water_neighbors,
-        )
+        strait_mask = detect_straits(mesh, is_water, params=p.strait)
 
         _report("Computing sea distance to coast…")
         sea_dist = compute_sea_distance_to_coast(mesh, is_sailable)
@@ -182,10 +177,7 @@ class CostBuilder(Stage):
             is_sailable,
             sea_dist,
             strait_mask,
-            coastal_cost=p.sea.coastal_cost,
-            open_ocean_cost=p.sea.open_ocean_cost,
-            open_ocean_distance_km=p.sea.open_ocean_distance_km,
-            strait_discount=p.sea.strait_discount,
+            params=p.sea,
         )
 
         surfaces = CostSurfaces(

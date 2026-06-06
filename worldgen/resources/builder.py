@@ -226,14 +226,7 @@ class ResourcesBuilder(Stage):
             face_biome=face_biome,
             riparian_hops=water_hops,
             pixel_positions=pixel_positions,
-            precipitation_modulation_strength=gp.precipitation_modulation_strength,
-            treeline_elevation_km=gp.treeline_elevation_km,
-            treeline_falloff_km=gp.treeline_falloff_km,
-            riparian_bonus=gp.riparian_bonus,
-            riparian_decay_per_hop=gp.riparian_decay_per_hop,
-            riparian_max_hops=gp.riparian_max_hops,
-            noise_amplitude=gp.noise_amplitude,
-            noise_octaves=gp.noise_octaves,
+            params=gp,
             seed=int(p.seed if p.seed is not None else 0),
             mesh=mesh,
         )                                                          # (N, H, W, 1)
@@ -247,19 +240,8 @@ class ResourcesBuilder(Stage):
             face_elev_range_km=face_elev_range,
             water_hops=water_hops,
             volcanism_hops=volcanism_hops,
-            optimal_temperature_c=fp.optimal_temperature_c,
-            temperature_sigma_c=fp.temperature_sigma_c,
-            optimal_precipitation_mm=fp.optimal_precipitation_mm,
-            precipitation_sigma_log=fp.precipitation_sigma_log,
-            elevation_range_threshold_km=fp.elevation_range_threshold_km,
-            floodplain_bonus=fp.floodplain_bonus,
-            floodplain_decay_per_hop=fp.floodplain_decay_per_hop,
-            floodplain_max_hops=fp.floodplain_max_hops,
-            volcanic_bonus=fp.volcanic_bonus,
-            volcanic_decay_per_hop=fp.volcanic_decay_per_hop,
-            volcanic_max_hops=fp.volcanic_max_hops,
+            params=fp,
             forest_density_tex=forest,
-            forest_penalty_strength=fp.forest_penalty_strength,
             mesh=mesh,
         )                                                          # (N, H, W, 1)
 
@@ -285,44 +267,18 @@ class ResourcesBuilder(Stage):
         mesh.apply_metadata_channel("dominant_crop", dominant_crop_face.tolist())
 
         _report("Placing mineral deposits…")
-        mp = p.minerals
         mineral_seed = int(p.seed if p.seed is not None else 0) + 99991
         self.minerals = place_mineral_deposits(
             mesh,
-            noise_frequency=mp.noise_frequency,
-            deposit_threshold=mp.deposit_threshold,
-            iron_deposit_threshold=mp.iron_deposit_threshold,
-            gold_deposit_threshold=mp.gold_deposit_threshold,
-            gem_deposit_threshold=mp.gem_deposit_threshold,
-            coal_deposit_threshold=mp.coal_deposit_threshold,
-            salt_deposit_threshold=mp.salt_deposit_threshold,
-            marble_deposit_threshold=mp.marble_deposit_threshold,
-            rare_metals_deposit_threshold=mp.rare_metals_deposit_threshold,
-            volcanic_threshold_gold=mp.volcanic_threshold_gold,
-            volcanic_threshold_gems=mp.volcanic_threshold_gems,
-            volcanic_threshold_rare=mp.volcanic_threshold_rare,
-            coal_min_boundary_hops=mp.coal_min_boundary_hops,
-            coal_max_elevation_km=mp.coal_max_elevation_km,
+            params=p.minerals,
             seed=mineral_seed,
         )
 
         _report("Placing rare biological resources…")
-        rbp = p.rare_bio
         rare_bio_seed = int(p.seed if p.seed is not None else 0) + 55557
         self.rare_bio = place_rare_bio_resources(
             mesh,
-            noise_frequency=rbp.noise_frequency,
-            base_threshold=rbp.base_threshold,
-            max_spices=rbp.max_spices,
-            max_tea=rbp.max_tea,
-            max_silk=rbp.max_silk,
-            max_ivory=rbp.max_ivory,
-            max_furs=rbp.max_furs,
-            max_incense=rbp.max_incense,
-            max_dyes=rbp.max_dyes,
-            max_amber=rbp.max_amber,
-            max_rubber=rbp.max_rubber,
-            max_pearls=rbp.max_pearls,
+            params=p.rare_bio,
             seed=rare_bio_seed,
         )
 

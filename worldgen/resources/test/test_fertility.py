@@ -7,6 +7,7 @@ from worldgen.resources.fertility import (
     BIOME_FERTILITY_MULT,
     compute_fertility,
 )
+from worldgen.resources.builder import FertilityParams
 
 
 # Biome indices (from worldgen.climate.classification.BIOME_NAMES)
@@ -16,7 +17,12 @@ TROPICAL = 6
 
 
 def _default_kwargs(**overrides):
-    kw = dict(
+    """Return the keyword args for ``compute_fertility`` — i.e. ``params=<FertilityParams>``.
+
+    ``overrides`` set individual ``FertilityParams`` fields (e.g.
+    ``_default_kwargs(optimal_temperature_c=5.0)``).
+    """
+    defaults = dict(
         optimal_temperature_c=18.0,
         temperature_sigma_c=12.0,
         optimal_precipitation_mm=900.0,
@@ -29,8 +35,8 @@ def _default_kwargs(**overrides):
         volcanic_decay_per_hop=0.3,
         volcanic_max_hops=6,
     )
-    kw.update(overrides)
-    return kw
+    defaults.update(overrides)
+    return dict(params=FertilityParams(**defaults))
 
 
 def _build_inputs(

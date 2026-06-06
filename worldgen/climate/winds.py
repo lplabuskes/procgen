@@ -1,9 +1,12 @@
 """Zonal Hadley/Ferrel/Polar surface winds with seasonal ITCZ shift."""
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Sequence, TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from worldgen.climate.builder import WindParams
 
 
 SEASON_PHASES = np.array([0.0, np.pi / 2, np.pi, 3 * np.pi / 2], dtype=np.float64)
@@ -26,31 +29,28 @@ def _tangent_frames(face_centroids: np.ndarray) -> tuple[np.ndarray, np.ndarray]
 def zonal_winds(face_centroids: np.ndarray,
                 latitudes_rad: np.ndarray,
                 *,
-                trade_speed: float,
-                westerly_speed: float,
-                polar_speed: float,
-                itcz_shift_deg: float,
+                params: "WindParams",
                 season_phases: np.ndarray | None = None) -> np.ndarray:
     """Compute prevailing surface winds at face centroids per season.
 
     Args:
         face_centroids: (N, 3) unit-sphere face positions.
         latitudes_rad: (N,) face latitudes in radians.
-        trade_speed, westerly_speed, polar_speed: band speeds in m/s.
-        itcz_shift_deg: amplitude of seasonal ITCZ migration in degrees.
+        params: WindParams — band speeds (trade/westerly/polar) and ITCZ shift.
         season_phases: (K,) seasonal phases in radians. Defaults to four seasons
             anchored at 0, π/2, π, 3π/2.
 
     Returns:
         (N, K, 3) float32 wind velocity vectors (m/s) tangent to the sphere.
     """
+    p = params
     if season_phases is None:
         season_phases = SEASON_PHASES
 
     east, north = _tangent_frames(face_centroids)                     # (N, 3) each
 
     lat_deg = np.rad2deg(latitudes_rad)                                # (N,)
-    itcz_lat = itcz_shift_deg * np.sin(season_phases)                  # (K,)
+    itcz_lat = p.itcz_shift_deg * np.sin(season_phases)               # (K,)
     phi_eff = lat_deg[:, None] - itcz_lat[None, :]                     # (N, K)
     band_dist = np.abs(phi_eff)
     hemi_sign = np.where(phi_eff >= 0.0, 1.0, -1.0)                    # +1 N of thermal equator
@@ -69,8 +69,8 @@ def zonal_winds(face_centroids: np.ndarray,
     u_east *= inv_mag
     v_north *= inv_mag
 
-    speed = np.where(trade, trade_speed,
-                     np.where(westerly, westerly_speed, polar_speed))   # (N, K)
+    speed = np.where(trade, p.trade_speed,
+                     np.where(westerly, p.westerly_speed, p.polar_speed))   # (N, K)
 
     # Compose 3D vectors: w = speed * (u_east * east_hat + v_north * north_hat)
     winds = (

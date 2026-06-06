@@ -20,11 +20,16 @@ normalised excess above the threshold.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from utils.simplex import fbm_sum, make_perm
 from core.mesh import PolygonMesh
 from worldgen.resources.terrain import face_hops_from_seeds
+
+if TYPE_CHECKING:
+    from worldgen.resources.builder import MineralParams
 
 
 MINERAL_NAMES: list[str] = [
@@ -83,39 +88,15 @@ def _fbm_noise(centroids: np.ndarray, frequency: float, seed: int, octaves: int 
 def place_mineral_deposits(
     mesh: PolygonMesh,
     *,
-    noise_frequency: float = 3.0,
-    deposit_threshold: float = 0.55,
-    iron_deposit_threshold: float = 0.35,
-    gold_deposit_threshold: float = 0.70,
-    gem_deposit_threshold: float = 0.78,
-    coal_deposit_threshold: float = 0.68,
-    salt_deposit_threshold: float = 0.58,
-    marble_deposit_threshold: float = 0.60,
-    rare_metals_deposit_threshold: float = 0.75,
-    volcanic_threshold_gold: float = 0.25,
-    volcanic_threshold_gems: float = 0.40,
-    volcanic_threshold_rare: float = 0.15,
-    coal_min_boundary_hops: int = 3,
-    coal_max_elevation_km: float = 0.5,
+    params: "MineralParams",
     seed: int = 0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Place mineral deposits on the globe using the hybrid geology+noise model.
 
     Args:
         mesh: fully-built dual mesh (geology + climate metadata present).
-        noise_frequency: spatial frequency of the clustering noise field.
-            Lower values = larger deposit clusters.
-        deposit_threshold: fraction of the [0,1] noise range above which a
-            candidate face becomes a deposit.  Higher = fewer deposits.
-        volcanic_threshold_gold: minimum volcanic_activity for a face to be a
-            gold/gems candidate.
-        volcanic_threshold_gems: as above but for the rarer gems type.
-        volcanic_threshold_rare: minimum volcanic_activity for the rare-metals
-            hot-spot component.
-        coal_min_boundary_hops: minimum BFS hops from any tectonic boundary
-            face for a face to qualify as a sedimentary coal basin.
-        coal_max_elevation_km: maximum face-level mean elevation (km) for coal
-            candidates.  Sedimentary basins are low-lying.
+        params: MineralParams — noise frequency, per-type deposit thresholds, and
+            the volcanic / boundary-hop / elevation gates.
         seed: base RNG seed; each mineral type uses seed + type_offset so their
             noise draws are spatially independent.
 
@@ -124,6 +105,7 @@ def place_mineral_deposits(
         kinds:       (M,)   int8     — MINERAL_* index.
         abundances:  (M,)   float32  — [0, 1], higher = richer deposit.
     """
+    p = params
     n = len(mesh.faces)
     centroids = mesh.face_centroids.astype(np.float32)
 
@@ -162,16 +144,16 @@ def place_mineral_deposits(
     if boundary_seed_mask.any():
         boundary_hops = face_hops_from_seeds(
             mesh, boundary_seed_mask,
-            max_hops=coal_min_boundary_hops + 6,
+            max_hops=p.coal_min_boundary_hops + 6,
         )
     else:
-        boundary_hops = np.full(n, coal_min_boundary_hops + 10, dtype=np.int32)
+        boundary_hops = np.full(n, p.coal_min_boundary_hops + 10, dtype=np.int32)
 
     coal_candidates = (
         is_continental
         & ~is_ocean
-        & (elevation < coal_max_elevation_km)
-        & (boundary_hops >= coal_min_boundary_hops)
+        & (elevation < p.coal_max_elevation_km)
+        & (boundary_hops >= p.coal_min_boundary_hops)
     )
 
     # Salt: evaporite basins — continental, arid biome, low-to-moderate elevation,
@@ -183,7 +165,7 @@ def place_mineral_deposits(
         & ~is_ocean
         & is_arid
         & (elevation < 1.5)
-        & (boundary_hops >= coal_min_boundary_hops)
+        & (boundary_hops >= p.coal_min_boundary_hops)
     )
 
     # Marble: metamorphic rock formed at convergent boundaries.
@@ -194,17 +176,17 @@ def place_mineral_deposits(
     # ── per-mineral (kind, candidate_mask, seed_offset, threshold) tuples ─
     # Offset keeps each type's noise draw spatially independent.
     # All types are gated on land — ocean deposits are not modelled.
-    dt = deposit_threshold
+    dt = p.deposit_threshold
     specs: list[tuple[int, np.ndarray, int, float]] = [
-        (IRON,        land & is_convergent,                                         0, iron_deposit_threshold),
-        (COPPER,      land & is_convergent,                                         1, dt),
-        (GOLD,        land & (volcanic >= volcanic_threshold_gold),                  2, gold_deposit_threshold),
-        (GEMS,        land & (volcanic >= volcanic_threshold_gems),                  3, gem_deposit_threshold),
-        (COAL,        coal_candidates,                                               4, coal_deposit_threshold),
-        (TIN,         land & is_divergent,                                           5, dt),
-        (RARE_METALS, land & (is_divergent | (volcanic >= volcanic_threshold_rare)), 6, rare_metals_deposit_threshold),
-        (SALT,        salt_candidates,                                               7, salt_deposit_threshold),
-        (MARBLE,      marble_candidates,                                             8, marble_deposit_threshold),
+        (IRON,        land & is_convergent,                                           0, p.iron_deposit_threshold),
+        (COPPER,      land & is_convergent,                                           1, dt),
+        (GOLD,        land & (volcanic >= p.volcanic_threshold_gold),                 2, p.gold_deposit_threshold),
+        (GEMS,        land & (volcanic >= p.volcanic_threshold_gems),                 3, p.gem_deposit_threshold),
+        (COAL,        coal_candidates,                                                4, p.coal_deposit_threshold),
+        (TIN,         land & is_divergent,                                            5, dt),
+        (RARE_METALS, land & (is_divergent | (volcanic >= p.volcanic_threshold_rare)), 6, p.rare_metals_deposit_threshold),
+        (SALT,        salt_candidates,                                               7, p.salt_deposit_threshold),
+        (MARBLE,      marble_candidates,                                             8, p.marble_deposit_threshold),
     ]
 
     all_positions: list[np.ndarray] = []
@@ -215,7 +197,7 @@ def place_mineral_deposits(
         if not candidate_mask.any():
             continue
 
-        noise = _fbm_noise(centroids, noise_frequency, seed + offset * 1000)
+        noise = _fbm_noise(centroids, p.noise_frequency, seed + offset * 1000)
 
         # Score = noise masked to candidates; deposit where score > threshold.
         score = noise * candidate_mask.astype(np.float32)

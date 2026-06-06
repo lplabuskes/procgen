@@ -261,10 +261,7 @@ class RealmStage(Stage):
             mesh,
             freshwater_mask,
             dist_coast_km,
-            freshwater_decay=p.water.freshwater_decay,
-            freshwater_max_hops=p.water.freshwater_max_hops,
-            coast_scale_km=p.water.coast_scale_km,
-            coast_weight=p.water.coast_weight,
+            params=p.water,
         )
 
         ctx.report("Computing climate habitability…")
@@ -272,12 +269,7 @@ class RealmStage(Stage):
             t_warmest,
             t_coldest,
             p_annual,
-            t_grow_min_c=p.climate.t_grow_min_c,
-            t_grow_opt_c=p.climate.t_grow_opt_c,
-            t_cold_min_c=p.climate.t_cold_min_c,
-            p_dry_mm=p.climate.p_dry_mm,
-            p_opt_mm=p.climate.p_opt_mm,
-            p_wet_mm=p.climate.p_wet_mm,
+            params=p.climate,
         )
 
         ctx.report("Computing resource access…")
@@ -295,10 +287,7 @@ class RealmStage(Stage):
             climate_score,
             fertility.astype(np.float32),
             resource_score,
-            water_weight=p.weights.water_weight,
-            climate_weight=p.weights.climate_weight,
-            fertility_weight=p.weights.fertility_weight,
-            resource_weight=p.weights.resource_weight,
+            params=p.weights,
         )
 
         ruggedness_mult = compute_ruggedness_penalty(
@@ -339,15 +328,13 @@ class RealmStage(Stage):
             land_base_cost = world.get_feature("cost_surfaces").land_base_cost
         pass_score = compute_mountain_passes(
             mesh, land_base_cost, is_water,
-            min_neighbor_cost=sp.passes.min_neighbor_cost,
-            cost_scale=sp.passes.cost_scale,
+            params=sp.passes,
         )
 
         # Strait adjacency: land faces bordering tagged strait ocean faces.
         is_strait = IS_STRAIT.read(world)
         strait_score = compute_strait_adjacency(mesh, is_strait, is_water)
 
-        sw = sp.weights
         situational_value = combine_situational_value(
             is_water,
             harbor_score,
@@ -355,11 +342,7 @@ class RealmStage(Stage):
             nav_head_score,
             pass_score,
             strait_score,
-            harbor_weight=sw.harbor_weight,
-            confluence_weight=sw.confluence_weight,
-            nav_head_weight=sw.nav_head_weight,
-            pass_weight=sw.pass_weight,
-            strait_weight=sw.strait_weight,
+            params=sp.weights,
         )
 
         self.situational_value = situational_value

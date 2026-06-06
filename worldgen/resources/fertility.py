@@ -37,10 +37,15 @@ Ocean pixels are zeroed via `ocean_mask`.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from worldgen.geology.elevation import rasterize_face_values
 from core.mesh import PolygonMesh
+
+if TYPE_CHECKING:
+    from worldgen.resources.builder import FertilityParams
 
 
 # Biome index → fertility multiplier. Indices follow `BIOME_NAMES` in
@@ -139,19 +144,8 @@ def compute_fertility(
     face_elev_range_km: np.ndarray,
     water_hops: np.ndarray,
     volcanism_hops: np.ndarray,
-    optimal_temperature_c: float,
-    temperature_sigma_c: float,
-    optimal_precipitation_mm: float,
-    precipitation_sigma_log: float,
-    elevation_range_threshold_km: float,
-    floodplain_bonus: float,
-    floodplain_decay_per_hop: float,
-    floodplain_max_hops: int,
-    volcanic_bonus: float,
-    volcanic_decay_per_hop: float,
-    volcanic_max_hops: int,
+    params: "FertilityParams",
     forest_density_tex: np.ndarray | None = None,
-    forest_penalty_strength: float = 0.0,
     mesh: PolygonMesh | None = None,
 ) -> np.ndarray:
     """Compute per-pixel fertility in [0, 1].
@@ -164,6 +158,7 @@ def compute_fertility(
         face_elev_range_km: (N,) float32 — pixel elevation span per face.
         water_hops: (N,) int — face-graph hops from any river/lake face.
         volcanism_hops: (N,) int — face-graph hops from any volcanic face.
+        params: FertilityParams — the climate/terrain/water/geology tuning knobs.
         mesh: optional PolygonMesh. When provided, the per-face multiplier is
             rasterized via `rasterize_face_values` so adjacent faces blend
             continuously instead of looking blocky. When omitted, the multiplier
@@ -172,26 +167,27 @@ def compute_fertility(
     Returns:
         (N, H, W, 1) float32 in [0, 1].
     """
+    p = params
     face_climate = _climate_term_face(
         temperature_tex,
         precipitation_tex,
-        optimal_temperature_c=optimal_temperature_c,
-        temperature_sigma_c=temperature_sigma_c,
-        optimal_precipitation_mm=optimal_precipitation_mm,
-        precipitation_sigma_log=precipitation_sigma_log,
+        optimal_temperature_c=p.optimal_temperature_c,
+        temperature_sigma_c=p.temperature_sigma_c,
+        optimal_precipitation_mm=p.optimal_precipitation_mm,
+        precipitation_sigma_log=p.precipitation_sigma_log,
     )                                                                # (N,)
 
     face_terrain = (
         1.0 - np.clip(
-            face_elev_range_km / max(elevation_range_threshold_km, 1e-3), 0.0, 1.0
+            face_elev_range_km / max(p.elevation_range_threshold_km, 1e-3), 0.0, 1.0
         )
     ).astype(np.float32)                                             # (N,)
 
     face_water = _hop_bonus(
-        water_hops, floodplain_bonus, floodplain_decay_per_hop, floodplain_max_hops
+        water_hops, p.floodplain_bonus, p.floodplain_decay_per_hop, p.floodplain_max_hops
     )                                                                # (N,)
     face_geology = _hop_bonus(
-        volcanism_hops, volcanic_bonus, volcanic_decay_per_hop, volcanic_max_hops
+        volcanism_hops, p.volcanic_bonus, p.volcanic_decay_per_hop, p.volcanic_max_hops
     )                                                                # (N,)
 
     biome_idx = np.clip(face_biome.astype(np.int32), 0, len(BIOME_FERTILITY_MULT) - 1)
@@ -212,11 +208,11 @@ def compute_fertility(
             (len(face_mult), temperature_tex.shape[1], temperature_tex.shape[2]),
         ).copy().astype(np.float32)                                  # (N, H, W)
 
-    if forest_density_tex is not None and forest_penalty_strength > 0.0:
+    if forest_density_tex is not None and p.forest_penalty_strength > 0.0:
         forest = forest_density_tex
         if forest.ndim == 4:
             forest = forest[..., 0]
-        forest_factor = 1.0 - forest_penalty_strength * forest.astype(np.float32)
+        forest_factor = 1.0 - p.forest_penalty_strength * forest.astype(np.float32)
         fertility = fertility * forest_factor
 
     fertility = np.clip(fertility, 0.0, 1.0)

@@ -28,9 +28,18 @@ an otherwise ideal site — each factor can compensate within its budget.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from worldgen.resources.terrain import face_hops_from_seeds
+
+if TYPE_CHECKING:
+    from realmgen.builder import (
+        ClimateHabitabilityParams,
+        SuitabilityWeightParams,
+        WaterProximityParams,
+    )
 
 
 # ── Water proximity ───────────────────────────────────────────────────────────
@@ -41,10 +50,7 @@ def compute_water_proximity(
     freshwater_mask: np.ndarray,
     dist_to_coast_km: np.ndarray,
     *,
-    freshwater_decay: float = 0.4,
-    freshwater_max_hops: int = 12,
-    coast_scale_km: float = 150.0,
-    coast_weight: float = 0.4,
+    params: "WaterProximityParams",
 ) -> np.ndarray:
     """Fresh-water and coastal access score in [0, 1].
 
@@ -61,31 +67,29 @@ def compute_water_proximity(
         mesh: object with ``faces`` and ``face_adjacency``.
         freshwater_mask: (N,) bool — seed faces for BFS (rivers + lakes).
         dist_to_coast_km: (N,) float — land-to-ocean distance in km (0 = coast).
-        freshwater_decay: BFS hop-decay exponent.
-        freshwater_max_hops: BFS depth cap.
-        coast_scale_km: e-folding distance for coastal score.
-        coast_weight: maximum contribution of coastal access (< 1 so fresh
-            water is always preferred).
+        params: WaterProximityParams — freshwater hop-decay/cap and coastal
+            scale/weight.
 
     Returns:
         (N,) float32 in [0, 1].
     """
+    p = params
     n = len(mesh.faces)
     freshwater_mask = np.asarray(freshwater_mask, dtype=bool)
     dist = np.asarray(dist_to_coast_km, dtype=np.float64)
 
     # Freshwater: BFS hop-decay from river/lake seed faces.
     if freshwater_mask.any():
-        hops = face_hops_from_seeds(mesh, freshwater_mask, max_hops=freshwater_max_hops)
-        fw_score = np.exp(-hops.astype(np.float64) * freshwater_decay)
+        hops = face_hops_from_seeds(mesh, freshwater_mask, max_hops=p.freshwater_max_hops)
+        fw_score = np.exp(-hops.astype(np.float64) * p.freshwater_decay)
     else:
         fw_score = np.zeros(n, dtype=np.float64)
 
     # Coastal: exponential decay with land-to-ocean distance.
-    coast_score = np.exp(-np.maximum(dist, 0.0) / max(coast_scale_km, 1e-9))
+    coast_score = np.exp(-np.maximum(dist, 0.0) / max(p.coast_scale_km, 1e-9))
     coast_score = np.clip(coast_score, 0.0, 1.0)
 
-    combined = np.clip(fw_score + coast_weight * coast_score, 0.0, 1.0)
+    combined = np.clip(fw_score + p.coast_weight * coast_score, 0.0, 1.0)
     return combined.astype(np.float32)
 
 
@@ -97,12 +101,7 @@ def compute_climate_habitability(
     t_coldest: np.ndarray,
     p_annual: np.ndarray,
     *,
-    t_grow_min_c: float = 0.0,
-    t_grow_opt_c: float = 18.0,
-    t_cold_min_c: float = -30.0,
-    p_dry_mm: float = 100.0,
-    p_opt_mm: float = 800.0,
-    p_wet_mm: float = 3000.0,
+    params: "ClimateHabitabilityParams",
 ) -> np.ndarray:
     """Climate habitability score in [0, 1], product of three sub-scores.
 
@@ -128,31 +127,33 @@ def compute_climate_habitability(
         t_warmest: (N,) float °C — warmest-month temperature per face.
         t_coldest: (N,) float °C — coldest-month temperature per face.
         p_annual:  (N,) float mm/yr — annual precipitation per face.
+        params: ClimateHabitabilityParams — the growing/cold/precip thresholds.
 
     Returns:
         (N,) float32 in [0, 1].
     """
+    p = params
     tw = np.asarray(t_warmest, dtype=np.float64)
     tc = np.asarray(t_coldest, dtype=np.float64)
     pa = np.asarray(p_annual, dtype=np.float64)
 
     # Growing-season score.
-    grow_range = max(t_grow_opt_c - t_grow_min_c, 1e-9)
-    t_grow = np.clip((tw - t_grow_min_c) / grow_range, 0.0, 1.0)
+    grow_range = max(p.t_grow_opt_c - p.t_grow_min_c, 1e-9)
+    t_grow = np.clip((tw - p.t_grow_min_c) / grow_range, 0.0, 1.0)
 
     # Cold-tolerance score.
-    cold_range = max(0.0 - t_cold_min_c, 1e-9)
-    t_cold = np.clip((tc - t_cold_min_c) / cold_range, 0.0, 1.0)
+    cold_range = max(0.0 - p.t_cold_min_c, 1e-9)
+    t_cold = np.clip((tc - p.t_cold_min_c) / cold_range, 0.0, 1.0)
 
     # Precipitation score — piecewise.
-    dry_range = max(p_opt_mm - p_dry_mm, 1e-9)
-    wet_range = max(p_wet_mm - p_opt_mm, 1e-9)
+    dry_range = max(p.p_opt_mm - p.p_dry_mm, 1e-9)
+    wet_range = max(p.p_wet_mm - p.p_opt_mm, 1e-9)
     p_score = np.where(
-        pa < p_dry_mm, 0.0,
+        pa < p.p_dry_mm, 0.0,
         np.where(
-            pa < p_opt_mm, (pa - p_dry_mm) / dry_range,
+            pa < p.p_opt_mm, (pa - p.p_dry_mm) / dry_range,
             np.where(
-                pa < p_wet_mm, 1.0 - 0.5 * (pa - p_opt_mm) / wet_range,
+                pa < p.p_wet_mm, 1.0 - 0.5 * (pa - p.p_opt_mm) / wet_range,
                 0.5,
             ),
         ),
@@ -256,10 +257,7 @@ def combine_suitability(
     fertility: np.ndarray,
     resource_access: np.ndarray,
     *,
-    water_weight: float = 0.30,
-    climate_weight: float = 0.30,
-    fertility_weight: float = 0.25,
-    resource_weight: float = 0.15,
+    params: "SuitabilityWeightParams",
 ) -> np.ndarray:
     """Weighted-average suitability in [0, 1]; water faces are forced to 0.
 
@@ -278,18 +276,20 @@ def combine_suitability(
         climate:         (N,) float32 in [0, 1].
         fertility:       (N,) float32 in [0, 1].
         resource_access: (N,) float32 in [0, 1].
+        params: SuitabilityWeightParams — the four factor weights.
 
     Returns:
         (N,) float32 in [0, 1].
     """
-    total_w = water_weight + climate_weight + fertility_weight + resource_weight
+    p = params
+    total_w = p.water_weight + p.climate_weight + p.fertility_weight + p.resource_weight
     total_w = max(total_w, 1e-9)
 
     score = (
-        water_weight * np.asarray(water_proximity, dtype=np.float64)
-        + climate_weight * np.asarray(climate, dtype=np.float64)
-        + fertility_weight * np.asarray(fertility, dtype=np.float64)
-        + resource_weight * np.asarray(resource_access, dtype=np.float64)
+        p.water_weight * np.asarray(water_proximity, dtype=np.float64)
+        + p.climate_weight * np.asarray(climate, dtype=np.float64)
+        + p.fertility_weight * np.asarray(fertility, dtype=np.float64)
+        + p.resource_weight * np.asarray(resource_access, dtype=np.float64)
     ) / total_w
 
     score = np.where(np.asarray(is_water, dtype=bool), 0.0, score)

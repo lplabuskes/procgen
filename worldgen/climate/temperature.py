@@ -1,7 +1,12 @@
 """Per-face and per-pixel surface temperature."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
+
+if TYPE_CHECKING:
+    from worldgen.climate.builder import TemperatureParams
 
 
 def annual_mean_temperature(latitudes_rad: np.ndarray,
@@ -30,32 +35,28 @@ def surface_temperatures(latitudes_rad: np.ndarray,
                          face_elevations_km: np.ndarray,
                          distance_to_coast_km: np.ndarray,
                          *,
-                         equator_annual_c: float,
-                         pole_annual_c: float,
-                         anomaly_scale: float,
-                         lapse_rate_c_per_km: float,
-                         ocean_inertia: float,
-                         land_inertia: float,
-                         inertia_distance_km: float,
+                         params: "TemperatureParams",
                          coastal_current_temp_delta: np.ndarray | None = None
                          ) -> np.ndarray:
     """Compute (N, K) per-face seasonal temperatures in °C.
 
     Annual mean is a parabolic-in-latitude profile. The seasonal anomaly is
     derived from insolation departures from the annual mean, scaled by
-    `anomaly_scale`, then damped by an ocean-vs-land thermal inertia factor.
-    Lapse rate cools high faces uniformly across seasons.
+    `params.anomaly_scale`, then damped by an ocean-vs-land thermal inertia
+    factor. Lapse rate cools high faces uniformly across seasons.
 
-    `coastal_current_temp_delta` (shape `(N, K)` in °C) is added at the end as
-    a hook for the future currents stage; pass None for the MVP no-op.
+    `params` is a `TemperatureParams`. `coastal_current_temp_delta` (shape
+    `(N, K)` in °C) is added at the end as a hook for the currents stage; pass
+    None for the no-current pass.
     """
-    t_annual = annual_mean_temperature(latitudes_rad, equator_annual_c, pole_annual_c)  # (N,)
+    p = params
+    t_annual = annual_mean_temperature(latitudes_rad, p.equator_annual_c, p.pole_annual_c)  # (N,)
 
     q_anomaly = insolation_w_m2 - insolation_w_m2.mean(axis=1, keepdims=True)            # (N, K)
-    delta_t_eq = anomaly_scale * q_anomaly                                                # (N, K)
+    delta_t_eq = p.anomaly_scale * q_anomaly                                              # (N, K)
 
     inertia = thermal_inertia(
-        distance_to_coast_km, ocean_inertia, land_inertia, inertia_distance_km
+        distance_to_coast_km, p.ocean_inertia, p.land_inertia, p.inertia_distance_km
     )                                                                                     # (N,)
 
     # Lapse rate applies above sea level only — sub-sea-level faces are at the
@@ -64,7 +65,7 @@ def surface_temperatures(latitudes_rad: np.ndarray,
     t_face = (
         t_annual[:, None]
         + inertia[:, None] * delta_t_eq
-        - lapse_rate_c_per_km * elev_for_lapse[:, None]
+        - p.lapse_rate_c_per_km * elev_for_lapse[:, None]
     )
 
     if coastal_current_temp_delta is not None:

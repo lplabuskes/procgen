@@ -21,7 +21,7 @@ exposed by `surface_temperatures` and `surface_precipitation`.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Sequence, TYPE_CHECKING
 
 import numpy as np
 import scipy.sparse as sp
@@ -30,6 +30,9 @@ from scipy.sparse.csgraph import dijkstra as sp_dijkstra
 
 from worldgen.climate.winds import _tangent_frames
 from core.mesh import PolygonMesh
+
+if TYPE_CHECKING:
+    from worldgen.climate.builder import CurrentsParams
 
 
 EARTH_RADIUS_KM = 6371.0
@@ -409,14 +412,9 @@ def compute_currents(mesh: PolygonMesh,
                      winds_per_season: np.ndarray,
                      face_insolation: np.ndarray,
                      *,
+                     params: "CurrentsParams",
                      sea_level: float = 0.0,
-                     is_ocean: np.ndarray | None = None,
-                     beta_scale: float = 1.0,
-                     advection_alpha: float = 1.0,
-                     advection_iterations: int = 400,
-                     temperature_scale: float = 0.06,
-                     precipitation_scale: float = 0.03,
-                     inland_decay_km: float = 600.0) -> CurrentsResult:
+                     is_ocean: np.ndarray | None = None) -> CurrentsResult:
     """Run the annual-mean ocean current model and return per-face deltas.
 
     Args:
@@ -426,17 +424,12 @@ def compute_currents(mesh: PolygonMesh,
         winds_per_season: (N, K, 3) seasonal wind vectors from `zonal_winds`.
         face_insolation: (N,) annual-mean insolation in W/m² (mean of the
             seasonal `seasonal_insolation` output along the season axis).
+        params: CurrentsParams — β scale, advection mixing/iterations, the
+            temperature/precipitation feedback scales, and inland decay.
         sea_level: elevation threshold defining the ocean mask.
-        beta_scale: scale factor on the planetary vorticity gradient β. Set
-            to 0 for symmetric gyres, ~1 for Stommel western intensification.
-        advection_alpha: per-iteration mixing fraction in the Jacobi advection.
-        advection_iterations: number of Jacobi sweeps; ~400 is plenty for
-            current depths/icosphere sizes used in this project.
-        temperature_scale: °C per (W/m² of advected-vs-local insolation gap).
-        precipitation_scale: multiplicative wet-delta per °C of anomaly.
-        inland_decay_km: e-folding distance for inland propagation of the
-            ocean anomaly.
+        is_ocean: optional precomputed ocean mask; derived from sea_level if None.
     """
+    p = params
     n = len(mesh.faces)
     if is_ocean is None:
         is_ocean = face_elev_km <= sea_level
@@ -448,22 +441,22 @@ def compute_currents(mesh: PolygonMesh,
     # Laplacian (≈ −∇²) and the β term drives western-boundary intensification.
     curl_tau = _wind_stress_curl(centroids, mesh.face_adjacency, annual_winds)
     psi = _solve_streamfunction(mesh, centroids, is_ocean, -curl_tau,
-                                beta_scale=beta_scale)
+                                beta_scale=p.beta_scale)
     currents = _streamfunction_currents(centroids, mesh.face_adjacency, psi, is_ocean)
 
     src, dst, w = _build_advection_edges(mesh, currents, is_ocean)
     advected = _advect_field(face_insolation.astype(np.float64),
                              is_ocean,
                              src, dst, w,
-                             advection_iterations,
-                             advection_alpha)
+                             p.advection_iterations,
+                             p.advection_alpha)
 
     ocean_dQ = np.zeros(n, dtype=np.float64)
     ocean_dQ[is_ocean] = advected[is_ocean] - face_insolation[is_ocean]
-    ocean_dT = temperature_scale * ocean_dQ
+    ocean_dT = p.temperature_scale * ocean_dQ
 
-    temp_delta, _ = _propagate_inland(ocean_dT, mesh, is_ocean, inland_decay_km)
-    precip_delta = precipitation_scale * temp_delta
+    temp_delta, _ = _propagate_inland(ocean_dT, mesh, is_ocean, p.inland_decay_km)
+    precip_delta = p.precipitation_scale * temp_delta
 
     return CurrentsResult(
         currents=currents.astype(np.float32),

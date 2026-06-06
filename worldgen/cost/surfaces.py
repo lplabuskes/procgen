@@ -31,11 +31,14 @@ from __future__ import annotations
 
 import heapq
 from dataclasses import dataclass
-from typing import List
+from typing import List, TYPE_CHECKING
 
 import numpy as np
 
 from worldgen.climate.classification import N_BIOMES
+
+if TYPE_CHECKING:
+    from worldgen.cost.builder import SeaCostParams, StraitParams
 
 # Sphere radius for converting unit-sphere arc lengths to kilometres (matches the
 # value used across the climate stage).
@@ -377,8 +380,7 @@ def detect_straits(
     mesh,
     is_water: np.ndarray,
     *,
-    opposite_dot_threshold: float = -0.3,
-    min_water_neighbors: int = 1,
+    params: "StraitParams",
 ) -> np.ndarray:
     """Tag water faces pinched between land on opposite sides (chokepoints).
 
@@ -390,10 +392,12 @@ def detect_straits(
     Args:
         mesh: object exposing ``faces``, ``face_adjacency`` and ``face_centroids``.
         is_water: (N,) bool — open water (ocean ∪ lake).
+        params: StraitParams — ``opposite_dot_threshold`` + ``min_water_neighbors``.
 
     Returns:
         (N,) bool strait mask.
     """
+    p = params
     n = len(mesh.faces)
     is_water = np.asarray(is_water, dtype=bool)
     centroids = np.asarray(mesh.face_centroids, dtype=np.float64)
@@ -416,12 +420,12 @@ def detect_straits(
                 water_count += 1
             else:
                 land_dirs.append(d)
-        if water_count < min_water_neighbors or len(land_dirs) < 2:
+        if water_count < p.min_water_neighbors or len(land_dirs) < 2:
             continue
         L = np.array(land_dirs)
         dots = L @ L.T
         iu = np.triu_indices(len(L), k=1)
-        if float(dots[iu].min()) <= opposite_dot_threshold:
+        if float(dots[iu].min()) <= p.opposite_dot_threshold:
             strait[f] = True
     return strait
 
@@ -482,18 +486,16 @@ def compute_sea_cost(
     sea_distance_to_coast_km: np.ndarray,
     strait_mask: np.ndarray,
     *,
-    coastal_cost: float = 0.5,
-    open_ocean_cost: float = 2.0,
-    open_ocean_distance_km: float = 2000.0,
-    strait_discount: float = 0.5,
+    params: "SeaCostParams",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Per-face sea cost: coastal water cheapest, open ocean dearer, straits discounted.
 
-    Cost ramps linearly from ``coastal_cost`` at the shore to ``open_ocean_cost``
-    at ``open_ocean_distance_km`` and beyond; strait faces are multiplied by
-    ``strait_discount`` (near-free crossings). Pass distances from
-    :func:`compute_sea_distance_to_coast` (open-ocean → coast), *not* the climate
-    stage's land → ocean ``distance_to_coast``.
+    Cost ramps linearly from ``params.coastal_cost`` at the shore to
+    ``params.open_ocean_cost`` at ``params.open_ocean_distance_km`` and beyond;
+    strait faces are multiplied by ``params.strait_discount`` (near-free
+    crossings). Pass distances from :func:`compute_sea_distance_to_coast`
+    (open-ocean → coast), *not* the climate stage's land → ocean
+    ``distance_to_coast``.
 
     ``is_water`` is the sailable mask — ocean ∪ lake ∪ navigable rivers; lakes and
     navigable rivers read as coastal (distance ~0) and so come out cheap.
@@ -502,14 +504,15 @@ def compute_sea_cost(
         (sea_base_cost (N,) float32, sea_passable (N,) bool). Non-sailable land
         faces are impassable; their cost is left at 0 (gate via the mask).
     """
+    p = params
     sea_passable = np.asarray(is_water, dtype=bool)
     t = np.clip(
-        np.asarray(sea_distance_to_coast_km, dtype=np.float64) / max(open_ocean_distance_km, 1e-9),
+        np.asarray(sea_distance_to_coast_km, dtype=np.float64) / max(p.open_ocean_distance_km, 1e-9),
         0.0,
         1.0,
     )
-    cost = coastal_cost + (open_ocean_cost - coastal_cost) * t
-    cost = np.where(np.asarray(strait_mask, dtype=bool), cost * strait_discount, cost)
+    cost = p.coastal_cost + (p.open_ocean_cost - p.coastal_cost) * t
+    cost = np.where(np.asarray(strait_mask, dtype=bool), cost * p.strait_discount, cost)
     cost = np.where(sea_passable, cost, 0.0).astype(np.float32)
     return cost, sea_passable
 

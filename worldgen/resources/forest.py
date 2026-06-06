@@ -16,11 +16,16 @@ Ocean pixels are zeroed via `ocean_mask`.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from worldgen.geology.elevation import rasterize_face_values
 from utils.simplex import fbm_sum, make_perm
 from core.mesh import PolygonMesh
+
+if TYPE_CHECKING:
+    from worldgen.resources.builder import ForestDensityParams
 
 
 # Biome index → forest density baseline. Indices follow `BIOME_NAMES` in
@@ -101,14 +106,7 @@ def compute_forest_density(
     face_biome: np.ndarray,
     riparian_hops: np.ndarray,
     pixel_positions: np.ndarray | None,
-    precipitation_modulation_strength: float,
-    treeline_elevation_km: float,
-    treeline_falloff_km: float,
-    riparian_bonus: float,
-    riparian_decay_per_hop: float,
-    riparian_max_hops: int,
-    noise_amplitude: float,
-    noise_octaves: int,
+    params: "ForestDensityParams",
     seed: int,
     mesh: PolygonMesh | None = None,
 ) -> np.ndarray:
@@ -122,6 +120,8 @@ def compute_forest_density(
         riparian_hops: (N,) int — face-graph hops from any river/lake face.
         pixel_positions: (N, H, W, 3) float32 unit-sphere positions, or None
             to skip the noise component entirely.
+        params: ForestDensityParams — precipitation/treeline/riparian/noise knobs.
+        seed: noise seed (from the top-level resources seed).
         mesh: optional PolygonMesh. When provided, per-face baseline / P_ref /
             riparian-bonus values are rasterized via `rasterize_face_values`
             so adjacent biomes blend continuously instead of looking blocky.
@@ -130,6 +130,7 @@ def compute_forest_density(
     Returns:
         (N, H, W, 1) float32 in [0, 1].
     """
+    p = params
     biome_idx = np.clip(face_biome.astype(np.int32), 0, len(BIOME_FOREST_BASELINE) - 1)
     face_baseline = BIOME_FOREST_BASELINE[biome_idx]                  # (N,)
     face_p_ref = BIOME_PRECIP_REFERENCE_MM[biome_idx]                 # (N,)
@@ -137,8 +138,8 @@ def compute_forest_density(
     p_annual = precipitation_tex.sum(axis=-1).astype(np.float32)     # (N, H, W) mm/yr
 
     h = riparian_hops.astype(np.float32)
-    face_riparian = riparian_bonus * np.exp(-h * riparian_decay_per_hop)
-    face_riparian[riparian_hops > riparian_max_hops] = 0.0
+    face_riparian = p.riparian_bonus * np.exp(-h * p.riparian_decay_per_hop)
+    face_riparian[riparian_hops > p.riparian_max_hops] = 0.0
     face_riparian = face_riparian.astype(np.float32)                  # (N,)
 
     if mesh is not None:
@@ -159,19 +160,19 @@ def compute_forest_density(
 
     rel = (p_annual - p_ref_tex) / np.maximum(p_ref_tex, 1.0)
     p_modulation = np.clip(
-        1.0 + precipitation_modulation_strength * np.tanh(rel), 0.7, 1.3
+        1.0 + p.precipitation_modulation_strength * np.tanh(rel), 0.7, 1.3
     ).astype(np.float32)                                              # (N, H, W)
 
     elev = elevation_tex[..., 0].astype(np.float32)                  # (N, H, W)
-    falloff = max(treeline_falloff_km, 1e-3)
+    falloff = max(p.treeline_falloff_km, 1e-3)
     treeline = np.clip(
-        (treeline_elevation_km - elev) / falloff, 0.0, 1.0
+        (p.treeline_elevation_km - elev) / falloff, 0.0, 1.0
     ).astype(np.float32)                                              # (N, H, W)
 
-    if pixel_positions is not None and noise_amplitude > 0.0:
+    if pixel_positions is not None and p.noise_amplitude > 0.0:
         noise = _value_noise(
-            pixel_positions, seed=seed, octaves=noise_octaves
-        ) * noise_amplitude
+            pixel_positions, seed=seed, octaves=p.noise_octaves
+        ) * p.noise_amplitude
     else:
         noise = np.zeros_like(p_annual)
 

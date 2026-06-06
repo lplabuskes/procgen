@@ -21,9 +21,14 @@ need not sum to exactly 1; water faces are forced to 0.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from realmgen.suitability import _positions_to_face_ids
+
+if TYPE_CHECKING:
+    from realmgen.builder import MountainPassParams, SituationalValueWeightParams
 
 
 # ── Harbor quality ────────────────────────────────────────────────────────────
@@ -177,8 +182,7 @@ def compute_mountain_passes(
     land_base_cost: np.ndarray,
     is_water: np.ndarray,
     *,
-    min_neighbor_cost: float = 3.0,
-    cost_scale: float = 1.5,
+    params: "MountainPassParams",
 ) -> np.ndarray:
     """Score low-cost corridors through high-cost terrain (mountain passes).
 
@@ -192,19 +196,18 @@ def compute_mountain_passes(
         mesh: object with ``faces`` and ``face_adjacency``.
         land_base_cost: (N,) float — per-face isotropic land traversal cost.
         is_water: (N,) bool — water faces are excluded.
-        min_neighbor_cost: neighbors' mean cost must exceed this for the face to
-            qualify as a pass (prevents flat grasslands from scoring).
-        cost_scale: half-saturation constant for the contrast sigmoid.
+        params: MountainPassParams — ``min_neighbor_cost`` + ``cost_scale``.
 
     Returns:
         (N,) float32 in [0, 1].
     """
+    p = params
     n = len(mesh.faces)
     cost = np.asarray(land_base_cost, dtype=np.float64)
     is_water = np.asarray(is_water, dtype=bool)
 
     score = np.zeros(n, dtype=np.float64)
-    cscale = max(cost_scale, 1e-9)
+    cscale = max(p.cost_scale, 1e-9)
     for i, adj in enumerate(mesh.face_adjacency):
         if is_water[i]:
             continue
@@ -212,7 +215,7 @@ def compute_mountain_passes(
         if len(land_adj) < 2:
             continue
         neighbor_mean = cost[np.array(land_adj, dtype=np.intp)].mean()
-        if neighbor_mean < min_neighbor_cost:
+        if neighbor_mean < p.min_neighbor_cost:
             continue
         contrast = neighbor_mean - cost[i]
         if contrast <= 0.0:
@@ -266,11 +269,7 @@ def combine_situational_value(
     passes: np.ndarray,
     straits: np.ndarray,
     *,
-    harbor_weight: float = 0.25,
-    confluence_weight: float = 0.20,
-    nav_head_weight: float = 0.20,
-    pass_weight: float = 0.20,
-    strait_weight: float = 0.15,
+    params: "SituationalValueWeightParams",
 ) -> np.ndarray:
     """Weighted-average situational value in [0, 1]; water faces are forced to 0.
 
@@ -286,19 +285,24 @@ def combine_situational_value(
         nav_head:   (N,) float32 in [0, 1].
         passes:     (N,) float32 in [0, 1].
         straits:    (N,) float32 in [0, 1].
+        params: SituationalValueWeightParams — the five factor weights.
 
     Returns:
         (N,) float32 in [0, 1].
     """
-    total_w = harbor_weight + confluence_weight + nav_head_weight + pass_weight + strait_weight
+    p = params
+    total_w = (
+        p.harbor_weight + p.confluence_weight + p.nav_head_weight
+        + p.pass_weight + p.strait_weight
+    )
     total_w = max(total_w, 1e-9)
 
     score = (
-        harbor_weight * np.asarray(harbor, dtype=np.float64)
-        + confluence_weight * np.asarray(confluence, dtype=np.float64)
-        + nav_head_weight * np.asarray(nav_head, dtype=np.float64)
-        + pass_weight * np.asarray(passes, dtype=np.float64)
-        + strait_weight * np.asarray(straits, dtype=np.float64)
+        p.harbor_weight * np.asarray(harbor, dtype=np.float64)
+        + p.confluence_weight * np.asarray(confluence, dtype=np.float64)
+        + p.nav_head_weight * np.asarray(nav_head, dtype=np.float64)
+        + p.pass_weight * np.asarray(passes, dtype=np.float64)
+        + p.strait_weight * np.asarray(straits, dtype=np.float64)
     ) / total_w
 
     score = np.where(np.asarray(is_water, dtype=bool), 0.0, score)
