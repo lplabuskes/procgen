@@ -637,5 +637,3 @@ class ClimateLakeFeedbackStage(Stage):
             self.builder.apply_lake_humidity_feedback(
                 mesh, LAKE_MASK.read(mesh), progress=ctx.report
             )
-
-

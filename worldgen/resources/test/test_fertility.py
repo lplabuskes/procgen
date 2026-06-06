@@ -137,17 +137,6 @@ class TestComputeFertility:
         )
         far = np.full(1, 100, dtype=np.int32)
         near = np.full(1, 0, dtype=np.int32)
-        kw = _default_kwargs()
-        f_far = compute_fertility(
-            temperature_tex=temp, precipitation_tex=precip, ocean_mask_tex=ocean,
-            face_biome=biome, face_elev_range_km=rng,
-            water_hops=far, volcanism_hops=vh, **kw,
-        )
-        f_near = compute_fertility(
-            temperature_tex=temp, precipitation_tex=precip, ocean_mask_tex=ocean,
-            face_biome=biome, face_elev_range_km=rng,
-            water_hops=near, volcanism_hops=vh, **kw,
-        )
         # Both are clipped to 1; lower the climate term so the bonus shows.
         kw2 = _default_kwargs(optimal_temperature_c=5.0)  # detune climate so f < 1
         f_far2 = compute_fertility(

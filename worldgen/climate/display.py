@@ -186,5 +186,3 @@ def build_biome_display_texture(mesh) -> np.ndarray:
         lake_tex = mesh.face_textures["lake_mask"]       # (N, H, W, 1)
         rgba[lake_tex[:, :, :, 0] > 0] = LAKE_COLOR
     return rgba
-
-

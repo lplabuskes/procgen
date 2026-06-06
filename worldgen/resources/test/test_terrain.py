@@ -81,7 +81,8 @@ class TestFaceHopsFromSeeds:
 
     def test_cap_truncates(self):
         mesh = self._line_mesh(10)
-        mask = np.zeros(10, dtype=bool); mask[0] = True
+        mask = np.zeros(10, dtype=bool)
+        mask[0] = True
         h = face_hops_from_seeds(mesh, mask, max_hops=3)
         assert list(h[:4]) == [0, 1, 2, 3]
         assert all(h[4:] == 4)
@@ -114,11 +115,13 @@ class TestRiverTraversedFaces:
     def test_marks_segment_endpoints(self):
         class _Node:
             def __init__(self, fid): self.face_id = fid
+
         class _Seg:
             def __init__(self, a, b, in_lake=False):
                 self.start = _Node(a)
                 self.end = _Node(b)
                 self.in_lake = in_lake
+
         class _River:
             def __init__(self, segs): self.segments = segs
         rivers = [_River([_Seg(1, 2), _Seg(2, 4)])]
@@ -128,11 +131,13 @@ class TestRiverTraversedFaces:
     def test_skips_in_lake_segments(self):
         class _Node:
             def __init__(self, fid): self.face_id = fid
+
         class _Seg:
             def __init__(self, a, b, in_lake=False):
                 self.start = _Node(a)
                 self.end = _Node(b)
                 self.in_lake = in_lake
+
         class _River:
             def __init__(self, segs): self.segments = segs
         rivers = [_River([_Seg(1, 2, in_lake=True), _Seg(2, 3)])]

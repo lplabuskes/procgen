@@ -624,9 +624,9 @@ class MapWidget(QWidget):
             r_fill = int(rgba[0] * 255)
             g_fill = int(rgba[1] * 255)
             b_fill = int(rgba[2] * 255)
-            r_pen  = max(0, r_fill - 60)
-            g_pen  = max(0, g_fill - 60)
-            b_pen  = max(0, b_fill - 60)
+            r_pen = max(0, r_fill - 60)
+            g_pen = max(0, g_fill - 60)
+            b_pen = max(0, b_fill - 60)
             painter.setPen(QPen(QColor(r_pen, g_pen, b_pen, 220), 1.0))
             painter.setBrush(QBrush(QColor(r_fill, g_fill, b_fill, 210)))
             k_abund = abundances[mask]
@@ -669,9 +669,9 @@ class MapWidget(QWidget):
             r_fill = int(rgba[0] * 255)
             g_fill = int(rgba[1] * 255)
             b_fill = int(rgba[2] * 255)
-            r_pen  = max(0, r_fill - 60)
-            g_pen  = max(0, g_fill - 60)
-            b_pen  = max(0, b_fill - 60)
+            r_pen = max(0, r_fill - 60)
+            g_pen = max(0, g_fill - 60)
+            b_pen = max(0, b_fill - 60)
             painter.setPen(QPen(QColor(r_pen, g_pen, b_pen, 220), 1.0))
             painter.setBrush(QBrush(QColor(r_fill, g_fill, b_fill, 210)))
             k_abund = abundances[mask]
@@ -682,10 +682,10 @@ class MapWidget(QWidget):
                 # Draw as diamond (rotated square) to distinguish from mineral squares.
                 cx_i, cy_i = float(k_sx[i]), float(k_sy[i])
                 diamond = QPolygonF([
-                    QPointF(cx_i,     cy_i - r),
-                    QPointF(cx_i + r, cy_i    ),
-                    QPointF(cx_i,     cy_i + r),
-                    QPointF(cx_i - r, cy_i    ),
+                    QPointF(cx_i, cy_i - r),
+                    QPointF(cx_i + r, cy_i),
+                    QPointF(cx_i, cy_i + r),
+                    QPointF(cx_i - r, cy_i),
                 ])
                 painter.drawPolygon(diamond)
         painter.restore()

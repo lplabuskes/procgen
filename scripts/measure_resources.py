@@ -333,7 +333,7 @@ def main() -> None:
     _save_history(history)
     _update_markdown(history)
 
-    rel = lambda p: p.relative_to(Path(__file__).parent.parent)
+    def rel(p): return p.relative_to(Path(__file__).parent.parent)
     print(f"Results appended to {rel(JSON_PATH)}")
     print(f"Markdown updated at  {rel(MD_PATH)}")
     print()

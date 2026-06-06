@@ -32,7 +32,9 @@ class GlobeParams:
     resources: ResourcesParams = field(default_factory=ResourcesParams, metadata={"label": "Resources"})
     cost: CostParams = field(default_factory=CostParams, metadata={"label": "Cost"})
     # World seed — drives mesh selection and every stage's draws. None → random each run.
-    seed: Optional[int] = field(default=None, metadata={"label": "Seed", "kind": "optional_int", "min": 0, "max": 2**31 - 1})
+    seed: Optional[int] = field(
+        default=None, metadata={"label": "Seed", "kind": "optional_int", "min": 0, "max": 2**31 - 1}
+    )
 
 
 class GlobePipeline(Pipeline):

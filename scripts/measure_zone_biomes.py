@@ -45,7 +45,7 @@ MD_PATH = RESULTS_DIR / "zone_biome_results.md"
 
 TROPICAL_IDX = BIOME_NAMES.index("Tropical")   # 6
 SAVANNAH_IDX = BIOME_NAMES.index("Savannah")   # 5
-DESERT_IDX   = BIOME_NAMES.index("Desert")     # 8
+DESERT_IDX = BIOME_NAMES.index("Desert")     # 8
 
 # Earth reference values — WWF Terrestrial Ecoregions / GlobCover estimates.
 # Savannah and Desert figures are rough literature estimates.
@@ -100,10 +100,10 @@ def measure_seed(seed: int) -> dict:
         return round(100.0 * n_biome / max(n_land, 1), 1)
 
     pct_global = _biome_pct(TROPICAL_IDX, 90.0)
-    pct_23_5   = _biome_pct(TROPICAL_IDX, 23.5)
-    pct_30_0   = _biome_pct(TROPICAL_IDX, 30.0)
-    sav_30_0   = _biome_pct(SAVANNAH_IDX, 30.0)
-    des_30_0   = _biome_pct(DESERT_IDX,   30.0)
+    pct_23_5 = _biome_pct(TROPICAL_IDX, 23.5)
+    pct_30_0 = _biome_pct(TROPICAL_IDX, 30.0)
+    sav_30_0 = _biome_pct(SAVANNAH_IDX, 30.0)
+    des_30_0 = _biome_pct(DESERT_IDX, 30.0)
 
     n_land_global = int(is_land.sum())
 
@@ -353,7 +353,7 @@ def main() -> None:
     _save_history(history)
     _update_markdown(history)
 
-    rel = lambda p: p.relative_to(Path(__file__).parent.parent)
+    def rel(p): return p.relative_to(Path(__file__).parent.parent)
     print(f"Results appended to {rel(JSON_PATH)}")
     print(f"Markdown updated at  {rel(MD_PATH)}")
     print()

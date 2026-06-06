@@ -19,7 +19,17 @@ from worldgen.geology.elevation import (
     face_elevations_from_texture,
     smooth_elevation_seams,
 )
+from core.mesh import PolygonMesh
 from viz.color_stops import interp_stops_scalar
+from worldgen.geology.channels import (
+    BOUNDARY_TYPE,
+    ELEVATION,
+    ELEVATION_FACE,
+    IS_OCEAN,
+    OCEAN_MASK,
+    PLATE_TYPE,
+    VOLCANIC_ACTIVITY,
+)
 from worldgen.geology.display import (
     BOUNDARY_COLORS,
     LAND_COLOR,
@@ -29,6 +39,15 @@ from worldgen.geology.display import (
     build_elevation_display_texture,
     elevation_legend_entries,
 )
+from worldgen.geology.tectonics import (
+    assign_plate_types,
+    classify_plate_boundaries,
+    compute_face_velocities,
+    generate_plate_velocities,
+    generate_plates,
+    relax_plates,
+)
+from worldgen.geology.volcanism import compute_volcanism, generate_volcano_positions
 
 _SPEED_STOPS = [
     (0.0, (0.00, 0.50, 1.00, 1.0)),
@@ -40,25 +59,6 @@ _VOLCANIC_STOPS = [
     (0.5, (0.95, 0.25, 0.00, 1.0)),
     (1.0, (0.95, 0.05, 0.00, 1.0)),
 ]
-from worldgen.geology.channels import (
-    BOUNDARY_TYPE,
-    ELEVATION,
-    ELEVATION_FACE,
-    IS_OCEAN,
-    OCEAN_MASK,
-    PLATE_TYPE,
-    VOLCANIC_ACTIVITY,
-)
-from worldgen.geology.volcanism import compute_volcanism, generate_volcano_positions
-from worldgen.geology.tectonics import (
-    assign_plate_types,
-    classify_plate_boundaries,
-    compute_face_velocities,
-    generate_plate_velocities,
-    generate_plates,
-    relax_plates,
-)
-from core.mesh import PolygonMesh
 
 
 @paramclass
@@ -115,7 +115,9 @@ class ElevationParams:
     plate_motion: PlateMotionParams = field(default_factory=PlateMotionParams, metadata={"label": "Plate Motion"})
     elevation: ElevationFieldParams = field(default_factory=ElevationFieldParams, metadata={"label": "Elevation"})
     noise: NoiseParams = field(default_factory=NoiseParams, metadata={"label": "Elevation Noise"})
-    face_erosion: FaceErosionParams = field(default_factory=FaceErosionParams, metadata={"label": "Face Erosion", "hidden": True})
+    face_erosion: FaceErosionParams = field(
+        default_factory=FaceErosionParams, metadata={"label": "Face Erosion", "hidden": True}
+    )
     volcanism: VolcanismParams = field(default_factory=VolcanismParams, metadata={"label": "Volcanism"})
 
 

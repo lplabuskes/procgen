@@ -126,8 +126,8 @@ def place_mineral_deposits(
     biome = BIOME.read(mesh)
 
     # ── geological candidate masks ───────────────────────────────────────
-    is_convergent  = boundary_type == "convergent"
-    is_divergent   = boundary_type == "divergent"
+    is_convergent = boundary_type == "convergent"
+    is_divergent = boundary_type == "divergent"
     is_continental = plate_type == "continental"
 
     # Coal: sedimentary basin proxy — continental, non-ocean, low elevation,
@@ -176,7 +176,8 @@ def place_mineral_deposits(
         (GEMS,        land & (volcanic >= p.volcanic_threshold_gems),                 3, p.gem_deposit_threshold),
         (COAL,        coal_candidates,                                                4, p.coal_deposit_threshold),
         (TIN,         land & is_divergent,                                            5, dt),
-        (RARE_METALS, land & (is_divergent | (volcanic >= p.volcanic_threshold_rare)), 6, p.rare_metals_deposit_threshold),
+        (RARE_METALS, land & (is_divergent | (volcanic >= p.volcanic_threshold_rare)),
+         6, p.rare_metals_deposit_threshold),
         (SALT,        salt_candidates,                                               7, p.salt_deposit_threshold),
         (MARBLE,      marble_candidates,                                             8, p.marble_deposit_threshold),
     ]
@@ -213,7 +214,7 @@ def place_mineral_deposits(
         )
         return empty
 
-    positions  = np.concatenate(all_positions, axis=0)
-    kinds      = np.concatenate(all_kinds,     axis=0)
-    abundances = np.concatenate(all_abund,     axis=0)
+    positions = np.concatenate(all_positions, axis=0)
+    kinds = np.concatenate(all_kinds, axis=0)
+    abundances = np.concatenate(all_abund, axis=0)
     return positions, kinds, abundances
