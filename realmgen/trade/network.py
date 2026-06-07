@@ -2,14 +2,20 @@
 
 Phase 1 — Resources to settlements
     Each deposit routes to its nearest settlement (by hybrid cost).  Short,
-    local routes.  The settlement accumulates the raw abundance as "goods."
+    local routes.  The settlement accumulates the raw abundance as "goods,"
+    tracked per good type.
 
 Phase 2 — Inter-settlement trade
-    Each settlement with goods routes to every other settlement.  Flow is:
+    Each settlement with goods routes to every other settlement.  Flow is
+    modulated by good-type rarity and the destination's local supply:
 
-        flow = goods × demand(dst) × exp(−flow_decay × inter_settlement_cost)
+        demand_modifier[dst, g] = 1 − local_supply_fraction[dst, g]
+        flow = Σ_g(goods[src,g] × rarity[g] × demand_modifier[dst,g])
+               × settlement_demand[dst] × exp(−flow_decay × cost)
 
-    These are the longer, interesting routes shown on the map.
+    A settlement already rich in silk therefore has low demand for more silk
+    but still wants spices it doesn't locally produce — producing realistic
+    long-distance routes for rare goods.
 
 The underlying graph is (2N, 2N): land nodes 0..N-1, sea nodes N..2N-1.
 Surface switching happens at navigable-river faces (amphibious, zero cost) and
@@ -23,6 +29,13 @@ Node indexing
 -------------
 - Land node for face i: index i
 - Sea node for face i: index i + N
+
+Good-type IDs
+-------------
+Type IDs are assigned by the caller (realmgen.builder).  The namespace used
+in practice: minerals occupy 0..N_MINERAL_TYPES-1, rare bio occupy
+N_MINERAL_TYPES..N_MINERAL_TYPES+N_RARE_BIO_TYPES-1.  See GOOD_RARITY_WEIGHTS
+for per-type values.
 """
 from __future__ import annotations
 
@@ -36,12 +49,44 @@ from scipy.sparse.csgraph import dijkstra as sp_dijkstra
 from realmgen.placement.types import Settlement
 
 
+# ── Good-type namespace ───────────────────────────────────────────────────────
+
+# Minerals occupy type IDs 0..N_MINERAL_TYPES-1.
+# Rare bio occupy N_MINERAL_TYPES..N_MINERAL_TYPES+N_RARE_BIO_TYPES-1.
+# These must match the offsets used in realmgen.builder when tagging good_sources.
+N_MINERAL_TYPES = 9
+RARE_BIO_TYPE_OFFSET = N_MINERAL_TYPES
+
+# Per-type rarity multiplier.  Higher → more inter-settlement flow and longer routes.
+# Values reflect historical long-distance trade importance, not physical abundance.
+GOOD_RARITY_WEIGHTS: dict[int, float] = {
+    0: 1.0,   # Iron        — utilitarian, widely distributed
+    1: 1.5,   # Copper
+    2: 3.0,   # Gold        — precious metal
+    3: 4.0,   # Gems        — luxury
+    4: 1.0,   # Coal        — utilitarian
+    5: 1.5,   # Tin
+    6: 3.5,   # Rare Metals — strategic
+    7: 2.5,   # Salt        — historically essential across cultures
+    8: 1.5,   # Marble
+    9: 5.0,   # Spices      — the premier long-distance trade good historically
+    10: 3.0,  # Tea
+    11: 4.5,  # Silk        — luxury, source regions strongly bounded
+    12: 3.5,  # Ivory
+    13: 2.5,  # Furs
+    14: 3.0,  # Incense
+    15: 2.5,  # Dyes
+    16: 2.0,  # Amber
+    17: 2.0,  # Rubber
+    18: 3.5,  # Pearls
+}
+
 
 @dataclass
 class TradeResult:
     """Output of :func:`compute_trade_network`."""
 
-    face_flow: np.ndarray   # (N,) float32 — cumulative trade flow touching each face
+    face_flow: np.ndarray   # (N,) float32 — aggregate trade flow across all good types
     hub_mask: np.ndarray    # (N,) bool — high-flow junction faces
     routes: list            # [(start_3d, end_3d, flow)] segments above display threshold
 
@@ -198,23 +243,32 @@ def compute_trade_network(
     flow_decay: float = 0.05,
     hub_flow_quantile: float = 0.90,
     min_display_flow: float | None = None,
+    rarity_weights: dict | None = None,
 ) -> TradeResult:
     """Accumulate trade flow in two phases.
 
     **Phase 1** — each deposit routes to its nearest settlement (by hybrid cost).
-    Flow on each path segment = ``abundance × exp(−flow_decay × dist_to_settlement)``.
-    The raw abundance is credited to that settlement as "goods."
+    Flow on each path = ``abundance × rarity[g] × exp(−flow_decay × dist)``.
+    Raw abundance is credited to that settlement per good type.
 
     **Phase 2** — each settlement with goods routes to every other settlement.
-    Flow = ``goods × demand(dst) × exp(−flow_decay × inter_settlement_cost)``.
-    This produces the inter-settlement trade network shown on the map.
+    Demand for good type *g* at the destination is modulated by how well the
+    destination already supplies *g* locally::
+
+        demand_modifier[dst, g] = 1 − deposit_goods[dst, g] / global_max[g]
+        inter_flow = Σ_g(goods[src,g] × rarity[g] × demand_modifier[dst,g])
+                     × settlement_demand[dst] × exp(−flow_decay × cost)
+
+    This produces long-distance routes for rare goods that destinations lack,
+    while keeping short-distance routes for common goods.
 
     Args:
         mesh: ``PolygonMesh`` — provides ``face_adjacency`` and ``face_centroids``.
         settlements: list of :class:`~realmgen.placement.types.Settlement`.
-        good_sources: list of ``(face_id, abundance)`` tuples — one entry per
-            deposit.  ``face_id`` is a land-face index; ``abundance`` is a
-            non-negative float.
+        good_sources: list of ``(face_id, abundance, good_type_id)`` tuples.
+            ``face_id`` is a land-face index; ``abundance`` is a non-negative
+            float; ``good_type_id`` is an integer key into ``rarity_weights``
+            (use :data:`RARE_BIO_TYPE_OFFSET` to separate mineral and bio IDs).
         land_edge_costs: from ``build_land_edge_costs``, len N.
         land_passable: ``(N,)`` bool.
         sea_edge_costs: from ``build_sea_edge_costs``, len N.
@@ -232,6 +286,8 @@ def compute_trade_network(
             face is flagged as a trade hub.
         min_display_flow: minimum edge flow to include in the route list for
             display; defaults to the median of all positive edge flows.
+        rarity_weights: per-type rarity multipliers; defaults to
+            :data:`GOOD_RARITY_WEIGHTS`.  Unknown type IDs get weight 1.0.
 
     Returns:
         :class:`TradeResult`.
@@ -244,6 +300,8 @@ def compute_trade_network(
     )
     if not settlements or not good_sources:
         return empty
+
+    weights = rarity_weights if rarity_weights is not None else GOOD_RARITY_WEIGHTS
 
     centroids = np.asarray(mesh.face_centroids, dtype=np.float64)
 
@@ -284,12 +342,24 @@ def compute_trade_network(
         graph, directed=False, indices=settlement_nodes, return_predecessors=True,
     )
 
+    # Determine good-type array size from sources and weights.
+    max_type = max(int(gs[2]) for gs in good_sources)
+    if weights:
+        max_type = max(max_type, max(weights.keys()))
+    n_types = max_type + 1
+
+    # Rarity array indexed by type ID; unknown types default to 1.0.
+    rarity_arr = np.array(
+        [float(weights.get(g, 1.0)) for g in range(n_types)], dtype=np.float64
+    )
+
     decay = float(flow_decay)
     edge_flow: dict[tuple[int, int], float] = {}
-    deposit_goods = np.zeros(len(settlements), dtype=np.float64)
+    # deposit_goods[k, g] = raw abundance of type g collected at settlement k.
+    deposit_goods = np.zeros((len(settlements), n_types), dtype=np.float64)
 
     # Phase 1: route each deposit to its nearest settlement
-    for face_id, abundance in good_sources:
+    for face_id, abundance, good_type in good_sources:
         src_node = int(face_id)
         if src_node >= size:
             continue
@@ -298,16 +368,25 @@ def compute_trade_network(
         d = float(dists_to_src[k])
         if not np.isfinite(d):
             continue
-        deposit_goods[k] += float(abundance)
-        phase1_flow = float(abundance) * np.exp(-decay * d)
+        g = int(good_type)
+        deposit_goods[k, g] += float(abundance)
+        phase1_flow = float(abundance) * float(rarity_arr[g]) * np.exp(-decay * d)
         if phase1_flow < 1e-9:
             continue
         _accumulate_path(pred[k], src_node, settlement_nodes[k], phase1_flow, edge_flow)
 
-    # Phase 2: inter-settlement trade
+    # Phase 2: inter-settlement trade, modulated by local supply per good type.
+    # demand_modifier[k, g] = 1 − how saturated settlement k already is with type g.
+    global_max = deposit_goods.max(axis=0)  # (n_types,)
+    global_max = np.where(global_max > 0.0, global_max, 1.0)
+    local_frac = deposit_goods / global_max  # (S, n_types) in [0, 1]
+    demand_modifier = 1.0 - local_frac      # (S, n_types): 0 = saturated, 1 = none locally
+
+    # Rarity-weighted goods: how much value each settlement can export per type.
+    weighted_goods = deposit_goods * rarity_arr  # (S, n_types)
+
     for k_src in range(len(settlements)):
-        goods = deposit_goods[k_src]
-        if goods <= 0.0:
+        if weighted_goods[k_src].sum() <= 0.0:
             continue
         src_node = settlement_nodes[k_src]
         for k_dst in range(len(settlements)):
@@ -317,7 +396,11 @@ def compute_trade_network(
             d = float(dist[k_src, dst_node])
             if not np.isfinite(d):
                 continue
-            inter_flow = goods * float(norm_demands[k_dst]) * np.exp(-decay * d)
+            # Sum over types: export value weighted by destination's unmet need.
+            total_goods = float((weighted_goods[k_src] * demand_modifier[k_dst]).sum())
+            if total_goods <= 0.0:
+                continue
+            inter_flow = total_goods * float(norm_demands[k_dst]) * np.exp(-decay * d)
             if inter_flow < 1e-9:
                 continue
             _accumulate_path(pred[k_src], dst_node, src_node, inter_flow, edge_flow)

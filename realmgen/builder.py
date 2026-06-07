@@ -40,7 +40,7 @@ from realmgen.population.calibration import (
     cull_settlements,
 )
 from realmgen.population.trade_spawn import spawn_trade_settlements
-from realmgen.trade.network import compute_trade_network
+from realmgen.trade.network import RARE_BIO_TYPE_OFFSET, compute_trade_network
 from realmgen.placement.seeder import (
     build_cost_graph,
     placement_score,
@@ -555,14 +555,18 @@ class RealmStage(Stage):
             sea_passable = np.zeros(n, dtype=bool)
             sea_edge_costs = [np.empty(0, dtype=np.float64) for _ in range(n)]
 
-        # Collect good sources from minerals and rare_bio deposits
+        # Collect good sources from minerals and rare_bio deposits.
+        # Type IDs: minerals use their kind directly (0-8); rare bio are offset
+        # by RARE_BIO_TYPE_OFFSET so each good type has a unique ID for the
+        # rarity-weighted demand model in compute_trade_network.
         good_sources: list[tuple] = []
-        for channel in (MINERALS, RARE_BIO):
+        for channel, type_offset in ((MINERALS, 0), (RARE_BIO, RARE_BIO_TYPE_OFFSET)):
             if channel.present(world):
-                positions, _, abundances = channel.read(world)
+                positions, kinds, abundances = channel.read(world)
                 if len(positions) > 0:
                     fids = _positions_to_face_ids(positions, centroids)
-                    good_sources.extend(zip(fids.tolist(), abundances.tolist()))
+                    for fid, kind, ab in zip(fids.tolist(), kinds.tolist(), abundances.tolist()):
+                        good_sources.append((fid, ab, int(kind) + type_offset))
 
         pp = p.population
         tsp = pp.trade_spawn

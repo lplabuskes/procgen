@@ -13,6 +13,7 @@ from realmgen.trade.network import (
     TradeResult,
     build_hybrid_cost_graph,
     compute_trade_network,
+    RARE_BIO_TYPE_OFFSET,
 )
 
 
@@ -222,7 +223,7 @@ class TestComputeTradeNetwork:
         sea_p = np.zeros(n, dtype=bool)
         ec = _uniform_edge_costs(mesh)
         result = compute_trade_network(
-            mesh, [], [(3, 1.0)],
+            mesh, [], [(3, 1.0, 0)],
             ec, land_p,
             [np.empty(0)] * n, sea_p,
         )
@@ -238,7 +239,7 @@ class TestComputeTradeNetwork:
         ec = _uniform_edge_costs(mesh, cost=1.0)
         settlements = [_settlement(0, tier=0)]
         result = compute_trade_network(
-            mesh, settlements, [(3, 10.0)],
+            mesh, settlements, [(3, 10.0, 0)],
             ec, land_p,
             [np.empty(0)] * n, sea_p,
             flow_decay=0.0,  # no decay so we can reason clearly
@@ -260,11 +261,11 @@ class TestComputeTradeNetwork:
         settlements = [_settlement(0, tier=0)]
 
         low_decay = compute_trade_network(
-            mesh, settlements, [(9, 1.0)],
+            mesh, settlements, [(9, 1.0, 0)],
             ec, land_p, [np.empty(0)] * n, sea_p, flow_decay=0.0,
         )
         high_decay = compute_trade_network(
-            mesh, settlements, [(9, 1.0)],
+            mesh, settlements, [(9, 1.0, 0)],
             ec, land_p, [np.empty(0)] * n, sea_p, flow_decay=2.0,
         )
         # High decay → less total flow
@@ -279,7 +280,7 @@ class TestComputeTradeNetwork:
         settlements = [_settlement(0, tier=0)]
         # Source at face 4: flow passes through faces 0-4.
         result = compute_trade_network(
-            mesh, settlements, [(4, 100.0)],
+            mesh, settlements, [(4, 100.0, 0)],
             ec, land_p, [np.empty(0)] * n, sea_p,
             flow_decay=0.0,
             hub_flow_quantile=0.50,
@@ -296,7 +297,7 @@ class TestComputeTradeNetwork:
         ec = _uniform_edge_costs(mesh, cost=1.0)
         settlements = [_settlement(0, tier=0)]
         result = compute_trade_network(
-            mesh, settlements, [(4, 10.0)],
+            mesh, settlements, [(4, 10.0, 0)],
             ec, land_p, [np.empty(0)] * n, sea_p,
             flow_decay=0.0,
             min_display_flow=0.0,  # include all segments
@@ -335,7 +336,7 @@ class TestComputeTradeNetwork:
 
         settlements = [_settlement(0, tier=0)]
         result = compute_trade_network(
-            mesh, settlements, [(2, 5.0)],
+            mesh, settlements, [(2, 5.0, 0)],
             land_ec, land_p,
             sea_ec, sea_p,
             port_cost=1.0,
@@ -354,7 +355,7 @@ class TestComputeTradeNetwork:
         sea_p = np.zeros(n, dtype=bool)
         ec = _uniform_edge_costs(mesh, cost=1.0)
         settlements = [_settlement(0, tier=0), _settlement(7, tier=1)]
-        sources = [(2, 3.0), (5, 1.5)]
+        sources = [(2, 3.0, 0), (5, 1.5, 0)]
         kwargs = dict(flow_decay=0.1, hub_flow_quantile=0.7)
 
         r1 = compute_trade_network(
@@ -376,10 +377,66 @@ class TestComputeTradeNetwork:
         ec = _uniform_edge_costs(mesh)
         settlements = [_settlement(0, tier=0)]
         result = compute_trade_network(
-            mesh, settlements, [(3, 1.0)],
+            mesh, settlements, [(3, 1.0, 0)],
             ec, land_p, [np.empty(0)] * n, sea_p,
         )
         assert result.face_flow.shape == (n,)
         assert result.face_flow.dtype == np.float32
         assert result.hub_mask.shape == (n,)
         assert result.hub_mask.dtype == bool
+
+    def test_rare_good_generates_more_flow_than_common(self):
+        # Two settlements: face 0 and face 7. Source at face 4.
+        # Rare type (RARE_BIO_TYPE_OFFSET) should generate more inter-settlement
+        # flow than a common type (0) at the same abundance and no local supply.
+        mesh = _line_mesh(9)
+        n = 9
+        land_p = np.ones(n, dtype=bool)
+        sea_p = np.zeros(n, dtype=bool)
+        ec = _uniform_edge_costs(mesh, cost=1.0)
+        settlements = [_settlement(0, tier=0), _settlement(8, tier=1)]
+
+        common = compute_trade_network(
+            mesh, settlements, [(4, 1.0, 0)],  # Iron — rarity 1.0
+            ec, land_p, [np.empty(0)] * n, sea_p,
+            flow_decay=0.0,
+        )
+        rare = compute_trade_network(
+            mesh, settlements, [(4, 1.0, RARE_BIO_TYPE_OFFSET)],  # Spices — rarity 5.0
+            ec, land_p, [np.empty(0)] * n, sea_p,
+            flow_decay=0.0,
+        )
+        assert rare.face_flow.sum() > common.face_flow.sum()
+
+    def test_local_supply_suppresses_demand(self):
+        # Y-shaped topology: hub (face 0) with two separate arms.
+        #   arm A: 0 — 1 — 2   (dst_rich at face 2)
+        #   arm B: 0 — 3 — 4   (dst_poor at face 4)
+        # src at face 0.  Paths to the two destinations are fully disjoint, so
+        # face-flow at each leaf reflects only flow directed *to* that settlement.
+        n = 5
+        adj = [[1, 3], [0, 2], [1], [0, 4], [3]]
+        angles = np.linspace(0, 2 * np.pi, n, endpoint=False)
+        centroids = np.column_stack([np.cos(angles), np.sin(angles), np.zeros(n)])
+        mesh = _Mesh(adj, centroids)
+
+        land_p = np.ones(n, dtype=bool)
+        sea_p = np.zeros(n, dtype=bool)
+        ec = [np.ones(len(nbrs), dtype=np.float64) for nbrs in adj]
+
+        settlements = [_settlement(0, tier=0), _settlement(2, tier=1), _settlement(4, tier=1)]
+        # src has type-0 goods; dst_rich also has type-0 locally — saturates its demand.
+        sources = [
+            (0, 10.0, 0),  # goods at src
+            (2, 10.0, 0),  # same good already at dst_rich
+        ]
+        result = compute_trade_network(
+            mesh, settlements, sources,
+            ec, land_p, [np.empty(0)] * n, sea_p,
+            flow_decay=0.0,
+        )
+        # dst_poor (face 4) has unmet demand for type 0 → attracts inter-settlement
+        # flow; dst_rich (face 2) is saturated → receives none from src.
+        flow_at_rich = float(result.face_flow[2])
+        flow_at_poor = float(result.face_flow[4])
+        assert flow_at_poor > flow_at_rich
