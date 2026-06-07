@@ -42,7 +42,6 @@ from worldgen.hydrology.channels import LAKE_MASK, RIVER_OBJECTS
 class LandCostParams:
     biome_cost_scale: float = _f(1.0, label="Biome cost scale", min=0.0, max=5.0)
     ruggedness_cost_per_km: float = _f(1.5, label="Ruggedness cost/km", min=0.0, max=10.0)
-    water_crossing_cost: float = _f(20.0, label="Water crossing cost", min=0.0, max=100.0)
     river_ford_strength: float = _f(2.0, label="River ford penalty", min=0.0, max=10.0)
     river_corridor_strength: float = _f(0.5, label="River corridor discount", min=0.0, max=1.0)
     river_flow_reference: float = _f(2000.0, label="River flow reference", min=1.0, max=20000.0)
@@ -142,7 +141,6 @@ class CostBuilder(Stage):
             is_water,
             biome_cost_scale=p.land.biome_cost_scale,
             ruggedness_cost_per_km=p.land.ruggedness_cost_per_km,
-            water_crossing_cost=p.land.water_crossing_cost,
         )
 
         _report("Computing river flow field…")
@@ -221,7 +219,7 @@ class CostBuilder(Stage):
         land_costs = np.array(
             [m.get("land_base_cost", 0.0) for m in mesh.face_metadata], dtype=np.float64
         )
-        # Normalize against land faces only (water crossing cost would skew the scale).
+        # Normalize against land faces only (water carries a meaningless cost value).
         # Fall back to is_ocean for worlds saved before the cost stage wrote is_water.
         is_water_arr = np.array(
             [bool(m.get("is_water", m.get("is_ocean", False))) for m in mesh.face_metadata],

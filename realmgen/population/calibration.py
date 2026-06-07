@@ -3,12 +3,17 @@
 Two responsibilities:
 
 1. **Hinterland assignment** — soft, fractional.  Each settlement bids for
-   every land face within ``max_distance`` cost-distance; the bid combines a
+   every face within ``max_distance`` cost-distance; the bid combines a
    linear proximity falloff with an influence-derived pull, and each face's
    carrying capacity is split among bidders in proportion to their bids.  A
    village beside a city therefore still captures a share of the surrounding
    land instead of being shut out, so it can survive in the city's shadow.
-   The *displayed* hinterland is the single highest bidder per face.
+   The *displayed* hinterland is the single highest bidder per face.  When the
+   caller supplies a *water-permeable* cost graph (the population stage does),
+   a coastal settlement also bids for a *limited* band of nearby ocean/lake,
+   pulling its fishing-grounds productivity (the aquatic component of
+   ``fertility_mean``) into carrying capacity; the band stays small because
+   water steps are made deliberately expensive.
 
 2. **Iterative relaxation** — carrying capacity (hinterland fertility × area)
    and trade wealth (face flow at the settlement's face) combine into a per-
@@ -64,7 +69,10 @@ def compute_hinterland_shares(
         n_faces: number of mesh faces (N).
         settlements: list of :class:`~realmgen.placement.types.Settlement`
             (reads ``face_id`` and ``influence``).
-        cost_graph: (N, N) directed land-cost CSR matrix — used undirected.
+        cost_graph: (N, N) directed land-cost CSR matrix — used undirected. Pass
+            a water-permeable variant (water passable at a steep finite cost) to
+            let coastal settlements claim a limited band of ocean/lake for their
+            fishing grounds; pass a land-only graph to keep hinterlands on land.
         max_distance: hard cap (cost-distance) on the widest hinterland reach.
         influence_scale: e-folding scale mapping ``influence`` to ``pull``;
             larger flattens the importance gap between tiers.
@@ -126,7 +134,9 @@ def compute_carrying_capacity(
 
     Args:
         shares: (S, N) float64 from :func:`compute_hinterland_shares`.
-        fertility: (N,) float in [0, 1] — per-face ``fertility_mean``.
+        fertility: (N,) float in [0, 1] — per-face ``fertility_mean`` (already
+            includes aquatic fishing productivity on coastal ocean/lake faces, so
+            water claimed via a permeable hinterland graph contributes here).
         face_areas: (N,) float64 — per-face solid-angle areas (unit-sphere).
 
     Returns:

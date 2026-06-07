@@ -14,7 +14,7 @@ from core.pipeline import BuildContext, Stage
 from realmgen.channels import HINTERLAND_ID, POPULATION, SUITABILITY, TRADE_FLOW
 from realmgen.placement.builder import SeederParams
 from realmgen.placement.seeder import build_cost_graph
-from realmgen.placement.types import Settlement, TIER_NAMES, population_display_tier
+from realmgen.placement.types import Settlement, population_display_tier
 from realmgen.population.calibration import (
     apply_population_to_settlements,
     compute_carrying_capacity,
@@ -61,6 +61,7 @@ class PopulationParams:
     hinterland_max_distance: float = _f(40.0, label="Hinterland max distance", min=5.0, max=200.0)
     hinterland_influence_scale: float = _f(8.0, label="Hinterland influence scale", min=0.5, max=30.0)
     hinterland_reach_scale: float = _f(45.0, label="Hinterland reach scale (∝ catchment radius)", min=1.0, max=1000.0)
+    hinterland_water_cost: float = _f(20.0, label="Hinterland water step cost (coastal fishing reach)", min=0.0, max=200.0)
     trade_spawn: TradeSpawnParams = field(
         default_factory=TradeSpawnParams, metadata={"label": "Trade-spawn settlements"}
     )
@@ -153,6 +154,14 @@ class PopulationStage(Stage):
         self.settlements = list(world.get_feature("settlements"))
 
         # ── Cost graphs (land + sea) ─────────────────────────────────────────
+        # ``edge_costs`` is the land surface as worldgen produces it: open water is
+        # impassable. ``hinterland_edge_costs`` is a *hinterland-only* variant that
+        # makes water passable at a steep, tunable per-step cost so a coastal
+        # settlement can pull a *limited* band of ocean into its carrying capacity
+        # (fishing grounds — coastal ocean already carries aquatic fertility in
+        # ``fertility_mean``). The band is naturally bounded by ``hinterland_max_distance``
+        # and the steep water cost; the permeability is unique to the hinterland
+        # and never leaks into trade, placement, or polity formation.
         if COST_SURFACES.present(world):
             from worldgen.cost.surfaces import build_land_edge_costs, build_sea_edge_costs
             cs = COST_SURFACES.read(world)
@@ -160,6 +169,17 @@ class PopulationStage(Stage):
                 mesh,
                 cs.land_base_cost,
                 cs.land_passable,
+                cs.river_flow_dir,
+                cs.river_flow_mag,
+                cs.river_navigability,
+            )
+            hinterland_land_cost = np.where(
+                is_water, pp.hinterland_water_cost, cs.land_base_cost
+            )
+            hinterland_edge_costs = build_land_edge_costs(
+                mesh,
+                hinterland_land_cost,
+                np.ones(n, dtype=bool),            # water passable for hinterlands only
                 cs.river_flow_dir,
                 cs.river_flow_mag,
                 cs.river_navigability,
@@ -172,10 +192,16 @@ class PopulationStage(Stage):
                 np.array([0.5 * (base[i] + base[j]) for j in adj], dtype=np.float64)
                 for i, adj in enumerate(mesh.face_adjacency)
             ]
+            hinterland_base = np.where(is_water, pp.hinterland_water_cost, 1.5)
+            hinterland_edge_costs = [
+                np.array([0.5 * (hinterland_base[i] + hinterland_base[j]) for j in adj], dtype=np.float64)
+                for i, adj in enumerate(mesh.face_adjacency)
+            ]
             sea_passable = np.zeros(n, dtype=bool)
             sea_edge_costs = [np.empty(0, dtype=np.float64) for _ in range(n)]
 
         cost_graph = build_cost_graph(mesh.face_adjacency, edge_costs)
+        hinterland_cost_graph = build_cost_graph(mesh.face_adjacency, hinterland_edge_costs)
 
         # ── Good sources (minerals + rare bio) ──────────────────────────────
         good_sources: list[tuple] = []
@@ -236,7 +262,7 @@ class PopulationStage(Stage):
                 ctx.report(f"  Trade-spawn: +{len(new_settlements)} ({len(self.settlements)} total).")
 
             shares, self.hinterland = compute_hinterland_shares(
-                n, self.settlements, cost_graph,
+                n, self.settlements, hinterland_cost_graph,
                 max_distance=pp.hinterland_max_distance,
                 influence_scale=pp.hinterland_influence_scale,
                 reach_scale=pp.hinterland_reach_scale,
@@ -261,7 +287,7 @@ class PopulationStage(Stage):
         self.population = population
 
         _shares, self.hinterland = compute_hinterland_shares(
-            n, self.settlements, cost_graph,
+            n, self.settlements, hinterland_cost_graph,
             max_distance=pp.hinterland_max_distance,
             influence_scale=pp.hinterland_influence_scale,
             reach_scale=pp.hinterland_reach_scale,

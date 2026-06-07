@@ -116,18 +116,16 @@ class PolityStage(Stage):
 
         # ── Land-only cost graph ─────────────────────────────────────────────
         # Polities grow over land only (design: ocean is impassable, so
-        # coastlines are natural borders and islands stay outside territory).
-        # The shared land surface now makes water merely *expensive* (cost 20,
-        # so coastal hinterlands can include productive ocean), so we re-impose
-        # impassability here by passing ``~is_water`` as the passable mask —
-        # ``build_land_edge_costs`` then sets every water-incident edge to inf.
+        # coastlines are natural borders and islands stay outside territory). The
+        # land surface treats water as impassable (``land_passable == ~is_water``),
+        # so ``build_land_edge_costs`` already gives every water-incident edge inf.
         if COST_SURFACES.present(world):
             from worldgen.cost.surfaces import build_land_edge_costs
             cs = COST_SURFACES.read(world)
             edge_costs = build_land_edge_costs(
                 mesh,
                 cs.land_base_cost,
-                ~is_water,
+                cs.land_passable,
                 cs.river_flow_dir,
                 cs.river_flow_mag,
                 cs.river_navigability,
