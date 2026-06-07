@@ -165,6 +165,9 @@ class PopulationStage(Stage):
         if COST_SURFACES.present(world):
             from worldgen.cost.surfaces import build_land_edge_costs, build_sea_edge_costs
             cs = COST_SURFACES.read(world)
+            settlement_mask = np.zeros(n, dtype=bool)
+            for s in self.settlements:
+                settlement_mask[s.face_id] = True
             edge_costs = build_land_edge_costs(
                 mesh,
                 cs.land_base_cost,
@@ -172,6 +175,7 @@ class PopulationStage(Stage):
                 cs.river_flow_dir,
                 cs.river_flow_mag,
                 cs.river_navigability,
+                settlement_mask=settlement_mask,
             )
             hinterland_land_cost = np.where(
                 is_water, pp.hinterland_water_cost, cs.land_base_cost

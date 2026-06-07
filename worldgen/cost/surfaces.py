@@ -317,6 +317,7 @@ def build_land_edge_costs(
     river_flow_reference: float = 2000.0,
     river_min_mult: float = 0.4,
     river_max_mult: float = 5.0,
+    settlement_mask: np.ndarray | None = None,
 ) -> List[np.ndarray]:
     """Directional per-edge land traversal cost (mirrors ``mesh.face_adjacency``).
 
@@ -340,6 +341,10 @@ def build_land_edge_costs(
     not tapered — a rapids-choked river is no easier to cross. ``None`` means
     "fully navigable everywhere" (the discount applies in full).
 
+    ``settlement_mask``: (N,) bool — faces with a settlement suppress the ford
+    penalty (settlements have bridges/fords), but still receive the corridor
+    discount for traveling along the valley.
+
     ``land_cost`` is whatever per-face base the caller wants the river term applied
     to — worldgen passes ``land_base_cost``; realmgen passes base + danger.
     """
@@ -356,6 +361,11 @@ def build_land_edge_costs(
         river_nav = np.ones(n, dtype=np.float64)
     else:
         river_nav = np.asarray(river_navigability, dtype=np.float64)
+    if settlement_mask is not None:
+        s_mask = np.asarray(settlement_mask, dtype=bool)
+        ford_strength_arr = np.where(s_mask, 0.0, float(river_ford_strength))
+    else:
+        ford_strength_arr = None
     centroids = np.asarray(mesh.face_centroids, dtype=np.float64)
 
     passable_edge = land_passable[src] & land_passable[dst]
@@ -372,8 +382,9 @@ def build_land_edge_costs(
         nav = np.clip(river_nav[face_idx], 0.0, 1.0)   # (E,) fall-line taper
         align = np.abs((step_hat * fdir).sum(axis=1))  # (E,) in [0, 1]
         w = np.minimum(fmag / ref, 1.0)
+        ford_s = ford_strength_arr[face_idx] if ford_strength_arr is not None else river_ford_strength
         factor = 1.0 + w * (
-            river_ford_strength * (1.0 - align) - river_corridor_strength * nav * align
+            ford_s * (1.0 - align) - river_corridor_strength * nav * align
         )
         return np.where(fmag > 0.0, factor, 1.0)
 
