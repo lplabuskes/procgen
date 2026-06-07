@@ -12,13 +12,18 @@ realm stage is re-run, so iterating on population params is fast.
 |--------|-------:|---------|
 | Zipf slope | -1.0 | log(pop) vs log(rank); the rank-size rule |
 | Rank-size fit R² | ≳ 0.90 | how straight the log-log line is (the spec's validation signal) |
-| Primacy P1/P2 | ~2.0 | largest / second; poly-centric, not one megacity |
 | Gini | ~0.55 | settlement-size inequality |
 | Tier pyramid | villages ≫ towns > cities > capitals | central-place hierarchy |
+| Primacy P1/P2 | *informational* | n/a at world scale (see note) |
 
 These are ballpark anchors, not hard bounds — medieval urban systems
 varied by region and were often somewhat flatter than a pure Zipf line.
 Use the *trend* across tuning sessions, not a single number.
+
+**Primacy is informational, not a target.** P1/P2 ≈ 2.0 assumes a single
+integrated urban system. A whole-globe map is poly-centric — several
+comparable regional capitals (~4-7) — so P1/P2 naturally runs ~1.3-1.5.
+Measure primacy *per realm* once polities group hinterlands into kingdoms.
 
 ## Run History (averaged across seeds in run)
 
@@ -26,11 +31,15 @@ Use the *trend* across tuning sessions, not a single number.
 |------|-------|--:|-----------:|---:|------:|-----:|-----:|-------------------|--------|
 | 2026-06-06 | 42 | 614 | -0.79 | 0.88 | 1.33 | 0.09 | 0.49 | 6 / 22 / 247 / 339 | trade_w=1.50 cull=0.005 hinter_max=40 hinter_infl=8.0 passes=2 |
 | 2026-06-06 | 42 137 999 | 566 | -0.83 | 0.86 | 1.16 | 0.11 | 0.50 | 6 / 22 / 235 / 304 | trade_w=1.50 cull=0.005 hinter_max=40 hinter_infl=8.0 passes=2 |
+| 2026-06-07 | 42 137 999 | 316 | -0.84 | 0.91 | 1.49 | 0.16 | 0.51 | 4 / 18 / 141 / 152 | vil_thr=0.20 vil_excl=5 town_excl=6 trade_w=1.50 cull=0.005 hinter_max=40 hinter_infl=8.0 |
+| 2026-06-07 | 42 137 999 | 177 | -1.17 | 0.96 | 1.13 | 0.41 | 0.76 | 5 / 6 / 14 / 152 | vil_thr=0.20 vil_excl=5 town_excl=6 trade_w=1.50 cull=0.005 hinter_max=40 hinter_infl=8.0 hinter_reach=15 |
+| 2026-06-07 | 42 137 999 | 292 | -0.96 | 0.96 | 1.28 | 0.26 | 0.63 | 5 / 11 / 36 / 241 | vil_thr=0.20 vil_excl=5 town_excl=6 trade_w=1.50 cull=0.005 hinter_max=40 hinter_infl=8.0 hinter_reach=40 |
+| 2026-06-07 | 42 137 999 | 292 | -0.96 | 0.96 | 1.28 | 0.26 | 0.63 | 5 / 11 / 36 / 241 | vil_thr=0.20 vil_excl=5 town_excl=6 trade_w=1.50 cull=0.005 hinter_max=40 hinter_infl=8.0 hinter_reach=40 |
 
 ## Per-Seed Detail (latest run)
 
 | Seed | n | Zipf slope | R² | P1/P2 | top4 | Gini | cap/city/town/vil |
 |------|--:|-----------:|---:|------:|-----:|-----:|-------------------|
-| 42 | 614 | -0.79 | 0.88 | 1.33 | 0.09 | 0.49 | 6 / 22 / 247 / 339 |
-| 137 | 248 | -0.87 | 0.85 | 1.12 | 0.16 | 0.50 | 4 / 19 / 136 / 89 |
-| 999 | 836 | -0.83 | 0.87 | 1.01 | 0.08 | 0.50 | 7 / 24 / 321 / 484 |
+| 42 | 295 | -0.95 | 0.97 | 1.21 | 0.28 | 0.65 | 5 / 8 / 35 / 247 |
+| 137 | 134 | -1.00 | 0.95 | 1.51 | 0.33 | 0.62 | 2 / 9 / 20 / 103 |
+| 999 | 448 | -0.92 | 0.96 | 1.13 | 0.18 | 0.62 | 7 / 16 / 53 / 372 |

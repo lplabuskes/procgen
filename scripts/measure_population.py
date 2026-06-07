@@ -26,9 +26,13 @@ compare the new row in scripts/results/population_results.md against the anchors
 High-medieval Europe reference (shape only, rough — see notes in the .md):
     Zipf slope (log pop vs log rank):   ≈ -1.0   (rank-size rule)
     Rank-size fit R²:                   ≳ 0.90   (line is reasonably straight)
-    Primacy P1/P2:                      ≈ 2.0    (poly-centric, not one megacity)
     Gini of settlement sizes:           ≈ 0.55
     Tier hierarchy:                     steep pyramid — villages ≫ towns > cities > capitals
+    Primacy P1/P2:                      informational only at world scale. A whole-
+                                        globe map is poly-centric (several comparable
+                                        regional capitals), so P1/P2 runs ~1.3-1.5, not
+                                        the ~2.0 of a single integrated urban system.
+                                        Measure primacy per-realm once polities exist.
 """
 from __future__ import annotations
 
@@ -60,10 +64,11 @@ CACHE_DIR = Path(__file__).parent.parent / "saved_worlds"
 # Rough shape anchors for a high-medieval European city/region system. These are
 # ballpark targets, not hard bounds — the point is to watch the trend across
 # parameter-tuning sessions, not to hit a single number.
+# primacy_p1_p2 is intentionally absent: at whole-globe (multi-realm) scale the
+# system is poly-centric, so P1/P2 is reported as informational, not a target.
 MEDIEVAL_REF = {
     "zipf_slope": -1.0,
     "zipf_r2": 0.90,
-    "primacy_p1_p2": 2.0,
     "gini": 0.55,
 }
 
@@ -194,10 +199,11 @@ def print_table(rows: list[dict]) -> None:
     line("n_settlements",   "n_settlements",        None, 0)
     line("Zipf slope",      "zipf_slope",           "zipf_slope")
     line("Zipf fit R²",     "zipf_r2",              "zipf_r2")
-    line("primacy P1/P2",   "primacy_p1_p2",        "primacy_p1_p2")
-    line("top-4 share",     "top4_share",           None)
     line("Gini",            "gini",                 "gini")
+    line("top-4 share",     "top4_share",           None)
+    line("primacy P1/P2*",  "primacy_p1_p2",        None)
     line("pop max/median",  "pop_max_over_median",  None)
+    print("  * primacy is informational at world scale (poly-centric, multi-realm).")
 
     # Tier-count pyramid (Capital / City / Town / Village).
     print(f"\n{'tier counts (cap/city/town/village)':<22}")
@@ -232,12 +238,14 @@ def _save_history(history: list) -> None:
 
 def _params_summary(rp: RealmParams) -> str:
     pp = rp.population
+    sd = rp.seeder
     return (
-        f"trade_w={pp.trade_weight:.2f} "
-        f"cull={pp.min_pop_fraction:.3f} "
+        f"vil_thr={sd.tier3.score_threshold:.2f} vil_excl={sd.tier3.exclusion_radius:.0f} "
+        f"town_excl={sd.tier2.exclusion_radius:.0f} "
+        f"trade_w={pp.trade_weight:.2f} cull={pp.min_pop_fraction:.3f} "
         f"hinter_max={pp.hinterland_max_distance:.0f} "
         f"hinter_infl={pp.hinterland_influence_scale:.1f} "
-        f"passes={pp.relaxation_passes}"
+        f"hinter_reach={pp.hinterland_reach_scale:.0f}"
     )
 
 
@@ -266,13 +274,18 @@ def _update_markdown(history: list) -> None:
         "|--------|-------:|---------|",
         "| Zipf slope | -1.0 | log(pop) vs log(rank); the rank-size rule |",
         "| Rank-size fit R² | ≳ 0.90 | how straight the log-log line is (the spec's validation signal) |",
-        "| Primacy P1/P2 | ~2.0 | largest / second; poly-centric, not one megacity |",
         "| Gini | ~0.55 | settlement-size inequality |",
         "| Tier pyramid | villages ≫ towns > cities > capitals | central-place hierarchy |",
+        "| Primacy P1/P2 | *informational* | n/a at world scale (see note) |",
         "",
         "These are ballpark anchors, not hard bounds — medieval urban systems",
         "varied by region and were often somewhat flatter than a pure Zipf line.",
         "Use the *trend* across tuning sessions, not a single number.",
+        "",
+        "**Primacy is informational, not a target.** P1/P2 ≈ 2.0 assumes a single",
+        "integrated urban system. A whole-globe map is poly-centric — several",
+        "comparable regional capitals (~4-7) — so P1/P2 naturally runs ~1.3-1.5.",
+        "Measure primacy *per realm* once polities group hinterlands into kingdoms.",
         "",
         "## Run History (averaged across seeds in run)",
         "",

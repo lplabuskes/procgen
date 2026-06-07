@@ -207,11 +207,12 @@ class TradeSpawnParams:
 
 @paramclass
 class PopulationParams:
-    relaxation_passes: int = _f(2, label="Relaxation passes", min=1, max=5)
+    relaxation_passes: int = _f(4, label="Relaxation passes", min=1, max=5)
     trade_weight: float = _f(1.5, label="Trade wealth weight", min=0.0, max=5.0)
     min_pop_fraction: float = _f(0.005, label="Min pop fraction (cull)", min=0.0, max=0.1)
     hinterland_max_distance: float = _f(40.0, label="Hinterland max distance", min=5.0, max=200.0)
     hinterland_influence_scale: float = _f(8.0, label="Hinterland influence scale", min=0.5, max=30.0)
+    hinterland_reach_scale: float = _f(40.0, label="Hinterland reach scale (∝ catchment radius)", min=1.0, max=1000.0)
     trade_spawn: TradeSpawnParams = field(
         default_factory=TradeSpawnParams, metadata={"label": "Trade-spawn settlements"}
     )
@@ -563,64 +564,10 @@ class RealmStage(Stage):
                     fids = _positions_to_face_ids(positions, centroids)
                     good_sources.extend(zip(fids.tolist(), abundances.tolist()))
 
-        self.trade_result = compute_trade_network(
-            mesh,
-            self.settlements,
-            good_sources,
-            edge_costs,
-            ~is_water,   # land_passable
-            sea_edge_costs,
-            sea_passable,
-            port_cost=tp.port_cost,
-            river_switch_cost=tp.river_switch_cost,
-            demand_penalty=tp.demand_penalty,
-            flow_decay=tp.flow_decay,
-            hub_flow_quantile=tp.hub_flow_quantile,
-        )
-
-        ctx.report(
-            f"Initial trade done: {len(self.trade_result.routes)} route segments, "
-            f"{self.trade_result.hub_mask.sum()} hub faces."
-        )
-
-        # ── Trade-driven settlement spawning ─────────────────────────────────
-        ctx.report("Spawning trade-driven settlements…")
         pp = p.population
         tsp = pp.trade_spawn
-        new_settlements = spawn_trade_settlements(
-            n,
-            self.settlements,
-            self.trade_result.face_flow,
-            suitability,
-            is_water,
-            cost_graph,
-            centroids,
-            tier_configs,
-            hub_flow_quantile=tsp.hub_flow_quantile,
-            hub_min_suitability=tsp.hub_min_suitability,
-            hub_exclusion=tsp.hub_exclusion,
-            waypoint_min_cost=tsp.waypoint_min_cost,
-            waypoint_min_suitability=tsp.waypoint_min_suitability,
-            waypoint_exclusion=tsp.waypoint_exclusion,
-        )
-        if new_settlements:
-            self.settlements = self.settlements + new_settlements
-            ctx.report(
-                f"Trade-spawn: added {len(new_settlements)} settlements "
-                f"({len(self.settlements)} total)."
-            )
-
-        # ── Population & Calibration ─────────────────────────────────────────
-        ctx.report("Computing hinterland assignment…")
         face_areas = np.asarray(mesh.face_areas, dtype=np.float64)
-        shares, self.hinterland = compute_hinterland_shares(
-            n, self.settlements, cost_graph,
-            max_distance=pp.hinterland_max_distance,
-            influence_scale=pp.hinterland_influence_scale,
-        )
-        carrying_cap = compute_carrying_capacity(shares, fertility, face_areas)
 
-        # Closure to recompute trade with updated settlement demands.
         def _compute_trade(settlements, settlement_demands=None):
             return compute_trade_network(
                 mesh,
@@ -638,38 +585,80 @@ class RealmStage(Stage):
                 settlement_demands=settlement_demands,
             )
 
-        current_flow = self.trade_result.face_flow.astype(np.float64)
+        self.trade_result = _compute_trade(self.settlements)
+        ctx.report(
+            f"Initial trade done: {len(self.trade_result.routes)} route segments, "
+            f"{self.trade_result.hub_mask.sum()} hub faces."
+        )
+
+        # ── Population & Calibration relaxation loop ──────────────────────────
         n_passes = max(1, int(pp.relaxation_passes))
         population = np.zeros(len(self.settlements), dtype=np.float64)
 
         for pass_idx in range(n_passes):
-            trade_wealth = compute_trade_wealth(self.settlements, current_flow)
+            ctx.report(f"Relaxation pass {pass_idx + 1}/{n_passes}…")
+
+            # Spawn trade-driven settlements from current flow.
+            new_settlements = spawn_trade_settlements(
+                n,
+                self.settlements,
+                self.trade_result.face_flow,
+                suitability,
+                is_water,
+                cost_graph,
+                centroids,
+                tier_configs,
+                hub_flow_quantile=tsp.hub_flow_quantile,
+                hub_min_suitability=tsp.hub_min_suitability,
+                hub_exclusion=tsp.hub_exclusion,
+                waypoint_min_cost=tsp.waypoint_min_cost,
+                waypoint_min_suitability=tsp.waypoint_min_suitability,
+                waypoint_exclusion=tsp.waypoint_exclusion,
+            )
+            if new_settlements:
+                self.settlements = self.settlements + new_settlements
+                ctx.report(f"  Trade-spawn: +{len(new_settlements)} ({len(self.settlements)} total).")
+
+            # Assign hinterlands and carrying capacity.
+            shares, self.hinterland = compute_hinterland_shares(
+                n, self.settlements, cost_graph,
+                max_distance=pp.hinterland_max_distance,
+                influence_scale=pp.hinterland_influence_scale,
+                reach_scale=pp.hinterland_reach_scale,
+            )
+            carrying_cap = compute_carrying_capacity(shares, fertility, face_areas)
+
+            # Compute population.
+            trade_wealth = compute_trade_wealth(
+                self.settlements, self.trade_result.face_flow.astype(np.float64),
+            )
             population = compute_population(
                 carrying_cap, trade_wealth, trade_weight=pp.trade_weight,
             )
-            if pass_idx < n_passes - 1:
-                max_p = float(population.max())
-                norm_demands = population / max_p if max_p > 0 else np.ones_like(population)
-                self.trade_result = _compute_trade(self.settlements, settlement_demands=norm_demands)
-                current_flow = self.trade_result.face_flow.astype(np.float64)
-                ctx.report(f"Population relaxation pass {pass_idx + 1}/{n_passes} done.")
 
-        # Cull, then stamp final population on surviving settlements.
-        self.settlements, population = cull_settlements(
-            self.settlements, population, min_pop_fraction=pp.min_pop_fraction,
-        )
+            # Cull weak settlements.
+            self.settlements, population = cull_settlements(
+                self.settlements, population, min_pop_fraction=pp.min_pop_fraction,
+            )
+            ctx.report(f"  {len(self.settlements)} settlements after cull.")
+
+            # Recompute trade with population-weighted demands for next pass.
+            max_p = float(population.max())
+            norm_demands = population / max_p if max_p > 0 else np.ones_like(population)
+            self.trade_result = _compute_trade(self.settlements, settlement_demands=norm_demands)
+
         self.settlements = apply_population_to_settlements(self.settlements, population)
         self.population = population
 
-        # Recompute hinterland (display owner) for the culled settlement list.
+        # Final hinterland for the surviving settlement list.
         _shares, self.hinterland = compute_hinterland_shares(
             n, self.settlements, cost_graph,
             max_distance=pp.hinterland_max_distance,
             influence_scale=pp.hinterland_influence_scale,
+            reach_scale=pp.hinterland_reach_scale,
         )
 
-        # Run one final trade pass with the culled settlement list so routes
-        # reflect the final geography.
+        # Final clean trade pass (no demand weighting) so routes reflect final geography.
         if self.settlements:
             self.trade_result = _compute_trade(self.settlements)
 
@@ -677,10 +666,11 @@ class RealmStage(Stage):
         TRADE_FLOW.write(mesh, self.trade_result.face_flow)
         mesh.apply_metadata_channel("is_trade_hub", self.trade_result.hub_mask)
 
-        # Per-face population = population of owning settlement (0 if unassigned).
+        # Per-face population = population of settlement (0 if no settlement).
+        # Will add a second value for total population including rural areas
         pop_arr = np.zeros(n, dtype=np.float64)
         for k, s in enumerate(self.settlements):
-            pop_arr[self.hinterland == k] = population[k]
+            pop_arr[s.face_id] = population[k]
         POPULATION.write(mesh, pop_arr)
         HINTERLAND_ID.write(mesh, self.hinterland.tolist())
 
@@ -800,9 +790,9 @@ class RealmPipeline(Pipeline):
             if tier is not None and int(tier) >= 0:
                 t = int(tier)
                 parts.append(TIER_NAMES[min(t, len(TIER_NAMES) - 1)])
-            pop = meta.get("population")
-            if pop is not None and float(pop) > 0:
-                parts.append(f"Pop: {float(pop):.3g}")
+                pop = meta.get("population")
+                if pop is not None and float(pop) > 0:
+                    parts.append(f"Pop: {float(pop):.3g}")
             if parts:
                 cur = window._status_label.text()
                 fragment = "  ".join(parts)
