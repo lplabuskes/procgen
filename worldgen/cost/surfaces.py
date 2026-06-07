@@ -108,6 +108,9 @@ class CostSurfaces:
     sea_base_cost: np.ndarray
     sea_passable: np.ndarray
     strait_mask: np.ndarray
+    # (N, 3) float32 coast-blended mean wind direction; zero near coasts. None
+    # if the climate stage ran without wind data.
+    wind_dir: np.ndarray | None = None
 
 
 # ── Land ─────────────────────────────────────────────────────────────────────
@@ -527,6 +530,76 @@ def compute_ice_penalty(
     return penalty.astype(np.float32)
 
 
+def compute_wind_sea_modifier(
+    winds: np.ndarray,
+    sea_distance_to_coast_km: np.ndarray,
+    *,
+    optimal_speed: float = 7.0,
+    speed_width: float = 5.0,
+    penalty_strength: float = 1.0,
+    coast_blend_km: float = 300.0,
+) -> np.ndarray:
+    """Per-face sea cost multiplier from wind speed — a bell curve centred on optimal.
+
+    Too little wind leaves sailing ships becalmed; too much is dangerous. Cost
+    is lowest at ``optimal_speed`` m/s and rises symmetrically on either side with
+    a Gaussian envelope of width ``speed_width``. The full penalty at zero /
+    extreme wind is ``1 + penalty_strength``.
+
+    The effect is blended to 1.0 within ``coast_blend_km`` of the coast so
+    near-shore routes stay unaffected by open-ocean wind conditions.
+
+    Args:
+        winds: (N, K, 3) float32 — seasonal wind velocity vectors (m/s).
+        sea_distance_to_coast_km: (N,) float — distance from each face to the
+            nearest coast (from :func:`compute_sea_distance_to_coast`).
+
+    Returns:
+        (N,) float32 multiplier ≥ 1.0; 1.0 at optimal speed or near the coast.
+    """
+    winds_f = np.asarray(winds, dtype=np.float64)           # (N, K, 3)
+    speed = np.linalg.norm(winds_f, axis=2).mean(axis=1)   # (N,) m/s, mean across seasons
+    w = max(float(speed_width), 1e-9)
+    bell = 1.0 + float(penalty_strength) * (
+        1.0 - np.exp(-0.5 * ((speed - float(optimal_speed)) / w) ** 2)
+    )
+    coast_dist = np.asarray(sea_distance_to_coast_km, dtype=np.float64)
+    coast_factor = np.clip(coast_dist / max(float(coast_blend_km), 1.0), 0.0, 1.0)
+    modifier = 1.0 + coast_factor * (bell - 1.0)
+    return modifier.astype(np.float32)
+
+
+def compute_wind_mean_dir(
+    winds: np.ndarray,
+    sea_distance_to_coast_km: np.ndarray,
+    *,
+    coast_blend_km: float = 300.0,
+) -> np.ndarray:
+    """Coast-blended mean wind direction for use in directional edge costs.
+
+    Returns the mean wind vector (averaged across seasons) normalised to unit
+    length, then scaled by the same coast-blend factor used in
+    :func:`compute_wind_sea_modifier` so that faces near the shore contribute
+    no directional bias to their edges — coastal routes stay viable regardless
+    of offshore wind patterns.
+
+    Args:
+        winds: (N, K, 3) float32 — seasonal wind velocity vectors (m/s).
+        sea_distance_to_coast_km: (N,) float.
+
+    Returns:
+        (N, 3) float32 unit-direction vectors scaled by coastal blend weight
+        (magnitude approaches 0 near the coast).
+    """
+    winds_f = np.asarray(winds, dtype=np.float64)
+    mean_wind = winds_f.mean(axis=1)                         # (N, 3)
+    mag = np.linalg.norm(mean_wind, axis=1, keepdims=True)   # (N, 1)
+    unit_dir = np.divide(mean_wind, mag, out=np.zeros_like(mean_wind), where=mag > 1e-12)
+    coast_dist = np.asarray(sea_distance_to_coast_km, dtype=np.float64)
+    coast_factor = np.clip(coast_dist / max(float(coast_blend_km), 1.0), 0.0, 1.0)
+    return (unit_dir * coast_factor[:, None]).astype(np.float32)
+
+
 def compute_sea_cost(
     is_water: np.ndarray,
     sea_distance_to_coast_km: np.ndarray,
@@ -534,14 +607,21 @@ def compute_sea_cost(
     *,
     params: "SeaCostParams",
     temperature_tex: np.ndarray | None = None,
+    winds: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Per-face sea cost: coastal water cheapest, open ocean dearer, straits discounted.
 
     Cost ramps linearly from ``params.coastal_cost`` at the shore to
     ``params.open_ocean_cost`` at ``params.open_ocean_distance_km`` and beyond;
     strait faces are multiplied by ``params.strait_discount`` (near-free
-    crossings). If ``temperature_tex`` is provided, an ice penalty is applied
-    based on the fraction of seasons below freezing.
+    crossings). Optional modifiers stacked on top in order:
+
+    * **Ice**: fraction of frozen seasons × ``ice_penalty_strength`` — polar seas.
+    * **Wind speed**: bell-curve centred on ``wind_optimal_speed`` m/s — too calm
+      or too stormy costs more; blended to 1.0 near the coast.
+
+    The directional wind term (cheap downwind, dear upwind) is *not* applied here
+    — it lives in :func:`build_sea_edge_costs` because it depends on travel direction.
 
     Pass distances from :func:`compute_sea_distance_to_coast` (open-ocean → coast),
     *not* the climate stage's land → ocean ``distance_to_coast``.
@@ -571,6 +651,17 @@ def compute_sea_cost(
         )
         cost = cost * ice_penalty
 
+    if winds is not None:
+        wind_mod = compute_wind_sea_modifier(
+            winds,
+            sea_distance_to_coast_km,
+            optimal_speed=p.wind_optimal_speed,
+            speed_width=p.wind_speed_width,
+            penalty_strength=p.wind_penalty_strength,
+            coast_blend_km=p.wind_coast_blend_km,
+        )
+        cost = cost * wind_mod
+
     cost = np.where(sea_passable, cost, 0.0).astype(np.float32)
     return cost, sea_passable
 
@@ -579,12 +670,30 @@ def build_sea_edge_costs(
     mesh,
     sea_cost: np.ndarray,
     sea_passable: np.ndarray,
+    *,
+    wind_dir: np.ndarray | None = None,
+    direction_strength: float = 0.4,
 ) -> List[np.ndarray]:
-    """Per-edge sea cost = mean of endpoint sea costs; ``inf`` if either is land.
+    """Per-edge sea cost with optional directional wind term.
 
-    Isotropic (no analogue to the river term), so this is a thin averaging pass
-    over the ocean sub-graph. Mirrors ``mesh.face_adjacency`` like
-    :func:`build_land_edge_costs`.
+    Base cost = mean of endpoint face costs (``inf`` if either is land).
+
+    If ``wind_dir`` is provided (coast-blended mean wind direction from
+    :func:`compute_wind_mean_dir`), a directional multiplier is applied:
+    travelling *downwind* (step aligned with the wind) is cheaper; travelling
+    *upwind* is costlier. The multiplier ranges in
+    ``[1 - direction_strength, 1 + direction_strength]`` and is averaged over
+    the wind directions at both endpoint faces. Coastal faces carry near-zero
+    ``wind_dir`` magnitude (pre-blended by the caller) so the directional term
+    naturally fades near the shore.
+
+    Args:
+        wind_dir: (N, 3) float32 — coast-blended unit wind direction per face
+            (magnitude 0 near coast). ``None`` disables the directional term.
+        direction_strength: fractional cost change per unit of wind alignment
+            (0 = no effect, 1 = free downwind / double upwind).
+
+    Mirrors ``mesh.face_adjacency`` like :func:`build_land_edge_costs`.
     """
     src, dst, indptr = _flatten_adjacency(mesh)
     n = len(mesh.faces)
@@ -594,5 +703,16 @@ def build_sea_edge_costs(
     sea_passable = np.asarray(sea_passable, dtype=bool)
     passable_edge = sea_passable[src] & sea_passable[dst]
     base = 0.5 * (sea_cost[src] + sea_cost[dst])
+
+    if wind_dir is not None and direction_strength > 0.0:
+        centroids = np.asarray(mesh.face_centroids, dtype=np.float64)
+        step = centroids[dst] - centroids[src]
+        step_hat = step / np.maximum(np.linalg.norm(step, axis=1, keepdims=True), 1e-12)
+        wdir = np.asarray(wind_dir, dtype=np.float64)
+        mean_wdir = 0.5 * (wdir[src] + wdir[dst])            # (E, 3)
+        align = (step_hat * mean_wdir).sum(axis=1)            # (E,) ∈ [-1, 1]
+        dir_mult = np.clip(1.0 - direction_strength * align, 1e-3, None)
+        base = base * dir_mult
+
     flat = np.where(passable_edge, base, np.inf)
     return [flat[indptr[i]:indptr[i + 1]].copy() for i in range(n)]

@@ -34,16 +34,16 @@ from worldgen.geology.display import OCEAN_COLOR
 @paramclass
 class PolityParams:
     capital_min_separation: float = _f(
-        60.0, label="Capital min separation (cost-dist)", min=5.0, max=400.0
+        20.0, label="Capital min separation (cost-dist)", min=5.0, max=400.0
     )
     capital_min_pop_fraction: float = _f(
-        0.15, label="Capital min pop fraction", min=0.0, max=1.0
+        0.1, label="Capital min pop fraction", min=0.0, max=1.0
     )
     power_bias: float = _f(
         25.0, label="Power territory bias (cost-dist / e-fold)", min=0.0, max=200.0
     )
     growth_max_reach: float = _f(
-        250.0, label="Territory max reach (cost-dist)", min=10.0, max=1000.0
+        200.0, label="Territory max reach (cost-dist)", min=10.0, max=1000.0
     )
     tension_barrier_scale: float = _f(
         3.0, label="Tension barrier scale (edge cost)", min=0.1, max=50.0

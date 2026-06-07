@@ -23,6 +23,7 @@ from worldgen.cost.surfaces import (
     compute_river_navigability,
     compute_sea_cost,
     compute_sea_distance_to_coast,
+    compute_wind_mean_dir,
     detect_straits,
     navigable_river_mask,
 )
@@ -63,6 +64,11 @@ class SeaCostParams:
     )
     ice_penalty_strength: float = _f(5.0, label="Ice penalty strength", min=0.0, max=20.0)
     ice_freeze_threshold: float = _f(0.0, label="Ice freeze threshold (°C)", min=-10.0, max=10.0)
+    wind_optimal_speed: float = _f(7.0, label="Wind optimal speed (m/s)", min=0.0, max=30.0)
+    wind_speed_width: float = _f(5.0, label="Wind speed bell width (m/s)", min=0.5, max=20.0)
+    wind_penalty_strength: float = _f(1.0, label="Wind speed penalty", min=0.0, max=5.0)
+    wind_direction_strength: float = _f(0.4, label="Wind direction strength", min=0.0, max=1.0)
+    wind_coast_blend_km: float = _f(300.0, label="Wind coast blend (km)", min=0.0, max=2000.0)
 
 
 @paramclass
@@ -172,6 +178,13 @@ class CostBuilder(Stage):
         _report("Computing sea distance to coast…")
         sea_dist = compute_sea_distance_to_coast(mesh, is_sailable)
 
+        # Read winds from the climate stage if available: [(centroids, (N,3)), ...]
+        winds_arr: Optional[np.ndarray] = None
+        wind_dir: Optional[np.ndarray] = None
+        winds_feature = ctx.world.get_feature("winds")
+        if winds_feature is not None:
+            winds_arr = np.stack([w for _, w in winds_feature], axis=1)  # (N, K, 3)
+
         _report("Computing sea cost…")
         sea_cost, sea_passable = compute_sea_cost(
             is_sailable,
@@ -179,7 +192,15 @@ class CostBuilder(Stage):
             strait_mask,
             params=p.sea,
             temperature_tex=temperature_tex,
+            winds=winds_arr,
         )
+
+        if winds_arr is not None:
+            wind_dir = compute_wind_mean_dir(
+                winds_arr,
+                sea_dist,
+                coast_blend_km=p.sea.wind_coast_blend_km,
+            )
 
         surfaces = CostSurfaces(
             land_base_cost=land_cost,
@@ -190,6 +211,7 @@ class CostBuilder(Stage):
             sea_base_cost=sea_cost,
             sea_passable=sea_passable,
             strait_mask=strait_mask,
+            wind_dir=wind_dir,
         )
         self.surfaces = surfaces
 
@@ -270,7 +292,7 @@ class CostBuilder(Stage):
         cs = self.surfaces
         if cs is None:
             return {}
-        return {
+        out = {
             "cost_land_base_cost": cs.land_base_cost.astype(np.float32),
             "cost_land_passable": cs.land_passable.astype(np.bool_),
             "cost_river_flow_dir": cs.river_flow_dir.astype(np.float32),
@@ -280,6 +302,9 @@ class CostBuilder(Stage):
             "cost_sea_passable": cs.sea_passable.astype(np.bool_),
             "cost_strait_mask": cs.strait_mask.astype(np.bool_),
         }
+        if cs.wind_dir is not None:
+            out["cost_wind_dir"] = cs.wind_dir.astype(np.float32)
+        return out
 
     def load(self, arrays: Mapping[str, np.ndarray], ctx: BuildContext) -> None:
         if "cost_land_base_cost" not in arrays:
@@ -295,6 +320,7 @@ class CostBuilder(Stage):
             sea_base_cost=arrays["cost_sea_base_cost"],
             sea_passable=arrays["cost_sea_passable"],
             strait_mask=arrays["cost_strait_mask"],
+            wind_dir=arrays.get("cost_wind_dir"),
         )
         self.surfaces = cs
         COST_SURFACES.write(ctx.world, cs)

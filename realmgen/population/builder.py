@@ -184,7 +184,10 @@ class PopulationStage(Stage):
                 cs.river_flow_mag,
                 cs.river_navigability,
             )
-            sea_edge_costs = build_sea_edge_costs(mesh, cs.sea_base_cost, cs.sea_passable)
+            sea_edge_costs = build_sea_edge_costs(
+                mesh, cs.sea_base_cost, cs.sea_passable,
+                wind_dir=cs.wind_dir,
+            )
             sea_passable = cs.sea_passable
         else:
             base = np.where(is_water, np.inf, 1.5)
