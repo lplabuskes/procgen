@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from viz.mapview.antimeridian import find_ideal_antimeridian
 from viz.mapview.projections import ALL_PROJECTIONS, RobinsonProjection, Projection
 
 if TYPE_CHECKING:
@@ -58,21 +59,29 @@ def _bary_in_fan(
     return None
 
 
-def _split_at_antimeridian(face_ecef: np.ndarray, face_uv: Optional[np.ndarray] = None) -> list:
+def _split_at_antimeridian(
+    face_ecef: np.ndarray,
+    face_uv: Optional[np.ndarray] = None,
+    cut_lon: float = np.pi,
+) -> list:
     """
     face_ecef: (N, 3) ECEF unit-sphere vertices of a polygon.
     face_uv: optional (N, 2) per-vertex UV coordinates.
+    cut_lon: longitude (radians) to treat as the antimeridian.  Default π keeps
+             the standard ±180° split; any other value rotates the cut.
 
-    Without face_uv: returns list of (M, 2) [lon, lat] arrays.
+    Without face_uv: returns list of (M, 2) [lon, lat] arrays in the shifted
+    coordinate frame where cut_lon maps to ±π.
     With face_uv: returns list of ((M, 2) lonlat, (M, 2) uv) tuples.
-    Single-element list if no antimeridian crossing; two elements if crossing.
+    Single-element list if no crossing; two elements if crossing.
     """
     n = len(face_ecef)
     lon = np.arctan2(face_ecef[:, 1], face_ecef[:, 0])
     lat = np.arcsin(np.clip(face_ecef[:, 2], -1.0, 1.0))
 
-    # An edge crosses the antimeridian when the direct lon difference exceeds π,
-    # meaning the shorter geodesic path goes via ±180°.
+    # Shift so cut_lon maps to ±π.  With cut_lon=π this is the identity on (-π, π].
+    lon = ((lon - cut_lon) % (2.0 * np.pi)) - np.pi
+
     crosses = np.array(
         [abs(lon[i] - lon[(i + 1) % n]) > np.pi for i in range(n)], dtype=bool
     )
@@ -81,8 +90,12 @@ def _split_at_antimeridian(face_ecef: np.ndarray, face_uv: Optional[np.ndarray] 
         lonlat = np.column_stack([lon, lat])
         return [lonlat] if face_uv is None else [(lonlat, face_uv)]
 
-    east_ll: list[list[float]] = []   # lon in [0, π]
-    west_ll: list[list[float]] = []   # lon in [-π, 0)
+    # Precompute the ECEF direction of the cut meridian for crossing interpolation.
+    cos_cut = np.cos(cut_lon)
+    sin_cut = np.sin(cut_lon)
+
+    east_ll: list[list[float]] = []   # shifted lon in [0, π]
+    west_ll: list[list[float]] = []   # shifted lon in [-π, 0)
     east_uv_pts: list[np.ndarray] = []
     west_uv_pts: list[np.ndarray] = []
 
@@ -98,9 +111,12 @@ def _split_at_antimeridian(face_ecef: np.ndarray, face_uv: Optional[np.ndarray] 
                 west_uv_pts.append(face_uv[i])
 
         if crosses[i]:
-            # Find where the edge crosses y=0 (the antimeridian half-plane x<0, y=0)
+            # Find t where the edge a→b crosses the cut meridian.
+            # The cut meridian satisfies: p_y * cos_cut - p_x * sin_cut = 0.
             a, b = face_ecef[i], face_ecef[(i + 1) % n]
-            t = -a[1] / (b[1] - a[1])
+            fa = a[1] * cos_cut - a[0] * sin_cut
+            fb = b[1] * cos_cut - b[0] * sin_cut
+            t = -fa / (fb - fa)
             p = a + t * (b - a)
             p = p / np.linalg.norm(p)
             p_lat = float(np.arcsin(np.clip(p[2], -1.0, 1.0)))
@@ -135,6 +151,7 @@ class MapWidget(QWidget):
         super().__init__(parent)
         self._mesh: Optional[PolygonMesh] = None
         self._projection: Projection = RobinsonProjection()
+        self._antimeridian: float = np.pi  # cut longitude; updated per mesh
 
         # Lon/lat polygons after antimeridian split (coordinate-system-agnostic)
         self._faces_lonlat: list[np.ndarray] = []  # each (N, 2)
@@ -167,8 +184,13 @@ class MapWidget(QWidget):
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         self.setMouseTracking(True)
 
+    def _shift_lon(self, lon: np.ndarray) -> np.ndarray:
+        """Shift longitudes into the frame where self._antimeridian maps to ±π."""
+        return ((lon - self._antimeridian) % (2.0 * np.pi)) - np.pi
+
     def set_mesh(self, mesh: PolygonMesh) -> None:
         self._mesh = mesh
+        self._antimeridian = find_ideal_antimeridian(mesh)
         self._rebuild_faces()
         self._rebuild_textures()
         self._rebuild_colors()
@@ -224,16 +246,17 @@ class MapWidget(QWidget):
         vertex_uvs: Optional[list[np.ndarray]] = None
         if has_textures:
             *_, vertex_uvs = self._mesh.face_tangent_frames()
+        cut = self._antimeridian
         for i, face in enumerate(self._mesh.faces):
             face_ecef = verts[np.array(face, dtype=np.int32)]
             if has_textures:
                 assert vertex_uvs is not None
-                for poly_lonlat, poly_uv in _split_at_antimeridian(face_ecef, vertex_uvs[i]):
+                for poly_lonlat, poly_uv in _split_at_antimeridian(face_ecef, vertex_uvs[i], cut):
                     self._faces_lonlat.append(poly_lonlat)
                     self._face_src.append(i)
                     self._face_uvs.append(poly_uv)
             else:
-                for poly_lonlat in _split_at_antimeridian(face_ecef):
+                for poly_lonlat in _split_at_antimeridian(face_ecef, cut_lon=cut):
                     self._faces_lonlat.append(poly_lonlat)
                     self._face_src.append(i)
 
@@ -400,7 +423,7 @@ class MapWidget(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(QColor(80, 140, 220, 255)))
         for verts in polygons:
-            for lonlat in _split_at_antimeridian(verts):
+            for lonlat in _split_at_antimeridian(verts, cut_lon=self._antimeridian):
                 proj = self._projection.project_lonlat(lonlat)
                 sx = (proj[:, 0] - cx) * scale_x + W * 0.5
                 sy = -(proj[:, 1] - cy) * scale_y + H * 0.5
@@ -446,9 +469,9 @@ class MapWidget(QWidget):
         end_positions = positions + step[:, None] * unit
         end_positions /= np.maximum(np.linalg.norm(end_positions, axis=1, keepdims=True), 1e-12)
 
-        lon0 = np.arctan2(positions[:, 1], positions[:, 0])
+        lon0 = self._shift_lon(np.arctan2(positions[:, 1], positions[:, 0]))
         lat0 = np.arcsin(np.clip(positions[:, 2], -1.0, 1.0))
-        lon1 = np.arctan2(end_positions[:, 1], end_positions[:, 0])
+        lon1 = self._shift_lon(np.arctan2(end_positions[:, 1], end_positions[:, 0]))
         lat1 = np.arcsin(np.clip(end_positions[:, 2], -1.0, 1.0))
 
         proj0 = self._projection.project_lonlat(np.column_stack([lon0, lat0]))
@@ -531,9 +554,9 @@ class MapWidget(QWidget):
         end_positions = positions + step * unit
         end_positions /= np.maximum(np.linalg.norm(end_positions, axis=1, keepdims=True), 1e-12)
 
-        lon0 = np.arctan2(positions[:, 1], positions[:, 0])
+        lon0 = self._shift_lon(np.arctan2(positions[:, 1], positions[:, 0]))
         lat0 = np.arcsin(np.clip(positions[:, 2], -1.0, 1.0))
-        lon1 = np.arctan2(end_positions[:, 1], end_positions[:, 0])
+        lon1 = self._shift_lon(np.arctan2(end_positions[:, 1], end_positions[:, 0]))
         lat1 = np.arcsin(np.clip(end_positions[:, 2], -1.0, 1.0))
 
         proj0 = self._projection.project_lonlat(np.column_stack([lon0, lat0]))
@@ -566,7 +589,7 @@ class MapWidget(QWidget):
         positions = self._globe.get_feature("deltas")  # type: ignore[union-attr]
         if positions is None or len(positions) == 0:
             return
-        lon = np.arctan2(positions[:, 1], positions[:, 0])
+        lon = self._shift_lon(np.arctan2(positions[:, 1], positions[:, 0]))
         lat = np.arcsin(np.clip(positions[:, 2], -1.0, 1.0))
         proj = self._projection.project_lonlat(np.column_stack([lon, lat]))
         sx = (proj[:, 0] - cx) * scale_x + W * 0.5
@@ -589,7 +612,7 @@ class MapWidget(QWidget):
         positions = self._globe.get_feature("volcanoes")  # type: ignore[union-attr]
         if positions is None or len(positions) == 0:
             return
-        lon = np.arctan2(positions[:, 1], positions[:, 0])
+        lon = self._shift_lon(np.arctan2(positions[:, 1], positions[:, 0]))
         lat = np.arcsin(np.clip(positions[:, 2], -1.0, 1.0))
         proj = self._projection.project_lonlat(np.column_stack([lon, lat]))
         sx = (proj[:, 0] - cx) * scale_x + W * 0.5
@@ -616,7 +639,7 @@ class MapWidget(QWidget):
         positions, kinds, abundances = feature
         if len(positions) == 0:
             return
-        lon = np.arctan2(positions[:, 1], positions[:, 0])
+        lon = self._shift_lon(np.arctan2(positions[:, 1], positions[:, 0]))
         lat = np.arcsin(np.clip(positions[:, 2], -1.0, 1.0))
         proj = self._projection.project_lonlat(np.column_stack([lon, lat]))
         sx = (proj[:, 0] - cx) * scale_x + W * 0.5
@@ -661,7 +684,7 @@ class MapWidget(QWidget):
         positions, kinds, abundances = feature
         if len(positions) == 0:
             return
-        lon = np.arctan2(positions[:, 1], positions[:, 0])
+        lon = self._shift_lon(np.arctan2(positions[:, 1], positions[:, 0]))
         lat = np.arcsin(np.clip(positions[:, 2], -1.0, 1.0))
         proj = self._projection.project_lonlat(np.column_stack([lon, lat]))
         sx = (proj[:, 0] - cx) * scale_x + W * 0.5
@@ -719,9 +742,9 @@ class MapWidget(QWidget):
         active_pen: QPen | None = None
 
         for start_pos, end_pos, flow in routes:
-            lon0 = float(np.arctan2(start_pos[1], start_pos[0]))
+            lon0 = float(self._shift_lon(np.arctan2(start_pos[1], start_pos[0])))
             lat0 = float(np.arcsin(np.clip(start_pos[2], -1.0, 1.0)))
-            lon1 = float(np.arctan2(end_pos[1], end_pos[0]))
+            lon1 = float(self._shift_lon(np.arctan2(end_pos[1], end_pos[0])))
             lat1 = float(np.arcsin(np.clip(end_pos[2], -1.0, 1.0)))
 
             delta = lon1 - lon0
@@ -784,7 +807,7 @@ class MapWidget(QWidget):
         tiers = np.array(
             [population_display_tier(float(p), max_pop) for p in pops], dtype=np.int32
         )
-        lon = np.arctan2(positions[:, 1], positions[:, 0])
+        lon = self._shift_lon(np.arctan2(positions[:, 1], positions[:, 0]))
         lat = np.arcsin(np.clip(positions[:, 2], -1.0, 1.0))
         proj = self._projection.project_lonlat(np.column_stack([lon, lat]))
         sx = (proj[:, 0] - cx) * scale_x + W * 0.5
@@ -850,7 +873,7 @@ class MapWidget(QWidget):
             in_lake = entry[2] if len(entry) > 2 else None
             if len(positions) < 2:
                 continue
-            lon = np.arctan2(positions[:, 1], positions[:, 0])
+            lon = self._shift_lon(np.arctan2(positions[:, 1], positions[:, 0]))
             lat = np.arcsin(np.clip(positions[:, 2], -1.0, 1.0))
             lonlat = np.column_stack([lon, lat])
             proj = self._projection.project_lonlat(lonlat)
