@@ -152,7 +152,7 @@ class TestSeedSettlements:
         is_water = np.array([True, True, True, False, False])
         setts = seed_settlements(
             score, is_water, _equatorial_centroids(n), g,
-            tier_configs=[(0.5, 0.0, 0.0, 1.0)],
+            tier_configs=[(0.5, 0.0, 1.0)],
         )
         for s in setts:
             assert not is_water[s.face_id], f"face {s.face_id} is water"
@@ -166,7 +166,7 @@ class TestSeedSettlements:
         is_water = np.zeros(n, dtype=bool)
         setts = seed_settlements(
             score, is_water, _equatorial_centroids(n), g,
-            tier_configs=[(0.0, 0.0, 0.0, 1.0)],  # exclusion_radius=0 → only the placed face is forbidden
+            tier_configs=[(0.0, 0.0, 1.0)],  # exclusion_radius=0 → only the placed face is forbidden
         )
         assert setts[0].face_id == 1  # index 1 has score 0.9
 
@@ -180,7 +180,7 @@ class TestSeedSettlements:
         is_water = np.zeros(n, dtype=bool)
         setts = seed_settlements(
             score, is_water, _equatorial_centroids(n), g,
-            tier_configs=[(1.5, 0.0, 0.0, 1.0)],
+            tier_configs=[(1.5, 0.0, 1.0)],
         )
         placed = {s.face_id for s in setts}
         assert 2 in placed
@@ -195,7 +195,7 @@ class TestSeedSettlements:
         is_water = np.zeros(n, dtype=bool)
         setts = seed_settlements(
             score, is_water, _equatorial_centroids(n), g,
-            tier_configs=[(50.0, 0.5, 0.0, 1.0), (50.0, 0.1, 4.0, 0.6)],
+            tier_configs=[(50.0, 0.5, 1.0), (50.0, 0.1, 0.5)],
         )
         tiers = [s.tier for s in setts]
         assert 0 in tiers
@@ -208,7 +208,7 @@ class TestSeedSettlements:
         is_water = np.zeros(n, dtype=bool)
         setts = seed_settlements(
             score, is_water, _equatorial_centroids(n), g,
-            tier_configs=[(0.0, 0.45, 0.0, 1.0)],
+            tier_configs=[(0.0, 0.45, 1.0)],
         )
         for s in setts:
             assert s.score >= 0.45, f"score {s.score} below threshold"
@@ -221,7 +221,7 @@ class TestSeedSettlements:
             np.ones(n, dtype=bool),
             _equatorial_centroids(n),
             g,
-            tier_configs=[(5.0, 0.0, 0.0, 1.0)],
+            tier_configs=[(5.0, 0.0, 1.0)],
         )
         assert setts == []
 
@@ -243,7 +243,7 @@ class TestSeedSettlements:
         score = rng.random(n).astype(np.float32)
         is_water = rng.random(n) < 0.3
         g = _uniform_graph(n, cost=1.0)
-        tier_configs = [(3.0, 0.3, 0.0, 1.0), (1.5, 0.1, 4.0, 0.6)]
+        tier_configs = [(3.0, 0.3, 1.0), (1.5, 0.1, 0.5)]
         c = _equatorial_centroids(n)
         s1 = seed_settlements(score, is_water, c, g, tier_configs)
         s2 = seed_settlements(score, is_water, c, g, tier_configs)
@@ -259,7 +259,7 @@ class TestSeedSettlements:
         is_water = np.zeros(n, dtype=bool)
         setts = seed_settlements(
             score, is_water, _equatorial_centroids(n), g,
-            tier_configs=[(100.0, 0.5, 0.0, 1.0), (100.0, 0.1, 4.0, 0.6)],
+            tier_configs=[(100.0, 0.5, 1.0), (100.0, 0.1, 0.5)],
         )
         # Only one settlement in tier 0; tier 1 finds the whole graph forbidden.
         tier0 = [s for s in setts if s.tier == 0]
@@ -274,7 +274,7 @@ class TestSeedSettlements:
         score = np.array([0.8, 0.5, 0.3], dtype=np.float32)
         setts = seed_settlements(
             score, np.zeros(n, dtype=bool), c, g,
-            tier_configs=[(0.0, 0.0, 0.0, 1.0)],
+            tier_configs=[(0.0, 0.0, 1.0)],
         )
         assert len(setts) >= 1
         fid = setts[0].face_id

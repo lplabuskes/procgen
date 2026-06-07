@@ -24,27 +24,26 @@ from worldgen.cost.channels import COST_SURFACES, IS_WATER
 class TierParams:
     exclusion_radius: float = _f(20.0, label="Exclusion radius (cost-dist)", min=0.5, max=100.0)
     score_threshold: float = _f(0.30, label="Min score to place", min=0.0, max=1.0)
-    influence: float = _f(0.0, label="Territory influence (lower = wider)", min=0.0, max=30.0)
-    demand: float = _f(1.0, label="Trade demand weight", min=0.0, max=2.0)
+    initial_population: float = _f(0.5, label="Initial population seed", min=0.0, max=1.0)
 
 
 @paramclass
 class SeederParams:
     situational_weight: float = _f(0.40, label="Situational value weight", min=0.0, max=1.0)
     tier0: TierParams = field(
-        default_factory=lambda: TierParams(exclusion_radius=25.0, score_threshold=0.45, influence=0.0, demand=1.0),
+        default_factory=lambda: TierParams(exclusion_radius=25.0, score_threshold=0.45, initial_population=1.0),
         metadata={"label": "Capitals"},
     )
     tier1: TierParams = field(
-        default_factory=lambda: TierParams(exclusion_radius=12.0, score_threshold=0.28, influence=4.0, demand=0.6),
+        default_factory=lambda: TierParams(exclusion_radius=12.0, score_threshold=0.28, initial_population=0.5),
         metadata={"label": "Cities"},
     )
     tier2: TierParams = field(
-        default_factory=lambda: TierParams(exclusion_radius=6.0, score_threshold=0.2, influence=9.0, demand=0.3),
+        default_factory=lambda: TierParams(exclusion_radius=6.0, score_threshold=0.2, initial_population=0.2),
         metadata={"label": "Towns"},
     )
     tier3: TierParams = field(
-        default_factory=lambda: TierParams(exclusion_radius=3.0, score_threshold=0.1, influence=15.0, demand=0.12),
+        default_factory=lambda: TierParams(exclusion_radius=3.0, score_threshold=0.1, initial_population=0.08),
         metadata={"label": "Villages"},
     )
 
@@ -98,10 +97,10 @@ class PlacementStage(Stage):
         )
         cost_graph = build_cost_graph(mesh.face_adjacency, edge_costs)
         tier_configs = [
-            (p.tier0.exclusion_radius, p.tier0.score_threshold, p.tier0.influence, p.tier0.demand),
-            (p.tier1.exclusion_radius, p.tier1.score_threshold, p.tier1.influence, p.tier1.demand),
-            (p.tier2.exclusion_radius, p.tier2.score_threshold, p.tier2.influence, p.tier2.demand),
-            (p.tier3.exclusion_radius, p.tier3.score_threshold, p.tier3.influence, p.tier3.demand),
+            (p.tier0.exclusion_radius, p.tier0.score_threshold, p.tier0.initial_population),
+            (p.tier1.exclusion_radius, p.tier1.score_threshold, p.tier1.initial_population),
+            (p.tier2.exclusion_radius, p.tier2.score_threshold, p.tier2.initial_population),
+            (p.tier3.exclusion_radius, p.tier3.score_threshold, p.tier3.initial_population),
         ]
 
         ctx.report("Seeding settlements…")

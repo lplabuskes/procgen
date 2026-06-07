@@ -48,16 +48,10 @@ def _line_graph(n: int, cost: float = 1.0) -> csr_matrix:
     return csr_matrix((n, n), dtype=np.float64)
 
 
-def _settlement(
-    face_id: int, tier: int = 0, pop: float = 0.0,
-    influence: float = 0.0, demand: float = 1.0,
-) -> Settlement:
+def _settlement(face_id: int, tier: int = 0, pop: float = 0.0) -> Settlement:
     pos = np.zeros(3, dtype=np.float64)
     pos[0] = 1.0
-    return Settlement(
-        face_id=face_id, position=pos, tier=tier, score=0.5,
-        influence=influence, demand=demand, population=pop,
-    )
+    return Settlement(face_id=face_id, position=pos, tier=tier, score=0.5, population=pop)
 
 
 # ── compute_hinterland_shares ───────────────────────────────────────────────────
@@ -97,31 +91,30 @@ class TestHinterlandShares:
         assert (owner >= 0).all()
 
     def test_higher_pull_claims_contested_middle(self):
-        # Line 0—1—2—3—4.  s0 (influence 0, pull 1) vs s1 (influence 8).
-        # At the middle face 2 both are equidistant, so the higher-pull s0 wins
-        # and claims more faces overall.  The pull gap is large enough that s0
-        # even out-bids s1 at s1's own face — but s1 keeps a positive share.
+        # Line 0—1—2—3—4.  s0 (high pop, high pull) vs s1 (low pop, low pull).
+        # At the middle face 2 both are equidistant; the higher-pop s0 wins and
+        # claims more faces.  s1 still keeps a positive share at its own face.
         n = 5
         g = _line_graph(n, cost=1.0)
-        s0 = _settlement(0, influence=0.0)
-        s1 = _settlement(4, influence=8.0)
+        s0 = _settlement(0, pop=1.0)
+        s1 = _settlement(4, pop=0.05)
         shares, owner = compute_hinterland_shares(
-            n, [s0, s1], g, max_distance=10.0, influence_scale=8.0,
+            n, [s0, s1], g, max_distance=10.0,
         )
         assert owner[2] == 0  # s0 wins the equidistant middle face
         assert int((owner == 0).sum()) > int((owner == 1).sum())
         assert shares[1, 4] > 0.0  # s1 retains a share even where out-bid
 
     def test_low_pull_settlement_keeps_a_share(self):
-        # The key feature: a low-pull village beside a high-pull city still
+        # The key feature: a low-pop village beside a high-pop city still
         # captures a nonzero share of nearby land, even though the city is the
         # displayed owner of those faces.
         n = 3
         g = _line_graph(n)  # city — — village  (0 — 1 — 2)
-        city = _settlement(0, influence=0.0)     # pull = 1
-        village = _settlement(2, influence=15.0)  # pull = exp(-15/8) ≈ 0.15
+        city = _settlement(0, pop=1.0)     # high pull
+        village = _settlement(2, pop=0.05)  # low pull
         shares, owner = compute_hinterland_shares(
-            n, [city, village], g, max_distance=10.0, influence_scale=8.0,
+            n, [city, village], g, max_distance=10.0,
         )
         # City out-bids the village even at the village's own face …
         assert owner[2] == 0

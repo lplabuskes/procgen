@@ -81,7 +81,7 @@ def spawn_trade_settlements(
         is_water: ``(N,)`` bool — ocean ∪ lake mask; no settlement placed here.
         cost_graph: ``(N, N)`` land-cost CSR matrix (used undirected).
         centroids: ``(N, 3)`` unit-sphere face centroids.
-        tier_configs: ``[(exclusion, threshold, influence, demand), ...]`` —
+        tier_configs: ``[(exclusion, threshold, initial_population), ...]`` —
             index 2 = town (used for hubs), index 3 = village (used for
             waypoints).
         hub_spawn_quantile: percentile of positive face flows above which a
@@ -117,8 +117,7 @@ def spawn_trade_settlements(
 
     # ── Hub spawning ──────────────────────────────────────────────────────────
 
-    hub_influence = float(tier_configs[2][2])
-    hub_demand = float(tier_configs[2][3])
+    hub_initial_pop = float(tier_configs[2][2])
 
     positive_flow = flow[flow > 0.0]
     if positive_flow.size > 0:
@@ -142,8 +141,7 @@ def spawn_trade_settlements(
                 position=centroids[int(face_id)].copy(),
                 tier=2,
                 score=float(flow[int(face_id)]),
-                influence=hub_influence,
-                demand=hub_demand,
+                population=hub_initial_pop,
             ))
             # Expand forbidden zone to prevent clustering of new hubs.
             d_from_hub = sp_dijkstra(
@@ -154,8 +152,7 @@ def spawn_trade_settlements(
 
     # ── Waypoint spawning ─────────────────────────────────────────────────────
 
-    wp_influence = float(tier_configs[3][2])
-    wp_demand = float(tier_configs[3][3])
+    wp_initial_pop = float(tier_configs[3][2])
 
     combined = settlements + spawned
     if len(combined) < 2:
@@ -215,8 +212,7 @@ def spawn_trade_settlements(
             position=centroids[int(best)].copy(),
             tier=3,
             score=float(suit[int(best)]),
-            influence=wp_influence,
-            demand=wp_demand,
+            population=wp_initial_pop,
         ))
         # Mark vicinity of the new waypoint as forbidden for future waypoints.
         d_from_wp = sp_dijkstra(

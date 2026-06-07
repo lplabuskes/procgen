@@ -40,45 +40,48 @@ def compute_hinterland_shares(
     cost_graph: csr_matrix,
     *,
     max_distance: float,
-    influence_scale: float = 8.0,
-    reach_scale: float = float("inf"),
+    influence_scale: float = 1.5,
+    reach_scale: float = 3.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Soft hinterland assignment — fractional capacity shares + display owner.
 
     Runs undirected multi-source Dijkstra from all settlement nodes, then has
     each settlement *k* bid for every face *i*::
 
+        influence[k]    = log(max_pop / pop[k])          # 0 for top settlement
         reach[k]        = max_distance * exp(-influence[k] / reach_scale)
         proximity[k, i] = relu(1 - dist[k, i] / reach[k])       # in [0, 1]
         pull[k]         = exp(-influence[k] / influence_scale)   # in (0, 1]
         bid[k, i]       = proximity[k, i] * pull[k]
 
-    ``max_distance`` caps the largest market area (a capital at ``influence`` 0).
-    ``reach_scale`` is the e-folding that shrinks the *catchment radius* of
-    lower-order centres, so higher-order centres draw capacity from a
-    proportionally larger market area (central-place theory) instead of every
-    settlement bidding out to the same uniform radius.  ``reach_scale = inf``
-    recovers the original uniform-``max_distance`` behaviour.  ``pull`` then
-    weights more important settlements on *contested* faces (capitals at
-    ``influence`` 0 pull hardest).  Each face's carrying capacity is divided
-    among its bidders in proportion to their bids, so a low-pull village next to
-    a high-pull city still claims a nonzero share of the nearby land (and can
-    survive culling) even when the city is the displayed owner of those faces.
+    ``influence`` is derived from each settlement's current population: the
+    highest-population settlement gets influence 0 (widest reach, strongest
+    pull) and lower-population settlements get proportionally larger influence.
+    This means hinterland priority emerges from population rather than from
+    fixed tier labels.
+
+    ``max_distance`` caps the largest market area (the top-population settlement
+    at influence 0).  ``reach_scale`` controls how steeply catchment radius
+    shrinks with influence; smaller values give more differentiation.
+    ``influence_scale`` controls how steeply pull decays; smaller values
+    widen the pull gap between large and small settlements.
+
+    Each face's carrying capacity is divided among its bidders in proportion to
+    their bids, so a low-pull village next to a high-pull city still claims a
+    nonzero share of the nearby land (and can survive culling).
 
     Args:
         n_faces: number of mesh faces (N).
         settlements: list of :class:`~realmgen.placement.types.Settlement`
-            (reads ``face_id`` and ``influence``).
+            (reads ``face_id`` and ``population``).
         cost_graph: (N, N) directed land-cost CSR matrix — used undirected. Pass
-            a water-permeable variant (water passable at a steep finite cost) to
-            let coastal settlements claim a limited band of ocean/lake for their
-            fishing grounds; pass a land-only graph to keep hinterlands on land.
+            a water-permeable variant to let coastal settlements claim a limited
+            band of ocean/lake for fishing grounds.
         max_distance: hard cap (cost-distance) on the widest hinterland reach.
-        influence_scale: e-folding scale mapping ``influence`` to ``pull``;
-            larger flattens the importance gap between tiers.
-        reach_scale: e-folding scale mapping ``influence`` to *catchment radius*;
-            smaller gives higher-order centres a larger market area. ``inf``
-            (default) makes every settlement reach the full ``max_distance``.
+        influence_scale: e-folding scale for ``pull``; smaller widens the pull
+            gap between settlements.
+        reach_scale: e-folding scale for catchment radius; smaller gives higher-
+            population centres a proportionally larger market area.
 
     Returns:
         ``(shares, owner)`` where:
@@ -96,7 +99,13 @@ def compute_hinterland_shares(
         )
 
     s_nodes = np.array([s.face_id for s in settlements], dtype=np.int32)
-    influence = np.array([s.influence for s in settlements], dtype=np.float64)
+    populations = np.array([s.population for s in settlements], dtype=np.float64)
+    max_pop = float(populations.max())
+    if max_pop <= 0.0:
+        influence = np.zeros_like(populations)
+    else:
+        min_pop = max_pop * 1e-3
+        influence = np.log(max_pop / np.maximum(populations, min_pop))
 
     # dist[k, i] = undirected cost-distance from settlements[k] to face i
     # (+inf where unreachable).

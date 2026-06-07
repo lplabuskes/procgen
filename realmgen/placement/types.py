@@ -42,17 +42,14 @@ def population_display_tier(population: float, max_pop: float) -> int:
 class Settlement:
     """A placed settlement on the land face graph.
 
-    ``tier`` is assigned by the seeder and serves only as a seeding label
-    (it governs exclusion radius and seeds ``influence`` / ``demand``).
-    No downstream computation reads ``tier`` — all generation operates on
-    ``influence``, ``demand``, and ``population``.  Display tiers are derived
-    at render time via :func:`population_display_tier`.
+    ``tier`` is assigned by the seeder as a label only (it governs exclusion
+    radius and seeds ``population``).  No downstream computation reads ``tier``
+    directly — all generation operates on ``population``.  Display tiers are
+    derived at render time via :func:`population_display_tier`.
     """
 
     face_id: int
     position: np.ndarray   # (3,) unit-sphere centroid of the face
     tier: int              # seeding label: 0=capital, 1=city, 2=town, 3=village
     score: float           # combined placement score at seeding time
-    influence: float = 0.0   # hinterland priority offset; lower = wider territory
-    demand: float = 1.0      # trade demand weight (seeded from tier)
-    population: float = 0.0  # set by Population & Calibration stage
+    population: float = 0.0  # seeded from tier initial_population; updated by PopulationStage

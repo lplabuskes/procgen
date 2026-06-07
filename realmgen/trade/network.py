@@ -306,11 +306,11 @@ def compute_trade_network(
 
     # Normalised demand weights per settlement.
     # settlement_demands (population-proportional, from relaxation passes) takes
-    # priority over each settlement's own demand field.
+    # priority; without it, all settlements are treated as equally attractive.
     if settlement_demands is not None:
         raw_demands = np.asarray(settlement_demands, dtype=np.float64)
     else:
-        raw_demands = np.array([s.demand for s in settlements], dtype=np.float64)
+        raw_demands = np.ones(len(settlements), dtype=np.float64)
     max_d = raw_demands.max()
     norm_demands = raw_demands / max_d if max_d > 0 else raw_demands.copy()
     settlement_nodes = [s.face_id for s in settlements]

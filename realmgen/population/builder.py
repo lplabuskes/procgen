@@ -4,6 +4,7 @@ Params and stage for the third phase of the realm pipeline.
 """
 from __future__ import annotations
 
+import dataclasses
 from typing import Optional
 
 import numpy as np
@@ -59,8 +60,8 @@ class PopulationParams:
     trade_weight: float = _f(1.5, label="Trade wealth weight", min=0.0, max=5.0)
     min_pop_fraction: float = _f(0.012, label="Min pop fraction (cull)", min=0.0, max=0.1)
     hinterland_max_distance: float = _f(40.0, label="Hinterland max distance", min=5.0, max=200.0)
-    hinterland_influence_scale: float = _f(8.0, label="Hinterland influence scale", min=0.5, max=30.0)
-    hinterland_reach_scale: float = _f(45.0, label="Hinterland reach scale (∝ catchment radius)", min=1.0, max=1000.0)
+    hinterland_influence_scale: float = _f(1.5, label="Hinterland influence scale", min=0.1, max=10.0)
+    hinterland_reach_scale: float = _f(3.0, label="Hinterland reach scale", min=0.1, max=30.0)
     hinterland_water_cost: float = _f(20.0, label="Hinterland water step cost (coastal fishing reach)", min=0.0, max=200.0)
     trade_spawn: TradeSpawnParams = field(
         default_factory=TradeSpawnParams, metadata={"label": "Trade-spawn settlements"}
@@ -220,12 +221,12 @@ class PopulationStage(Stage):
                     for fid, kind, ab in zip(fids.tolist(), kinds.tolist(), abundances.tolist()):
                         good_sources.append((fid, ab, int(kind) + type_offset))
 
-        # Tier configs reused by trade-spawn for influence/demand of new settlements.
+        # Tier configs reused by trade-spawn for initial_population of new settlements.
         tier_configs = [
-            (sp.tier0.exclusion_radius, sp.tier0.score_threshold, sp.tier0.influence, sp.tier0.demand),
-            (sp.tier1.exclusion_radius, sp.tier1.score_threshold, sp.tier1.influence, sp.tier1.demand),
-            (sp.tier2.exclusion_radius, sp.tier2.score_threshold, sp.tier2.influence, sp.tier2.demand),
-            (sp.tier3.exclusion_radius, sp.tier3.score_threshold, sp.tier3.influence, sp.tier3.demand),
+            (sp.tier0.exclusion_radius, sp.tier0.score_threshold, sp.tier0.initial_population),
+            (sp.tier1.exclusion_radius, sp.tier1.score_threshold, sp.tier1.initial_population),
+            (sp.tier2.exclusion_radius, sp.tier2.score_threshold, sp.tier2.initial_population),
+            (sp.tier3.exclusion_radius, sp.tier3.score_threshold, sp.tier3.initial_population),
         ]
 
         def _compute_trade(settlements, settlement_demands=None):
@@ -239,8 +240,11 @@ class PopulationStage(Stage):
                 settlement_demands=settlement_demands,
             )
 
+        # Initialize population from seeded initial values (set at placement time).
+        population = np.array([s.population for s in self.settlements], dtype=np.float64)
+
         ctx.report("Building trade network…")
-        self.trade_result = _compute_trade(self.settlements)
+        self.trade_result = _compute_trade(self.settlements, settlement_demands=population)
         ctx.report(
             f"Initial trade done: {len(self.trade_result.routes)} route segments, "
             f"{self.trade_result.hub_mask.sum()} hub faces."
@@ -249,10 +253,15 @@ class PopulationStage(Stage):
         # ── Relaxation loop ──────────────────────────────────────────────────
         tsp = pp.trade_spawn
         n_passes = max(1, int(pp.relaxation_passes))
-        population = np.zeros(len(self.settlements), dtype=np.float64)
 
         for pass_idx in range(n_passes):
             ctx.report(f"Relaxation pass {pass_idx + 1}/{n_passes}…")
+
+            # Sync s.population so hinterland sees the latest values this pass.
+            self.settlements = [
+                dataclasses.replace(s, population=float(p))
+                for s, p in zip(self.settlements, population)
+            ]
 
             new_settlements = spawn_trade_settlements(
                 n, self.settlements, self.trade_result.face_flow,
@@ -266,6 +275,8 @@ class PopulationStage(Stage):
             )
             if new_settlements:
                 self.settlements = self.settlements + new_settlements
+                new_pops = np.array([s.population for s in new_settlements], dtype=np.float64)
+                population = np.concatenate([population, new_pops])
                 ctx.report(f"  Trade-spawn: +{len(new_settlements)} ({len(self.settlements)} total).")
 
             shares, self.hinterland = compute_hinterland_shares(
@@ -300,7 +311,7 @@ class PopulationStage(Stage):
             reach_scale=pp.hinterland_reach_scale,
         )
         if self.settlements:
-            self.trade_result = _compute_trade(self.settlements)
+            self.trade_result = _compute_trade(self.settlements, settlement_demands=population)
 
         # ── Write per-face metadata ──────────────────────────────────────────
         TRADE_FLOW.write(mesh, self.trade_result.face_flow)
