@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 paramclass = dataclass
 
 
-def param_field(default, *, label: str, min: float, max: float,
+def param_field(default, *, label: str, min: float | int, max: float | int,
                 step: float | None = None, hidden: bool = False):
     """Declare a leaf param field with UI dialog metadata."""
     meta: dict = {"label": label, "min": min, "max": max}

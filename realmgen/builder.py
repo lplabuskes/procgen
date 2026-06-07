@@ -1,10 +1,11 @@
 """Realm pipeline — human-geography layer over a fully-built world.
 
-``RealmPipeline`` composes three stages:
+``RealmPipeline`` composes four stages:
 
 1. :class:`~realmgen.scoring.builder.ScoringStage` — suitability + situational value
 2. :class:`~realmgen.placement.builder.PlacementStage` — settlement seeding
 3. :class:`~realmgen.population.builder.PopulationStage` — trade + population calibration
+4. :class:`~realmgen.polity.builder.PolityStage` — territory growth + border tension
 
 Usage::
 
@@ -25,6 +26,7 @@ from core.pipeline import BuildContext, Pipeline
 from core.world import World
 from realmgen.placement.builder import PlacementStage, SeederParams
 from realmgen.placement.types import TIER_NAMES
+from realmgen.polity.builder import PolityParams, PolityStage
 from realmgen.population.builder import PopulationParams, PopulationStage, TradeParams
 from realmgen.scoring.builder import ScoringStage, SituationalValueParams, SuitabilityParams
 
@@ -49,19 +51,23 @@ class RealmParams:
     population: PopulationParams = field(
         default_factory=PopulationParams, metadata={"label": "Population"}
     )
+    polity: PolityParams = field(
+        default_factory=PolityParams, metadata={"label": "Polities"}
+    )
 
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
 
 
 class RealmPipeline(Pipeline):
-    """Three-stage pipeline for the human-geography layer.
+    """Four-stage pipeline for the human-geography layer.
 
     Stages in order: :class:`~realmgen.scoring.builder.ScoringStage` →
     :class:`~realmgen.placement.builder.PlacementStage` →
-    :class:`~realmgen.population.builder.PopulationStage`.  After
-    ``build(ctx)``, each stage stores its results as attributes;
-    ``apply_display`` wires all three into a ``MapWindow``.
+    :class:`~realmgen.population.builder.PopulationStage` →
+    :class:`~realmgen.polity.builder.PolityStage`.  After ``build(ctx)``, each
+    stage stores its results as attributes; ``apply_display`` wires all of them
+    into a ``MapWindow``.
     """
 
     def __init__(self, params: RealmParams | None = None) -> None:
@@ -70,7 +76,13 @@ class RealmPipeline(Pipeline):
         self.scoring_stage = ScoringStage(p.suitability, p.situational)
         self.placement_stage = PlacementStage(p.seeder)
         self.population_stage = PopulationStage(p.trade, p.population, p.seeder)
-        super().__init__([self.scoring_stage, self.placement_stage, self.population_stage])
+        self.polity_stage = PolityStage(p.polity)
+        super().__init__([
+            self.scoring_stage,
+            self.placement_stage,
+            self.population_stage,
+            self.polity_stage,
+        ])
         self.world: Optional[World] = None
 
     @property
@@ -131,6 +143,12 @@ class RealmPipeline(Pipeline):
                 pop = meta.get("population")
                 if pop is not None and float(pop) > 0:
                     parts.append(f"Pop: {float(pop):.3g}")
+            pid = meta.get("polity_id")
+            if pid is not None and int(pid) >= 0:
+                parts.append(f"Polity {int(pid)}")
+                tension = meta.get("border_tension")
+                if tension is not None and float(tension) > 0.01:
+                    parts.append(f"Tension: {float(tension):.2f}")
             if parts:
                 cur = window._status_label.text()
                 fragment = "  ".join(parts)
