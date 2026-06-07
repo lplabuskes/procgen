@@ -166,6 +166,25 @@ class SituationalValueWeightParams:
 
 
 @paramclass
+class SuitabilityParams:
+    water: WaterProximityParams = field(
+        default_factory=WaterProximityParams, metadata={"label": "Water proximity"}
+    )
+    climate: ClimateHabitabilityParams = field(
+        default_factory=ClimateHabitabilityParams, metadata={"label": "Climate"}
+    )
+    ruggedness: RuggednessParams = field(
+        default_factory=RuggednessParams, metadata={"label": "Ruggedness"}
+    )
+    resource: ResourceAccessParams = field(
+        default_factory=ResourceAccessParams, metadata={"label": "Resource access"}
+    )
+    weights: SuitabilityWeightParams = field(
+        default_factory=SuitabilityWeightParams, metadata={"label": "Weights"}
+    )
+
+
+@paramclass
 class SituationalValueParams:
     harbor: HarborQualityParams = field(
         default_factory=HarborQualityParams, metadata={"label": "Harbor quality"}
@@ -190,14 +209,13 @@ class TierParams:
 class TradeParams:
     port_cost: float = _f(5.0, label="Port cost", min=0.0, max=50.0)
     river_switch_cost: float = _f(0.0, label="River switch cost", min=0.0, max=10.0)
-    demand_penalty: float = _f(5.0, label="Demand penalty", min=0.0, max=20.0)
     flow_decay: float = _f(0.05, label="Flow decay", min=0.001, max=1.0)
-    hub_flow_quantile: float = _f(0.90, label="Hub quantile", min=0.5, max=0.99)
+    hub_display_quantile: float = _f(0.90, label="Hub display quantile", min=0.5, max=0.99)
 
 
 @paramclass
 class TradeSpawnParams:
-    hub_flow_quantile: float = _f(0.97, label="Hub flow quantile", min=0.80, max=1.00)
+    hub_spawn_quantile: float = _f(0.97, label="Hub spawn quantile", min=0.80, max=1.00)
     hub_min_suitability: float = _f(0.15, label="Hub min suitability", min=0.0, max=0.5)
     hub_exclusion: float = _f(5.0, label="Hub exclusion radius", min=1.0, max=30.0)
     waypoint_min_cost: float = _f(30.0, label="Waypoint min cost dist", min=5.0, max=200.0)
@@ -241,20 +259,8 @@ class SeederParams:
 
 @paramclass
 class RealmParams:
-    water: WaterProximityParams = field(
-        default_factory=WaterProximityParams, metadata={"label": "Water proximity"}
-    )
-    climate: ClimateHabitabilityParams = field(
-        default_factory=ClimateHabitabilityParams, metadata={"label": "Climate"}
-    )
-    ruggedness: RuggednessParams = field(
-        default_factory=RuggednessParams, metadata={"label": "Ruggedness"}
-    )
-    resource: ResourceAccessParams = field(
-        default_factory=ResourceAccessParams, metadata={"label": "Resource access"}
-    )
-    weights: SuitabilityWeightParams = field(
-        default_factory=SuitabilityWeightParams, metadata={"label": "Weights"}
+    suitability: SuitabilityParams = field(
+        default_factory=SuitabilityParams, metadata={"label": "Suitability"}
     )
     situational: SituationalValueParams = field(
         default_factory=SituationalValueParams, metadata={"label": "Situational value"}
@@ -404,7 +410,7 @@ class RealmStage(Stage):
             mesh,
             freshwater_mask,
             dist_coast_km,
-            params=p.water,
+            params=p.suitability.water,
         )
 
         ctx.report("Computing climate habitability…")
@@ -412,15 +418,15 @@ class RealmStage(Stage):
             t_warmest,
             t_coldest,
             p_annual,
-            params=p.climate,
+            params=p.suitability.climate,
         )
 
         ctx.report("Computing resource access…")
         resource_score = compute_resource_proximity(
             mesh,
             resource_mask,
-            resource_decay=p.resource.decay,
-            resource_max_hops=p.resource.max_hops,
+            resource_decay=p.suitability.resource.decay,
+            resource_max_hops=p.suitability.resource.max_hops,
         )
 
         ctx.report("Combining suitability…")
@@ -430,12 +436,12 @@ class RealmStage(Stage):
             climate_score,
             fertility.astype(np.float32),
             resource_score,
-            params=p.weights,
+            params=p.suitability.weights,
         )
 
         ruggedness_mult = compute_ruggedness_penalty(
             elev_range,
-            penalty_scale_km=p.ruggedness.penalty_scale_km,
+            penalty_scale_km=p.suitability.ruggedness.penalty_scale_km,
         )
         suitability = (suitability * ruggedness_mult).astype(np.float32)
 
@@ -583,9 +589,8 @@ class RealmStage(Stage):
                 sea_passable,
                 port_cost=tp.port_cost,
                 river_switch_cost=tp.river_switch_cost,
-                demand_penalty=tp.demand_penalty,
                 flow_decay=tp.flow_decay,
-                hub_flow_quantile=tp.hub_flow_quantile,
+                hub_display_quantile=tp.hub_display_quantile,
                 settlement_demands=settlement_demands,
             )
 
@@ -612,7 +617,7 @@ class RealmStage(Stage):
                 cost_graph,
                 centroids,
                 tier_configs,
-                hub_flow_quantile=tsp.hub_flow_quantile,
+                hub_spawn_quantile=tsp.hub_spawn_quantile,
                 hub_min_suitability=tsp.hub_min_suitability,
                 hub_exclusion=tsp.hub_exclusion,
                 waypoint_min_cost=tsp.waypoint_min_cost,

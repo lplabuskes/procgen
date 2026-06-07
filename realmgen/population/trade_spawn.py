@@ -63,7 +63,7 @@ def spawn_trade_settlements(
     centroids: np.ndarray,
     tier_configs: list,
     *,
-    hub_flow_quantile: float = 0.97,
+    hub_spawn_quantile: float = 0.97,
     hub_min_suitability: float = 0.15,
     hub_exclusion: float = 5.0,
     waypoint_min_cost: float = 30.0,
@@ -84,7 +84,7 @@ def spawn_trade_settlements(
         tier_configs: ``[(exclusion, threshold, influence, demand), ...]`` —
             index 2 = town (used for hubs), index 3 = village (used for
             waypoints).
-        hub_flow_quantile: percentile of positive face flows above which a
+        hub_spawn_quantile: percentile of positive face flows above which a
             face is a hub candidate.
         hub_min_suitability: minimum suitability for hub placement.
         hub_exclusion: minimum cost-distance from any settlement to spawn a hub.
@@ -122,7 +122,7 @@ def spawn_trade_settlements(
 
     positive_flow = flow[flow > 0.0]
     if positive_flow.size > 0:
-        hub_threshold = float(np.quantile(positive_flow, hub_flow_quantile))
+        hub_threshold = float(np.quantile(positive_flow, hub_spawn_quantile))
 
         # Forbidden: water, or too close to any existing settlement.
         forbidden = water | (min_dist < hub_exclusion)

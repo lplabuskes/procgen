@@ -239,9 +239,8 @@ def compute_trade_network(
     port_cost: float = 5.0,
     river_switch_cost: float = 0.0,
     settlement_demands: np.ndarray | None = None,
-    demand_penalty: float = 5.0,
     flow_decay: float = 0.05,
-    hub_flow_quantile: float = 0.90,
+    hub_display_quantile: float = 0.90,
     min_display_flow: float | None = None,
     rarity_weights: dict | None = None,
 ) -> TradeResult:
@@ -279,13 +278,13 @@ def compute_trade_network(
             When provided, overrides each settlement's ``demand`` field — used
             by the population relaxation loop to substitute population-
             proportional demands.
-        demand_penalty: unused in two-phase model; kept for API compatibility.
         flow_decay: exponential decay factor applied to both phase-1 and
             phase-2 routes with increasing cost distance.
-        hub_flow_quantile: percentile of positive face flows above which a
-            face is flagged as a trade hub.
+        hub_display_quantile: percentile of positive face flows above which a
+            face is flagged as a trade hub for display.
         min_display_flow: minimum edge flow to include in the route list for
-            display; defaults to the median of all positive edge flows.
+            display; defaults to 0.0 (all positive-flow edges included — the
+            renderer's width calculation handles visual thinning).
         rarity_weights: per-type rarity multipliers; defaults to
             :data:`GOOD_RARITY_WEIGHTS`.  Unknown type IDs get weight 1.0.
 
@@ -416,17 +415,17 @@ def compute_trade_network(
 
     # Hub detection
     positive = face_flow[face_flow > 0.0]
-    hub_threshold = float(np.quantile(positive, hub_flow_quantile)) if positive.size > 0 else np.inf
+    hub_threshold = float(np.quantile(positive, hub_display_quantile)) if positive.size > 0 else np.inf
     hub_mask = face_flow >= hub_threshold
 
-    # Route segments for display
-    all_flows = np.array(list(edge_flow.values()), dtype=np.float64)
-    if min_display_flow is None:
-        min_display_flow = float(np.median(all_flows)) if all_flows.size > 0 else 0.0
+    # Route segments for display.
+    # min_display_flow=None includes all positive-flow edges; the renderer's
+    # per-segment width calculation already provides visual filtering.
+    threshold = float(min_display_flow) if min_display_flow is not None else 0.0
 
     routes = []
     for (a, b), flow in edge_flow.items():
-        if flow < min_display_flow:
+        if flow < threshold:
             continue
         routes.append((centroids[a % n].copy(), centroids[b % n].copy(), float(flow)))
 

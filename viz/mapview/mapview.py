@@ -724,14 +724,25 @@ class MapWidget(QWidget):
             lon1 = float(np.arctan2(end_pos[1], end_pos[0]))
             lat1 = float(np.arcsin(np.clip(end_pos[2], -1.0, 1.0)))
 
-            if abs(lon1 - lon0) > np.pi:
-                continue  # skip antimeridian-crossing segments
-
-            proj = self._projection.project_lonlat(
-                np.array([[lon0, lat0], [lon1, lat1]], dtype=np.float32)
-            )
-            sx = (proj[:, 0] - cx) * scale_x + W * 0.5
-            sy = -(proj[:, 1] - cy) * scale_y + H * 0.5
+            delta = lon1 - lon0
+            if delta > np.pi:
+                # lon0 near -π, lon1 near +π — split at antimeridian
+                t = (-np.pi - lon0) / (lon1 - 2 * np.pi - lon0)
+                lat_x = lat0 + t * (lat1 - lat0)
+                lonlat_pairs = [
+                    ((lon0, lat0), (-np.pi, lat_x)),
+                    ((np.pi, lat_x), (lon1, lat1)),
+                ]
+            elif delta < -np.pi:
+                # lon0 near +π, lon1 near -π — split at antimeridian
+                t = (np.pi - lon0) / (lon1 + 2 * np.pi - lon0)
+                lat_x = lat0 + t * (lat1 - lat0)
+                lonlat_pairs = [
+                    ((lon0, lat0), (np.pi, lat_x)),
+                    ((-np.pi, lat_x), (lon1, lat1)),
+                ]
+            else:
+                lonlat_pairs = [((lon0, lat0), (lon1, lat1))]
 
             w = (
                 min_width + (max_width - min_width) * (float(flow) / max_flow) ** 0.5
@@ -745,10 +756,16 @@ class MapWidget(QWidget):
                 painter.setPen(pen)
                 active_pen = pen
 
-            painter.drawLine(
-                QPointF(float(sx[0]), float(sy[0])),
-                QPointF(float(sx[1]), float(sy[1])),
-            )
+            for (a0, b0), (a1, b1) in lonlat_pairs:
+                proj = self._projection.project_lonlat(
+                    np.array([[a0, b0], [a1, b1]], dtype=np.float32)
+                )
+                sx = (proj[:, 0] - cx) * scale_x + W * 0.5
+                sy = -(proj[:, 1] - cy) * scale_y + H * 0.5
+                painter.drawLine(
+                    QPointF(float(sx[0]), float(sy[0])),
+                    QPointF(float(sx[1]), float(sy[1])),
+                )
 
     def _draw_settlements_overlay(
         self,
