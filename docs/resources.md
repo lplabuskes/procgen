@@ -23,7 +23,7 @@ Attaches face textures:
 - `"forest_density"` `(N,H,W,1) float32`
 - `"dominant_crop"` `(N,H,W,1) uint8`
 
-Writes per-face metadata: `fertility_mean`, `forest_density_mean`, `dominant_crop`. Stores `minerals` and `rare_bio` as `(positions, kinds, abundances)` 3-tuples for the globe builder to register as features.
+Writes per-face metadata: `fertility_mean`, `forest_density_mean`, `dominant_crop`. Stores `minerals` and `rare_bio` as `(positions, kinds, abundances)` 3-tuples and registers them directly as `"minerals"` and `"rare_bio"` globe features.
 
 ## Individual modules
 
@@ -31,9 +31,10 @@ Writes per-face metadata: `fertility_mean`, `forest_density_mean`, `dominant_cro
 - `face_elevation_range(elevation_tex) → (N,) float32 km` — per-face pixel elevation span as a ruggedness proxy (per-pixel slope is dominated by noise at default tex_size)
 - `face_hops_from_seeds(mesh, seed_mask, max_hops) → (N,) int32` — BFS hop count from any seed face; faces beyond `max_hops` get sentinel `max_hops+1`
 - `river_traversed_faces(rivers, n_faces)` / `lake_containing_faces(lake_mask_tex)` — seed masks for water-proximity BFS
+- `coastal_ocean_faces(mesh, is_ocean) → (N,) bool` — ocean faces adjacent to land, used as seeds for ocean depth BFS
 - `volcanic_faces(mesh, threshold)` — seed mask for volcanism-proximity BFS
 
-**`fertility.py`** — `compute_fertility()`: Multiplicative product of five per-face factors — climate (bell-curve in growing-season T and log-P), terrain (penalizes rugged faces by elevation range), water proximity (floodplain BFS hop-decay bonus), volcanism proximity (volcanic-soil BFS hop-decay bonus), and a biome LUT modifier — plus an optional per-pixel forest penalty. Per-face factors rasterized via vertex-averaged interpolation so adjacent faces blend continuously.
+**`fertility.py`** — `compute_fertility()`: Multiplicative product of five per-face factors — climate (bell-curve in growing-season T and log-P), terrain (penalizes rugged faces by elevation range), water proximity (floodplain BFS hop-decay bonus), volcanism proximity (volcanic-soil BFS hop-decay bonus), and a biome LUT modifier — plus an optional per-pixel forest penalty. Per-face factors rasterized via vertex-averaged interpolation so adjacent faces blend continuously. Also exports `compute_aquatic_fertility()` — a separate per-face scalar for ocean/lake faces, driven by SST (temperature), ocean depth hops (upwelling proxy), and lake river-proximity; the builder writes these values over ocean/lake pixels in the fertility texture so coastal fishing is captured in carrying capacity.
 
 **`forest.py`** — `compute_forest_density()`: Biome baseline × precipitation modulation (tanh centred on per-biome reference P) × treeline taper, plus a riparian bonus and a small per-pixel fBm simplex noise overlay. Per-face inputs rasterized before combining so biome boundaries blend continuously.
 
@@ -43,4 +44,4 @@ Writes per-face metadata: `fertility_mean`, `forest_density_mean`, `dominant_cro
 
 **`rare_bio.py`** — `place_rare_bio_resources()`: Ten rare biological resources (Spices, Tea, Silk, Ivory, Furs, Incense, Dyes, Amber, Rubber, Pearls) placed via narrow ecological criteria (biome, T_annual, P_annual, elevation, distance_to_coast) plus fBm noise. A global per-type cap enforces world-level rarity by keeping only the top-scoring candidates.
 
-**`display.py`**: Color schemes and texture builders for all five resource layers. Fertility and forest density use multi-stop gradients; crops and resources use categorical palettes. All schemes registered unconditionally (not gated on `debug`) since resources are world-building outputs.
+**`display.py`**: Color schemes and texture builders for all resource layers. Fertility and forest density use multi-stop gradients; crops and resources use categorical palettes. Registration gating: **Dominant Crop** and **Minerals** are always shown; **Fertility**, **Forest Density**, and **Rare Resources** are only registered in `debug` mode.

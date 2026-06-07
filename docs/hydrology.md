@@ -16,6 +16,8 @@ See also: `docs/plans/river_generation_spec.md` for the original design.
 - `river_flow_threshold` (default `200.0`) — minimum upstream accumulation for a river headwater
 - `min_lake_pixels` (default `50`) — minimum flooded-component size to keep as a lake
 - `pet_baseline_mm_yr` / `pet_per_degree_mm_yr` / `pet_max_mm_yr` — clamped-linear PET model for water-balance lake shrinking (`PET = clamp(baseline + slope·max(0,T), 0, max)`)
+- `delta_min_flow` (default `1000.0`) — minimum mouth flow for a river to be tagged as having a delta
+- `delta_min_length_km` (default `500.0`) — minimum river length for delta tagging
 
 **`HydrologyBuilder`**: A pipeline `Stage`. Runs after elevation **and** climate. Consumes `"precipitation"`, `"temperature"`, and optionally `"ocean_mask"` face textures.
 

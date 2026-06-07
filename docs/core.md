@@ -1,8 +1,66 @@
-# Core — Mesh Data Structures & Visualization
+# Core — Infrastructure, Mesh, and Visualization
+
+## `core/pipeline.py` — Stage contract and BuildContext
+
+**`BuildContext`** (dataclass): Shared state threaded through every stage's `build`.
+- `world: World` — the container all stages read/write
+- `seed: int | None` — base seed for per-stage RNG fan-out (random if omitted)
+- `progress: ProgressFn` — optional status callback; called via `ctx.report(msg)`
+- `ctx.mesh` — shorthand property for `ctx.world.mesh`
+- `ctx.rng(name) → np.random.Generator` — deterministic per-name RNG; stable for a given `(seed, name)` pair and independent of call order across stages
+
+**`Stage`** (ABC): One unit of world generation. Subclasses must implement `build`; all other hooks default to no-ops.
+- `name: str` — stage identifier
+- `requires / provides: Tuple[Channel, ...]` — declared channel dependencies (for validation, deferred)
+- `build(ctx)` — reads inputs from `ctx`, writes outputs back
+- `register_display(world, reg, *, debug=False)` — adds color schemes/overlays to `DisplayRegistry`
+- `serialize() → dict[str, np.ndarray]` / `load(arrays, ctx)` — persistence hooks
+
+**`Pipeline`**: Ordered list of stages run against a shared `BuildContext`. Iterable; `build(ctx)` runs each stage in order.
+
+## `core/channels.py` — Inter-stage data contract
+
+Stages read and write shared world state through typed channel descriptors instead of magic strings. Each stage exports the channels it produces as module-level constants; downstream stages import those constants, making dependencies explicit and type-checked.
+
+- **`MetaChannel(name, dtype, default)`**: Per-face scalar in `mesh.face_metadata`. `read(mesh) → (N,) ndarray`; `write(mesh, values)` bulk-sets the key; `present(mesh) → bool`.
+- **`TextureChannel(name, n_channels)`**: `(N, H, W, C)` array in `mesh.face_textures`. Same `present/read/write` API operating on the mesh.
+- **`FeatureChannel(name)`**: Arbitrary Python object in the `World` feature registry (rivers, deposits, settlements, etc.). `present/read/write` operate on a `World` rather than a mesh.
+
+`Channel = Union[MetaChannel, TextureChannel, FeatureChannel]`
+
+## `core/world.py` — World container
+
+**`World`**: Container for a generated world: a mesh plus a named feature registry. The constructor loads a mesh from the shared cache (`core/mesh_cache.py`), building it on first run. Use `World.from_mesh(mesh)` to wrap an already-built mesh (e.g. when loading a saved world).
+
+Feature registry: `add_feature(name, data)`, `get_feature(name)`, `has_feature(name)`, `remove_feature(name)`, `feature_names()`.
+
+## `core/mesh_cache.py` — Mesh cache
+
+**`MeshParams`** (`@paramclass`): `icosphere_depth`, `n_swaps`, `n_relax`, `stiffness`, `outer_iters` — same parameters as `Mesh.icosphere` + `deregularize` + `mesh_dual`. Exposed in `GlobeParams.mesh`.
+
+**`build(params, cache_dir, n, progress)`**: Generates `n` random deregularized dual meshes and writes them to `mesh_cache/`. Run once; subsequent runs load from cache. **`load_random(seed, cache_dir, n)`**: Loads one mesh deterministically by `seed % n`.
+
+`World.__init__` calls `mesh_cache.build` on first run, then `mesh_cache.load_random(seed)`.
+
+## `core/params.py` — Params utilities
+
+**`paramclass`**: Alias for `@dataclass` — used to mark params dataclasses so the UI dialog can reflect over them.
+
+**`param_field(default, *, label, min, max, step?, hidden?)`**: Declares a leaf param field with UI dialog metadata (`label`, range, optional step, optional hidden flag). Import alias `_f` is convention throughout the codebase.
+
+**`field`**: Re-exported `dataclasses.field` for declaring nested sub-param fields with `metadata={"label": ...}`.
+
+## `core/display.py` — DisplayRegistry
+
+Qt-free surface that stages contribute visualization to. A viz adapter (`viz/mapview/registry.py`) later walks it and wires into a concrete `MapWindow`, keeping Qt/OpenGL out of `core`.
+
+- **`DisplayRegistry`**: `add_scheme(name, fn, *, texture?, legend?)`, `add_overlay(feature, label, *, checked?, legend?)`, `add_hover(fn)`. `hover(face_idx, uv, world)` concatenates all registered contributor fragments.
+- **`SchemeSpec`**: `fn: SchemeFn` (callable over face metadata dict → RGBA tuple), optional `texture` (associated per-face RGBA texture name), optional `legend`.
+- **`OverlaySpec`**: `feature: str`, `label: str`, `checked: bool`, optional `legend`.
 
 ## `core/mesh.py` — Mesh data structures
 
-- **`PolygonMesh`**: Base class for any polygon mesh. Pre-computes `face_adjacency`, `face_centroids`, `face_metadata`, and fan-triangulated render arrays at construction. Key API:
+- **`PolygonMesh`**: Base class for any polygon mesh. Pre-computes `face_adjacency`, `face_centroids`, `face_areas`, `face_metadata`, and fan-triangulated render arrays at construction. Key API:
   - `set_face_colors(colors)`
   - `set_face_metadata(face_idx, **kw)`
   - `apply_metadata_channel(key, values)` — bulk-write one metadata key across all faces
@@ -16,34 +74,6 @@
   - `.mesh_dual()` — returns a `PolygonMesh` by placing new vertices at face centroids (normalized to unit sphere), then for each original vertex builds a CCW-wound face from the centroids of its adjacent faces
 
 **Key invariant:** `Mesh` stores only triangular faces; `PolygonMesh` handles arbitrary polygon faces (e.g., the dual has 12 pentagons + many hexagons). The dual normalizes centroids to the unit sphere.
-
-## `viz/mesh/gui.py` — OpenGL/Qt renderer
-
-- **`MeshViewer`** (`QOpenGLWidget`): Renders a `PolygonMesh` using VBOs and `glDrawArrays` (OpenGL 3.3 compatibility). ~60 FPS via a timer, rotates the mesh 0.5°/frame. When the mesh has `face_textures`, `_setup_buffers` packs all per-face textures into a square grid atlas, uploads it as a single `GL_TEXTURE_2D`, and substitutes a UV VBO for the color VBO; atlas UV coordinates account for the v-flip between numpy (row 0 = top) and OpenGL (v=0 = bottom). Without textures, the original color-array path is used.
-- **`MainWindow`** (`QMainWindow`): Hosts `MeshViewer`; exposes `set_mesh(mesh)` to swap the displayed mesh at runtime.
-
-## `viz/mapview/projections.py` — Map projections
-
-All projections share a `Projection` base class with `project(ecef_vertices)` and `project_lonlat(lonlat)` methods (ECEF convention: Z is north, lon=0 at +X). Output is `float32 (N, 2)` in normalized map coordinates.
-
-- **`EquirectangularProjection`**: u = lon/π, v = lat/(π/2). Output in [−1, 1]².
-- **`MercatorProjection`**: Conformal cylindrical; latitudes clamped at ±85.05° so v stays in [−1, 1].
-- **`MollweideProjection`**: Equal-area pseudocylindrical; solved via Newton iteration for auxiliary angle θ. Fits an ellipse with semi-axes √2 (u) and √2 (v).
-- **`RobinsonProjection`**: Table-based compromise; parallel lengths and y-offsets interpolated from the original Robinson lookup tables at 5° latitude steps.
-
-## `viz/mapview/mapview.py` — Qt map widget
-
-- **`_split_at_antimeridian(face_ecef, face_uv=None)`**: Splits a unit-sphere polygon at the ±180° meridian; with `face_uv`, also interpolates UVs at crossing points and returns `(lonlat, uv)` pairs.
-- **`MapWidget`** (`QWidget`): `QPainter`-based projected polygon renderer with pan/zoom. Renders faces as solid color, named color schemes (callables over `face_metadata`), or per-face textures (affine UV mapping via `QBrush`/`QTransform` per fan triangle). Draws vector overlays from `Globe.features` on top; the `"rivers"` overlay scales line width by flow and skips `in_lake` segments. Hover hit-testing via bbox pre-filter + point-in-polygon + barycentric UV (`set_hover_callback`).
-- **`MapWindow`** (`QMainWindow`): Hosts `MapWidget` with projection selector, color scheme selector, overlay checkboxes, legend panel, Re-run/Params/Save buttons, and status bar.
-
-## `viz/mapview/main.py` — Dev entry point
-
-Creates an `icosphere(depth=4)`, deregularizes it, computes its dual, builds a radial-gradient per-face texture tinted by each face's random color, and opens the map viewer.
-
-## Face rendering priority
-
-Three layers in priority order: per-face textures → named color schemes (callables over `face_metadata`) → static `face_colors` array. Both viewers fall back down this stack when the higher layer is absent.
 
 ## Tangent frame convention
 

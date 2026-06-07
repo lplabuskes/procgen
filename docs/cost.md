@@ -14,10 +14,10 @@ Final physical stage. Converts already-computed data into **base** land + sea tr
 
 **`CostParams`** (dataclass): Nested `land: LandCostParams`, `sea: SeaCostParams`, `strait: StraitParams`.
 - Land knobs: biome-cost scale, ruggedness cost/km, river term (ford penalty, corridor discount, flow reference, min/max multiplier), `navigable_ruggedness_km` (local-relief limit where a river stops being navigable — the fall line)
-- Sea knobs: coastal/open-ocean cost, open-ocean distance ramp, strait discount, `navigable_flow_min` (minimum river flow to float a boat)
+- Sea knobs: coastal/open-ocean cost, open-ocean distance ramp, strait discount, `navigable_flow_min` (minimum river flow to float a boat), `ice_penalty_strength` / `ice_freeze_threshold` (sea-ice cost penalty above polar freeze)
 - Strait knobs: `opposite_dot_threshold` + `min_water_neighbors`
 
-**`CostBuilder`**: A pipeline `Stage`. Runs after elevation + climate + hydrology + resources. Reads: `biome` and `is_ocean` per-face metadata, `elevation` + `lake_mask` textures, hydrology rivers via `"river_objects"` world feature.
+**`CostBuilder`**: A pipeline `Stage`. Runs after elevation + climate + hydrology + resources. Reads: `biome` and `is_ocean` per-face metadata, `elevation` + `lake_mask` + `temperature` textures, hydrology rivers via `"river_objects"` world feature (temperature used for the sea-ice cost).
 
 Derives `is_water = is_ocean | is_lake` (a face counts as lake when ≥50% of its pixels are lake).
 

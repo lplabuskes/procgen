@@ -20,6 +20,7 @@ See also: `docs/plans/climate_generation_spec.md` for the original design.
 - `wind`: three-cell speeds, seasonal ITCZ shift, monsoon pressure-gradient scale (set to 0 to disable)
 - `precipitation`: global wetness multiplier, advection iterations, continental drying rate, orographic strength, hidden lake-feedback knobs
 - `currents`: enabled flag, β scale for western-boundary intensification, temperature/precipitation feedback scales, inland decay
+- `seed: Optional[int]`
 
 Each leaf field carries `metadata` consumed by the params dialog. `GlobeParams` exposes `climate: ClimateParams`.
 
@@ -31,7 +32,7 @@ Attaches face textures:
 - `"humidity"` `(N,H,W,K) float32`
 - `"biome"` `(N,H,W,1) uint8`
 
-Writes per-face metadata: `temperature_annual/warmest/coldest`, `precipitation_annual/seasonality`, `biome`, `distance_to_coast`, `humidity_annual`. Registers `"winds"` / `"currents"` features.
+Writes per-face metadata: `temperature_annual/warmest/coldest`, `precipitation_annual`, `biome`, `distance_to_coast`, `humidity_annual`. Registers `"winds"` / `"currents"` features.
 
 **Lake-feedback second pass**: `lake_feedback_stage()` returns a `ClimateLakeFeedbackStage` (sharing the builder) placed after hydrology in the pipeline. Its `build(ctx)` calls `apply_lake_humidity_feedback(mesh, lake_mask_tex)` to re-run moisture advection with lake evaporation as an extra source.
 

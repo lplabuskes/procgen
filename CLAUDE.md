@@ -47,12 +47,13 @@ python3 scripts/measure_resources.py    [seeds…|--random N|--detail]
 
 Pipeline: mesh → deregularize → dual → **elevation/tectonics** → **climate** → **hydrology** → **climate lake-feedback** → **resources** → **cost** → *(optional)* **realmgen**
 
-Top-level orchestrator: `GlobeBuilder` in `worldgen/globe/builder.py`. Each stage is a `Stage` that reads from and writes to a `BuildContext`. Realmgen is standalone — not wired into `GlobeBuilder`.
+Top-level orchestrator: `GlobePipeline` in `worldgen/builder.py`. Each stage is a `Stage` that reads from and writes to a `BuildContext`. Realmgen is a separate `RealmPipeline` — both are wired together in `main.py` via `AppParams`.
 
 Stage reference docs (read the relevant one before working on a stage):
 
-- [docs/core.md](docs/core.md) — `core/mesh.py`, `viz/mesh/gui.py`, `viz/mapview/`
-- [docs/globe.md](docs/globe.md) — `worldgen/globe/`, `main.py`, pipeline stage contract
+- [docs/core.md](docs/core.md) — `core/` infrastructure (pipeline, channels, params, display, mesh cache, mesh data structures)
+- [docs/viz.md](docs/viz.md) — `viz/` layer (MapWidget, MapWindow, projections, antimeridian, registry adapter, MeshViewer, ParamsDialog, color_stops)
+- [docs/worldgen.md](docs/worldgen.md) — `worldgen/builder.py`, `main.py`, pipeline stage contract
 - [docs/elevation.md](docs/elevation.md) — `worldgen/geology/`
 - [docs/climate.md](docs/climate.md) — `worldgen/climate/`
 - [docs/hydrology.md](docs/hydrology.md) — `worldgen/hydrology/`

@@ -8,17 +8,19 @@
 
 ## `elevation_builder.py`
 
-**`ElevationParams`** (dataclass): Every tuning knob in the elevation/tectonics pipeline.
-- *mesh generation*: `icosphere_depth`, `n_swaps`, `n_relax`, `stiffness`, `outer_iters`
-- *plate layout*: `n_plates`, `plate_compactness`, `relax_max_passes`, `oceanic_fraction`
-- *plate motion*: `drift_scale`, `spin_scale`
-- *elevation*: `elevation_rate_norm`, `elevation_decay_rate`, `elevation_max_hops`
-- *noise*, *face erosion*, *volcanism*
-- *reproducibility*: `seed` (fans out to per-stage sub-seeds; `None` = random each run)
+**`ElevationParams`** (dataclass): Every tuning knob in the elevation/tectonics pipeline. Structured as nested sub-param dataclasses:
+- `plates: PlateParams` — `n_plates`, `plate_compactness`, `relax_max_passes`, `oceanic_fraction`
+- `plate_motion: PlateMotionParams` — `drift_scale`, `spin_scale`
+- `elevation: ElevationFieldParams` — `elevation_rate_norm`, `elevation_decay_rate`, `elevation_max_hops`, `elevation_tex_size`
+- `noise: NoiseParams` — `noise_amplitude`, `noise_coast_sigma`
+- `face_erosion: FaceErosionParams` — hydraulic/thermal erosion knobs (hidden in params dialog)
+- `volcanism: VolcanismParams` — `n_hotspots`, `volcanic_decay_rate`, `volcanic_max_hops`, `volcanic_elevation_scale`, `volcanic_elevation_scale_oceanic`
+
+Mesh generation params (`icosphere_depth`, deregularize args) are not in `ElevationParams` — the mesh is pre-built before this stage runs. The world seed is passed to `ElevationBuilder.__init__(self, params, *, seed)` separately, not stored in `ElevationParams`.
 
 River parameters live in `HydrologyParams`, not here.
 
-**`ElevationBuilder`**: The mesh-producing `Stage`. `build(ctx)` sets `ctx.world.mesh` and returns the dual `PolygonMesh` with all metadata applied. Stored attributes after build: `mesh`, `plate_ids`, `plate_omegas`, `face_velocities`, `boundary_types`, `boundary_data`, `elevations`, `elevation_textures` (single-channel `(N, H, W, 1)` float32), `volcanism`, `max_speed`. The mesh has a `"elevation"` face texture (single-channel) attached.
+**`ElevationBuilder`**: A pipeline `Stage`. `build(ctx)` decorates the already-existing dual `PolygonMesh` in `ctx.mesh` with elevation/tectonics layers and returns it. Stored attributes after build: `mesh`, `plate_ids`, `plate_omegas`, `face_velocities`, `boundary_types`, `boundary_data`, `elevations`, `elevation_textures` (single-channel `(N, H, W, 1)` float32), `ocean_mask`, `volcanism`, `volcano_positions`, `max_speed`. Attaches face textures `"elevation"` (single-channel) and `"ocean_mask"` (single-channel); writes `plate_id`, `plate_type`, `boundary_type`, `surface_speed`, `volcanic_activity`, `is_ocean` per-face metadata.
 
 ## `elevation.py`
 
