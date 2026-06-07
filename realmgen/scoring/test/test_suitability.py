@@ -22,9 +22,9 @@ from realmgen.scoring.suitability import (
     compute_ruggedness_penalty,
     compute_water_proximity,
 )
-from realmgen.builder import (
+from realmgen.builder import RealmPipeline
+from realmgen.scoring.builder import (
     ClimateHabitabilityParams,
-    RealmPipeline,
     SuitabilityWeightParams,
     WaterProximityParams,
 )

@@ -1,34 +1,70 @@
-"""Lightweight checks on the RealmStage protocol surface (no world build)."""
+"""Lightweight checks on the realm pipeline stage protocol surface (no world build)."""
 import numpy as np
 
 from core.display import DisplayRegistry
 from core.pipeline import Stage
-from realmgen.builder import RealmStage
-from realmgen.channels import SITUATIONAL_VALUE, SUITABILITY
+from realmgen.builder import RealmParams, RealmPipeline
+from realmgen.placement.builder import PlacementStage
+from realmgen.population.builder import PopulationStage
+from realmgen.scoring.builder import ScoringStage
+from realmgen.channels import HINTERLAND_ID, POPULATION, SITUATIONAL_VALUE, SUITABILITY, TRADE_FLOW
+from realmgen.trade.network import TradeResult
 
 
-def test_realm_stage_is_a_stage():
-    assert issubclass(RealmStage, Stage)
-    s = RealmStage()
-    assert s.name == "realm"
-    assert SUITABILITY in s.provides and SITUATIONAL_VALUE in s.provides
+def test_all_stages_are_stage_subclasses():
+    assert issubclass(ScoringStage, Stage)
+    assert issubclass(PlacementStage, Stage)
+    assert issubclass(PopulationStage, Stage)
 
 
-def test_register_display_is_gated_on_computed_results():
-    stage = RealmStage()
+def test_stage_channels():
+    p = RealmParams()
+    scoring = ScoringStage(p.suitability, p.situational)
+    assert SUITABILITY in scoring.provides
+    assert SITUATIONAL_VALUE in scoring.provides
+
+    population = PopulationStage(p.trade, p.population, p.seeder)
+    assert TRADE_FLOW in population.provides
+    assert POPULATION in population.provides
+    assert HINTERLAND_ID in population.provides
+
+
+def test_realm_pipeline_has_three_stages():
+    rp = RealmPipeline()
+    assert len(rp.stages) == 3
+    assert isinstance(rp.stages[0], ScoringStage)
+    assert isinstance(rp.stages[1], PlacementStage)
+    assert isinstance(rp.stages[2], PopulationStage)
+
+
+def test_scoring_register_display_gated_on_results():
+    p = RealmParams()
+    stage = ScoringStage(p.suitability, p.situational)
     reg = DisplayRegistry()
-    # Nothing computed yet → no schemes or overlays.
     stage.register_display(None, reg)
     assert reg.schemes == {}
-    assert reg.overlays == []
-    # Suitability + situational value both present → both schemes registered.
+
     stage.suitability = np.array([0.5], dtype=np.float32)
     stage.situational_value = np.array([0.5], dtype=np.float32)
     reg2 = DisplayRegistry()
     stage.register_display(None, reg2)
     assert set(reg2.schemes) == {"Suitability", "Situational Value"}
-    # Settlements present → overlay added.
+
+
+def test_population_register_display_gated_on_results():
+    p = RealmParams()
+    stage = PopulationStage(p.trade, p.population, p.seeder)
+    reg = DisplayRegistry()
+    stage.register_display(None, reg)
+    assert reg.schemes == {}
+    assert reg.overlays == []
+
+    face_flow = np.zeros(4, dtype=np.float32)
+    stage.trade_result = TradeResult(face_flow=face_flow, hub_mask=np.zeros(4, dtype=bool), routes=[])
     stage.settlements = []
-    reg3 = DisplayRegistry()
-    stage.register_display(None, reg3)
-    assert any(ov.feature == "settlements" for ov in reg3.overlays)
+    stage.hinterland = np.full(4, -1, dtype=np.int32)
+    reg2 = DisplayRegistry()
+    stage.register_display(None, reg2)
+    assert "Trade Flow" in reg2.schemes
+    assert "Hinterland" in reg2.schemes
+    assert any(ov.feature == "settlements" for ov in reg2.overlays)

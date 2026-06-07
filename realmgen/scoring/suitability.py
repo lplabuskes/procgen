@@ -35,7 +35,7 @@ import numpy as np
 from worldgen.resources.terrain import face_hops_from_seeds
 
 if TYPE_CHECKING:
-    from realmgen.builder import (
+    from realmgen.scoring.builder import (
         ClimateHabitabilityParams,
         SuitabilityWeightParams,
         WaterProximityParams,

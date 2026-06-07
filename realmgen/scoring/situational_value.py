@@ -28,7 +28,7 @@ import numpy as np
 from realmgen.scoring.suitability import _positions_to_face_ids
 
 if TYPE_CHECKING:
-    from realmgen.builder import MountainPassParams, SituationalValueWeightParams
+    from realmgen.scoring.builder import MountainPassParams, SituationalValueWeightParams
 
 
 # ── Harbor quality ────────────────────────────────────────────────────────────

@@ -17,9 +17,9 @@ from realmgen.scoring.situational_value import (
     compute_river_confluences,
     compute_strait_adjacency,
 )
-from realmgen.builder import (
+from realmgen.builder import RealmPipeline
+from realmgen.scoring.builder import (
     MountainPassParams,
-    RealmPipeline,
     SituationalValueWeightParams,
 )
 from worldgen import GlobePipeline, GlobeParams
