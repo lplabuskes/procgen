@@ -209,10 +209,10 @@ class TradeSpawnParams:
 class PopulationParams:
     relaxation_passes: int = _f(4, label="Relaxation passes", min=1, max=5)
     trade_weight: float = _f(1.5, label="Trade wealth weight", min=0.0, max=5.0)
-    min_pop_fraction: float = _f(0.005, label="Min pop fraction (cull)", min=0.0, max=0.1)
+    min_pop_fraction: float = _f(0.012, label="Min pop fraction (cull)", min=0.0, max=0.1)
     hinterland_max_distance: float = _f(40.0, label="Hinterland max distance", min=5.0, max=200.0)
     hinterland_influence_scale: float = _f(8.0, label="Hinterland influence scale", min=0.5, max=30.0)
-    hinterland_reach_scale: float = _f(40.0, label="Hinterland reach scale (∝ catchment radius)", min=1.0, max=1000.0)
+    hinterland_reach_scale: float = _f(45.0, label="Hinterland reach scale (∝ catchment radius)", min=1.0, max=1000.0)
     trade_spawn: TradeSpawnParams = field(
         default_factory=TradeSpawnParams, metadata={"label": "Trade-spawn settlements"}
     )
