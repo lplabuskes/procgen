@@ -13,8 +13,7 @@ See also: `docs/plans/river_generation_spec.md` for the original design.
 ## `builder.py`
 
 **`HydrologyParams`** (dataclass):
-- `river_flow_threshold` (default `50.0`) — minimum upstream accumulation for a river headwater
-- `precip_exponent` (default `3.0`) — wetness bias on accumulation weight: each node contributes `(precip/mean)**p`, renormalized so the land-mean weight (and thus `river_flow_threshold`'s meaning) is unchanged. `p>1` concentrates the river network into wet regions and thins it in arid ones; `p=1` is plain precip-weighted accumulation.
+- `river_flow_threshold` (default `35.0`) — minimum upstream accumulation for a river headwater. Applied to the single-receiver **tree accumulation** (the network actually drawn), not the D-inf field; the lower default vs the old D-inf threshold (50) preserves channel density because single-receiver flow concentrates more than D-inf.
 - `min_lake_pixels` (default `50`) — minimum flooded-component size to keep as a lake
 - `pet_baseline_mm_yr` / `pet_per_degree_mm_yr` / `pet_max_mm_yr` — clamped-linear PET model for water-balance lake shrinking (`PET = clamp(baseline + slope·max(0,T), 0, max)`)
 - `delta_min_flow` (default `1000.0`) — minimum mouth flow for a river to be tagged as having a delta
@@ -35,19 +34,21 @@ Registered features: `"rivers"` (flattened polylines), `"river_objects"` (rich `
 End-to-end pipeline:
 1. Priority-Flood fill (Planchon-Darboux)
 2. D-infinity flow direction (Tarboton)
-3. Precipitation-weighted accumulation
+3. Precipitation-weighted D-infinity accumulation (chooses each node's single primary receiver = the larger-accumulation side at confluences)
 4. Water-balance lake shrinking (endorheic basins sized by PET vs inflow)
-5. Flat-region outlet biasing
-6. Headwater extraction
-7. Sub-pixel gradient trace walks
+5. Single-receiver **tree accumulation** along the primary-receiver graph — the network actually drawn
+6. Channel thresholding + main-stem (Hack) decomposition: each river is a chain from a channel headwater (a tree leaf) down to the sea, an endorheic sink, or the confluence where it meets a larger stem
+7. Receiver-graph routing + Laplacian smoothing of each chain
 8. Self-crossing removal
 9. Inter-river crossing resolution
 
-Rivers trace continuously through exorheic lakes (`in_lake` flags let the renderer hide those segments); endorheic basins are true sinks.
+`extract_rivers_graph` is the live extractor. The older bilinear-gradient tracer (`extract_rivers` / `_trace_river_subpixel`) is retained but no longer wired into `generate()`.
+
+Rivers route continuously through exorheic lakes (`in_lake` flags let the renderer hide those segments); endorheic basins are true sinks.
 
 Outputs: `generate() → list[River]`, `get_lake_polygons()`, `get_filled_height_texture()`, `get_lake_mask_texture()`.
 
 ## Design notes
 
-- D-infinity accumulation and sub-pixel gradient traces are used instead of D4 grid steps to avoid N-S/E-W bias from the tangent-frame convention (see `docs/core.md` — tangent frame).
+- Rivers are routed along the single-receiver tree (each node's primary D-infinity receiver), not the bilinear gradient, so the drawn polyline coincides with the accumulation channel and the painted flow is monotonic — stepping up only at *drawn* confluences. D-infinity (multi-receiver) still picks the direction at confluences; a separate single-receiver accumulation along those edges supplies the magnitude and the channel threshold. This replaced a gradient trace whose path was decoupled from the accumulation field (off-channel sampling painted a flat-then-leap staircase, and flow could appear to jump or "drop" between overlapping headwater traces).
 - The `"river_objects"` feature (rich `River` objects) is what downstream stages (Resources, Cost) consume; `"rivers"` is the flattened polyline form for rendering/serialization.

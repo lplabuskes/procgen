@@ -23,6 +23,7 @@ from worldgen.hydrology.types import (
     River,
     RiverNode,
     RiverSegment,
+    laplacian_smooth_sphere,
 )
 from core.mesh import PolygonMesh
 
@@ -46,7 +47,6 @@ class RiverGenerator:
         pet_per_degree_mm_yr: float = 60.0,
         pet_max_mm_yr: float = 2500.0,
         ocean_mask_textures: np.ndarray | None = None,
-        precip_exponent: float = 1.0,
     ) -> None:
         if elevation_textures.ndim == 4:
             elev = elevation_textures[:, :, :, 0]
@@ -93,20 +93,10 @@ class RiverGenerator:
             flat = annual.reshape(-1)
             mean = float(flat.mean())
             self._mean_precip: float | None = max(mean, 1e-6)
-            weights = flat / self._mean_precip  # mean ≈ 1 over all nodes
-            # Wetness-biased weighting: w = (precip/mean)**p concentrates the
-            # river network into wet regions and thins it in arid ones. Renormalize
-            # so the land-mean weight is unchanged, keeping `min_flow` (a count of
-            # upstream land cells of average rainfall) comparable across exponents.
-            p = float(precip_exponent)
-            if p != 1.0:
-                land = ~self._ocean_mask
-                land_mean = float(weights[land].mean()) if land.any() else 1.0
-                weights = np.power(weights, p)
-                new_land_mean = float(weights[land].mean()) if land.any() else 1.0
-                if new_land_mean > 0.0:
-                    weights *= land_mean / new_land_mean
-            self._precip_weights: np.ndarray | None = weights.astype(np.float32)
+            # Precip-weighted accumulation: each node contributes precip/mean
+            # (mean ≈ 1 over all nodes), so wetter cells carry proportionally
+            # more flow.
+            self._precip_weights: np.ndarray | None = (flat / self._mean_precip).astype(np.float32)
         else:
             self._mean_precip = None
             self._precip_weights = None
@@ -411,6 +401,142 @@ class RiverGenerator:
                 rivers.append(river)
         return rivers
 
+    # ------------------------------------------------------------------
+    # River extraction (accumulation-graph routing)
+    # ------------------------------------------------------------------
+
+    def extract_rivers_graph(
+        self,
+        receiver1: np.ndarray,
+        receiver2: np.ndarray,
+        frac1: np.ndarray,
+        frac2: np.ndarray,
+        flow_accum: np.ndarray,
+    ) -> List[River]:
+        """Build rivers by routing along the D-infinity accumulation graph.
+
+        Each river follows the primary (max-accumulation) receiver chain from a
+        channel headwater down to the sea, an endorheic sink, or a confluence
+        with a larger stem. The drawn polyline therefore *is* the accumulation
+        channel, so the painted flow grows smoothly and only jumps at real
+        confluences — unlike the bilinear-gradient trace, whose path was
+        decoupled from the accumulation field (off-channel sampling produced a
+        flat-then-leap staircase). Tributaries are separate rivers terminating
+        at the confluence node where they meet a higher-order stream, so no two
+        rivers share an interior cell (a main-stem / Hack decomposition).
+        """
+        n = self.n_nodes
+        ocean = self._ocean_mask
+        endo = self._endorheic_mask
+        threshold = self.min_flow
+
+        # Primary single receiver = the valid receiver carrying the larger
+        # accumulation (follows the main channel at confluences). -1 at outlets /
+        # endorheic sinks. This single-receiver graph is the tree we draw.
+        r1 = receiver1.astype(np.int64)
+        r2 = receiver2.astype(np.int64)
+        valid1 = (r1 >= 0) & (frac1 > 0.0)
+        valid2 = (r2 >= 0) & (frac2 > 0.0)
+        acc1 = np.full(n, -np.inf)
+        acc2 = np.full(n, -np.inf)
+        acc1[valid1] = flow_accum[r1[valid1]]
+        acc2[valid2] = flow_accum[r2[valid2]]
+        prx = np.full(n, -1, dtype=np.int64)
+        prx[valid1] = r1[valid1]
+        take2 = valid2 & (~valid1 | (acc2 > acc1))
+        prx[take2] = r2[take2]
+
+        # Tree accumulation: single-receiver flow along the prx edges we draw.
+        # Everything keys off this so the network and its painted flow are one
+        # consistent quantity — monotonic down each chain, rising only at *drawn*
+        # confluences, with sources born right at the threshold. (D-inf
+        # `flow_accum` only chooses the direction; it is a DAG, so using it for
+        # magnitude leaps where flow joins via the secondary receiver — a jump
+        # with no drawn tributary — and using it for the threshold makes sources
+        # appear far above it.) Reuses the JIT accumulator with one receiver.
+        tree_accum = accumulate_flow(
+            prx.astype(np.int32),
+            np.full(n, -1, dtype=np.int32),
+            np.ones(n, dtype=np.float32),
+            np.zeros(n, dtype=np.float32),
+            self._eff,
+            self._precip_weights,
+        )
+
+        # Channel nodes: enough tree flow, not open sea. Lake interiors stay in
+        # (rivers route through exorheic lakes, flagged in_lake downstream).
+        is_channel = (tree_accum >= threshold) & ~ocean
+
+        # main_child[d] = the channel node draining into d (via prx) with the
+        # largest tree accumulation — the main-stem continuation upstream of d.
+        # Ascending iteration leaves the max as the final writer. A chain stops
+        # where its node is not its receiver's main_child; channel leaves
+        # (main_child == -1) are the headwaters.
+        ch = np.where(is_channel)[0]
+        ch_sorted = ch[np.argsort(tree_accum[ch], kind="stable")]
+        main_child = np.full(n, -1, dtype=np.int64)
+        for node in ch_sorted.tolist():
+            d = prx[node]
+            if d >= 0 and is_channel[d]:
+                main_child[d] = node
+
+        sources = ch[main_child[ch] == -1]
+
+        rivers: List[River] = []
+        for src in sources.tolist():
+            path = [src]
+            cur = src
+            for _ in range(n):
+                d = prx[cur]
+                if d < 0:
+                    break
+                path.append(d)
+                if ocean[d] or endo[d]:
+                    break
+                if main_child[d] != cur:   # merged into a larger stem here
+                    break
+                cur = d
+            if len(path) < 4:              # drop stubs (matches old >2-segment rule)
+                continue
+            rivers.append(self._river_from_path(path, tree_accum))
+        return rivers
+
+    def _river_from_path(self, path: List[int], flow_accum: np.ndarray) -> River:
+        """Assemble a River from an ordered list of node indices (headwater→mouth)."""
+        res = self.resolution
+        n_minus_1 = res - 1
+        nodes = np.asarray(path, dtype=np.int64)
+        raw_pos = [self.positions[nd].astype(np.float64) for nd in path]
+        smooth = laplacian_smooth_sphere(raw_pos, iterations=8, alpha=0.5)
+        # On-channel flow: running max of accumulation keeps it monotonic through
+        # the minor dips D-inf splitting can leave between adjacent channel cells.
+        running = np.maximum.accumulate(flow_accum[nodes]).astype(np.float64)
+        in_lake = self._lake_mask[nodes]
+
+        def _node_rec(idx: int) -> RiverNode:
+            nd = int(path[idx])
+            face = nd // self._r2
+            rem = nd % self._r2
+            return RiverNode(
+                position=smooth[idx].astype(np.float32),
+                elevation=float(self.elevations[nd]),
+                face_id=int(face),
+                uv=((rem % res) / n_minus_1, (rem // res) / n_minus_1),
+            )
+
+        mouth_face = path[-1] // self._r2
+        river = River(source=_node_rec(0), mouth=_node_rec(len(path) - 1))
+        for k in range(1, len(path)):
+            river.segments.append(RiverSegment(
+                start=RiverNode(position=smooth[k - 1].astype(np.float32),
+                                elevation=0.0, face_id=int(mouth_face), uv=(0.0, 0.0)),
+                end=RiverNode(position=smooth[k].astype(np.float32),
+                              elevation=0.0, face_id=int(mouth_face), uv=(0.0, 0.0)),
+                flow_rate=float(running[k - 1]),
+                in_lake=bool(in_lake[k - 1] or in_lake[k]),
+            ))
+        return river
+
     def _trace_river_subpixel(
         self,
         start: int,
@@ -704,7 +830,7 @@ class RiverGenerator:
 
     def generate(self) -> List[River]:
         r1, r2, f1, f2, _ang, accum = self.compute_flow()
-        rivers = self.extract_rivers(r1, r2, f1, f2, accum)
+        rivers = self.extract_rivers_graph(r1, r2, f1, f2, accum)
         rivers = resolve_self_crossings(rivers)
         rivers = resolve_crossings(rivers)
         return rivers
