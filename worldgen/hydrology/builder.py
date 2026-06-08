@@ -19,7 +19,7 @@ LAKE_COLOR = np.array([0.28, 0.65, 0.90, 1.0], dtype=np.float32)
 
 @paramclass
 class HydrologyParams:
-    river_flow_threshold: float = _f(200.0, label="Flow threshold (faces)", min=1.0, max=1000.0)
+    river_flow_threshold: float = _f(100.0, label="Flow threshold (faces)", min=1.0, max=1000.0)
     min_lake_pixels: int = _f(50, label="Min lake pixels", min=1, max=500)
     pet_baseline_mm_yr: float = _f(100.0, label="PET baseline (mm/yr)", min=0.0, max=500.0)
     pet_per_degree_mm_yr: float = _f(60.0, label="PET slope (mm/yr/°C)", min=0.0, max=200.0)

@@ -1,0 +1,906 @@
+[
+  {
+    "timestamp": "2026-06-07T23:35:13.855464",
+    "params_summary": "flow_thr=200 min_lake=50 ico_depth=5",
+    "results": [
+      {
+        "seed": 42,
+        "n_rivers": 387,
+        "longest_km": 3477.5,
+        "p95_km": 675.7,
+        "p75_km": 348.9,
+        "median_km": 190.0,
+        "mean_km": 262.9,
+        "total_length_kkm": 101.8,
+        "pct_reaches_ocean": 87.1,
+        "threshold_counts": {
+          "1000": 6,
+          "2000": 1,
+          "3000": 1,
+          "4000": 0
+        },
+        "histogram": [
+          237,
+          113,
+          31,
+          5,
+          0,
+          1,
+          0
+        ],
+        "top_rivers": [
+          {
+            "length_km": 3477.5,
+            "mouth_flow": 14904.4,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1346.7,
+            "mouth_flow": 8973.3,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1088.1,
+            "mouth_flow": 1317.7,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1076.3,
+            "mouth_flow": 1776.9,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1069.5,
+            "mouth_flow": 5154.6,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1051.5,
+            "mouth_flow": 2519.4,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 990.9,
+            "mouth_flow": 1939.7,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 989.7,
+            "mouth_flow": 1065.5,
+            "reaches_ocean": false
+          },
+          {
+            "length_km": 922.8,
+            "mouth_flow": 1784.1,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 882.4,
+            "mouth_flow": 290.5,
+            "reaches_ocean": false
+          },
+          {
+            "length_km": 850.2,
+            "mouth_flow": 1441.1,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 847.5,
+            "mouth_flow": 298.3,
+            "reaches_ocean": true
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "timestamp": "2026-06-07T23:35:56.111891",
+    "params_summary": "flow_thr=200 min_lake=50 ico_depth=5",
+    "results": [
+      {
+        "seed": 42,
+        "n_rivers": 387,
+        "longest_km": 3477.5,
+        "p95_km": 675.7,
+        "p75_km": 348.9,
+        "median_km": 190.0,
+        "mean_km": 262.9,
+        "total_length_kkm": 101.8,
+        "pct_reaches_ocean": 87.1,
+        "threshold_counts": {
+          "1000": 6,
+          "2000": 1,
+          "3000": 1,
+          "4000": 0
+        },
+        "histogram": [
+          237,
+          113,
+          31,
+          5,
+          0,
+          1,
+          0
+        ],
+        "top_rivers": [
+          {
+            "length_km": 3477.5,
+            "mouth_flow": 14904.4,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1346.7,
+            "mouth_flow": 8973.3,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1088.1,
+            "mouth_flow": 1317.7,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1076.3,
+            "mouth_flow": 1776.9,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1069.5,
+            "mouth_flow": 5154.6,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1051.5,
+            "mouth_flow": 2519.4,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 990.9,
+            "mouth_flow": 1939.7,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 989.7,
+            "mouth_flow": 1065.5,
+            "reaches_ocean": false
+          },
+          {
+            "length_km": 922.8,
+            "mouth_flow": 1784.1,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 882.4,
+            "mouth_flow": 290.5,
+            "reaches_ocean": false
+          },
+          {
+            "length_km": 850.2,
+            "mouth_flow": 1441.1,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 847.5,
+            "mouth_flow": 298.3,
+            "reaches_ocean": true
+          }
+        ]
+      },
+      {
+        "seed": 137,
+        "n_rivers": 181,
+        "longest_km": 2109.6,
+        "p95_km": 1057.7,
+        "p75_km": 370.8,
+        "median_km": 220.5,
+        "mean_km": 323.1,
+        "total_length_kkm": 58.5,
+        "pct_reaches_ocean": 91.7,
+        "threshold_counts": {
+          "1000": 11,
+          "2000": 1,
+          "3000": 0,
+          "4000": 0
+        },
+        "histogram": [
+          105,
+          44,
+          21,
+          10,
+          1,
+          0,
+          0
+        ],
+        "top_rivers": [
+          {
+            "length_km": 2109.6,
+            "mouth_flow": 21702.3,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1534.1,
+            "mouth_flow": 13239.8,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1356.9,
+            "mouth_flow": 3448.9,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1301.8,
+            "mouth_flow": 1822.1,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1164.2,
+            "mouth_flow": 1115.7,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1142.3,
+            "mouth_flow": 27823.7,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1136.3,
+            "mouth_flow": 2623.1,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1124.3,
+            "mouth_flow": 1994.0,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1086.5,
+            "mouth_flow": 2006.1,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1057.7,
+            "mouth_flow": 360.4,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1027.0,
+            "mouth_flow": 302.7,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 951.9,
+            "mouth_flow": 13566.4,
+            "reaches_ocean": false
+          }
+        ]
+      },
+      {
+        "seed": 999,
+        "n_rivers": 646,
+        "longest_km": 2031.8,
+        "p95_km": 647.5,
+        "p75_km": 295.0,
+        "median_km": 182.7,
+        "mean_km": 251.3,
+        "total_length_kkm": 162.3,
+        "pct_reaches_ocean": 86.4,
+        "threshold_counts": {
+          "1000": 14,
+          "2000": 2,
+          "3000": 0,
+          "4000": 0
+        },
+        "histogram": [
+          427,
+          147,
+          58,
+          12,
+          2,
+          0,
+          0
+        ],
+        "top_rivers": [
+          {
+            "length_km": 2031.8,
+            "mouth_flow": 38155.5,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 2006.4,
+            "mouth_flow": 2622.3,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1894.6,
+            "mouth_flow": 2137.0,
+            "reaches_ocean": false
+          },
+          {
+            "length_km": 1589.0,
+            "mouth_flow": 7922.4,
+            "reaches_ocean": false
+          },
+          {
+            "length_km": 1282.9,
+            "mouth_flow": 4109.6,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1265.4,
+            "mouth_flow": 2311.8,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1254.8,
+            "mouth_flow": 1521.4,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1234.5,
+            "mouth_flow": 87342.8,
+            "reaches_ocean": false
+          },
+          {
+            "length_km": 1162.4,
+            "mouth_flow": 3913.8,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1127.9,
+            "mouth_flow": 2637.1,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1075.1,
+            "mouth_flow": 6363.8,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1014.8,
+            "mouth_flow": 3776.3,
+            "reaches_ocean": false
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "timestamp": "2026-06-07T23:45:07.837470",
+    "params_summary": "flow_thr=200 min_lake=50 ico_depth=5",
+    "results": [
+      {
+        "seed": 4,
+        "n_rivers": 313,
+        "longest_km": 1231.2,
+        "p95_km": 634.7,
+        "p75_km": 284.4,
+        "median_km": 172.2,
+        "mean_km": 235.2,
+        "total_length_kkm": 73.6,
+        "pct_reaches_ocean": 93.9,
+        "threshold_counts": {
+          "1000": 4,
+          "2000": 0,
+          "3000": 0,
+          "4000": 0
+        },
+        "histogram": [
+          220,
+          63,
+          26,
+          4,
+          0,
+          0,
+          0
+        ],
+        "top_rivers": [
+          {
+            "length_km": 1231.2,
+            "mouth_flow": 4875.8,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1181.5,
+            "mouth_flow": 1457.2,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1104.7,
+            "mouth_flow": 247.3,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1101.6,
+            "mouth_flow": 510.5,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 975.5,
+            "mouth_flow": 5965.9,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 928.7,
+            "mouth_flow": 1535.2,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 921.6,
+            "mouth_flow": 1630.1,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 851.2,
+            "mouth_flow": 1805.0,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 839.7,
+            "mouth_flow": 32058.0,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 801.6,
+            "mouth_flow": 1785.3,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 796.6,
+            "mouth_flow": 836.9,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 739.8,
+            "mouth_flow": 1076.1,
+            "reaches_ocean": true
+          }
+        ]
+      },
+      {
+        "seed": 31,
+        "n_rivers": 238,
+        "longest_km": 2779.0,
+        "p95_km": 565.8,
+        "p75_km": 240.2,
+        "median_km": 134.2,
+        "mean_km": 211.9,
+        "total_length_kkm": 50.4,
+        "pct_reaches_ocean": 91.2,
+        "threshold_counts": {
+          "1000": 4,
+          "2000": 1,
+          "3000": 0,
+          "4000": 0
+        },
+        "histogram": [
+          181,
+          39,
+          14,
+          3,
+          1,
+          0,
+          0
+        ],
+        "top_rivers": [
+          {
+            "length_km": 2779.0,
+            "mouth_flow": 16989.4,
+            "reaches_ocean": false
+          },
+          {
+            "length_km": 1570.2,
+            "mouth_flow": 3533.6,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1314.4,
+            "mouth_flow": 2311.5,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1069.6,
+            "mouth_flow": 3069.6,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 940.4,
+            "mouth_flow": 570.9,
+            "reaches_ocean": false
+          },
+          {
+            "length_km": 906.8,
+            "mouth_flow": 751.0,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 902.2,
+            "mouth_flow": 553.2,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 740.9,
+            "mouth_flow": 762.3,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 719.8,
+            "mouth_flow": 4333.7,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 719.6,
+            "mouth_flow": 327.0,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 574.1,
+            "mouth_flow": 1178.4,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 565.9,
+            "mouth_flow": 749.2,
+            "reaches_ocean": true
+          }
+        ]
+      },
+      {
+        "seed": 35,
+        "n_rivers": 165,
+        "longest_km": 1460.6,
+        "p95_km": 614.2,
+        "p75_km": 269.2,
+        "median_km": 171.9,
+        "mean_km": 231.3,
+        "total_length_kkm": 38.2,
+        "pct_reaches_ocean": 93.3,
+        "threshold_counts": {
+          "1000": 3,
+          "2000": 0,
+          "3000": 0,
+          "4000": 0
+        },
+        "histogram": [
+          118,
+          35,
+          9,
+          3,
+          0,
+          0,
+          0
+        ],
+        "top_rivers": [
+          {
+            "length_km": 1460.6,
+            "mouth_flow": 6828.0,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1372.0,
+            "mouth_flow": 1191.5,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1046.9,
+            "mouth_flow": 679.9,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 938.6,
+            "mouth_flow": 2347.3,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 871.5,
+            "mouth_flow": 1332.6,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 853.4,
+            "mouth_flow": 1025.1,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 789.7,
+            "mouth_flow": 299.3,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 780.1,
+            "mouth_flow": 2481.3,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 617.1,
+            "mouth_flow": 7667.5,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 602.6,
+            "mouth_flow": 288.3,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 516.7,
+            "mouth_flow": 4477.8,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 515.6,
+            "mouth_flow": 1858.6,
+            "reaches_ocean": true
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "timestamp": "2026-06-08T00:20:10.402033",
+    "params_summary": "flow_thr=100 min_lake=50 ico_depth=5",
+    "results": [
+      {
+        "seed": 4,
+        "n_rivers": 564,
+        "longest_km": 1914.9,
+        "p95_km": 617.6,
+        "p75_km": 270.9,
+        "median_km": 161.5,
+        "mean_km": 227.2,
+        "total_length_kkm": 128.1,
+        "pct_reaches_ocean": 91.7,
+        "threshold_counts": {
+          "1000": 7,
+          "2000": 0,
+          "3000": 0,
+          "4000": 0
+        },
+        "histogram": [
+          402,
+          113,
+          42,
+          7,
+          0,
+          0,
+          0
+        ],
+        "top_rivers": [
+          {
+            "length_km": 1914.9,
+            "mouth_flow": 15178.3,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1760.9,
+            "mouth_flow": 1377.9,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1242.8,
+            "mouth_flow": 9833.4,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1240.1,
+            "mouth_flow": 913.3,
+            "reaches_ocean": false
+          },
+          {
+            "length_km": 1118.5,
+            "mouth_flow": 2055.8,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1112.2,
+            "mouth_flow": 2167.8,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1090.4,
+            "mouth_flow": 4364.1,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 999.4,
+            "mouth_flow": 307.4,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 985.6,
+            "mouth_flow": 283.3,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 909.5,
+            "mouth_flow": 2574.2,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 896.3,
+            "mouth_flow": 1384.8,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 806.6,
+            "mouth_flow": 2510.6,
+            "reaches_ocean": true
+          }
+        ]
+      },
+      {
+        "seed": 31,
+        "n_rivers": 422,
+        "longest_km": 1878.8,
+        "p95_km": 577.6,
+        "p75_km": 265.7,
+        "median_km": 153.8,
+        "mean_km": 217.8,
+        "total_length_kkm": 91.9,
+        "pct_reaches_ocean": 91.7,
+        "threshold_counts": {
+          "1000": 8,
+          "2000": 0,
+          "3000": 0,
+          "4000": 0
+        },
+        "histogram": [
+          307,
+          87,
+          20,
+          8,
+          0,
+          0,
+          0
+        ],
+        "top_rivers": [
+          {
+            "length_km": 1878.8,
+            "mouth_flow": 16989.4,
+            "reaches_ocean": false
+          },
+          {
+            "length_km": 1865.8,
+            "mouth_flow": 2852.1,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1436.1,
+            "mouth_flow": 2620.5,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1224.4,
+            "mouth_flow": 3053.7,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1138.4,
+            "mouth_flow": 61952.9,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1102.8,
+            "mouth_flow": 186.9,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1090.1,
+            "mouth_flow": 3532.7,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1020.1,
+            "mouth_flow": 321.0,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 941.3,
+            "mouth_flow": 245.4,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 937.3,
+            "mouth_flow": 3440.3,
+            "reaches_ocean": false
+          },
+          {
+            "length_km": 828.1,
+            "mouth_flow": 60529.8,
+            "reaches_ocean": false
+          },
+          {
+            "length_km": 778.9,
+            "mouth_flow": 1077.0,
+            "reaches_ocean": true
+          }
+        ]
+      },
+      {
+        "seed": 35,
+        "n_rivers": 375,
+        "longest_km": 1547.1,
+        "p95_km": 519.5,
+        "p75_km": 275.7,
+        "median_km": 159.8,
+        "mean_km": 218.1,
+        "total_length_kkm": 81.8,
+        "pct_reaches_ocean": 87.5,
+        "threshold_counts": {
+          "1000": 5,
+          "2000": 0,
+          "3000": 0,
+          "4000": 0
+        },
+        "histogram": [
+          271,
+          81,
+          18,
+          5,
+          0,
+          0,
+          0
+        ],
+        "top_rivers": [
+          {
+            "length_km": 1547.1,
+            "mouth_flow": 2444.0,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1333.5,
+            "mouth_flow": 944.6,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1111.4,
+            "mouth_flow": 4477.8,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1046.9,
+            "mouth_flow": 679.9,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 1019.3,
+            "mouth_flow": 1574.2,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 999.3,
+            "mouth_flow": 2051.5,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 927.6,
+            "mouth_flow": 807.8,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 878.0,
+            "mouth_flow": 2343.9,
+            "reaches_ocean": false
+          },
+          {
+            "length_km": 850.0,
+            "mouth_flow": 22759.5,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 815.5,
+            "mouth_flow": 482.9,
+            "reaches_ocean": false
+          },
+          {
+            "length_km": 768.0,
+            "mouth_flow": 358.3,
+            "reaches_ocean": true
+          },
+          {
+            "length_km": 699.9,
+            "mouth_flow": 625.3,
+            "reaches_ocean": true
+          }
+        ]
+      }
+    ]
+  }
+]
