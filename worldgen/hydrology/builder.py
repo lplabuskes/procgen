@@ -19,7 +19,8 @@ LAKE_COLOR = np.array([0.28, 0.65, 0.90, 1.0], dtype=np.float32)
 
 @paramclass
 class HydrologyParams:
-    river_flow_threshold: float = _f(100.0, label="Flow threshold (faces)", min=1.0, max=1000.0)
+    river_flow_threshold: float = _f(50.0, label="Flow threshold (faces)", min=1.0, max=1000.0)
+    precip_exponent: float = _f(3.0, label="Precip weighting exponent", min=1.0, max=5.0)
     min_lake_pixels: int = _f(50, label="Min lake pixels", min=1, max=500)
     pet_baseline_mm_yr: float = _f(100.0, label="PET baseline (mm/yr)", min=0.0, max=500.0)
     pet_per_degree_mm_yr: float = _f(60.0, label="PET slope (mm/yr/°C)", min=0.0, max=200.0)
@@ -74,6 +75,7 @@ class HydrologyBuilder(Stage):
             pet_per_degree_mm_yr=self.params.pet_per_degree_mm_yr,
             pet_max_mm_yr=self.params.pet_max_mm_yr,
             ocean_mask_textures=ocean_mask_tex,
+            precip_exponent=self.params.precip_exponent,
         )
         self.rivers = river_gen.generate()
         self.lake_polygons = river_gen.get_lake_polygons()

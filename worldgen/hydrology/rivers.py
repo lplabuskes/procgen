@@ -46,6 +46,7 @@ class RiverGenerator:
         pet_per_degree_mm_yr: float = 60.0,
         pet_max_mm_yr: float = 2500.0,
         ocean_mask_textures: np.ndarray | None = None,
+        precip_exponent: float = 1.0,
     ) -> None:
         if elevation_textures.ndim == 4:
             elev = elevation_textures[:, :, :, 0]
@@ -80,12 +81,32 @@ class RiverGenerator:
         self.elevations: np.ndarray = elev.astype(np.float32).reshape(-1)
         self.positions: np.ndarray = mesh.face_texture_positions(h, h).reshape(-1, 3)
 
+        # Ocean mask first — the precip weighting renormalizes over land.
+        if ocean_mask_textures is not None:
+            omask = ocean_mask_textures[:, :, :, 0] if ocean_mask_textures.ndim == 4 else ocean_mask_textures
+            self._ocean_mask: np.ndarray = omask.reshape(-1).astype(bool)
+        else:
+            self._ocean_mask = self.elevations <= sea_level
+
         if precipitation_textures is not None:
             annual = precipitation_textures.sum(axis=-1).astype(np.float32)  # (N, H, W)
             flat = annual.reshape(-1)
             mean = float(flat.mean())
             self._mean_precip: float | None = max(mean, 1e-6)
-            self._precip_weights: np.ndarray | None = flat / self._mean_precip
+            weights = flat / self._mean_precip  # mean ≈ 1 over all nodes
+            # Wetness-biased weighting: w = (precip/mean)**p concentrates the
+            # river network into wet regions and thins it in arid ones. Renormalize
+            # so the land-mean weight is unchanged, keeping `min_flow` (a count of
+            # upstream land cells of average rainfall) comparable across exponents.
+            p = float(precip_exponent)
+            if p != 1.0:
+                land = ~self._ocean_mask
+                land_mean = float(weights[land].mean()) if land.any() else 1.0
+                weights = np.power(weights, p)
+                new_land_mean = float(weights[land].mean()) if land.any() else 1.0
+                if new_land_mean > 0.0:
+                    weights *= land_mean / new_land_mean
+            self._precip_weights: np.ndarray | None = weights.astype(np.float32)
         else:
             self._mean_precip = None
             self._precip_weights = None
@@ -98,12 +119,6 @@ class RiverGenerator:
         self._pet_baseline_mm_yr = float(pet_baseline_mm_yr)
         self._pet_per_degree_mm_yr = float(pet_per_degree_mm_yr)
         self._pet_max_mm_yr = float(pet_max_mm_yr)
-
-        if ocean_mask_textures is not None:
-            omask = ocean_mask_textures[:, :, :, 0] if ocean_mask_textures.ndim == 4 else ocean_mask_textures
-            self._ocean_mask: np.ndarray = omask.reshape(-1).astype(bool)
-        else:
-            self._ocean_mask = self.elevations <= sea_level
 
         # Populated by compute_flow / water-balance shrinking.
         self._lake_mask_full: np.ndarray = np.zeros(self.n_nodes, dtype=bool)

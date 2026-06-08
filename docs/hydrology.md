@@ -13,7 +13,8 @@ See also: `docs/plans/river_generation_spec.md` for the original design.
 ## `builder.py`
 
 **`HydrologyParams`** (dataclass):
-- `river_flow_threshold` (default `200.0`) — minimum upstream accumulation for a river headwater
+- `river_flow_threshold` (default `50.0`) — minimum upstream accumulation for a river headwater
+- `precip_exponent` (default `3.0`) — wetness bias on accumulation weight: each node contributes `(precip/mean)**p`, renormalized so the land-mean weight (and thus `river_flow_threshold`'s meaning) is unchanged. `p>1` concentrates the river network into wet regions and thins it in arid ones; `p=1` is plain precip-weighted accumulation.
 - `min_lake_pixels` (default `50`) — minimum flooded-component size to keep as a lake
 - `pet_baseline_mm_yr` / `pet_per_degree_mm_yr` / `pet_max_mm_yr` — clamped-linear PET model for water-balance lake shrinking (`PET = clamp(baseline + slope·max(0,T), 0, max)`)
 - `delta_min_flow` (default `1000.0`) — minimum mouth flow for a river to be tagged as having a delta
