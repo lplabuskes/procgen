@@ -77,4 +77,4 @@ Qt-free surface that stages contribute visualization to. A viz adapter (`viz/map
 
 ## Tangent frame convention
 
-Per-face tangent-plane axes are `u_axis = cross(z, n)`, `v_axis = cross(n, u_axis)`, so the texture U-axis is geographic east and V-axis is geographic north for ~90% of faces. Any D4 grid-walk algorithm will produce N-S/E-W-biased output; `rivers.py` avoids this with D-infinity accumulation and sub-pixel gradient traces rather than grid-snapped steps.
+Per-face tangent-plane axes are `u_axis = cross(z, n)`, `v_axis = cross(n, u_axis)`, so the texture U-axis is geographic east and V-axis is geographic north for ~90% of faces. Any D4 grid-walk algorithm will produce N-S/E-W-biased output; `rivers.py` avoids this with D-infinity accumulation and Laplacian-smoothed polylines rather than grid-snapped steps.
