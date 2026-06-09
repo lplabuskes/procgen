@@ -60,8 +60,8 @@ class PopulationParams:
     trade_weight: float = _f(1.5, label="Trade wealth weight", min=0.0, max=5.0)
     min_pop_fraction: float = _f(0.012, label="Min pop fraction (cull)", min=0.0, max=0.1)
     hinterland_max_distance: float = _f(40.0, label="Hinterland max distance", min=5.0, max=200.0)
-    hinterland_influence_scale: float = _f(1.5, label="Hinterland influence scale", min=0.1, max=10.0)
-    hinterland_reach_scale: float = _f(3.0, label="Hinterland reach scale", min=0.1, max=30.0)
+    hinterland_influence_scale: float = _f(4.5, label="Hinterland influence scale", min=0.1, max=10.0)
+    hinterland_reach_scale: float = _f(9.0, label="Hinterland reach scale", min=0.1, max=30.0)
     hinterland_water_cost: float = _f(20.0, label="Hinterland water step cost (coastal fishing reach)", min=0.0, max=200.0)
     trade_spawn: TradeSpawnParams = field(
         default_factory=TradeSpawnParams, metadata={"label": "Trade-spawn settlements"}

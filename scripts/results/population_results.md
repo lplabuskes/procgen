@@ -37,11 +37,12 @@ Measure primacy *per realm* once polities group hinterlands into kingdoms.
 | 2026-06-07 | 42 137 999 | 292 | -0.96 | 0.96 | 1.28 | 0.26 | 0.63 | 5 / 11 / 36 / 241 | vil_thr=0.20 vil_excl=5 town_excl=6 trade_w=1.50 cull=0.005 hinter_max=40 hinter_infl=8.0 hinter_reach=40 |
 | 2026-06-07 | 42 137 999 | 506 | -0.85 | 0.96 | 1.37 | 0.20 | 0.59 | 5 / 10 / 49 / 442 | vil_thr=0.10 vil_excl=3 town_excl=6 trade_w=1.50 cull=0.005 hinter_max=40 hinter_infl=8.0 hinter_reach=40 |
 | 2026-06-07 | 42 137 999 | 320 | -0.78 | 0.97 | 1.31 | 0.21 | 0.54 | 6 / 10 / 66 / 239 | vil_thr=0.10 vil_excl=3 town_excl=6 trade_w=1.50 cull=0.012 hinter_max=40 hinter_infl=8.0 hinter_reach=45 |
+| 2026-06-09 | 42 137 999 | 480 | -0.79 | 0.94 | 1.73 | 0.11 | 0.48 | 3 / 27 / 187 / 263 | vil_thr=0.10 vil_excl=3 town_excl=6 trade_w=1.50 cull=0.012 hinter_max=40 hinter_infl=4.5 hinter_reach=9 |
 
 ## Per-Seed Detail (latest run)
 
 | Seed | n | Zipf slope | R² | P1/P2 | top4 | Gini | cap/city/town/vil |
 |------|--:|-----------:|---:|------:|-----:|-----:|-------------------|
-| 42 | 301 | -0.77 | 0.97 | 1.31 | 0.23 | 0.55 | 5 / 8 / 40 / 248 |
-| 137 | 210 | -0.80 | 0.97 | 1.61 | 0.22 | 0.52 | 5 / 4 / 69 / 132 |
-| 999 | 449 | -0.77 | 0.97 | 1.02 | 0.17 | 0.55 | 7 / 18 / 88 / 336 |
+| 42 | 534 | -0.78 | 0.96 | 1.15 | 0.10 | 0.50 | 6 / 22 / 201 / 305 |
+| 137 | 217 | -0.79 | 0.92 | 2.89 | 0.14 | 0.47 | 1 / 16 / 101 / 99 |
+| 999 | 689 | -0.81 | 0.93 | 1.14 | 0.08 | 0.49 | 3 / 43 / 258 / 385 |

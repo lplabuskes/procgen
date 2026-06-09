@@ -166,7 +166,7 @@ def measure_seed(seed: int, rebuild: bool) -> dict:
     realm = RealmPipeline(RealmParams())
     realm.build(ctx)
 
-    settlements = realm.realm_stage.settlements or []
+    settlements = realm.population_stage.settlements or []
     pops = np.array([s.population for s in settlements], dtype=np.float64)
     metrics = _distribution_metrics(pops)
     metrics["seed"] = seed

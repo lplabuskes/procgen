@@ -40,8 +40,8 @@ def compute_hinterland_shares(
     cost_graph: csr_matrix,
     *,
     max_distance: float,
-    influence_scale: float = 1.5,
-    reach_scale: float = 3.0,
+    influence_scale: float = 4.5,
+    reach_scale: float = 9.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Soft hinterland assignment — fractional capacity shares + display owner.
 
