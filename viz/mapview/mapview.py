@@ -737,11 +737,14 @@ class MapWidget(QWidget):
         if max_flow <= 0.0:
             return
 
+        flow_threshold = float(np.median(all_flows))
         min_width, max_width = 0.4, 4.0
         painter.setBrush(Qt.BrushStyle.NoBrush)
         active_pen: QPen | None = None
 
         for start_pos, end_pos, flow in routes:
+            if float(flow) < flow_threshold:
+                continue
             lon0 = float(self._shift_lon(np.arctan2(start_pos[1], start_pos[0])))
             lat0 = float(np.arcsin(np.clip(start_pos[2], -1.0, 1.0)))
             lon1 = float(self._shift_lon(np.arctan2(end_pos[1], end_pos[0])))
