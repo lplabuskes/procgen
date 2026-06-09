@@ -1,9 +1,7 @@
 """Tests for river generation: crossing detection and property checks.
 
 Covers:
- - _crossing_pairs: great-circle arc intersection primitive (unit tests)
- - _resolve_crossings: post-processing step that terminates lower-flow rivers at
-   crossing points (unit tests with synthetic River objects)
+ - crossing_pairs: great-circle arc intersection primitive (unit tests)
  - generate(): end-to-end property tests verifying no rivers cross and no river
    loops back on itself (over a few deterministic seeds)
 """
@@ -13,9 +11,9 @@ import numpy as np
 import pytest
 
 from worldgen.geology.elevation import compute_elevation_textures
-from worldgen.hydrology.crossings import _arc_param, crossing_pairs, resolve_crossings
+from worldgen.hydrology.crossings import _arc_param, crossing_pairs
 from worldgen.hydrology.rivers import RiverGenerator
-from worldgen.hydrology.types import River, RiverNode, RiverSegment
+from worldgen.hydrology.types import River
 from core.mesh import Mesh
 
 
@@ -110,8 +108,8 @@ def _crossing_pairs_np(
 def _inter_river_crossings(rivers: list[River]) -> list[tuple]:
     """Return (ri_a, ri_b, si_a, si_b) for every crossing between distinct rivers.
 
-    Uses AABB pre-filtering and vectorized arc intersection (same approach as
-    _resolve_crossings) so the check runs fast even with hundreds of rivers.
+    Uses AABB pre-filtering and vectorized arc intersection so the check runs
+    fast even with hundreds of rivers.
     """
     segs = [_river_segments(r) for r in rivers]
     bounds = [_aabb(p1, p2) for p1, p2 in segs]
@@ -255,79 +253,6 @@ class TestCrossingPairs:
 
 
 # ---------------------------------------------------------------------------
-# TestResolveCrossings
-# ---------------------------------------------------------------------------
-
-def _make_river(positions: list[np.ndarray], flow_rate: float) -> River:
-    """Construct a River from a list of unit-sphere positions and a constant flow."""
-    segs = []
-    for i in range(len(positions) - 1):
-        segs.append(RiverSegment(
-            start=RiverNode(position=positions[i].astype(np.float32),
-                            elevation=0.0, face_id=0, uv=(0.0, 0.0)),
-            end=RiverNode(position=positions[i + 1].astype(np.float32),
-                          elevation=0.0, face_id=0, uv=(0.0, 0.0)),
-            flow_rate=flow_rate,
-        ))
-    return River(segments=segs, source=segs[0].start, mouth=segs[-1].end)
-
-
-class TestResolveCrossings:
-    """Unit tests for resolve_crossings with hand-crafted crossing rivers."""
-
-    def _crossing_pair(self):
-        """Two rivers whose first segments cross; river B has higher flow."""
-        a = 10.0
-        ne = _unit(np.array([np.sin(np.deg2rad(a)), np.sin(np.deg2rad(a)), np.cos(np.deg2rad(a * 1.41))]))
-        sw = _unit(np.array([-np.sin(np.deg2rad(a)), -np.sin(np.deg2rad(a)), np.cos(np.deg2rad(a * 1.41))]))
-        nw = _unit(np.array([-np.sin(np.deg2rad(a)), np.sin(np.deg2rad(a)), np.cos(np.deg2rad(a * 1.41))]))
-        se = _unit(np.array([np.sin(np.deg2rad(a)), -np.sin(np.deg2rad(a)), np.cos(np.deg2rad(a * 1.41))]))
-        # River A goes NE → SW (low flow). River B goes NW → SE (high flow).
-        # Each river has >2 segments so it survives the len>2 filter.
-        river_a = _make_river(
-            [ne, sw, _unit(sw + np.array([-0.1, -0.1, 0.0])),
-             _unit(sw + np.array([-0.2, -0.2, 0.0]))],
-            flow_rate=1.0,
-        )
-        river_b = _make_river(
-            [nw, se, _unit(se + np.array([0.1, -0.1, 0.0])),
-             _unit(se + np.array([0.2, -0.2, 0.0]))],
-            flow_rate=100.0,
-        )
-        return river_a, river_b
-
-    def test_lower_flow_river_truncated(self):
-        river_a, river_b = self._crossing_pair()
-        result = resolve_crossings([river_a, river_b])
-        # River B (higher flow) must survive intact.
-        b_in_result = any(
-            abs(s.flow_rate - 100.0) < 1e-6 for r in result for s in r.segments
-        )
-        assert b_in_result, "higher-flow river must be kept"
-
-    def test_no_crossings_after_resolve(self):
-        river_a, river_b = self._crossing_pair()
-        result = resolve_crossings([river_a, river_b])
-        crossings = _inter_river_crossings(result)
-        assert crossings == [], (
-            f"rivers still cross after resolve_crossings: {crossings}"
-        )
-
-    def test_single_river_unchanged(self):
-        p1 = _unit(np.array([0.5, 0.0, 0.866]))
-        p2 = _unit(np.array([0.0, 0.5, 0.866]))
-        p3 = _unit(np.array([-0.5, 0.0, 0.866]))
-        p4 = _unit(np.array([0.0, -0.5, 0.866]))
-        river = _make_river([p1, p2, p3, p4], flow_rate=10.0)
-        result = resolve_crossings([river])
-        assert len(result) == 1
-        assert len(result[0].segments) == len(river.segments)
-
-    def test_empty_list_unchanged(self):
-        assert resolve_crossings([]) == []
-
-
-# ---------------------------------------------------------------------------
 # TestRiverProperties — end-to-end checks over a few seeds
 # ---------------------------------------------------------------------------
 
@@ -393,7 +318,7 @@ def _classify_river_mouth(river: River, all_rivers: list, gen: RiverGenerator) -
       ocean but whose mouth drifted slightly inland after Laplacian smoothing).
     - lake: nearest grid node is in the endorheic basin mask (closed sink).
     - junction: mouth lies on another river's polyline within JUNCTION_TOL;
-      this is how resolve_crossings terminates lower-flow tributaries.
+      tributaries end on their main stem at the confluence (Hack decomposition).
     - unknown: none of the above; indicates a stall, loop, or geometry failure.
     """
     q = river.mouth.position.astype(np.float64)
@@ -414,11 +339,10 @@ def _classify_river_mouth(river: River, all_rivers: list, gen: RiverGenerator) -
         if np.linalg.norm(gen.positions[ocean_idxs] - q[None], axis=1).min() < OCEAN_TOL:
             return 'ocean'
 
-    # After resolve_crossings, a truncated river's mouth is placed at the exact
-    # great-circle crossing point, which lies on the other river's arc. The
-    # chord approximation error is < 0.002 for 5° segments, so 0.01 is safe.
-    # A slightly larger tolerance (0.03) also handles cases where smoothing
-    # moved the junction point away from the arc.
+    # A tributary's mouth is the confluence node on its main stem, which lies on
+    # the main stem's polyline. The chord approximation error is < 0.002 for 5°
+    # segments; the larger 0.03 tolerance also absorbs the offset from smoothing
+    # the tributary and the stem independently (per-river endpoints are pinned).
     JUNCTION_TOL = 0.03
     for other in all_rivers:
         if other is river:
@@ -446,68 +370,15 @@ def gen_and_rivers_mouths(request):
     return _make_gen_and_rivers_mouth_test(request.param)
 
 
-def _termination_reason_for_river(river: River, gen: RiverGenerator) -> str:
-    """Look up the trace termination reason for a river by matching its source node."""
-    src = river.source
-    if src is None:
-        return 'unknown_source'
-    face = src.face_id
-    res = gen.resolution
-    u, v = src.uv
-    col = int(round(u * (res - 1)))
-    row = int(round(v * (res - 1)))
-    hw = face * res * res + row * res + col
-    return gen._trace_reasons.get(hw, 'not_found')
-
-
 class TestRiverMouthTermination:
-    """Every river mouth must terminate at the ocean, an endorheic lake, or as
-    a tributary joining a higher-flow river (junction created by resolve_crossings).
-
-    The test is intentionally diagnostic: the error message reports the full
-    category breakdown so the awkward-ending fraction is visible at a glance.
+    """Every river mouth must terminate at the ocean, an endorheic lake, or as a
+    tributary joining a higher-flow river (a junction where a tributary ends on
+    its main stem in the Hack decomposition).
     """
 
     def test_rivers_generated(self, gen_and_rivers_mouths):
         _, rivers = gen_and_rivers_mouths
         assert len(rivers) > 0, "no rivers generated — mouth tests would be vacuous"
-
-    def test_termination_reason_breakdown(self, gen_and_rivers_mouths):
-        """Diagnostic: show trace-reason and mouth context for unknown-mouth rivers.
-
-        This test always passes — it prints the breakdown so we can see which
-        termination conditions remain and what the mouth positions look like.
-        """
-        gen, rivers = gen_and_rivers_mouths
-        unknown_details: list[str] = []
-        reason_counts: dict[str, int] = {}
-        for river in rivers:
-            cat = _classify_river_mouth(river, rivers, gen)
-            if cat != 'unknown':
-                continue
-            reason = _termination_reason_for_river(river, gen)
-            reason_counts[reason] = reason_counts.get(reason, 0) + 1
-            q = river.mouth.position.astype(np.float64)
-            nearest = int(np.argmin(np.linalg.norm(gen.positions - q[None], axis=1)))
-            near_elev = float(gen.elevations[nearest])
-            ocean_idxs = np.where(gen._ocean_mask)[0]
-            if ocean_idxs.size:
-                min_ocean_d = float(np.min(np.linalg.norm(gen.positions[ocean_idxs] - q[None], axis=1)))
-            else:
-                min_ocean_d = float('inf')
-            min_river_d = min(
-                (_min_chord_dist_to_polyline(q, r) for r in rivers if r is not river),
-                default=float('inf'),
-            )
-            unknown_details.append(
-                f"    trace={reason} near_elev={near_elev:.3f} "
-                f"d_ocean={min_ocean_d:.4f} d_river={min_river_d:.4f}"
-            )
-        if reason_counts:
-            breakdown_str = ', '.join(f'{r}={n}' for r, n in sorted(reason_counts.items()))
-            print(f"\n  Unknown mouths by trace reason: {breakdown_str}")
-            for d in unknown_details[:8]:
-                print(d)
 
     def test_all_mouths_have_valid_termination(self, gen_and_rivers_mouths):
         gen, rivers = gen_and_rivers_mouths

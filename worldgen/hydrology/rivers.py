@@ -1,17 +1,18 @@
 """River generation via per-face grid sampling and D-infinity routing.
 
-Priority-Flood fills depressions; D-infinity routes flow; headwaters are traced
-as sub-pixel bilinear-gradient walks to avoid cardinal-sector bias.
+Priority-Flood fills depressions; D-infinity routes flow; rivers are routed
+along the single-receiver accumulation tree and decomposed into main stems and
+tributaries (Hack ordering).
 
 Sibling modules: types.py, crossings.py, stitching.py, routing.py.
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 
-from worldgen.hydrology.crossings import resolve_crossings, resolve_self_crossings
+from worldgen.hydrology.crossings import resolve_self_crossings
 from worldgen.hydrology.routing import (
     accumulate_flow,
     compute_dinf_flow,
@@ -111,19 +112,14 @@ class RiverGenerator:
         self._pet_max_mm_yr = float(pet_max_mm_yr)
 
         # Populated by compute_flow / water-balance shrinking.
-        self._lake_mask_full: np.ndarray = np.zeros(self.n_nodes, dtype=bool)
         self._endorheic_mask: np.ndarray = np.zeros(self.n_nodes, dtype=bool)
-        self._flat_mask: np.ndarray = np.zeros(self.n_nodes, dtype=bool)  # all raised land, any size
-        self._lake_outlet_pos: np.ndarray | None = None  # (n_nodes, 3), NaN for non-flat nodes
 
-        # Cache per-face tangent frame data for sub-pixel walks.
+        # Per-face tangent frames; the inter-face flow fallback projects D8
+        # descent directions into each face's UV frame.
         frames = mesh.face_tangent_frames()
         self._u_axes = np.asarray(frames[0], dtype=np.float64)
         self._v_axes = np.asarray(frames[1], dtype=np.float64)
-        self._u_ranges = np.asarray(frames[4], dtype=np.float64)
-        self._vertex_uvs = frames[6]
 
-        self._trace_reasons: Dict[int, str] = {}
         # Sparse inter-face adjacency; intra-face neighbours derived on the fly.
         # Derived from the mesh's cached boundary pixel pairs (already built by
         # the elevation/climate seam passes), avoiding a separate stitch pass.
@@ -263,10 +259,7 @@ class RiverGenerator:
             self.elevations, self._ocean_mask, self._nbr_indptr, self._nbr_flat
         )
         self._eff = eff
-        self._was_raised = was_raised
         self._lake_mask = self._build_lake_mask(was_raised)
-        # Snapshot before water-balance shrinking — gates headwater detection.
-        self._lake_mask_full = self._lake_mask.copy()
         self._endorheic_mask = np.zeros(self.n_nodes, dtype=bool)
         r1, r2, f1, f2, ang = compute_dinf_flow(
             eff, self.n_nodes, self.n_faces, self._r2, self.resolution
@@ -278,7 +271,6 @@ class RiverGenerator:
         )
         accum = accumulate_flow(r1, r2, f1, f2, eff, self._precip_weights)
         self._shrink_endorheic_lakes(accum)
-        self._build_lake_outlets(accum)
         return r1, r2, f1, f2, ang, accum
 
     def _shrink_endorheic_lakes(self, flow_accum: np.ndarray) -> None:
@@ -333,73 +325,6 @@ class RiverGenerator:
         for comp in find_connected_components(raw, self._neighbors, self.n_nodes, min_size=self.min_lake_pixels):
             mask[np.array(comp)] = True
         return mask
-
-    def _build_lake_outlets(self, flow_accum: np.ndarray) -> None:
-        """For each flat filled region (all Priority-Flood-raised land, any size), find the outlet
-        (highest-flow boundary node) and store its 3D position for every node in that region.
-        Used to steer river traces through flat areas regardless of whether they are large enough
-        to render as lakes."""
-        self._lake_outlet_pos = np.full((self.n_nodes, 3), np.nan, dtype=np.float64)
-        all_flat = self._was_raised & ~self._ocean_mask
-        self._flat_mask: np.ndarray = all_flat  # all raised land, any size
-        if not all_flat.any():
-            return
-        for comp in find_connected_components(all_flat, self._neighbors, self.n_nodes, min_size=1):
-            comp_set = set(comp)
-            boundary = [n for n in comp if any(nb not in comp_set for nb in self._neighbors(n))]
-            if not boundary:
-                boundary = comp
-            outlet = max(boundary, key=lambda n: flow_accum[n])
-            outlet_pos = self.positions[outlet].astype(np.float64)
-            self._lake_outlet_pos[np.array(comp)] = outlet_pos
-
-    # ------------------------------------------------------------------
-    # River extraction (sub-pixel walk)
-    # ------------------------------------------------------------------
-
-    def extract_rivers(
-        self,
-        receiver1: np.ndarray,
-        receiver2: np.ndarray,
-        frac1: np.ndarray,
-        frac2: np.ndarray,
-        flow_accum: np.ndarray,
-    ) -> List[River]:
-        """Identify headwaters and trace each downstream via sub-pixel walk."""
-        threshold = self.min_flow
-        # Pre-shrinking mask: dry-bed pixels still have old flow directions.
-        lake_nodes = self._lake_mask_full
-        is_above = (flow_accum >= threshold) & ~lake_nodes
-        # Also exclude pixels immediately downstream of a lake outlet to avoid duplicate rivers.
-        is_post_lake = np.zeros(self.n_nodes, dtype=bool)
-        for p in np.where(lake_nodes)[0].tolist():
-            r1i = int(receiver1[p])
-            if r1i >= 0 and not lake_nodes[r1i]:
-                is_post_lake[r1i] = True
-            r2i = int(receiver2[p])
-            if r2i >= 0 and not lake_nodes[r2i]:
-                is_post_lake[r2i] = True
-        is_above &= ~is_post_lake
-        above_idx = np.where(is_above)[0]
-
-        # Headwater = above-threshold node receiving no above-threshold inflow.
-        has_inflow = np.zeros(self.n_nodes, dtype=bool)
-        for node in above_idx.tolist():
-            r1 = int(receiver1[node])
-            r2 = int(receiver2[node])
-            if r1 >= 0 and is_above[r1] and frac1[node] > 0.0:
-                has_inflow[r1] = True
-            if r2 >= 0 and is_above[r2] and frac2[node] > 0.0:
-                has_inflow[r2] = True
-        headwaters = above_idx[~has_inflow[above_idx]].tolist()
-
-        rivers: List[River] = []
-        for hw in headwaters:
-            river = self._trace_river_subpixel(int(hw), flow_accum)
-            if (river is not None and len(river.segments) > 2
-                    and self._trace_reasons.get(int(hw)) != 'loop'):
-                rivers.append(river)
-        return rivers
 
     # ------------------------------------------------------------------
     # River extraction (accumulation-graph routing)
@@ -537,293 +462,6 @@ class RiverGenerator:
             ))
         return river
 
-    def _trace_river_subpixel(
-        self,
-        start: int,
-        flow_accum: np.ndarray,
-    ) -> Optional[River]:
-        """Walk sub-pixel along the negative bilinear gradient of the filled DEM.
-
-        Momentum blending pushes through face-boundary gradient discontinuities.
-        Terminates at ocean, endorheic sink, loop, or stall.
-        """
-        res = self.resolution
-        n_minus_1 = res - 1
-        uv_step = 1.0 / n_minus_1
-        face_init, row_init, col_init = self._unpack(start)
-
-        current_face = face_init
-        u = col_init / n_minus_1
-        v = row_init / n_minus_1
-        current_pos = self.mesh.face_uv_to_3d(current_face, u, v)
-        positions: List[np.ndarray] = [current_pos.copy()]
-        flow_history: List[float] = [float(flow_accum[start])]
-        # Per-point lake flag lets the renderer hide in-lake segments without truncating data.
-        in_lake_flags: List[bool] = [bool(self._lake_mask[start])]
-
-        # Momentum blending pushes through face-boundary gradient discontinuities and NaN flats.
-        momentum = 0.5
-        prev_du = 0.0
-        prev_dv = 0.0
-        has_prev = False
-
-        stall_window = 40
-        recent_positions: List[np.ndarray] = [current_pos]
-        face_cell_3d = float(self._u_ranges[current_face]) / (res - 1)
-        stall_threshold = 0.5 * face_cell_3d
-
-        max_steps = 4 * res * res
-        terminated_at_sea = False
-        reason = 'max_steps'
-        # Loop detection; skip first few steps to avoid false positives at the headwater.
-        visited_cells: set = set()
-        loop_check_start = 4
-        for step in range(max_steps):
-            ang = self._gradient_angle_at(current_face, u, v)
-
-            # Compute outlet pull when inside a (non-endorheic) lake flat.
-            outlet_du, outlet_dv = 0.0, 0.0
-            has_outlet_dir = False
-            if self._lake_outlet_pos is not None:
-                cur_row = int(round(v * n_minus_1))
-                cur_col = int(round(u * n_minus_1))
-                cur_node = self._node_idx(current_face, cur_row, cur_col)
-                if self._flat_mask[cur_node] and not self._endorheic_mask[cur_node]:
-                    outlet_xyz = self._lake_outlet_pos[cur_node]
-                    if not np.any(np.isnan(outlet_xyz)):
-                        delta = outlet_xyz - current_pos
-                        od_u = float(delta @ self._u_axes[current_face])
-                        od_v = float(delta @ self._v_axes[current_face])
-                        omag = (od_u * od_u + od_v * od_v) ** 0.5
-                        if omag > 1e-12:
-                            outlet_du = od_u / omag
-                            outlet_dv = od_v / omag
-                            has_outlet_dir = True
-
-            if np.isfinite(ang):
-                du = float(np.cos(ang))
-                dv = float(np.sin(ang))
-                if has_outlet_dir:
-                    # Blend gradient with outlet pull; lake surface is nearly flat so
-                    # gradient is unreliable — outlet direction dominates.
-                    lake_bias = 0.7
-                    du = (1.0 - lake_bias) * du + lake_bias * outlet_du
-                    dv = (1.0 - lake_bias) * dv + lake_bias * outlet_dv
-                if has_prev:
-                    du = (1.0 - momentum) * du + momentum * prev_du
-                    dv = (1.0 - momentum) * dv + momentum * prev_dv
-                    mag = (du * du + dv * dv) ** 0.5
-                    if mag < 1e-12:
-                        reason = 'no_direction'
-                        break
-                    du /= mag
-                    dv /= mag
-            elif has_outlet_dir:
-                # Flat lake with no gradient: steer toward outlet, blend lightly with momentum.
-                lake_bias = 0.85
-                if has_prev:
-                    du = lake_bias * outlet_du + (1.0 - lake_bias) * prev_du
-                    dv = lake_bias * outlet_dv + (1.0 - lake_bias) * prev_dv
-                    mag = (du * du + dv * dv) ** 0.5
-                    if mag > 1e-12:
-                        du /= mag
-                        dv /= mag
-                    else:
-                        du, dv = outlet_du, outlet_dv
-                else:
-                    du, dv = outlet_du, outlet_dv
-            elif has_prev:
-                # No gradient, no outlet (boundary glitch) — coast on momentum.
-                du = prev_du
-                dv = prev_dv
-            else:
-                reason = 'no_gradient'
-                break
-            prev_du = du
-            prev_dv = dv
-            has_prev = True
-
-            new_u = u + uv_step * du
-            new_v = v + uv_step * dv
-
-            if 0.0 <= new_u <= 1.0 and 0.0 <= new_v <= 1.0:
-                u, v = new_u, new_v
-                new_pos = self.mesh.face_uv_to_3d(current_face, u, v)
-            else:
-                # Crossed face boundary — find the neighbour the intended
-                # position falls into and switch frames.
-                attempted_pos = self.mesh.face_uv_to_3d(current_face, new_u, new_v)
-                attempted_pos /= max(float(np.linalg.norm(attempted_pos)), 1e-12)
-                # Collect all neighbour candidates sorted by L1 overflow.
-                candidates: List[Tuple[float, int, float, float]] = []
-                for nb_face in self.mesh.face_adjacency[current_face]:
-                    nu, nv = self.mesh.face_3d_to_uv(nb_face, attempted_pos)
-                    # L1 distance outside [0,1]²; 0 means the point is inside.
-                    out = max(0.0, -nu, nu - 1.0) + max(0.0, -nv, nv - 1.0)
-                    candidates.append((out, nb_face, nu, nv))
-                candidates.sort()
-                best_out = candidates[0][0] if candidates else float('inf')
-                # 0.5 is well above the ~0.14 max overshoot for one UV-grid step.
-                if best_out > 0.5 or not candidates:
-                    reason = 'bad_crossing'
-                    break
-
-                # At triple-point ties, pick the face momentum points most into.
-                vertex_tol = 1.5 * uv_step
-                tied = [c for c in candidates if c[0] <= best_out + vertex_tol]
-                next_face = -1
-                next_uv: Optional[Tuple[float, float]] = None
-                if has_prev and len(tied) > 1:
-                    d_3d = (prev_du * self._u_axes[current_face]
-                            + prev_dv * self._v_axes[current_face])
-                    best_score = -float('inf')
-                    for out, nb_face, nu, nv in tied:
-                        mdu = float(d_3d @ self._u_axes[nb_face])
-                        mdv = float(d_3d @ self._v_axes[nb_face])
-                        # "Into" = momentum component pointing toward face centre.
-                        cu = max(0.0, min(1.0, nu))
-                        cv = max(0.0, min(1.0, nv))
-                        score = mdu * (0.5 - cu) + mdv * (0.5 - cv)
-                        if score > best_score:
-                            best_score = score
-                            next_face = nb_face
-                            next_uv = (cu, cv)
-                else:
-                    _, next_face, nu0, nv0 = candidates[0]
-                    next_uv = (max(0.0, min(1.0, nu0)), max(0.0, min(1.0, nv0)))
-
-                if next_face < 0 or next_uv is None:
-                    reason = 'bad_crossing'
-                    break
-                old_face = current_face
-                current_face = next_face
-                # Re-express momentum in new face's UV frame to avoid frame-mismatch loops.
-                if has_prev:
-                    prev_du, prev_dv, has_prev = self._reproject_momentum(
-                        prev_du, prev_dv, old_face, current_face
-                    )
-                u, v = next_uv
-                new_pos = self.mesh.face_uv_to_3d(current_face, u, v)
-
-            norm = float(np.linalg.norm(new_pos))
-            if norm <= 0.0:
-                reason = 'degenerate'
-                break
-            new_pos = new_pos / norm
-
-            col_n = int(round(u * n_minus_1))
-            row_n = int(round(v * n_minus_1))
-            nearest = self._node_idx(current_face, row_n, col_n)
-
-            positions.append(new_pos)
-            in_lake_flags.append(bool(self._lake_mask[nearest]))
-            flow_history.append(max(flow_history[-1], float(flow_accum[nearest])))
-
-            if self._endorheic_mask[nearest]:  # endorheic sink
-                reason = 'endorheic'
-                break
-
-            if step >= loop_check_start:
-                if nearest in visited_cells:
-                    reason = 'loop'
-                    break  # loop detected
-                if nearest not in self._inter_adj:  # skip seam nodes; gradient discontinuities cause brief re-visits
-                    visited_cells.add(nearest)
-            if self._ocean_mask[nearest]:
-                reason = 'ocean'
-                terminated_at_sea = True
-                break
-            current_pos = new_pos
-            # Don't threshold on flow_accum mid-trace; D-inf accum can dip at branch points.
-            recent_positions.append(new_pos)
-            if len(recent_positions) > stall_window:
-                oldest = recent_positions.pop(0)
-                if float(np.linalg.norm(new_pos - oldest)) < stall_threshold:
-                    reason = 'stall'
-                    break
-
-        self._trace_reasons[start] = reason
-
-        if len(positions) < 2:
-            return None
-
-        source_node = RiverNode(
-            position=positions[0].astype(np.float32),
-            elevation=float(self.elevations[start]),
-            face_id=face_init,
-            uv=(col_init / n_minus_1, row_init / n_minus_1),
-        )
-        mouth_col = int(round(u * n_minus_1))
-        mouth_row = int(round(v * n_minus_1))
-        mouth_idx = self._node_idx(current_face, mouth_row, mouth_col)
-        mouth_node = RiverNode(
-            position=positions[-1].astype(np.float32),
-            elevation=float(self.elevations[mouth_idx]),
-            face_id=current_face,
-            uv=(u, v),
-        )
-        river = River(source=source_node, mouth=mouth_node)
-        for k in range(1, len(positions)):
-            seg_start = RiverNode(
-                position=positions[k - 1].astype(np.float32),
-                elevation=0.0, face_id=current_face, uv=(0.0, 0.0),
-            )
-            seg_end = RiverNode(
-                position=positions[k].astype(np.float32),
-                elevation=0.0, face_id=current_face, uv=(0.0, 0.0),
-            )
-            seg_in_lake = in_lake_flags[k - 1] or in_lake_flags[k]
-            river.segments.append(RiverSegment(
-                start=seg_start,
-                end=seg_end,
-                flow_rate=flow_history[k - 1],
-                in_lake=seg_in_lake,
-            ))
-        _ = terminated_at_sea  # for future use; mouth-at-sea info if needed
-        return river
-
-    def _reproject_momentum(
-        self,
-        du: float,
-        dv: float,
-        old_face: int,
-        new_face: int,
-    ) -> Tuple[float, float, bool]:
-        """Re-express UV momentum from old_face's frame into new_face's. Returns (du, dv, valid)."""
-        d_3d = du * self._u_axes[old_face] + dv * self._v_axes[old_face]
-        new_du = float(d_3d @ self._u_axes[new_face])
-        new_dv = float(d_3d @ self._v_axes[new_face])
-        pmag = (new_du ** 2 + new_dv ** 2) ** 0.5
-        if pmag > 1e-12:
-            return new_du / pmag, new_dv / pmag, True
-        return 0.0, 0.0, False
-
-    def _gradient_angle_at(self, face: int, u: float, v: float) -> float:
-        """Flow angle (CCW from +U) from bilinear gradient of filled DEM. NaN on flat cells."""
-        res = self.resolution
-        n_minus_1 = res - 1
-        fu = max(0.0, min(float(n_minus_1) - 1e-9, u * n_minus_1))
-        fv = max(0.0, min(float(n_minus_1) - 1e-9, v * n_minus_1))
-        c0 = int(fu)
-        r0 = int(fv)
-        c1 = c0 + 1
-        r1 = r0 + 1
-        tu = fu - c0
-        tv = fv - r0
-        base = face * self._r2
-        e00 = float(self._eff[base + r0 * res + c0])
-        e10 = float(self._eff[base + r0 * res + c1])
-        e01 = float(self._eff[base + r1 * res + c0])
-        e11 = float(self._eff[base + r1 * res + c1])
-        # Bilinear partial derivatives; constant scale doesn't affect direction.
-        dE_du = ((1.0 - tv) * (e10 - e00)) + (tv * (e11 - e01))
-        dE_dv = ((1.0 - tu) * (e01 - e00)) + (tu * (e11 - e10))
-        flow_du = -dE_du
-        flow_dv = -dE_dv
-        if abs(flow_du) < 1e-20 and abs(flow_dv) < 1e-20:
-            return float('nan')
-        return float(np.arctan2(flow_dv, flow_du))
-
     # ------------------------------------------------------------------
     # Facade
     # ------------------------------------------------------------------
@@ -832,7 +470,6 @@ class RiverGenerator:
         r1, r2, f1, f2, _ang, accum = self.compute_flow()
         rivers = self.extract_rivers_graph(r1, r2, f1, f2, accum)
         rivers = resolve_self_crossings(rivers)
-        rivers = resolve_crossings(rivers)
         return rivers
 
     def get_lake_polygons(self) -> List[np.ndarray]:
