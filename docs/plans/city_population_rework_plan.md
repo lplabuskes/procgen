@@ -1,6 +1,12 @@
 # City Population Rework — Grounding the Realm Layer in Real People
 
-**Status:** Proposed (planning). Not yet implemented.
+**Status:** Implemented 2026-06-11. Calibrated defaults: `D_max=16`, `γ=2.0`, `s=0.15`,
+`city_surplus_share=0.04` (§5 resolved: s *is* partitioned now — the modeled city takes
+4% of regional food, the rest is reserved for the future town pipeline), `β=900`,
+`city_min=7000`, `situational_weight=0.55`. Validation (seeds 4/31/35): world totals
+324/405/407 M, top cities 454–524k, Zipf slope −0.78…−0.90 (R² ≥ 0.92, Gini 0.46–0.52),
+8–10 of each seed's top-10 cities trade-fed (§8.3 passes). Harness:
+`scripts/measure_population_absolute.py` (supersedes `investigate_pop_grounding.py`).
 **Scope:** `realmgen` scoring → placement → population. Physical worldgen unchanged.
 **Motivation owner:** investigation in `scripts/investigate_pop_grounding.py` (seeds 4/31/35).
 

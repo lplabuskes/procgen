@@ -12,16 +12,18 @@ import numpy as np
 from core.display import DisplayRegistry
 from core.params import field, param_field as _f, paramclass
 from core.pipeline import BuildContext, Stage
-from realmgen.channels import HINTERLAND_ID, POPULATION, SUITABILITY, TRADE_FLOW
+from realmgen.channels import HINTERLAND_ID, POPULATION, RURAL_POPULATION, SUITABILITY, TRADE_FLOW
 from realmgen.placement.builder import SeederParams
 from realmgen.placement.seeder import build_cost_graph
 from realmgen.placement.types import Settlement, population_display_tier
 from realmgen.population.calibration import (
     apply_population_to_settlements,
     compute_carrying_capacity,
+    compute_food_base,
     compute_hinterland_shares,
-    compute_population,
+    compute_rural_population,
     compute_trade_wealth,
+    compute_urban_population,
     cull_settlements,
 )
 from realmgen.population.trade_spawn import spawn_trade_settlements
@@ -57,8 +59,16 @@ class TradeSpawnParams:
 @paramclass
 class PopulationParams:
     relaxation_passes: int = _f(4, label="Relaxation passes", min=1, max=5)
-    trade_weight: float = _f(1.5, label="Trade wealth weight", min=0.0, max=5.0)
-    min_pop_fraction: float = _f(0.012, label="Min pop fraction (cull)", min=0.0, max=0.1)
+    rural_density_max: float = _f(16.0, label="Max rural density (people/km² at fertility 1)", min=1.0, max=100.0)
+    fertility_exponent: float = _f(2.0, label="Fertility exponent γ (density contrast)", min=0.5, max=4.0)
+    surplus_rate: float = _f(0.15, label="Agricultural surplus rate s", min=0.0, max=0.5)
+    # ``s × cap`` is the urban headroom of the *whole region* — it also feeds the
+    # towns and small cities below this layer's resolution. The modeled major city
+    # gets only a share; the remainder is reserved for the future town pipeline
+    # (see docs/plans/city_population_rework_plan.md §5 — don't double-count).
+    city_surplus_share: float = _f(0.04, label="Major-city share of regional surplus", min=0.0, max=1.0)
+    trade_food_weight: float = _f(900.0, label="Trade food weight β (people per flow unit)", min=0.0, max=10_000.0)
+    city_min: float = _f(7_000.0, label="City existence floor (people)", min=0.0, max=100_000.0)
     hinterland_max_distance: float = _f(40.0, label="Hinterland max distance", min=5.0, max=200.0)
     hinterland_influence_scale: float = _f(4.5, label="Hinterland influence scale", min=0.1, max=10.0)
     hinterland_reach_scale: float = _f(9.0, label="Hinterland reach scale", min=0.1, max=30.0)
@@ -105,6 +115,28 @@ def _make_hinterland_color(settlements: "list[Settlement]"):
     return fn
 
 
+_RURAL_POP_STOPS = [
+    (0.0, (0.16, 0.14, 0.12, 1.0)),   # near-empty margins
+    (0.35, (0.45, 0.40, 0.20, 1.0)),
+    (0.70, (0.85, 0.65, 0.25, 1.0)),
+    (1.0, (1.00, 0.95, 0.60, 1.0)),   # dense agricultural core
+]
+
+
+def _make_rural_pop_color(rural_population: np.ndarray):
+    """Debug color scheme: per-face rural population, sqrt-scaled for contrast."""
+    max_pop = float(np.max(rural_population)) if np.size(rural_population) else 0.0
+
+    def fn(meta: dict) -> tuple:
+        if meta.get("is_water", meta.get("is_ocean", False)):
+            return OCEAN_COLOR
+        r = float(meta.get("rural_population", 0.0))
+        s = min(r / max_pop, 1.0) ** 0.5 if max_pop > 0 else 0.0
+        return interp_stops_scalar(s, _RURAL_POP_STOPS)
+
+    return fn
+
+
 def _trade_flow_color(meta: dict, _max_flow: list) -> tuple:
     if meta.get("is_water", meta.get("is_ocean", False)):
         return OCEAN_COLOR
@@ -137,6 +169,11 @@ class PopulationStage(Stage):
         self.trade_result = None
         self.population: Optional[np.ndarray] = None
         self.hinterland: Optional[np.ndarray] = None
+        self.rural_population: Optional[np.ndarray] = None
+        # Final-pass diagnostics, aligned with ``settlements``/``population`` —
+        # the exact inputs that produced the final urban populations.
+        self.carrying_cap: Optional[np.ndarray] = None
+        self.trade_wealth: Optional[np.ndarray] = None
 
     def build(self, ctx: BuildContext) -> None:
         world = ctx.world
@@ -151,6 +188,17 @@ class PopulationStage(Stage):
         fertility = FERTILITY_MEAN.read(mesh).clip(0.0, 1.0).astype(np.float64)
         centroids = np.asarray(mesh.face_centroids, dtype=np.float64)
         face_areas = np.asarray(mesh.face_areas, dtype=np.float64)
+
+        # Per-face food base (people) and rural population. The countryside fills
+        # to its Malthusian ceiling independent of where cities end up; water
+        # faces feed people (fishing grounds) but house none.
+        food_base = compute_food_base(
+            fertility, face_areas,
+            density_max=pp.rural_density_max,
+            fertility_exponent=pp.fertility_exponent,
+        )
+        self.rural_population = compute_rural_population(food_base, is_water)
+        RURAL_POPULATION.write(mesh, self.rural_population)
 
         self.settlements = list(world.get_feature("settlements"))
 
@@ -242,6 +290,8 @@ class PopulationStage(Stage):
 
         # Initialize population from seeded initial values (set at placement time).
         population = np.array([s.population for s in self.settlements], dtype=np.float64)
+        carrying_cap = np.zeros_like(population)
+        trade_wealth = np.zeros_like(population)
 
         ctx.report("Building trade network…")
         self.trade_result = _compute_trade(self.settlements, settlement_demands=population)
@@ -285,17 +335,24 @@ class PopulationStage(Stage):
                 influence_scale=pp.hinterland_influence_scale,
                 reach_scale=pp.hinterland_reach_scale,
             )
-            carrying_cap = compute_carrying_capacity(shares, fertility, face_areas)
+            carrying_cap = compute_carrying_capacity(shares, food_base)
             trade_wealth = compute_trade_wealth(
                 self.settlements, self.trade_result.face_flow.astype(np.float64),
             )
-            population = compute_population(
-                carrying_cap, trade_wealth, trade_weight=pp.trade_weight,
+            population = compute_urban_population(
+                carrying_cap, trade_wealth,
+                # The city's effective rate is its share of the regional surplus.
+                surplus_rate=pp.surplus_rate * pp.city_surplus_share,
+                trade_food_weight=pp.trade_food_weight,
             )
-            self.settlements, population = cull_settlements(
-                self.settlements, population, min_pop_fraction=pp.min_pop_fraction,
+            self.settlements, population, kept = cull_settlements(
+                self.settlements, population, min_population=pp.city_min,
             )
-            ctx.report(f"  {len(self.settlements)} settlements after cull.")
+            carrying_cap = carrying_cap[kept]
+            trade_wealth = trade_wealth[kept]
+            ctx.report(f"  {len(self.settlements)} cities after cull.")
+            if not self.settlements:
+                break
 
             max_p = float(population.max())
             norm_demands = population / max_p if max_p > 0 else np.ones_like(population)
@@ -303,6 +360,8 @@ class PopulationStage(Stage):
 
         self.settlements = apply_population_to_settlements(self.settlements, population)
         self.population = population
+        self.carrying_cap = carrying_cap
+        self.trade_wealth = trade_wealth
 
         _shares, self.hinterland = compute_hinterland_shares(
             n, self.settlements, hinterland_cost_graph,
@@ -331,8 +390,11 @@ class PopulationStage(Stage):
 
         world.add_feature("settlements", self.settlements)
         world.add_feature("trade_routes", self.trade_result.routes)
+        rural_total = float(self.rural_population.sum())
+        urban_total = float(population.sum())
         ctx.report(
-            f"Population & calibration done: {len(self.settlements)} settlements, "
+            f"Population & calibration done: {len(self.settlements)} cities "
+            f"(urban {urban_total / 1e6:.1f} M, rural {rural_total / 1e6:.0f} M people), "
             f"{len(self.trade_result.routes)} route segments."
         )
 
@@ -346,6 +408,8 @@ class PopulationStage(Stage):
             )
         if self.hinterland is not None and self.settlements is not None:
             reg.add_scheme("Hinterland", _make_hinterland_color(self.settlements))
+        if debug and self.rural_population is not None:
+            reg.add_scheme("Rural Population", _make_rural_pop_color(self.rural_population))
         if self.settlements is not None:
             reg.add_overlay("settlements", "Settlements", checked=True)
         if self.trade_result is not None and self.trade_result.routes:

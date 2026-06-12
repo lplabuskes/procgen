@@ -35,7 +35,7 @@ Standalone module downstream of worldgen. Takes a fully-built `World` (read-only
 
 After `build(ctx)`, each stage stores its results as attributes. `apply_display(window, debug=False)` merges realm color schemes (Suitability, Situational Value, Trade Flow, Hinterland, Polities, Border Tension), overlays (Settlements, Trade Routes), and chains hover with population/polity display.
 
-Writes per-face metadata: `"suitability"`, `"situational_value"`, `"settlement_tier"`, `"trade_flow"`, `"is_trade_hub"`, `"population"`, `"hinterland_id"`, `"polity_id"`, `"border_tension"`.
+Writes per-face metadata: `"suitability"`, `"situational_value"`, `"settlement_tier"`, `"trade_flow"`, `"is_trade_hub"`, `"population"` (urban headcount in people), `"rural_population"` (per-face people, land only), `"hinterland_id"`, `"polity_id"`, `"border_tension"`.
 
 Registers features: `"settlements"` (list of `Settlement` with `.population` set), `"trade_routes"`, `"polities"` (list of `Polity`), `"polity_tensions"` (list of `(a, b, score)`).
 
@@ -66,17 +66,23 @@ Registers features: `"settlements"` (list of `Settlement` with `.population` set
 
 ## Population
 
-**`PopulationParams`**: `relaxation_passes`, `trade_weight`, `min_pop_fraction`, `hinterland_max_distance`, `hinterland_influence_scale`, `hinterland_reach_scale`, `hinterland_water_cost`, `trade_spawn: TradeSpawnParams`.
+All populations are **real people**, anchored to a medieval-tech Earth (~300–400 M world total). Design rationale: `docs/plans/city_population_rework_plan.md`. Three quantities: per-face **rural population** (`D_max · fertility^γ · area_km²` — the Malthusian food base, land only), per-settlement **carrying capacity** (food base summed over claimed hinterland shares), and per-settlement **urban population** (`s · share · cap + β · trade_flow` — additive trade lets a thin-hinterland chokepoint grow large on imported grain, the Constantinople/Venice case). A settlement exists as a city only if its urban population clears `city_min`; the modeled settlements are *major cities* — towns/villages are sub-face-scale and deliberately unmodeled (their slice of the regional surplus is reserved via `city_surplus_share`).
 
-**`PopulationStage`** runs a relaxation loop for `relaxation_passes` iterations: each pass spawns trade-hub and waypoint settlements (`trade_spawn.py`), recomputes hinterland shares, carrying capacity, trade wealth, population, culls weak settlements, then reruns the trade network with population-weighted demands.
+**`PopulationParams`**: `relaxation_passes`, `rural_density_max` (D_max, people/km² at fertility 1), `fertility_exponent` (γ ≈ 2 — restores density contrast), `surplus_rate` (s — regional agricultural surplus), `city_surplus_share` (major city's slice of `s·cap`; remainder reserved for the future town pipeline), `trade_food_weight` (β — people fed per unit trade flow), `city_min` (urban-formation floor in people), `hinterland_max_distance`, `hinterland_influence_scale`, `hinterland_reach_scale`, `hinterland_water_cost`, `trade_spawn: TradeSpawnParams`.
+
+**`PopulationStage`** computes the per-face food base and rural population up front (written to `RURAL_POPULATION`), then runs a relaxation loop for `relaxation_passes` iterations: each pass spawns trade-hub and waypoint settlements (`trade_spawn.py`), recomputes hinterland shares, carrying capacity, trade wealth, urban population, culls cities below `city_min`, then reruns the trade network with population-weighted demands. Stores final per-settlement diagnostics (`carrying_cap`, `trade_wealth`) aligned with `settlements`/`population`. In debug mode registers a "Rural Population" color scheme.
 
 **`population/calibration.py`**: Pure functions:
+- `compute_food_base` — `D_max · fertility^γ · area_km²` per face (people the face can feed; aquatic fertility on coastal water counts)
+- `compute_rural_population` — food base masked to land
 - `compute_hinterland_shares` — soft fractional multi-source undirected Dijkstra; passes a *water-permeable* graph so coastal settlements claim a limited coastal band for fishing (bounded by `hinterland_water_cost` × `hinterland_max_distance`)
-- `compute_carrying_capacity` — Σ shares · fertility · face_area per settlement (`fertility_mean` already carries aquatic fishing productivity on coastal water faces)
+- `compute_carrying_capacity` — Σ shares · food_base per settlement
 - `compute_trade_wealth` — face_flow at settlement
-- `compute_population` — carrying_cap × log-trade bonus
-- `cull_settlements` — remove settlements below `min_pop_fraction` of peak
+- `compute_urban_population` — `s_eff · cap + β · wealth` (additive trade)
+- `cull_settlements` — drop settlements below the absolute `city_min` floor; also returns the keep mask for filtering aligned arrays
 - `apply_population_to_settlements` — stamp population onto Settlement objects
+
+Validation harnesses: `scripts/measure_population.py` (distribution shape — Zipf slope/R²/Gini) and `scripts/measure_population_absolute.py` (absolute grounding — world total, top-city band, trade-fed-city test).
 
 **`population/trade_spawn.py`**: `spawn_trade_settlements` — identifies high-flow hub faces and remote waypoint faces and seeds additional settlements there; called once per relaxation pass.
 

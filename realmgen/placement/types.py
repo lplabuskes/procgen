@@ -5,15 +5,28 @@ from dataclasses import dataclass
 
 import numpy as np
 
-TIER_NAMES = ["Capital", "City", "Town", "Village"]
+# Every modeled settlement is city-class at this mesh resolution (a face is
+# province-scale); the tiers are rank *within* the set of major cities.
+TIER_NAMES = ["Great City", "Major City", "City", "Minor City"]
+
+
+def format_population(population: float) -> str:
+    """Humanize an urban headcount for display: 9400 → '9.4k', 132000 → '132k'."""
+    p = float(population)
+    if p >= 1e6:
+        return f"{p / 1e6:.2g}M"
+    if p >= 1e3:
+        return f"{p / 1e3:.3g}k"
+    return f"{p:.0f}"
+
 
 # RGBA display colors per tier — used at visualisation time, keyed by display tier
 # derived from population (see ``population_display_tier``), not the seeding tier.
 TIER_COLORS: list[tuple[float, float, float, float]] = [
-    (1.00, 0.85, 0.10, 1.0),  # gold   — capital
-    (0.35, 0.60, 0.90, 1.0),  # blue   — city
-    (0.40, 0.75, 0.40, 1.0),  # green  — town
-    (0.80, 0.68, 0.50, 1.0),  # tan    — village
+    (1.00, 0.85, 0.10, 1.0),  # gold   — great city
+    (0.35, 0.60, 0.90, 1.0),  # blue   — major city
+    (0.40, 0.75, 0.40, 1.0),  # green  — city
+    (0.80, 0.68, 0.50, 1.0),  # tan    — minor city
 ]
 
 # Base display radii in pixels at zoom = 1.

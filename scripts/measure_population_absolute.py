@@ -1,0 +1,352 @@
+"""Measure *absolute* population grounding vs a medieval-tech Earth.
+
+Companion to ``measure_population.py`` (distribution *shape*): this harness checks
+that the realm layer's people-denominated quantities land at plausible
+medieval-Earth scales. Grew out of the investigation in
+``docs/plans/city_population_rework_plan.md``.
+
+Anchors (whole globe, c.1300):
+    World total (rural + urban):   ~300-400 M people
+    Largest city:                  ~50k-500k (Constantinople ~400k, Paris ~200k)
+    Urban fraction:                ~2-6 % of total population in *major cities*.
+                                   Full medieval urbanization (every town >5k) ran
+                                   ~5-10 %, but the towns below this layer's
+                                   resolution are deliberately unmodeled (their
+                                   surplus share is reserved — see plan §5).
+    Trade-fed cities:              at least one top-10 city should draw most of
+                                   its food from trade (the Constantinople test —
+                                   structurally impossible pre-rework)
+
+The physical world is cached per seed in ``saved_worlds/`` (shared with the
+other harnesses); only the realm stage is re-run.
+
+Usage:
+    python3 scripts/measure_population_absolute.py            # seeds 4, 31, 35
+    python3 scripts/measure_population_absolute.py 1 2 3      # specific seeds
+    python3 scripts/measure_population_absolute.py --random 5
+    python3 scripts/measure_population_absolute.py --detail   # top-10 city table
+    python3 scripts/measure_population_absolute.py --rebuild-cache
+"""
+from __future__ import annotations
+
+import argparse
+import datetime
+import json
+import random
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+import numpy as np  # noqa: E402
+
+from core.pipeline import BuildContext  # noqa: E402
+from core.world import World  # noqa: E402
+from realmgen.builder import RealmParams, RealmPipeline  # noqa: E402
+from realmgen.population.calibration import KM2_PER_STERADIAN  # noqa: E402
+from worldgen import GlobeParams, GlobePipeline, load_globe, save_globe  # noqa: E402
+from worldgen.cost.channels import IS_WATER  # noqa: E402
+from worldgen.resources.channels import FERTILITY_MEAN  # noqa: E402
+
+RESULTS_DIR = Path(__file__).parent / "results"
+JSON_PATH = RESULTS_DIR / "population_absolute_results.json"
+MD_PATH = RESULTS_DIR / "population_absolute_results.md"
+CACHE_DIR = Path(__file__).parent.parent / "saved_worlds"
+
+# Vetted Earth-like seeds (land fraction ~29%, continent-scale landmasses) —
+# same set as measure_rivers.py.
+DEFAULT_SEEDS = [4, 31, 35]
+
+MEDIEVAL_REF = {
+    "world_total_M": (300.0, 400.0),   # range, not single target
+    "top_city": (50_000.0, 500_000.0),
+    "urban_fraction": (0.02, 0.06),  # major cities only; towns are unmodeled
+}
+
+
+# ── Physical-world caching ────────────────────────────────────────────────────
+
+
+def _get_physical_world(seed: int, rebuild: bool) -> World:
+    path = CACHE_DIR / f"world_{seed}.npz"
+    if not (path.exists() and not rebuild):
+        params = GlobeParams()
+        params.seed = seed
+        world = World(params.mesh, seed=params.seed)
+        gp = GlobePipeline(params)
+        gp.build(BuildContext(world=world))
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        save_globe(gp, path)
+    _, world = load_globe(path)
+    return world
+
+
+# ── Measurement ───────────────────────────────────────────────────────────────
+
+
+def measure_seed(seed: int, rebuild: bool) -> dict:
+    """Run the realm stage on the (cached) physical world; return absolute metrics."""
+    world = _get_physical_world(seed, rebuild)
+    ctx = BuildContext(world=world, seed=seed)
+    mesh = ctx.mesh
+
+    realm = RealmPipeline(RealmParams())
+    realm.build(ctx)
+    ps = realm.population_stage
+    pp = realm.params.population
+
+    settlements = ps.settlements or []
+    pops = np.asarray(ps.population, dtype=np.float64)
+    cap = np.asarray(ps.carrying_cap, dtype=np.float64)
+    wealth = np.asarray(ps.trade_wealth, dtype=np.float64)
+    rural = np.asarray(ps.rural_population, dtype=np.float64)
+
+    surplus_term = pp.surplus_rate * pp.city_surplus_share * np.maximum(cap, 0.0)
+    trade_term = pp.trade_food_weight * np.maximum(wealth, 0.0)
+
+    rural_total = float(rural.sum())
+    urban_total = float(pops.sum())
+    world_total = rural_total + urban_total
+
+    order = np.argsort(-pops)
+    top10 = [
+        {
+            "pop": float(pops[k]),
+            "surplus": float(surplus_term[k]),
+            "trade": float(trade_term[k]),
+            "trade_share": float(trade_term[k] / pops[k]) if pops[k] > 0 else 0.0,
+        }
+        for k in order[:10]
+    ]
+    # Trade-city test: cities whose imported food exceeds local surplus.
+    trade_fed = trade_term > surplus_term
+    trade_fed_top10 = int(trade_fed[order[:10]].sum()) if pops.size else 0
+    band_lo, band_hi = MEDIEVAL_REF["top_city"]
+
+    # Implied D_max for an exact 400 M *rural* total at the current γ —
+    # the direct calibration handle for ``rural_density_max``.
+    is_water = IS_WATER.read(mesh)
+    fert = FERTILITY_MEAN.read(mesh).clip(0.0, 1.0).astype(np.float64)
+    areas_km2 = np.asarray(mesh.face_areas, dtype=np.float64) * KM2_PER_STERADIAN
+    land = ~is_water
+    eff_area = float((fert[land] ** pp.fertility_exponent * areas_km2[land]).sum())
+    implied_d_max = 400e6 / eff_area if eff_area > 0 else float("nan")
+
+    return {
+        "seed": seed,
+        "n_cities": int(len(settlements)),
+        "rural_total_M": rural_total / 1e6,
+        "urban_total_M": urban_total / 1e6,
+        "world_total_M": world_total / 1e6,
+        "urban_fraction": urban_total / world_total if world_total > 0 else float("nan"),
+        "top_city": float(pops[order[0]]) if pops.size else float("nan"),
+        "n_top_band": int(((pops >= band_lo) & (pops <= band_hi)).sum()),
+        "trade_fed_total": int(trade_fed.sum()),
+        "trade_fed_top10": trade_fed_top10,
+        "max_trade_share_top10": max((c["trade_share"] for c in top10), default=float("nan")),
+        "implied_d_max_400M": implied_d_max,
+        "top10": top10,
+    }
+
+
+# ── Reporting ─────────────────────────────────────────────────────────────────
+
+
+def _fmt_people(p: float) -> str:
+    if p != p:
+        return "nan"
+    if p >= 1e6:
+        return f"{p / 1e6:.2f}M"
+    if p >= 1e3:
+        return f"{p / 1e3:.0f}k"
+    return f"{p:.0f}"
+
+
+def print_table(rows: list[dict]) -> None:
+    print("\nAbsolute population grounding:")
+    header = f"{'metric':<26}  " + "  ".join(f"{'s=' + str(r['seed']):>9}" for r in rows) + f"  {'medieval':>13}"
+    print(header)
+    print("-" * len(header))
+
+    def line(label: str, fmt, ref: str) -> None:
+        cells = "  ".join(f"{fmt(r):>9}" for r in rows)
+        print(f"{label:<26}  {cells}  {ref:>13}")
+
+    lo, hi = MEDIEVAL_REF["world_total_M"]
+    line("world total (M)", lambda r: f"{r['world_total_M']:.0f}", f"{lo:.0f}-{hi:.0f}")
+    line("  rural (M)", lambda r: f"{r['rural_total_M']:.0f}", "—")
+    line("  urban (M)", lambda r: f"{r['urban_total_M']:.1f}", "—")
+    ulo, uhi = MEDIEVAL_REF["urban_fraction"]
+    line("urban fraction", lambda r: f"{r['urban_fraction']:.3f}", f"{ulo:.2f}-{uhi:.2f}")
+    line("n cities", lambda r: f"{r['n_cities']}", "~200-400")
+    blo, bhi = MEDIEVAL_REF["top_city"]
+    line("top city", lambda r: _fmt_people(r["top_city"]), f"{_fmt_people(blo)}-{_fmt_people(bhi)}")
+    line("cities in 50k-500k", lambda r: f"{r['n_top_band']}", ">0")
+    line("trade-fed cities", lambda r: f"{r['trade_fed_total']}", ">0")
+    line("  of top 10", lambda r: f"{r['trade_fed_top10']}", "≥1")
+    line("max trade share (top10)", lambda r: f"{r['max_trade_share_top10']:.2f}", ">0.5")
+    line("implied D_max (400M)", lambda r: f"{r['implied_d_max_400M']:.1f}", "—")
+    print()
+
+
+def print_detail(rows: list[dict]) -> None:
+    for r in rows:
+        print(f"\n  Top cities (seed={r['seed']}):  pop = surplus + trade  (trade share)")
+        for i, c in enumerate(r["top10"], start=1):
+            print(
+                f"    rank {i:>2}: {_fmt_people(c['pop']):>7} = "
+                f"{_fmt_people(c['surplus']):>7} + {_fmt_people(c['trade']):>7}  "
+                f"({c['trade_share']:.2f})"
+            )
+    print()
+
+
+# ── JSON history + markdown ───────────────────────────────────────────────────
+
+
+def _params_summary(rp: RealmParams) -> str:
+    pp = rp.population
+    return (
+        f"D_max={pp.rural_density_max:.0f} gamma={pp.fertility_exponent:.1f} "
+        f"s={pp.surplus_rate:.2f} share={pp.city_surplus_share:.3f} "
+        f"beta={pp.trade_food_weight:.0f} "
+        f"city_min={pp.city_min:.0f} sit_w={rp.seeder.situational_weight:.2f}"
+    )
+
+
+def _avg(rows: list[dict], key: str) -> float:
+    vals = [r[key] for r in rows if isinstance(r.get(key), (int, float)) and r[key] == r[key]]
+    return sum(vals) / len(vals) if vals else float("nan")
+
+
+def _load_history() -> list:
+    if JSON_PATH.exists():
+        with JSON_PATH.open() as f:
+            return json.load(f)
+    return []
+
+
+def _save_history(history: list) -> None:
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    with JSON_PATH.open("w") as f:
+        json.dump(history, f, indent=2)
+
+
+def _update_markdown(history: list) -> None:
+    lines = [
+        "# Population — Absolute Grounding Tracking",
+        "",
+        "Auto-generated by `scripts/measure_population_absolute.py`. Do not edit by hand.",
+        "",
+        "All quantities are real people. Anchors are a medieval-tech Earth c.1300:",
+        "world total ~300-400 M, largest city 50k-500k, urban fraction ~3-10 %,",
+        "and at least one top-10 city fed mostly by trade (the Constantinople test).",
+        "",
+        "## Run History (averaged across seeds in run)",
+        "",
+        "| Date | Seeds | cities | world M | rural M | urban M | urb frac | top city "
+        "| 50-500k | trade-fed top10 | Params |",
+        "|------|-------|-------:|--------:|--------:|--------:|---------:|---------:"
+        "|--------:|----------------:|--------|",
+    ]
+    for run in history:
+        rows = run["results"]
+        seeds_str = " ".join(str(r["seed"]) for r in rows)
+        date = run["timestamp"][:10]
+        lines.append(
+            f"| {date} | {seeds_str} "
+            f"| {_avg(rows, 'n_cities'):.0f} "
+            f"| {_avg(rows, 'world_total_M'):.0f} "
+            f"| {_avg(rows, 'rural_total_M'):.0f} "
+            f"| {_avg(rows, 'urban_total_M'):.1f} "
+            f"| {_avg(rows, 'urban_fraction'):.3f} "
+            f"| {_fmt_people(_avg(rows, 'top_city'))} "
+            f"| {_avg(rows, 'n_top_band'):.0f} "
+            f"| {_avg(rows, 'trade_fed_top10'):.1f} "
+            f"| {run.get('params_summary', '—')} |"
+        )
+
+    if history:
+        last = history[-1]["results"]
+        lines += [
+            "",
+            "## Per-Seed Detail (latest run)",
+            "",
+            "| Seed | cities | world M | rural M | urban M | top city | 50-500k | trade-fed | max trade share top10 |",
+            "|------|-------:|--------:|--------:|--------:|---------:|--------:|----------:|----------------------:|",
+        ]
+        for r in last:
+            lines.append(
+                f"| {r['seed']} | {r['n_cities']} "
+                f"| {r['world_total_M']:.0f} | {r['rural_total_M']:.0f} "
+                f"| {r['urban_total_M']:.1f} "
+                f"| {_fmt_people(r['top_city'])} | {r['n_top_band']} "
+                f"| {r['trade_fed_total']} | {r['max_trade_share_top10']:.2f} |"
+            )
+
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    MD_PATH.write_text("\n".join(lines) + "\n")
+
+
+# ── CLI ───────────────────────────────────────────────────────────────────────
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("seeds", nargs="*", type=int,
+                        help=f"Explicit seed values (default: {DEFAULT_SEEDS})")
+    parser.add_argument("--random", metavar="N", type=int,
+                        help="Use N random seeds instead of explicit ones")
+    parser.add_argument("--detail", action="store_true",
+                        help="Print the top-10 city decomposition per seed")
+    parser.add_argument("--rebuild-cache", action="store_true",
+                        help="Force-rebuild the cached physical worlds")
+    args = parser.parse_args()
+
+    seeds = (
+        [random.randint(0, 2**31 - 1) for _ in range(args.random)]
+        if args.random
+        else (args.seeds or DEFAULT_SEEDS)
+    )
+
+    print(f"\nAbsolute population grounding — {len(seeds)} seed(s)\n")
+
+    rows: list[dict] = []
+    for seed in seeds:
+        cached = (CACHE_DIR / f"world_{seed}.npz").exists() and not args.rebuild_cache
+        tag = "load" if cached else "build"
+        print(f"  seed={seed} ({tag})…", end="", flush=True)
+        row = measure_seed(seed, rebuild=args.rebuild_cache)
+        rows.append(row)
+        print(
+            f"  cities={row['n_cities']:>4}  world={row['world_total_M']:.0f}M  "
+            f"top={_fmt_people(row['top_city'])}  "
+            f"trade-fed(top10)={row['trade_fed_top10']}"
+        )
+
+    print_table(rows)
+    if args.detail:
+        print_detail(rows)
+
+    run_entry = {
+        "timestamp":      datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None).isoformat(),
+        "params_summary": _params_summary(RealmParams()),
+        "results":        rows,
+    }
+    history = _load_history()
+    history.append(run_entry)
+    _save_history(history)
+    _update_markdown(history)
+
+    def rel(p):
+        return p.relative_to(Path(__file__).parent.parent)
+    print(f"Results appended to {rel(JSON_PATH)}")
+    print(f"Markdown updated at  {rel(MD_PATH)}")
+    print()
+
+
+if __name__ == "__main__":
+    main()

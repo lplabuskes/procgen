@@ -10,11 +10,14 @@ from scipy.sparse import csr_matrix
 
 from realmgen.placement.types import Settlement
 from realmgen.population.calibration import (
+    KM2_PER_STERADIAN,
     apply_population_to_settlements,
     compute_carrying_capacity,
+    compute_food_base,
     compute_hinterland_shares,
-    compute_population,
+    compute_rural_population,
     compute_trade_wealth,
+    compute_urban_population,
     cull_settlements,
 )
 
@@ -153,6 +156,42 @@ class TestHinterlandShares:
         assert owner.dtype == np.int32
 
 
+# ── compute_food_base / compute_rural_population ──────────────────────────────
+
+
+class TestComputeFoodBase:
+    def test_linear_law_matches_density_times_area(self):
+        fert = np.array([1.0, 0.5], dtype=np.float32)
+        areas = np.array([2.0, 2.0], dtype=np.float64)  # steradians
+        fb = compute_food_base(fert, areas, density_max=10.0, fertility_exponent=1.0)
+        assert fb[0] == pytest.approx(10.0 * 2.0 * KM2_PER_STERADIAN)
+        assert fb[1] == pytest.approx(5.0 * 2.0 * KM2_PER_STERADIAN)
+
+    def test_exponent_restores_contrast(self):
+        # γ=2 squeezes low-fertility faces much harder than high-fertility ones.
+        fert = np.array([0.9, 0.3], dtype=np.float32)
+        areas = np.ones(2, dtype=np.float64)
+        lin = compute_food_base(fert, areas, density_max=1.0, fertility_exponent=1.0)
+        quad = compute_food_base(fert, areas, density_max=1.0, fertility_exponent=2.0)
+        assert lin[0] / lin[1] == pytest.approx(3.0)
+        assert quad[0] / quad[1] == pytest.approx(9.0)
+
+    def test_fertility_clipped(self):
+        fert = np.array([-0.5, 1.5], dtype=np.float32)
+        areas = np.ones(2, dtype=np.float64)
+        fb = compute_food_base(fert, areas, density_max=1.0)
+        assert fb[0] == 0.0
+        assert fb[1] == pytest.approx(KM2_PER_STERADIAN)
+
+
+class TestComputeRuralPopulation:
+    def test_water_masked_to_zero(self):
+        fb = np.array([100.0, 200.0, 300.0], dtype=np.float64)
+        is_water = np.array([False, True, False])
+        rural = compute_rural_population(fb, is_water)
+        np.testing.assert_allclose(rural, [100.0, 0.0, 300.0])
+
+
 # ── compute_carrying_capacity ──────────────────────────────────────────────────
 
 
@@ -163,40 +202,30 @@ class TestComputeCarryingCapacity:
             [1.0, 1.0, 0.0, 0.0],
             [0.0, 0.0, 1.0, 1.0],
         ], dtype=np.float64)
-        fertility = np.array([0.5, 0.5, 1.0, 1.0], dtype=np.float32)
-        areas = np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float64)
-        cap = compute_carrying_capacity(shares, fertility, areas)
+        food_base = np.array([0.5, 0.5, 1.0, 1.0], dtype=np.float64)
+        cap = compute_carrying_capacity(shares, food_base)
         assert cap[0] == pytest.approx(1.0)
         assert cap[1] == pytest.approx(2.0)
 
     def test_fractional_shares_split_capacity(self):
         # One face split 0.25 / 0.75 between two settlements.
         shares = np.array([[0.25], [0.75]], dtype=np.float64)
-        fertility = np.array([0.8], dtype=np.float32)
-        areas = np.array([2.0], dtype=np.float64)
-        cap = compute_carrying_capacity(shares, fertility, areas)
-        assert cap[0] == pytest.approx(0.25 * 0.8 * 2.0)
-        assert cap[1] == pytest.approx(0.75 * 0.8 * 2.0)
+        food_base = np.array([1.6], dtype=np.float64)
+        cap = compute_carrying_capacity(shares, food_base)
+        assert cap[0] == pytest.approx(0.25 * 1.6)
+        assert cap[1] == pytest.approx(0.75 * 1.6)
 
     def test_unclaimed_faces_excluded(self):
-        # Middle face (column 0) claimed by nobody → contributes nothing.
+        # Faces claimed by nobody contribute nothing.
         shares = np.array([[0.0, 1.0, 0.0]], dtype=np.float64)
-        fertility = np.array([1.0, 0.8, 1.0], dtype=np.float32)
-        areas = np.array([2.0, 2.0, 2.0], dtype=np.float64)
-        cap = compute_carrying_capacity(shares, fertility, areas)
-        assert cap[0] == pytest.approx(1.6)  # only face 1: 0.8 × 2.0
+        food_base = np.array([2.0, 1.6, 2.0], dtype=np.float64)
+        cap = compute_carrying_capacity(shares, food_base)
+        assert cap[0] == pytest.approx(1.6)  # only face 1
 
     def test_no_settlements_returns_empty(self):
         shares = np.zeros((0, 3), dtype=np.float64)
-        cap = compute_carrying_capacity(shares, np.ones(3), np.ones(3))
+        cap = compute_carrying_capacity(shares, np.ones(3))
         assert cap.shape == (0,)
-
-    def test_area_weighted(self):
-        shares = np.array([[1.0, 1.0]], dtype=np.float64)
-        fertility = np.array([0.5, 0.5], dtype=np.float32)
-        areas = np.array([1.0, 3.0], dtype=np.float64)
-        cap = compute_carrying_capacity(shares, fertility, areas)
-        assert cap[0] == pytest.approx(2.0)  # 0.5×1 + 0.5×3
 
 
 # ── compute_trade_wealth ──────────────────────────────────────────────────────
@@ -220,86 +249,102 @@ class TestComputeTradeWealth:
         assert (wealth == 0.0).all()
 
 
-# ── compute_population ────────────────────────────────────────────────────────
+# ── compute_urban_population ──────────────────────────────────────────────────
 
 
-class TestComputePopulation:
-    def test_zero_carrying_cap_gives_zero(self):
-        cap = np.array([0.0, 0.0], dtype=np.float64)
-        wealth = np.array([10.0, 5.0], dtype=np.float64)
-        pop = compute_population(cap, wealth)
-        assert (pop == 0.0).all()
+class TestComputeUrbanPopulation:
+    def test_surplus_term_scales_with_cap(self):
+        cap = np.array([100_000.0, 200_000.0], dtype=np.float64)
+        wealth = np.zeros(2, dtype=np.float64)
+        pop = compute_urban_population(cap, wealth, surplus_rate=0.15)
+        np.testing.assert_allclose(pop, [15_000.0, 30_000.0])
 
-    def test_nonzero_cap_positive_pop(self):
-        cap = np.array([1.0, 1.0], dtype=np.float64)
-        wealth = np.array([1.0, 1.0], dtype=np.float64)
-        pop = compute_population(cap, wealth)
-        assert (pop > 0).all()
+    def test_trade_is_additive_not_multiplicative(self):
+        # The Constantinople/Venice unlock: zero hinterland, big trade flow →
+        # a real city fed entirely on imported grain.
+        cap = np.array([0.0], dtype=np.float64)
+        wealth = np.array([5.0], dtype=np.float64)
+        pop = compute_urban_population(
+            cap, wealth, surplus_rate=0.15, trade_food_weight=20_000.0,
+        )
+        assert pop[0] == pytest.approx(100_000.0)
 
     def test_higher_trade_wealth_gives_higher_pop(self):
         cap = np.array([1.0, 1.0], dtype=np.float64)
         wealth = np.array([10.0, 1.0], dtype=np.float64)
-        pop = compute_population(cap, wealth)
+        pop = compute_urban_population(cap, wealth, trade_food_weight=1.0)
         assert pop[0] > pop[1]
 
-    def test_trade_weight_zero_returns_carrying_cap(self):
+    def test_trade_food_weight_zero_returns_surplus_only(self):
         cap = np.array([2.0, 3.0], dtype=np.float64)
         wealth = np.array([100.0, 200.0], dtype=np.float64)
-        pop = compute_population(cap, wealth, trade_weight=0.0)
-        np.testing.assert_allclose(pop, cap)
+        pop = compute_urban_population(
+            cap, wealth, surplus_rate=0.1, trade_food_weight=0.0,
+        )
+        np.testing.assert_allclose(pop, 0.1 * cap)
 
-    def test_all_zero_wealth_returns_cap(self):
-        cap = np.array([1.0, 2.0], dtype=np.float64)
-        wealth = np.zeros(2, dtype=np.float64)
-        pop = compute_population(cap, wealth)
-        # log1p(0) = 0 → trade bonus = 0 → pop = cap * 1.0
-        np.testing.assert_allclose(pop, cap)
+    def test_negative_inputs_clamped(self):
+        cap = np.array([-5.0], dtype=np.float64)
+        wealth = np.array([-2.0], dtype=np.float64)
+        pop = compute_urban_population(
+            cap, wealth, surplus_rate=0.15, trade_food_weight=1.0,
+        )
+        assert pop[0] == 0.0
 
 
 # ── cull_settlements ──────────────────────────────────────────────────────────
 
 
 class TestCullSettlements:
-    def test_all_above_threshold_unchanged(self):
+    def test_all_above_floor_unchanged(self):
         s = [_settlement(0, tier=1), _settlement(1, tier=2)]
         pop = np.array([100.0, 80.0], dtype=np.float64)
-        kept_s, kept_p = cull_settlements(s, pop, min_pop_fraction=0.0)
+        kept_s, kept_p, kept = cull_settlements(s, pop, min_population=50.0)
         assert len(kept_s) == 2
+        assert kept.all()
 
-    def test_below_threshold_culled_regardless_of_tier(self):
-        # Both a low-tier and high-tier settlement below threshold get culled.
+    def test_below_floor_culled_regardless_of_tier(self):
+        # The urban-formation floor is absolute: a rich farming region with no
+        # trade node has villages but no city, whatever its seeding tier.
         s = [_settlement(0, tier=0), _settlement(1, tier=1), _settlement(2, tier=3)]
-        pop = np.array([100.0, 0.001, 0.001], dtype=np.float64)
-        kept_s, kept_p = cull_settlements(s, pop, min_pop_fraction=0.01)
+        pop = np.array([50_000.0, 4_000.0, 900.0], dtype=np.float64)
+        kept_s, kept_p, kept = cull_settlements(s, pop, min_population=10_000.0)
         face_ids = [x.face_id for x in kept_s]
-        assert 0 in face_ids
-        assert 1 not in face_ids   # tier-1 below threshold → culled (no downgrade)
-        assert 2 not in face_ids   # tier-3 below threshold → culled
+        assert face_ids == [0]
+        np.testing.assert_array_equal(kept, [True, False, False])
+
+    def test_keep_mask_filters_aligned_arrays(self):
+        s = [_settlement(i) for i in range(4)]
+        pop = np.array([20.0, 5.0, 30.0, 1.0], dtype=np.float64)
+        aligned = np.array([1.0, 2.0, 3.0, 4.0])
+        kept_s, kept_p, kept = cull_settlements(s, pop, min_population=10.0)
+        np.testing.assert_allclose(aligned[kept], [1.0, 3.0])
+        np.testing.assert_allclose(kept_p, [20.0, 30.0])
 
     def test_tiers_unchanged_on_survivors(self):
         # Culling must not modify tiers on surviving settlements.
         s = [_settlement(0, tier=0), _settlement(1, tier=1)]
         pop = np.array([100.0, 80.0], dtype=np.float64)
-        kept_s, kept_p = cull_settlements(s, pop, min_pop_fraction=0.0)
+        kept_s, kept_p, _ = cull_settlements(s, pop, min_population=0.0)
         assert kept_s[0].tier == 0
         assert kept_s[1].tier == 1
 
     def test_empty_input(self):
-        kept_s, kept_p = cull_settlements([], np.array([], dtype=np.float64))
+        kept_s, kept_p, kept = cull_settlements([], np.array([], dtype=np.float64))
         assert kept_s == []
         assert kept_p.shape == (0,)
+        assert kept.shape == (0,)
 
     def test_output_aligned(self):
         s = [_settlement(i, tier=min(i, 3)) for i in range(5)]
         pop = np.array([100.0, 80.0, 60.0, 40.0, 20.0], dtype=np.float64)
-        kept_s, kept_p = cull_settlements(s, pop, min_pop_fraction=0.0)
+        kept_s, kept_p, _ = cull_settlements(s, pop, min_population=0.0)
         assert len(kept_s) == len(kept_p)
 
-    def test_zero_max_pop_keeps_all(self):
-        # All population zero: threshold is 0, so nothing is below it.
+    def test_zero_floor_keeps_all(self):
         s = [_settlement(0, tier=0), _settlement(1, tier=3)]
         pop = np.zeros(2, dtype=np.float64)
-        kept_s, kept_p = cull_settlements(s, pop, min_pop_fraction=0.01)
+        kept_s, kept_p, _ = cull_settlements(s, pop, min_population=0.0)
         assert len(kept_s) == 2
 
 

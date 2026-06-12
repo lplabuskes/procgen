@@ -25,7 +25,7 @@ from core.params import field, paramclass
 from core.pipeline import BuildContext, Pipeline
 from core.world import World
 from realmgen.placement.builder import PlacementStage, SeederParams
-from realmgen.placement.types import TIER_NAMES
+from realmgen.placement.types import TIER_NAMES, format_population
 from realmgen.polity.builder import PolityParams, PolityStage
 from realmgen.population.builder import PopulationParams, PopulationStage, TradeParams
 from realmgen.scoring.builder import ScoringStage, SituationalValueParams, SuitabilityParams
@@ -142,7 +142,7 @@ class RealmPipeline(Pipeline):
                 parts.append(TIER_NAMES[min(t, len(TIER_NAMES) - 1)])
                 pop = meta.get("population")
                 if pop is not None and float(pop) > 0:
-                    parts.append(f"Pop: {float(pop):.3g}")
+                    parts.append(f"Pop: {format_population(float(pop))}")
             pid = meta.get("polity_id")
             if pid is not None and int(pid) >= 0:
                 parts.append(f"Polity {int(pid)}")

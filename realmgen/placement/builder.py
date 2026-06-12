@@ -29,7 +29,9 @@ class TierParams:
 
 @paramclass
 class SeederParams:
-    situational_weight: float = _f(0.40, label="Situational value weight", min=0.0, max=1.0)
+    # Cities form at nodes — harbors, confluences, passes, straits — not merely
+    # at fertile spots (fertile spots get villages, modeled separately).
+    situational_weight: float = _f(0.55, label="Situational value weight", min=0.0, max=1.0)
     tier0: TierParams = field(
         default_factory=lambda: TierParams(exclusion_radius=25.0, score_threshold=0.45, initial_population=1.0),
         metadata={"label": "Capitals"},
