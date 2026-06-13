@@ -91,8 +91,9 @@ class PolityStage(Stage):
     requires = (POPULATION, IS_WATER, COST_SURFACES)
     provides = (POLITY_ID, BORDER_TENSION)
 
-    def __init__(self, params: PolityParams) -> None:
+    def __init__(self, params: PolityParams, danger_params=None) -> None:
         self.params = params
+        self.danger_params = danger_params
         self.polities: Optional[List[Polity]] = None
         self.polity_of_face: Optional[np.ndarray] = None
         self.face_tension: Optional[np.ndarray] = None
@@ -114,6 +115,14 @@ class PolityStage(Stage):
                            np.zeros(n, dtype=np.float64), {})
             return
 
+        danger = np.zeros(n, dtype=np.float32)
+        danger_scale = 0.0
+        if self.danger_params is not None:
+            from worldgen.danger.channels import DANGER_ARRAY
+            if DANGER_ARRAY.present(world):
+                danger = DANGER_ARRAY.read(world).astype(np.float32)
+            danger_scale = float(self.danger_params.movement_scale)
+
         # ── Land-only cost graph ─────────────────────────────────────────────
         # Polities grow over land only (design: ocean is impassable, so
         # coastlines are natural borders and islands stay outside territory). The
@@ -122,16 +131,17 @@ class PolityStage(Stage):
         if COST_SURFACES.present(world):
             from worldgen.cost.surfaces import build_land_edge_costs
             cs = COST_SURFACES.read(world)
+            land_base_cost = cs.land_base_cost + danger_scale * danger
             edge_costs = build_land_edge_costs(
                 mesh,
-                cs.land_base_cost,
+                land_base_cost,
                 cs.land_passable,
                 cs.river_flow_dir,
                 cs.river_flow_mag,
                 cs.river_navigability,
             )
         else:
-            base = np.where(is_water, np.inf, 1.5)
+            base = np.where(is_water, np.inf, 1.5) + danger_scale * danger
             edge_costs = [
                 np.array([0.5 * (base[i] + base[j]) for j in adj], dtype=np.float64)
                 for i, adj in enumerate(mesh.face_adjacency)

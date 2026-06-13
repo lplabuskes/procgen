@@ -21,7 +21,7 @@ from __future__ import annotations
 from typing import Optional
 
 from core.display import DisplayRegistry
-from core.params import field, paramclass
+from core.params import field, param_field as _f, paramclass
 from core.pipeline import BuildContext, Pipeline
 from core.world import World
 from realmgen.placement.builder import PlacementStage, SeederParams
@@ -32,6 +32,19 @@ from realmgen.scoring.builder import ScoringStage, SituationalValueParams, Suita
 
 
 # ── Top-level params ──────────────────────────────────────────────────────────
+
+
+@paramclass
+class DangerInfluenceParams:
+    suitability_weight: float = _f(
+        0.5, label="Suitability penalty weight", min=0.0, max=1.0
+    )
+    block_threshold: float = _f(
+        0.65, label="Settlement block threshold", min=0.0, max=1.0
+    )
+    movement_scale: float = _f(
+        2.0, label="Movement cost added (+ danger)", min=0.0, max=20.0
+    )
 
 
 @paramclass
@@ -54,6 +67,9 @@ class RealmParams:
     polity: PolityParams = field(
         default_factory=PolityParams, metadata={"label": "Polities"}
     )
+    danger: DangerInfluenceParams = field(
+        default_factory=DangerInfluenceParams, metadata={"label": "Danger influence"}
+    )
 
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
@@ -73,10 +89,10 @@ class RealmPipeline(Pipeline):
     def __init__(self, params: RealmParams | None = None) -> None:
         self._params = params or RealmParams()
         p = self._params
-        self.scoring_stage = ScoringStage(p.suitability, p.situational)
-        self.placement_stage = PlacementStage(p.seeder)
-        self.population_stage = PopulationStage(p.trade, p.population, p.seeder)
-        self.polity_stage = PolityStage(p.polity)
+        self.scoring_stage = ScoringStage(p.suitability, p.situational, p.danger)
+        self.placement_stage = PlacementStage(p.seeder, p.danger)
+        self.population_stage = PopulationStage(p.trade, p.population, p.seeder, p.danger)
+        self.polity_stage = PolityStage(p.polity, p.danger)
         super().__init__([
             self.scoring_stage,
             self.placement_stage,

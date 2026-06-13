@@ -60,8 +60,9 @@ class PlacementStage(Stage):
     requires = (SUITABILITY, SITUATIONAL_VALUE, IS_WATER, COST_SURFACES)
     provides = ()
 
-    def __init__(self, params: SeederParams) -> None:
+    def __init__(self, params: SeederParams, danger_params=None) -> None:
         self.params = params
+        self.danger_params = danger_params
         self.settlements: Optional[list[Settlement]] = None
 
     def build(self, ctx: BuildContext) -> None:
@@ -75,13 +76,24 @@ class PlacementStage(Stage):
         situational_value = SITUATIONAL_VALUE.read(mesh)
         centroids = np.asarray(mesh.face_centroids, dtype=np.float64)
 
+        # Optional danger influence.
+        danger = np.zeros(n, dtype=np.float32)
+        if self.danger_params is not None:
+            from worldgen.danger.channels import DANGER_ARRAY
+            if DANGER_ARRAY.present(world):
+                danger = DANGER_ARRAY.read(world).astype(np.float32)
+
         ctx.report("Building land cost graph…")
         if COST_SURFACES.present(world):
             from worldgen.cost.surfaces import build_land_edge_costs
             cs = COST_SURFACES.read(world)
+            land_base_cost = cs.land_base_cost
+            if self.danger_params is not None:
+                scale = float(self.danger_params.movement_scale)
+                land_base_cost = land_base_cost + scale * danger
             edge_costs = build_land_edge_costs(
                 mesh,
-                cs.land_base_cost,
+                land_base_cost,
                 cs.land_passable,
                 cs.river_flow_dir,
                 cs.river_flow_mag,
@@ -89,6 +101,9 @@ class PlacementStage(Stage):
             )
         else:
             base = np.where(is_water, np.inf, 1.5)
+            if self.danger_params is not None:
+                scale = float(self.danger_params.movement_scale)
+                base = base + scale * danger
             edge_costs = [
                 np.array([0.5 * (base[i] + base[j]) for j in adj], dtype=np.float64)
                 for i, adj in enumerate(mesh.face_adjacency)
@@ -97,6 +112,8 @@ class PlacementStage(Stage):
         combined = placement_score(
             suitability, situational_value, situational_weight=p.situational_weight,
         )
+        if self.danger_params is not None:
+            combined[danger >= float(self.danger_params.block_threshold)] = 0.0
         cost_graph = build_cost_graph(mesh.face_adjacency, edge_costs)
         tier_configs = [
             (p.tier0.exclusion_radius, p.tier0.score_threshold, p.tier0.initial_population),

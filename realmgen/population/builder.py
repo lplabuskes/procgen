@@ -161,10 +161,12 @@ class PopulationStage(Stage):
         trade_params: TradeParams,
         population_params: PopulationParams,
         seeder_params: SeederParams,
+        danger_params=None,
     ) -> None:
         self.trade_params = trade_params
         self.population_params = population_params
         self.seeder_params = seeder_params
+        self.danger_params = danger_params
         self.settlements: Optional[list[Settlement]] = None
         self.trade_result = None
         self.population: Optional[np.ndarray] = None
@@ -189,6 +191,12 @@ class PopulationStage(Stage):
         centroids = np.asarray(mesh.face_centroids, dtype=np.float64)
         face_areas = np.asarray(mesh.face_areas, dtype=np.float64)
 
+        danger = np.zeros(n, dtype=np.float32)
+        if self.danger_params is not None:
+            from worldgen.danger.channels import DANGER_ARRAY
+            if DANGER_ARRAY.present(world):
+                danger = DANGER_ARRAY.read(world).astype(np.float32)
+
         # Per-face food base (people) and rural population. The countryside fills
         # to its Malthusian ceiling independent of where cities end up; water
         # faces feed people (fishing grounds) but house none.
@@ -211,15 +219,20 @@ class PopulationStage(Stage):
         # ``fertility_mean``). The band is naturally bounded by ``hinterland_max_distance``
         # and the steep water cost; the permeability is unique to the hinterland
         # and never leaks into trade, placement, or polity formation.
+        danger_scale = (
+            float(self.danger_params.movement_scale) if self.danger_params is not None else 0.0
+        )
+
         if COST_SURFACES.present(world):
             from worldgen.cost.surfaces import build_land_edge_costs, build_sea_edge_costs
             cs = COST_SURFACES.read(world)
             settlement_mask = np.zeros(n, dtype=bool)
             for s in self.settlements:
                 settlement_mask[s.face_id] = True
+            land_base_cost = cs.land_base_cost + danger_scale * danger
             edge_costs = build_land_edge_costs(
                 mesh,
-                cs.land_base_cost,
+                land_base_cost,
                 cs.land_passable,
                 cs.river_flow_dir,
                 cs.river_flow_mag,
@@ -227,7 +240,8 @@ class PopulationStage(Stage):
                 settlement_mask=settlement_mask,
             )
             hinterland_land_cost = np.where(
-                is_water, pp.hinterland_water_cost, cs.land_base_cost
+                is_water, pp.hinterland_water_cost,
+                cs.land_base_cost + danger_scale * danger,
             )
             hinterland_edge_costs = build_land_edge_costs(
                 mesh,
@@ -243,14 +257,19 @@ class PopulationStage(Stage):
             )
             sea_passable = cs.sea_passable
         else:
-            base = np.where(is_water, np.inf, 1.5)
+            base = np.where(is_water, np.inf, 1.5) + danger_scale * danger
             edge_costs = [
                 np.array([0.5 * (base[i] + base[j]) for j in adj], dtype=np.float64)
                 for i, adj in enumerate(mesh.face_adjacency)
             ]
-            hinterland_base = np.where(is_water, pp.hinterland_water_cost, 1.5)
+            hinterland_base = np.where(
+                is_water, pp.hinterland_water_cost, 1.5 + danger_scale * danger
+            )
             hinterland_edge_costs = [
-                np.array([0.5 * (hinterland_base[i] + hinterland_base[j]) for j in adj], dtype=np.float64)
+                np.array(
+                    [0.5 * (hinterland_base[i] + hinterland_base[j]) for j in adj],
+                    dtype=np.float64,
+                )
                 for i, adj in enumerate(mesh.face_adjacency)
             ]
             sea_passable = np.zeros(n, dtype=bool)

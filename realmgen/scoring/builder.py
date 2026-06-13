@@ -183,9 +183,11 @@ class ScoringStage(Stage):
         self,
         suitability_params: SuitabilityParams,
         situational_params: SituationalValueParams,
+        danger_params=None,
     ) -> None:
         self.suitability_params = suitability_params
         self.situational_params = situational_params
+        self.danger_params = danger_params
         self.suitability: Optional[np.ndarray] = None
         self.situational_value: Optional[np.ndarray] = None
 
@@ -249,6 +251,14 @@ class ScoringStage(Stage):
             elev_range, penalty_scale_km=sp.ruggedness.penalty_scale_km,
         )
         suitability = (suitability * ruggedness_mult).astype(np.float32)
+
+        if self.danger_params is not None:
+            from worldgen.danger.channels import DANGER_ARRAY
+            if DANGER_ARRAY.present(world):
+                danger = DANGER_ARRAY.read(world).astype(np.float32)
+                w = float(self.danger_params.suitability_weight)
+                suitability = np.clip(suitability * (1.0 - w * danger), 0.0, 1.0).astype(np.float32)
+
         self.suitability = suitability
         SUITABILITY.write(mesh, suitability)
 
