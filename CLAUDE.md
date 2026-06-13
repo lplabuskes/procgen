@@ -70,6 +70,17 @@ Stage reference docs (read the relevant one before working on a stage):
 Historical design specs live in `docs/plans/`.
 
 
+## World Scale (default params)
+
+Icosphere depth 5 → **10,242 dual faces** (hexagons + 12 pentagons).
+
+| Unit | Value |
+|---|---|
+| Face area | ~50,000 km² (~size of Costa Rica) |
+| Pixel area at `tex_size=16` (default) | ~195 km² · ~14 km/side |
+
+The pixel figures are naive averages (face area ÷ tex_size²); corner pixels may fall outside the face polygon.
+
 ## Key Design Notes
 
 - **Stage contract**: each `Stage` receives a `BuildContext` containing the `World` (mesh + seed) and all outputs written by prior stages. Stages communicate exclusively through the context — no direct stage-to-stage calls.

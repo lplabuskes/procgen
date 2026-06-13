@@ -11,6 +11,7 @@ from core.pipeline import BuildContext, Pipeline
 from core.world import World
 from worldgen.climate.builder import ClimateBuilder, ClimateParams
 from worldgen.cost.builder import CostBuilder, CostParams
+from worldgen.danger.builder import DangerBuilder, DangerParams
 from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams
 from worldgen.hydrology.builder import HydrologyBuilder, HydrologyParams
 from worldgen.resources.builder import ResourcesBuilder, ResourcesParams
@@ -30,6 +31,7 @@ class GlobeParams:
     climate: ClimateParams = field(default_factory=ClimateParams, metadata={"label": "Climate"})
     hydrology: HydrologyParams = field(default_factory=HydrologyParams, metadata={"label": "Hydrology"})
     resources: ResourcesParams = field(default_factory=ResourcesParams, metadata={"label": "Resources"})
+    danger: DangerParams = field(default_factory=DangerParams, metadata={"label": "Danger"})
     cost: CostParams = field(default_factory=CostParams, metadata={"label": "Cost"})
     # World seed — drives mesh selection and every stage's draws. None → random each run.
     seed: Optional[int] = field(
@@ -46,6 +48,7 @@ class GlobePipeline(Pipeline):
         self.climate_builder: ClimateBuilder = ClimateBuilder(self.params.climate)
         self.hydrology_builder: HydrologyBuilder = HydrologyBuilder(self.params.hydrology)
         self.resources_builder: ResourcesBuilder = ResourcesBuilder(self.params.resources)
+        self.danger_builder: DangerBuilder = DangerBuilder(self.params.danger)
         self.cost_builder: CostBuilder = CostBuilder(self.params.cost)
 
         # Lake-feedback second pass is placed after hydrology, sharing the climate builder.
@@ -55,6 +58,7 @@ class GlobePipeline(Pipeline):
             self.hydrology_builder,
             self.climate_builder.lake_feedback_stage(),
             self.resources_builder,
+            self.danger_builder,
             self.cost_builder,
         ])
         self.globe: Optional[World] = None

@@ -399,6 +399,10 @@ class MapWidget(QWidget):
                 and self._globe is not None
                 and self._globe.has_feature("rare_bio")):
             self._draw_rare_bio_overlay(painter, W, H, cx, cy, scale_x, scale_y)
+        if (self._overlay_visible.get("danger_sources")
+                and self._globe is not None
+                and self._globe.has_feature("danger_sources")):
+            self._draw_danger_sources_overlay(painter, W, H, cx, cy, scale_x, scale_y)
         if (self._overlay_visible.get("trade_routes")
                 and self._globe is not None
                 and self._globe.has_feature("trade_routes")):
@@ -719,6 +723,49 @@ class MapWidget(QWidget):
                     QPointF(cx_i - r, cy_i),
                 ])
                 painter.drawPolygon(diamond)
+        painter.restore()
+
+    def _draw_danger_sources_overlay(
+        self,
+        painter: QPainter,
+        W: float, H: float,
+        cx: float, cy: float,
+        scale_x: float, scale_y: float,
+    ) -> None:
+        from worldgen.danger.builder import SOURCE_COLORS
+        feature = self._globe.get_feature("danger_sources")  # type: ignore[union-attr]
+        if feature is None:
+            return
+        positions, kinds = feature
+        if len(positions) == 0:
+            return
+        lon = self._shift_lon(np.arctan2(positions[:, 1], positions[:, 0]))
+        lat = np.arcsin(np.clip(positions[:, 2], -1.0, 1.0))
+        proj = self._projection.project_lonlat(np.column_stack([lon, lat]))
+        sx = (proj[:, 0] - cx) * scale_x + W * 0.5
+        sy = -(proj[:, 1] - cy) * scale_y + H * 0.5
+        r = max(3.0, 5.0 * self._zoom ** 0.3)
+        painter.save()
+        n_colors = len(SOURCE_COLORS)
+        for i in range(len(positions)):
+            k = int(kinds[i])
+            rgba = SOURCE_COLORS[min(k, n_colors - 1)]
+            r_fill = int(rgba[0] * 255)
+            g_fill = int(rgba[1] * 255)
+            b_fill = int(rgba[2] * 255)
+            r_pen = max(0, r_fill - 70)
+            g_pen = max(0, g_fill - 70)
+            b_pen = max(0, b_fill - 70)
+            painter.setPen(QPen(QColor(r_pen, g_pen, b_pen, 230), 1.5))
+            painter.setBrush(QBrush(QColor(r_fill, g_fill, b_fill, 210)))
+            # Draw as triangle (skull-like pointer) pointing downward.
+            px, py = float(sx[i]), float(sy[i])
+            triangle = QPolygonF([
+                QPointF(px, py + r),
+                QPointF(px - r * 0.87, py - r * 0.5),
+                QPointF(px + r * 0.87, py - r * 0.5),
+            ])
+            painter.drawPolygon(triangle)
         painter.restore()
 
     def _draw_trade_routes_overlay(
