@@ -37,7 +37,8 @@ class ProjectionParams:
     range_floor: float = _f(
         0.5, label="Projection range floor (+ infrastructure)", min=0.0, max=2.0
     )
-    sea_range_factor: float = _f(3.0, label="Sea projection range factor (× land)", min=1.0, max=10.0)
+    sea_range_factor: float = _f(1.5, label="Sea projection range factor (× land)", min=1.0, max=10.0)
+    sea_weight: float = _f(1.0, label="Sea channel magnitude weight (vs land)", min=0.0, max=1.0)
     legitimacy_spread: float = _f(0.3, label="Legitimacy spread (±)", min=0.0, max=1.0)
     maritime_scale: float = _f(1.5, label="Maritime reach scale (× trade)", min=0.0, max=5.0)
     cohesion_min: float = _f(0.4, label="Cohesion floor", min=0.0, max=1.0)
@@ -59,7 +60,7 @@ class ClaimingParams:
 @paramclass
 class HierarchyParams:
     """Direct/vassal/independent cutoffs and the cohesion→authority-gain map."""
-    direct_threshold: float = _f(3.0, label="Direct-rule authority ratio", min=0.5, max=20.0)
+    direct_threshold: float = _f(1.5, label="Direct-rule authority ratio", min=0.5, max=20.0)
     vassal_floor: float = _f(0.6, label="Vassal authority ratio floor", min=0.05, max=10.0)
     power_exponent: float = _f(
         0.5, label="Authority population exponent (1 = raw ratio)", min=0.0, max=1.0
@@ -161,7 +162,8 @@ class ForestBuilder:
         fields = np.zeros((0, s.n))
         scalars = Scalars(*(np.zeros(0) for _ in range(4)))
 
-        for outer in range(max(1, int(p.claiming.outer_max_iters))):
+        n_outer = max(1, int(p.claiming.outer_max_iters))
+        for outer in range(n_outer):
             capital_faces = [int(s.settlement_faces[i]) for i in capital_sidx]
             scalars = self._roll(capital_sidx, capital_faces)
             fields = self._project(capital_faces, scalars)
@@ -191,7 +193,10 @@ class ForestBuilder:
                 int(x) for x in np.flatnonzero(control == int(ControlClass.INDEPENDENT)).tolist()
                 if int(x) not in existing
             ]
-            if not new_caps or len(capital_sidx) + len(new_caps) > int(p.claiming.max_capitals):
+            # On the final pass we must not extend after rolling, or the returned
+            # scalars/fields/partition would be stale (shorter than capital_sidx).
+            last_pass = outer == n_outer - 1
+            if not new_caps or last_pass or len(capital_sidx) + len(new_caps) > int(p.claiming.max_capitals):
                 report(
                     f"  Sovereigns settled after {outer + 1} pass(es): "
                     f"{len(capital_sidx)} capitals ({n_iters} claim iters)."
@@ -210,7 +215,7 @@ class ForestBuilder:
             self.s.n, capital_faces, sc.legitimacy, sc.infrastructure, sc.maritime_reach,
             self.s.land_graph, self.s.hybrid_graph,
             base_range=p.projection.base_range, range_floor=p.projection.range_floor,
-            sea_range_factor=p.projection.sea_range_factor,
+            sea_range_factor=p.projection.sea_range_factor, sea_weight=p.projection.sea_weight,
         )
 
     def _roll(self, capital_sidx, capital_faces) -> Scalars:

@@ -16,8 +16,11 @@ Usage:
 
 Tuning workflow: edit PolityParams (nested sub-paramclasses in
 ``realmgen/polity/builder.py`` and ``realmgen/polity/forest.py``) —
-``projection.base_range`` is the master consolidation knob; ``hierarchy.vassal_floor`` /
-``hierarchy.direct_threshold`` set the secession/vassalage cutoffs — re-run, compare.
+``projection.sea_range_factor`` (sea decay vs land) is the dominant domain-consolidation
+knob: a large factor flattens the maritime field into a global plateau that lets one
+sea power out-claim every nearer land capital. ``projection.base_range`` sets overall
+reach; ``hierarchy.direct_threshold`` sets where the (post-sea-taming) field puts the
+direct/vassal cutoff; ``hierarchy.vassal_floor`` sets the secession cutoff — re-run, compare.
 
 Texture targets (qualitative, from docs/plans/polity_generation_brief.md):
     - a believable mix: a dominant empire + competing kingdoms + city-states;
@@ -69,8 +72,12 @@ def measure_seed(seed: int, rebuild: bool, detail: bool) -> None:
 
     n_cities = len(world.get_feature("settlements") or [])
     n_vassal_seats = len(vas)
-    largest = max((p.n_faces for p in sov), default=0)
-    largest_frac = largest / claimed if claimed else 0.0
+    # Largest *domain* (sovereign + all its vassals), not just directly-held faces —
+    # this is the consolidation number the "one realm eats the world" complaint is about.
+    sof = ps.sovereign_of_face
+    assert sof is not None
+    domain_counts = np.bincount(sof[sof >= 0]) if claimed else np.zeros(1, dtype=int)
+    largest_frac = int(domain_counts.max()) / claimed if claimed else 0.0
     max_depth = max((p.depth for p in pols), default=0)
 
     # Does infrastructure drive fragmentation? (over realms big enough to split)
@@ -87,7 +94,7 @@ def measure_seed(seed: int, rebuild: bool, detail: bool) -> None:
 
     print(
         f"seed {seed:>4}: {len(sov):>2} sovereigns, {n_vassal_seats:>2} vassals "
-        f"| {n_cities} cities | largest realm {largest_frac * 100:4.1f}% of claimed "
+        f"| {n_cities} cities | largest domain {largest_frac * 100:4.1f}% of claimed "
         f"| max depth {max_depth} | corr(infra, vassal_frac) {corr:+.2f}"
     )
     if detail:

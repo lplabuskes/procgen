@@ -27,6 +27,7 @@ def compute_authority_fields(
     base_range: float = 40.0,
     range_floor: float = 0.5,
     sea_range_factor: float = 3.0,
+    sea_weight: float = 1.0,
 ) -> np.ndarray:
     """Per-capital authority field, ``(C, N)`` in roughly [0, legitimacy].
 
@@ -36,9 +37,17 @@ def compute_authority_fields(
     ``land_dist`` is the undirected multi-source cost-distance from all capitals.
     Cheap terrain carries the field far; rugged/dangerous terrain (baked into the
     edge costs) pinches it, creating the interior **saddles** where vassalage
-    concentrates. With a hybrid land/sea graph, a gentler sea channel
-    (``legitimacy * maritime_reach``, range x ``sea_range_factor``) is max-combined
-    in, so a high-maritime coastal capital beads authority along coastlines.
+    concentrates. With a hybrid land/sea graph, a sea channel
+    (``sea_weight * legitimacy * maritime_reach``, range x ``sea_range_factor``) is
+    max-combined in, so a high-maritime coastal capital beads authority along
+    coastlines.
+
+    ``sea_range_factor`` and ``sea_weight`` keep the sea channel a *local coastal
+    supplement* rather than a global plateau: when the sea range is a large
+    multiple of the land range, cheap sea travel flattens ``auth_sea`` to ~constant
+    ``legitimacy * maritime_reach`` across the whole coastal world, and that plateau
+    wins the claiming ``argmax`` against every nearer land capital. A modest factor
+    (decay comparable to land) plus ``sea_weight < 1`` bounds the maritime edge.
     """
     caps = np.asarray(capital_faces, dtype=np.int64)
     if caps.size == 0:
@@ -57,7 +66,7 @@ def compute_authority_fields(
             hybrid_cost_graph, directed=False, indices=caps, return_predecessors=False,
         )[:, :n_faces]  # land-node slice (sea shortcuts through ports)
         sea_range = land_range * float(sea_range_factor)
-        auth_sea = (leg * mar)[:, None] * np.exp(-hybrid_dist / sea_range[:, None])
+        auth_sea = float(sea_weight) * (leg * mar)[:, None] * np.exp(-hybrid_dist / sea_range[:, None])
         return np.maximum(auth_land, auth_sea)
 
     return auth_land

@@ -79,6 +79,24 @@ class TestAuthorityFields:
                                             land, hybrid, **kw)
         assert sea_rich[0, 2] > land_only[0, 2] + 0.3       # maritime reach lights up the far coast
 
+    def test_sea_weight_scales_down_the_sea_channel(self):
+        # Same coastal bead as above, but a sub-1 sea weight must shrink the maritime
+        # contribution at the far coast (where the sea channel decides the value).
+        n = 3
+        land = csr_matrix(([10.0, 10.0, 10.0, 10.0], ([0, 1, 1, 2], [1, 0, 2, 1])),
+                          shape=(n, n), dtype=np.float64)
+        r = [0, 1, 1, 2, 3, 4, 4, 5, 0, 3, 2, 5]
+        c = [1, 0, 2, 1, 4, 3, 5, 4, 3, 0, 5, 2]
+        d = [10, 10, 10, 10, 1, 1, 1, 1, 0.5, 0.5, 0.5, 0.5]
+        hybrid = csr_matrix((d, (r, c)), shape=(2 * n, 2 * n), dtype=np.float64)
+        kw = dict(base_range=5.0, range_floor=0.5, sea_range_factor=3.0)
+        full = compute_authority_fields(n, [0], np.array([1.0]), np.array([1.0]), np.array([1.0]),
+                                        land, hybrid, sea_weight=1.0, **kw)
+        half = compute_authority_fields(n, [0], np.array([1.0]), np.array([1.0]), np.array([1.0]),
+                                        land, hybrid, sea_weight=0.5, **kw)
+        assert half[0, 2] < full[0, 2]
+        assert half[0, 2] == pytest.approx(0.5 * full[0, 2], rel=1e-6)
+
 
 class TestClaimFaces:
     def _two_capital_field(self, n=5):
