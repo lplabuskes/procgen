@@ -184,6 +184,7 @@ class DangerBuilder(Stage):
             reg.add_overlay(
                 "danger_sources", "Danger Sources",
                 legend=("categorical", SOURCE_CAT_LEGEND),
+                checked=False
             )
 
         mesh = world.mesh

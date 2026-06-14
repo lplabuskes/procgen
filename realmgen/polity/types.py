@@ -31,22 +31,20 @@ class Scalars(NamedTuple):
         return Scalars(*(np.atleast_1d(np.asarray(a)[idx]) for a in self))
 
 
-# Categorical palette for territory fill.  Distinct, slightly muted hues so the
-# capital settlement dots (drawn by the settlements overlay) stay legible on top.
-# Colors are assigned by ``polity_id % len(POLITY_COLORS)`` at render time.
+# Sovereign palette — assigned to independent nations by ``polity_id % len(POLITY_COLORS)``.
+# Rich, saturated, and dark enough (L ≈ 0.38–0.42) that vassal tints (lightened in
+# make_polity_tree_color) land visibly lighter while staying clearly in the same family.
+# Yellow-green band (~75°–115°) is intentionally skipped to avoid muddy colours.
 POLITY_COLORS: List[tuple] = [
-    (0.84, 0.37, 0.34, 1.0),  # red
-    (0.36, 0.55, 0.80, 1.0),  # blue
-    (0.45, 0.68, 0.40, 1.0),  # green
-    (0.80, 0.62, 0.30, 1.0),  # amber
-    (0.62, 0.46, 0.74, 1.0),  # purple
-    (0.36, 0.70, 0.68, 1.0),  # teal
-    (0.83, 0.55, 0.40, 1.0),  # orange
-    (0.74, 0.50, 0.62, 1.0),  # mauve
-    (0.55, 0.62, 0.34, 1.0),  # olive
-    (0.45, 0.58, 0.66, 1.0),  # slate
-    (0.78, 0.45, 0.52, 1.0),  # rose
-    (0.50, 0.66, 0.52, 1.0),  # sage
+    (0.69, 0.19, 0.11, 1.0),  # crimson      [ 8°]
+    (0.72, 0.44, 0.12, 1.0),  # orange       [32°]
+    (0.71, 0.67, 0.13, 1.0),  # gold         [55°]
+    (0.14, 0.62, 0.21, 1.0),  # forest green [128°]
+    (0.13, 0.63, 0.54, 1.0),  # teal         [170°]
+    (0.14, 0.37, 0.70, 1.0),  # sky blue     [215°]
+    (0.26, 0.13, 0.67, 1.0),  # cobalt       [255°]
+    (0.57, 0.15, 0.65, 1.0),  # violet       [290°]
+    (0.66, 0.14, 0.49, 1.0),  # magenta      [320°]
 ]
 
 # Land that no polity reached (remote wilderness / out of range).

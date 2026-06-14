@@ -106,6 +106,46 @@ class ForestBuilder:
                 liege_id=None, root_id=None, depth=0, autonomy=0.0,
             )
         self.authority_of_face = fields.max(axis=0) if fields.size else np.zeros(self.s.n)
+        self._renumber_sovereign_first()
+
+    def _renumber_sovereign_first(self) -> None:
+        """Reassign polity IDs so all sovereigns occupy the lowest slots.
+
+        Keeps encounter order within each group so POLITY_COLORS[sovereign_id % N]
+        assigns consecutive palette entries with no accidental overlap from vassal IDs.
+        """
+        old = self.polities
+        sov_ids = [p.polity_id for p in old if p.liege is None]
+        vas_ids = [p.polity_id for p in old if p.liege is not None]
+        remap = {old_id: new_id for new_id, old_id in enumerate(sov_ids + vas_ids)}
+
+        new_polities: List[Optional[Polity]] = [None] * len(old)
+        for pol in old:
+            new_pid = remap[pol.polity_id]
+            new_polities[new_pid] = Polity(
+                polity_id=new_pid,
+                capital_face=pol.capital_face,
+                capital_position=pol.capital_position,
+                cohesion=pol.cohesion,
+                infrastructure=pol.infrastructure,
+                legitimacy=pol.legitimacy,
+                maritime_reach=pol.maritime_reach,
+                liege=remap[pol.liege] if pol.liege is not None else None,
+                autonomy=pol.autonomy,
+                depth=pol.depth,
+                power=pol.power,
+                domain_power=pol.domain_power,
+                n_faces=pol.n_faces,
+                territory_faces=pol.territory_faces,
+                member_settlement_faces=pol.member_settlement_faces,
+                vassals=[remap[v] for v in pol.vassals],
+            )
+        self.polities = new_polities  # type: ignore[assignment]
+
+        remap_arr = np.array([remap[i] for i in range(len(old))], dtype=np.int32)
+        for arr in (self.polity_of_face, self.sovereign_of_face):
+            mask = arr >= 0
+            arr[mask] = remap_arr[arr[mask]]
 
     # ── sovereign resolution ──────────────────────────────────────────────────
 

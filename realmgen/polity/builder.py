@@ -187,7 +187,8 @@ class PolityStage(Stage):
         )
         self.pair_tension = pair_tension
         self.face_tension = face_tension
-        self._write_outputs(mesh, world, polities, polity_of_face, sovereign_of_face, control_of_face, face_tension, pair_tension)
+        self._write_outputs(mesh, world, polities, polity_of_face, sovereign_of_face, control_of_face, face_tension,
+                            pair_tension)
 
         n_sov = sum(1 for pol in polities if pol.liege is None)
         ctx.report(
@@ -287,7 +288,8 @@ class PolityStage(Stage):
         self.authority_of_face = np.zeros(n, dtype=np.float64)
         self.face_tension = face_tension
         self.pair_tension = pair_tension
-        self._write_outputs(mesh, world, polities, polity_of_face, sovereign_of_face, control_of_face, face_tension, pair_tension)
+        self._write_outputs(mesh, world, polities, polity_of_face, sovereign_of_face, control_of_face, face_tension,
+                            pair_tension)
 
     def _dump_tree(self, ctx: BuildContext) -> None:
         for pol in (self.polities or []):
@@ -303,7 +305,7 @@ class PolityStage(Stage):
 
     def register_display(self, world, reg: DisplayRegistry, *, debug: bool = False) -> None:
         if self.polities:
-            reg.add_scheme("Polities", disp.polity_color)
+            reg.add_scheme("Polities", disp.make_polity_tree_color(self.polities))
         if self.face_tension is not None:
             reg.add_scheme("Border Tension", disp.tension_color)
         if debug:

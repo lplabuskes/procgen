@@ -1,9 +1,15 @@
 """Color schemes for the polity stage (per-face metadata callables)."""
 from __future__ import annotations
 
+import colorsys
+from typing import TYPE_CHECKING, List
+
 from realmgen.polity.types import ControlClass, POLITY_COLORS, UNCLAIMED_COLOR
 from viz.color_stops import interp_stops_scalar
 from worldgen.geology.display import OCEAN_COLOR
+
+if TYPE_CHECKING:
+    from realmgen.polity.types import Polity
 
 _TENSION_STOPS = [
     (0.0, (0.30, 0.33, 0.36, 1.0)),  # calm interior — slate
@@ -27,6 +33,48 @@ _CONTROL_COLORS = {
 
 def _is_water(meta: dict) -> bool:
     return meta.get("is_water", meta.get("is_ocean", False))
+
+
+def make_polity_tree_color(polities: List["Polity"]):
+    """Return a color scheme that tints vassals away from their sovereign's base color.
+
+    Sovereign territories render in the pure palette color.  Each vassal gets a
+    hue jitter (±20°) and a lightness boost derived from its polity_id, so all
+    subjects of the same sovereign are clearly related but individually distinct.
+    """
+    depth_of: dict[int, int] = {pol.polity_id: pol.depth for pol in polities}
+
+    # Pre-convert each sovereign's palette color to HLS once.
+    sov_hls: dict[int, tuple] = {}
+    for pol in polities:
+        if pol.liege is None:
+            r, g, b, _ = POLITY_COLORS[pol.polity_id % len(POLITY_COLORS)]
+            sov_hls[pol.polity_id] = colorsys.rgb_to_hls(r, g, b)
+
+    def fn(meta: dict) -> tuple:
+        if _is_water(meta):
+            return OCEAN_COLOR
+        sid_raw = meta.get("sovereign_id", -1)
+        if sid_raw is None or int(sid_raw) < 0:
+            return UNCLAIMED_COLOR
+        sid = int(sid_raw)
+        pid_raw = meta.get("polity_id", sid_raw)
+        pid = int(pid_raw) if pid_raw is not None else sid
+
+        h, lit, s = sov_hls.get(sid, colorsys.rgb_to_hls(0.5, 0.5, 0.5))
+        depth = depth_of.get(pid, 0)
+
+        if depth > 0:
+            # Hue jitter ±20° — stable, unique per polity_id.
+            t = ((pid * 2654435761) & 0xFFFF) / 0xFFFF  # 0..1
+            h = (h + (t - 0.5) * (40.0 / 360.0)) % 1.0
+            # Lighten toward white with depth so vassals are visually lighter.
+            lit = min(lit + 0.08 + depth * 0.05, 0.82)
+
+        r, g, b = colorsys.hls_to_rgb(h, lit, s)
+        return (r, g, b, 1.0)
+
+    return fn
 
 
 def polity_color(meta: dict) -> tuple:
