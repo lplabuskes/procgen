@@ -169,6 +169,43 @@ def _accumulate_path(
 # ── Public API ────────────────────────────────────────────────────────────────
 
 
+def build_base_hybrid_graph(
+    n: int,
+    face_adjacency: List[List[int]],
+    land_edge_costs: List[np.ndarray],
+    land_passable: np.ndarray,
+    sea_edge_costs: List[np.ndarray],
+    sea_passable: np.ndarray,
+    *,
+    port_cost: float = 5.0,
+    river_switch_cost: float = 0.0,
+) -> csr_matrix:
+    """Build the base ``(2N, 2N)`` hybrid land/sea cost graph (no virtual source).
+
+    Land nodes ``0..N-1``, sea nodes ``N..2N-1``; port edges bridge coastal
+    land↔adjacent-sea, amphibious switches at navigable-river faces.  This is the
+    surface the polity stage projects sea authority over (Dijkstra from capital
+    land nodes, read back the land-node slice).  Mirrors the graph
+    :func:`compute_trade_network` builds internally.
+    """
+    size = 2 * n
+    rows, cols, data = _collect_hybrid_edges(
+        n, face_adjacency,
+        land_edge_costs, np.asarray(land_passable, dtype=bool),
+        sea_edge_costs, np.asarray(sea_passable, dtype=bool),
+        port_cost, river_switch_cost,
+    )
+    if not data:
+        return csr_matrix((size, size), dtype=np.float64)
+    return csr_matrix(
+        (
+            np.array(data, dtype=np.float64),
+            (np.array(rows, dtype=np.int32), np.array(cols, dtype=np.int32)),
+        ),
+        shape=(size, size),
+    )
+
+
 def build_hybrid_cost_graph(
     n: int,
     face_adjacency: List[List[int]],

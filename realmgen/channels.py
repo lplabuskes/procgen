@@ -13,5 +13,7 @@ POPULATION = MetaChannel("population", dtype=np.float64)  # urban headcount (peo
 RURAL_POPULATION = MetaChannel("rural_population", dtype=np.float64)  # per-face rural people (land only)
 HINTERLAND_ID = MetaChannel("hinterland_id", dtype=np.int32)  # settlement index or -1
 # Stage 5 — Polities
-POLITY_ID = MetaChannel("polity_id", dtype=np.int32, default=-1)  # polity index or -1
+POLITY_ID = MetaChannel("polity_id", dtype=np.int32, default=-1)  # directly-governing polity index or -1
+SOVEREIGN_ID = MetaChannel("sovereign_id", dtype=np.int32, default=-1)  # root polity of the face's tree or -1
+CONTROL_CLASS = MetaChannel("control_class", dtype=np.int32, default=-1)  # ControlClass at settlement faces, else -1
 BORDER_TENSION = MetaChannel("border_tension", dtype=np.float64)  # contested-border heat

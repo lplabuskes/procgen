@@ -19,9 +19,13 @@ Standalone module downstream of worldgen. Takes a fully-built `World` (read-only
 - `realmgen/population/calibration.py` — pure population functions
 - `realmgen/population/trade_spawn.py` — `spawn_trade_settlements` (adds hub/waypoint settlements per relaxation pass)
 - `realmgen/trade/network.py` — `compute_trade_network`
-- `realmgen/polity/builder.py` — `PolityStage`, `PolityParams`
-- `realmgen/polity/formation.py` — pure polity/territory functions
-- `realmgen/polity/types.py` — `Polity` dataclass + `POLITY_COLORS` palette
+- `realmgen/polity/builder.py` — `PolityStage`, `PolityParams` (IO, cost graphs, tension, display)
+- `realmgen/polity/forest.py` — `ForestBuilder` + `_Ctx` (the sovereign/vassal tree algorithm)
+- `realmgen/polity/seeding.py` — defensibility, capital seeding, scalar rolls (Stage 0 pure functions)
+- `realmgen/polity/authority.py` — authority field, claiming, classification (Stages 1-3 pure functions)
+- `realmgen/polity/tension.py` — border-crossing tension
+- `realmgen/polity/display.py` — color schemes
+- `realmgen/polity/types.py` — `Polity` / `Scalars` / `ControlClass` + `POLITY_COLORS` palette
 
 ## `builder.py`
 
@@ -33,9 +37,9 @@ Standalone module downstream of worldgen. Takes a fully-built `World` (read-only
 3. `PopulationStage` — trade network, relaxation loop, population calibration
 4. `PolityStage` — territory growth + border tension
 
-After `build(ctx)`, each stage stores its results as attributes. `apply_display(window, debug=False)` merges realm color schemes (Suitability, Situational Value, Trade Flow, Hinterland, Polities, Border Tension), overlays (Settlements, Trade Routes), and chains hover with population/polity display.
+After `build(ctx)`, each stage stores its results as attributes. `apply_display(window, debug=False)` merges realm color schemes (Suitability, Situational Value, Trade Flow, Hinterland, Polities, Border Tension; plus Sovereigns, Control Class, Authority Field under `--debug`), overlays (Settlements, Trade Routes), and chains hover with population/polity display.
 
-Writes per-face metadata: `"suitability"`, `"situational_value"`, `"settlement_tier"`, `"trade_flow"`, `"is_trade_hub"`, `"population"` (urban headcount in people), `"rural_population"` (per-face people, land only), `"hinterland_id"`, `"polity_id"`, `"border_tension"`.
+Writes per-face metadata: `"suitability"`, `"situational_value"`, `"settlement_tier"`, `"trade_flow"`, `"is_trade_hub"`, `"population"` (urban headcount in people), `"rural_population"` (per-face people, land only), `"hinterland_id"`, `"polity_id"` (directly-governing), `"sovereign_id"` (root), `"control_class"`, `"border_tension"`.
 
 Registers features: `"settlements"` (list of `Settlement` with `.population` set), `"trade_routes"`, `"polities"` (list of `Polity`), `"polity_tensions"` (list of `(a, b, score)`).
 
@@ -88,16 +92,28 @@ Validation harnesses: `scripts/measure_population.py` (distribution shape — Zi
 
 ## Polity
 
-**`PolityParams`**: `capital_min_separation`, `capital_min_pop_fraction`, `power_bias`, `growth_max_reach`, `tension_barrier_scale`, `tension_flow_ref`, `tension_artery_weight`.
+A polity is a **tree, not a flat partition** (`docs/plans/polity_generation_brief.md`): sovereigns are roots, vassals are children. The stage seeds sovereign capitals, projects an authority field from each over the land + sea cost surfaces, lets every face be claimed by the strongest projector, then classifies each settlement direct / vassal / independent by comparing projected authority against local power — recursing to carve vassal sub-territories. Per-polity scalars (`cohesion`, `infrastructure`, `legitimacy`, `maritime_reach`) — rolled from a per-capital RNG substream keyed on `world.seed` + capital face — modulate the field; their cross-product is the main generator of variety (Song ↔ Mongol ↔ HRE ↔ city-state belt).
 
-**`polity/formation.py`**: Pure functions:
-- `seed_capitals` — pick polity capitals from settlements by population, spaced by min cost-distance
-- `grow_territory` — power-weighted Voronoi on land cost graph: each face joins the capital minimising `cost_dist − power_bias·log(power/max_power)`; stronger capitals claim more, borders fall on barriers/coasts, unreachable islands stay unclaimed `-1`
-- `compute_polity_power` — total member-settlement population per polity
-- `compute_border_tension` — per-crossing `permeability · balance · artery`, where `artery = (1−w) + w·tanh(flow)` keeps a trade-independent baseline; reduced by `max` over each border's chokepoints
+**`PolityParams`** is composed of nested sub-paramclasses (one per concern). Those consumed only by the stage live in `polity/builder.py` — `seeding` (`CapitalSeedingParams`: `min_separation`, `min_pop_fraction`, `trade_weight`), `defensibility` (`DefensibilityParams`: `rugged_weight`, `situational_weight`), `tension` (`BorderTensionParams`: `barrier_scale`, `flow_ref`, `artery_weight`). Those consumed only by the forest algorithm live in `polity/forest.py` — `projection` (`ProjectionParams`: `base_range` — the master consolidation knob, `range_floor`, `sea_range_factor`, `legitimacy_spread`, `maritime_scale`, `cohesion_min`, `infrastructure_min`, `infrastructure_emergent`), `claiming` (`ClaimingParams`: `hysteresis`, `max_iters`, `outer_max_iters`, `max_capitals`), `hierarchy` (`HierarchyParams`: `direct_threshold`, `vassal_floor`, `cohesion_gain_floor`, `cohesion_gain_span`, `max_recursion_depth`).
+
+**`Polity`** (`polity/types.py`): `capital_face/position`, the four scalars, `liege` (None ⇒ sovereign root), `autonomy`, `depth`, `power` (own-territory member population), `domain_power` (own + descendant vassals), `territory_faces`, `member_settlement_faces`, `vassals`. `ControlClass` (IntEnum) labels each settlement DIRECT / VASSAL / INDEPENDENT. `Scalars` (NamedTuple) carries the four per-polity scalar arrays with a `.take(idx)` sub-select.
+
+**`polity/seeding.py`** (Stage 0 pure functions):
+- `compute_defensibility` — terrain-derived hold-strength (ruggedness + situational value), a ≥1 multiplier on a settlement's population (no stored wall/garrison fields exist)
+- `seed_capitals` — founder settlements weighted by population × trade × defensibility, spaced by cost-distance
+- `roll_polity_scalars` / `cohesion_to_gain` — per-capital scalar rolls (deterministic, keyed on face → `Scalars`) and the cohesion→authority-gain map
+
+**`polity/authority.py`** (Stages 1-3 pure functions):
+- `compute_authority_fields` — `legitimacy · exp(−land_dist / range)` (range from infrastructure) max-combined with a gentler sea channel (`maritime_reach`, over the hybrid land/sea graph)
+- `claim_faces` — argmax-authority face assignment with an incumbent hysteresis bonus, iterated to a bounded fixed point
+- `classify_settlements` — direct/vassal/independent from `projecting_power[capital] · field · gain` vs `population · defensibility`
+
+**`polity/forest.py`**: `ForestBuilder` threads the pure functions into the tree — `resolve_sovereigns` (claim + promote independents in an outer loop) then `_build_subtree` recursion (carve each sovereign into its directly-held core + vassal sub-territories). `_Ctx` holds the read-only shared inputs.
+
+**`polity/tension.py`**: `compute_border_tension` — retained; scored on the final sovereign partition.
+
+**Outputs**: per-face `POLITY_ID` (directly-governing), `SOVEREIGN_ID` (root), `CONTROL_CLASS`, `BORDER_TENSION`; features `polities` (the forest) and `polity_tensions`. Debug schemes (`--debug`): Authority Field (validates field saddles), Sovereigns (kingdom grouping), Control Class. Validation harness: `scripts/measure_polities.py`.
 
 ## Key design constraint
 
-The land cost surface is land-only (`land_passable = ~is_water`), so polity formation uses a land-only graph — coastlines become natural borders, islands stay unclaimed. The **only** place that opts into limited water travel is the population stage's hinterland graph (coastal fishing grounds). That permeability never reaches polity formation.
-
-Maritime reach (port-projected island/strait influence) is deferred — not yet implemented.
+The land cost surface is land-only (`land_passable = ~is_water`), so land authority and claiming use a land-only graph — coastlines become natural borders. The sea authority channel reuses the hybrid land/sea graph (`realmgen/trade/network.py::build_base_hybrid_graph`): a high-`maritime_reach` coastal capital projects authority along coastlines and onto reachable islands; claiming stays restricted to land faces. Maritime reach scales with capital trade wealth, so a landlocked capital contributes none.

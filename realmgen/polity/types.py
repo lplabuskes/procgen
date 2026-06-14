@@ -2,9 +2,34 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List
+from enum import IntEnum
+from typing import List, NamedTuple, Optional
 
 import numpy as np
+
+
+class ControlClass(IntEnum):
+    """How a settlement relates to the polity claiming it (projected authority
+    vs local power): ``DIRECT`` = directly-ruled province, ``VASSAL`` = founds a
+    child polity under its claimant, ``INDEPENDENT`` = founds a new sovereign."""
+
+    DIRECT = 0
+    VASSAL = 1
+    INDEPENDENT = 2
+
+
+class Scalars(NamedTuple):
+    """The four per-polity authority scalars — one (C,) array each, capital-aligned."""
+
+    cohesion: np.ndarray
+    infrastructure: np.ndarray
+    legitimacy: np.ndarray
+    maritime_reach: np.ndarray
+
+    def take(self, idx) -> "Scalars":
+        """Sub-select/reorder polities; always returns 1-D arrays."""
+        return Scalars(*(np.atleast_1d(np.asarray(a)[idx]) for a in self))
+
 
 # Categorical palette for territory fill.  Distinct, slightly muted hues so the
 # capital settlement dots (drawn by the settlements overlay) stay legible on top.
@@ -30,17 +55,32 @@ UNCLAIMED_COLOR = (0.32, 0.30, 0.27, 1.0)
 
 @dataclass
 class Polity:
-    """A territorial polity grown from a capital settlement.
+    """A node in the polity forest grown from a capital settlement.
 
-    ``polity_id`` indexes the polity within the build (0-based, aligned with the
-    per-face ``polity_id`` metadata).  ``power`` is the total population of every
-    settlement inside the territory — the strength measure used for border
-    tension's power-balance term.
+    Sovereigns are roots (``liege is None``); vassals point at a parent via
+    ``liege``. ``polity_id`` aligns with the per-face ``polity_id`` metadata (the
+    *directly governing* polity — sovereign or vassal). Scalars: ``cohesion``
+    (stability), ``infrastructure`` (projection range), ``legitimacy`` (field
+    magnitude), ``maritime_reach`` (sea projection). ``power`` is own-territory
+    member population; ``domain_power`` adds descendant vassals.
     """
 
     polity_id: int
     capital_face: int
     capital_position: np.ndarray            # (3,) unit-sphere centroid of the capital face
-    power: float                            # total member-settlement population
-    n_faces: int                            # territory size (face count)
-    member_settlement_faces: List[int] = field(default_factory=list)
+    # Per-polity scalars (see class docstring).
+    cohesion: float = 1.0
+    infrastructure: float = 1.0
+    legitimacy: float = 1.0
+    maritime_reach: float = 0.0
+    # Hierarchy.
+    liege: Optional[int] = None             # parent polity id; None ⇒ sovereign root
+    autonomy: float = 0.0                   # 0 for sovereigns; >0 for vassals
+    depth: int = 0                          # 0 = sovereign root
+    # Strength + territory.
+    power: float = 0.0                      # own-territory member-settlement population
+    domain_power: float = 0.0               # own + all descendant-vassal members
+    n_faces: int = 0                        # own-territory size (face count)
+    territory_faces: List[int] = field(default_factory=list)            # faces directly governed
+    member_settlement_faces: List[int] = field(default_factory=list)    # settlement faces directly governed
+    vassals: List[int] = field(default_factory=list)                    # child polity ids

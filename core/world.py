@@ -36,6 +36,9 @@ class World:
                 progress("Building mesh cache (first run only)…")
             mesh_cache.build(params, progress=progress)
         self.mesh: "PolygonMesh" = mesh_cache.load_random(seed=seed)
+        # Retained so downstream stages can derive per-world-deterministic RNG
+        # (e.g. polity scalars) — same seed ⇒ same world ⇒ same generation.
+        self.seed: Optional[int] = seed
         self._features: Dict[str, Any] = {}
 
     @classmethod
@@ -43,6 +46,7 @@ class World:
         """Wrap an already-built mesh without touching the cache."""
         self = cls.__new__(cls)
         self.mesh = mesh
+        self.seed = None
         self._features = {}
         return self
 

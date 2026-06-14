@@ -1,0 +1,280 @@
+"""The sovereign/vassal forest algorithm — Stages 1-3 orchestration.
+
+``ForestBuilder`` threads the pure functions (seeding, authority, claiming,
+classification) into the tree: resolve sovereigns (claim + promote independents),
+then recurse each into its directly-held core plus vassal sub-territories.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence
+
+import numpy as np
+from scipy.sparse import csr_matrix
+
+from core.params import param_field as _f, paramclass
+from realmgen.polity.authority import (
+    claim_faces,
+    classify_settlements,
+    compute_authority_fields,
+)
+from realmgen.polity.seeding import cohesion_to_gain, roll_polity_scalars
+from realmgen.polity.types import ControlClass, Polity, Scalars
+
+if TYPE_CHECKING:
+    from realmgen.polity.builder import PolityParams
+
+
+# ── Params (consumed only in this module) ──────────────────────────────────────
+
+
+@paramclass
+class ProjectionParams:
+    """Authority field reach + the per-polity scalar rolls that modulate it."""
+    base_range: float = _f(
+        14.0, label="Projection base range (cost-dist / e-fold)", min=5.0, max=400.0
+    )
+    range_floor: float = _f(
+        0.5, label="Projection range floor (+ infrastructure)", min=0.0, max=2.0
+    )
+    sea_range_factor: float = _f(3.0, label="Sea projection range factor (× land)", min=1.0, max=10.0)
+    legitimacy_spread: float = _f(0.3, label="Legitimacy spread (±)", min=0.0, max=1.0)
+    maritime_scale: float = _f(1.5, label="Maritime reach scale (× trade)", min=0.0, max=5.0)
+    cohesion_min: float = _f(0.4, label="Cohesion floor", min=0.0, max=1.0)
+    infrastructure_min: float = _f(0.4, label="Infrastructure floor", min=0.0, max=1.0)
+    infrastructure_emergent: float = _f(
+        0.5, label="Infrastructure emergent weight (pop+trade)", min=0.0, max=1.0
+    )
+
+
+@paramclass
+class ClaimingParams:
+    """Face-claim competition and the independence-relaxation outer loop."""
+    hysteresis: float = _f(0.15, label="Claim hysteresis (incumbent bonus)", min=0.0, max=1.0)
+    max_iters: int = _f(8, label="Claim max iterations", min=1, max=50)
+    outer_max_iters: int = _f(6, label="Independence relaxation iterations", min=1, max=20)
+    max_capitals: int = _f(40, label="Max sovereign capitals", min=1, max=200)
+
+
+@paramclass
+class HierarchyParams:
+    """Direct/vassal/independent cutoffs and the cohesion→authority-gain map."""
+    direct_threshold: float = _f(3.0, label="Direct-rule authority ratio", min=0.5, max=20.0)
+    vassal_floor: float = _f(0.6, label="Vassal authority ratio floor", min=0.05, max=10.0)
+    cohesion_gain_floor: float = _f(0.5, label="Cohesion gain floor", min=0.0, max=2.0)
+    cohesion_gain_span: float = _f(1.0, label="Cohesion gain span", min=0.0, max=2.0)
+    max_recursion_depth: int = _f(1, label="Vassal recursion depth", min=0, max=3)
+
+
+@dataclass
+class _Ctx:
+    """Read-only inputs shared by the recursive builder."""
+    n: int
+    centroids: np.ndarray
+    settlement_faces: np.ndarray        # (S,)
+    populations: np.ndarray             # (S,) raw people
+    pop_norm: np.ndarray                # (S,) populations / peak
+    trade_norm: np.ndarray              # (S,) trade wealth / peak
+    defensibility: np.ndarray           # (N,)
+    land_graph: csr_matrix
+    hybrid_graph: Optional[csr_matrix]
+    base_seed: int
+    p: "PolityParams"
+    face_to_settlement: Dict[int, int]
+
+
+class ForestBuilder:
+    """Grows the polity forest from seeded capitals into per-face assignments."""
+
+    def __init__(self, sctx: _Ctx) -> None:
+        self.s = sctx
+        n = sctx.n
+        self.polities: List[Polity] = []
+        self.polity_of_face = np.full(n, -1, dtype=np.int32)    # directly-governing id
+        self.sovereign_of_face = np.full(n, -1, dtype=np.int32)  # root id
+        self.control_of_face = np.full(n, -1, dtype=np.int32)    # ControlClass at settlements
+        self.authority_of_face = np.zeros(n, dtype=np.float64)   # winning field value (debug)
+
+    def build(self, capital_sidx: List[int], land_mask: np.ndarray, report: Callable[[str], None]) -> None:
+        partition, fields, scalars = self._resolve_sovereigns(capital_sidx, land_mask, report)
+        for k, sidx in enumerate(capital_sidx):
+            territory = np.flatnonzero(partition == k)
+            if territory.size == 0:
+                territory = np.array([int(self.s.settlement_faces[sidx])], dtype=np.int64)
+            self._build_subtree(
+                sidx, scalars.take(k), territory, self._members_on(territory),
+                liege_id=None, root_id=None, depth=0, autonomy=0.0,
+            )
+        self.authority_of_face = fields.max(axis=0) if fields.size else np.zeros(self.s.n)
+
+    # ── sovereign resolution ──────────────────────────────────────────────────
+
+    def _resolve_sovereigns(self, capital_sidx, land_mask, report):
+        """Claim → promote-independents loop; mutates ``capital_sidx`` to the
+        settled sovereign set. Returns ``(partition (N,), fields (C,N), scalars)``."""
+        s, p = self.s, self.s.p
+        prev = None
+        partition = np.full(s.n, -1, dtype=np.int32)
+        fields = np.zeros((0, s.n))
+        scalars = Scalars(*(np.zeros(0) for _ in range(4)))
+
+        for outer in range(max(1, int(p.claiming.outer_max_iters))):
+            capital_faces = [int(s.settlement_faces[i]) for i in capital_sidx]
+            scalars = self._roll(capital_sidx, capital_faces)
+            fields = self._project(capital_faces, scalars)
+            partition, n_iters = claim_faces(
+                fields, capital_faces, land_mask,
+                hysteresis=p.claiming.hysteresis, max_iters=p.claiming.max_iters, prev=prev,
+            )
+            prev = partition
+
+            # Project from the capital's raw power, not the whole-domain sum (which
+            # would let a big empire hold everything).
+            cap_power = s.populations[np.asarray(capital_sidx, dtype=np.int64)]
+            gain = cohesion_to_gain(
+                scalars.cohesion,
+                gain_floor=p.hierarchy.cohesion_gain_floor, gain_span=p.hierarchy.cohesion_gain_span,
+            )
+            is_cap = np.zeros(s.settlement_faces.size, dtype=bool)
+            is_cap[capital_sidx] = True
+            control, _ = classify_settlements(
+                s.settlement_faces, s.populations, partition, fields,
+                cap_power, s.defensibility, gain, is_cap,
+                direct_threshold=p.hierarchy.direct_threshold, vassal_floor=p.hierarchy.vassal_floor,
+            )
+            existing = set(capital_sidx)
+            new_caps = [
+                int(x) for x in np.flatnonzero(control == int(ControlClass.INDEPENDENT)).tolist()
+                if int(x) not in existing
+            ]
+            if not new_caps or len(capital_sidx) + len(new_caps) > int(p.claiming.max_capitals):
+                report(
+                    f"  Sovereigns settled after {outer + 1} pass(es): "
+                    f"{len(capital_sidx)} capitals ({n_iters} claim iters)."
+                )
+                break
+            capital_sidx.extend(sorted(new_caps))
+            report(f"  +{len(new_caps)} seceded → {len(capital_sidx)} sovereigns.")
+
+        return partition, fields, scalars
+
+    # ── projection / scalar helpers ───────────────────────────────────────────
+
+    def _project(self, capital_faces: Sequence[int], sc: Scalars) -> np.ndarray:
+        p = self.s.p
+        return compute_authority_fields(
+            self.s.n, capital_faces, sc.legitimacy, sc.infrastructure, sc.maritime_reach,
+            self.s.land_graph, self.s.hybrid_graph,
+            base_range=p.projection.base_range, range_floor=p.projection.range_floor,
+            sea_range_factor=p.projection.sea_range_factor,
+        )
+
+    def _roll(self, capital_sidx, capital_faces) -> Scalars:
+        s, p = self.s, self.s.p
+        sidx = np.asarray(capital_sidx, dtype=np.int64)
+        return roll_polity_scalars(
+            capital_faces, s.pop_norm[sidx], s.trade_norm[sidx], s.base_seed,
+            cohesion_min=p.projection.cohesion_min, infrastructure_min=p.projection.infrastructure_min,
+            infrastructure_emergent=p.projection.infrastructure_emergent,
+            legitimacy_spread=p.projection.legitimacy_spread, maritime_scale=p.projection.maritime_scale,
+        )
+
+    def _members_on(self, faces: np.ndarray) -> List[int]:
+        lookup = self.s.face_to_settlement
+        return [lookup[int(f)] for f in faces.tolist() if int(f) in lookup]
+
+    # ── recursive subtree builder ─────────────────────────────────────────────
+
+    def _build_subtree(
+        self, cap_sidx: int, sc: Scalars, territory: np.ndarray, members: List[int],
+        *, liege_id: Optional[int], root_id: Optional[int], depth: int, autonomy: float,
+    ) -> int:
+        """Create one polity over ``territory``; recurse to carve vassals.
+
+        ``sc`` is this polity's 1-element :class:`Scalars`. Returns the new id.
+        """
+        s, p = self.s, self.s.p
+        pid = len(self.polities)
+        if root_id is None:
+            root_id = pid
+        cap_face = int(s.settlement_faces[cap_sidx])
+        domain_raw = float(s.populations[members].sum()) if members else 0.0
+
+        # Which members aren't firmly held → vassalize (authority-vs-local here).
+        vassal_members: List[int] = []
+        vassal_autonomy: Dict[int, float] = {}
+        if depth < int(p.hierarchy.max_recursion_depth) and len(members) > 1:
+            field_self = self._project([cap_face], sc)[0]
+            cap_power = float(s.populations[cap_sidx])
+            gain = float(cohesion_to_gain(
+                sc.cohesion,
+                gain_floor=p.hierarchy.cohesion_gain_floor, gain_span=p.hierarchy.cohesion_gain_span,
+            )[0])
+            for m in members:
+                if m == cap_sidx:
+                    continue
+                face = int(s.settlement_faces[m])
+                eff = cap_power * float(field_self[face]) * gain
+                loc = float(s.populations[m]) * float(s.defensibility[face])
+                r = eff / max(loc, 1e-9)
+                if r < p.hierarchy.direct_threshold:
+                    vassal_members.append(m)
+                    vassal_autonomy[m] = float(
+                        np.clip(1.0 - r / max(p.hierarchy.direct_threshold, 1e-9), 0.0, 1.0)
+                    )
+
+        self.polities.append(None)  # type: ignore[arg-type]  # reserve slot for child ids
+        own_faces = territory
+        child_ids: List[int] = []
+        if vassal_members:
+            sub_sidx = [cap_sidx] + vassal_members
+            sub_caps = [cap_face] + [int(s.settlement_faces[m]) for m in vassal_members]
+            sub = self._roll(sub_sidx, sub_caps)
+            for parent_val, arr in zip(sc, sub):  # parent keeps its established scalars at idx 0
+                arr[0] = float(parent_val[0])
+            terr_mask = np.zeros(s.n, dtype=bool)
+            terr_mask[territory] = True
+            sub_assign, _ = claim_faces(
+                self._project(sub_caps, sub), sub_caps, terr_mask,
+                hysteresis=p.claiming.hysteresis, max_iters=p.claiming.max_iters,
+            )
+            own_faces = np.flatnonzero(sub_assign == 0)
+            for j, vm in enumerate(vassal_members, start=1):
+                v_terr = np.flatnonzero(sub_assign == j)
+                if v_terr.size == 0:
+                    v_terr = np.array([int(s.settlement_faces[vm])], dtype=np.int64)
+                child_ids.append(self._build_subtree(
+                    vm, sub.take(j), v_terr, self._members_on(v_terr),
+                    liege_id=pid, root_id=root_id, depth=depth + 1,
+                    autonomy=vassal_autonomy.get(vm, 0.0),
+                ))
+                self.control_of_face[int(s.settlement_faces[vm])] = int(ControlClass.VASSAL)
+
+        self.polity_of_face[own_faces] = pid
+        self.sovereign_of_face[own_faces] = root_id
+        own_face_set = set(own_faces.tolist())
+        own_members = [m for m in members if int(s.settlement_faces[m]) in own_face_set]
+        for m in own_members:
+            face = int(s.settlement_faces[m])
+            if self.control_of_face[face] < 0:
+                self.control_of_face[face] = int(ControlClass.DIRECT)
+
+        self.polities[pid] = Polity(
+            polity_id=pid,
+            capital_face=cap_face,
+            capital_position=s.centroids[cap_face].copy(),
+            cohesion=float(sc.cohesion[0]),
+            infrastructure=float(sc.infrastructure[0]),
+            legitimacy=float(sc.legitimacy[0]),
+            maritime_reach=float(sc.maritime_reach[0]),
+            liege=liege_id,
+            autonomy=float(autonomy),
+            depth=depth,
+            power=float(s.populations[own_members].sum()) if own_members else 0.0,
+            domain_power=domain_raw,
+            n_faces=int(own_faces.size),
+            territory_faces=own_faces.astype(int).tolist(),
+            member_settlement_faces=[int(s.settlement_faces[m]) for m in own_members],
+            vassals=child_ids,
+        )
+        return pid

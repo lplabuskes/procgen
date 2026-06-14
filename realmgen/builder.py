@@ -162,6 +162,12 @@ class RealmPipeline(Pipeline):
             pid = meta.get("polity_id")
             if pid is not None and int(pid) >= 0:
                 parts.append(f"Polity {int(pid)}")
+                sid = meta.get("sovereign_id")
+                if sid is not None and int(sid) >= 0 and int(sid) != int(pid):
+                    parts.append(f"⊂ Sovereign {int(sid)}")
+                cc = meta.get("control_class")
+                if cc is not None and int(cc) >= 0:
+                    parts.append(["Direct", "Vassal", "Independent"][int(cc)])
                 tension = meta.get("border_tension")
                 if tension is not None and float(tension) > 0.01:
                     parts.append(f"Tension: {float(tension):.2f}")

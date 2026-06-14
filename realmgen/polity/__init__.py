@@ -1,6 +1,9 @@
-"""Polity formation — Stage 5 of the realm (human-geography) layer.
+"""Polity formation — final stage of the realm (human-geography) layer.
 
-Grows territorial polities outward from major settlements over the land cost
-surface, assigns a ``polity_id`` per face, scores each polity's power, and
-measures inter-polity tension along shared borders.
+A polity is a tree, not a flat partition: sovereigns are roots, vassals are
+children. Capitals project an authority field over the land + sea cost surfaces;
+faces are claimed by the strongest projector; each settlement is classified
+direct / vassal / independent by projected authority vs local power. Modules:
+``seeding`` (Stage 0), ``authority`` (Stages 1-3 pure functions), ``forest`` (the
+tree algorithm), ``tension`` (border tension), ``builder`` (the pipeline stage).
 """

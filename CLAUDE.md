@@ -36,6 +36,7 @@ python3 scripts/measure_resources.py      [seeds…|--random N|--detail]
 python3 scripts/measure_population.py     [seeds…|--random N|--detail|--rebuild-cache]
 python3 scripts/measure_population_absolute.py [seeds…|--random N|--detail|--rebuild-cache]
 python3 scripts/measure_rivers.py         [seeds…|--random N|--detail]
+python3 scripts/measure_polities.py       [seeds…|--random N|--detail|--rebuild-cache]
 python3 scripts/profile_pipeline.py       [seeds…|--repeat N|--top N|--cprofile [--module M]]
 ```
 
@@ -46,6 +47,7 @@ python3 scripts/profile_pipeline.py       [seeds…|--repeat N|--top N|--cprofil
 - `measure_population.py` — city-size distribution shape (rank-size slope, R², Gini) vs high-medieval Europe. Caches the physical world build; re-runs only the realm stage.
 - `measure_population_absolute.py` — absolute population grounding (world total ~300–400 M people, top-city 50k–500k band, trade-fed-city test) vs medieval Earth c.1300. Same world cache; default seeds 4/31/35. Results appended to `scripts/results/population_absolute_results.json`.
 - `measure_rivers.py` — river source-to-mouth length distribution (longest, percentiles, count over 1/2/3/4k km, % reaching ocean) vs Earth's great rivers. Runs elevation + climate + hydrology. Results appended to `scripts/results/rivers_results.json`. Default seeds (4, 31, 35) are chosen for Earth-like land fraction (~29%) and a continent-scale largest landmass.
+- `measure_polities.py` — polity-forest structure: sovereign/vassal counts, largest-domain face fraction (consolidation), max tree depth, and `corr(infrastructure, vassal_fraction)` (should be negative — high-infra realms hold directly, low-infra ones fragment). Caches the physical world; re-runs only the realm stage. Default seeds 4/31/35.
 - `profile_pipeline.py` — per-phase wall-clock breakdown of the full globe pipeline. Use `--cprofile` for function-level drill-down.
 
 

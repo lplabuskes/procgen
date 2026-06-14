@@ -19,7 +19,7 @@ layer; they do not feed into it during generation.
   `land_base_cost`/`land_passable` and `sea_base_cost`/`sea_passable`/`strait_mask`. Ports
   are *edges*, not tiles.
 - **River network**: *not* a separate graph — anisotropic land edge-cost + amphibious sea nodes.
-- **Danger field**: ⛔ **does not exist yet** (unimplemented hook).
+- **Danger field**: `DANGER_ARRAY` world feature (`FeatureChannel`, `(N,)` float32 in [0, 1]) — written by `DangerBuilder` (`worldgen/danger/builder.py`), which runs after resources and before cost in the globe pipeline. Sources span 6 categories (Volcanic/Tectonic, Coastal/Ocean, Highland/Pass, Forest/Wilderness, Planar Intrusions, Undead/Necromantic) across 19 named threat types. Already consumed by `PolityStage`: `land_base_cost + danger_scale * danger` raises movement cost through high-danger terrain, attenuating authority projection accordingly (`DangerInfluenceParams.movement_scale`).
 - **Border-tension field**: ⚠️ currently an *output* of this stage, not an input (lifecycle conflict).
 
 **Output:**
@@ -217,10 +217,11 @@ a squeezed peripheral realm tightens then loosens (external pressure); rich vass
 > partition the lever perturbs. Resolution: recompute tension inside the relaxation loop, or move
 > it pre-classification onto the authority fields.
 
-> ⛔ **Blocked — danger field does not exist.** Despite cost-module docstrings ("realmgen adds
-> the danger field on top", `worldgen/cost/surfaces.py`), nothing computes one; PolityStage
-> builds edges straight from `cs.land_base_cost`. The external-pressure-consolidation lever and
-> any danger read **block on building the field first**.
+> ✅ **Unblocked — danger field exists.** `DangerBuilder` (`worldgen/danger/builder.py`) writes
+> `DANGER_ARRAY` (a `(N,)` float32 world feature in [0, 1]); `PolityStage` already reads it and
+> folds it into land movement cost via `DangerInfluenceParams.movement_scale`. The
+> external-pressure-consolidation lever can now read `DANGER_ARRAY` directly — no field build
+> required. Remaining work is the lever's logic itself.
 
 ### Stage 5 — Fragmentation epochs (optional, cheap, high-value)
 Run 2–3 "historical epochs." Each epoch: roll cohesion shocks; any polity whose `cohesion` falls
