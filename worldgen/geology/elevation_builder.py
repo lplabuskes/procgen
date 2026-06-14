@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from typing import List, Mapping, Optional
+from typing import List, Mapping, Optional, Protocol, TypeGuard
 
 import numpy as np
 
@@ -119,6 +119,26 @@ class ElevationParams:
         default_factory=FaceErosionParams, metadata={"label": "Face Erosion", "hidden": True}
     )
     volcanism: VolcanismParams = field(default_factory=VolcanismParams, metadata={"label": "Volcanism"})
+
+
+class _ElevationBuilt(Protocol):
+    plate_ids: List[int]
+    plate_omegas: np.ndarray
+    face_velocities: np.ndarray
+    volcanism: np.ndarray
+    elevations: np.ndarray
+    max_speed: float
+    volcano_positions: Optional[np.ndarray]
+
+
+def _is_built(b: "ElevationBuilder") -> TypeGuard[_ElevationBuilt]:
+    return (
+        b.plate_ids is not None
+        and b.plate_omegas is not None
+        and b.face_velocities is not None
+        and b.volcanism is not None
+        and b.elevations is not None
+    )
 
 
 class ElevationBuilder(Stage):
@@ -341,10 +361,8 @@ class ElevationBuilder(Stage):
     # ── Persistence ──────────────────────────────────────────────────────────
 
     def serialize(self) -> dict:
-        assert self.plate_omegas is not None
-        assert self.face_velocities is not None
-        assert self.volcanism is not None
-        assert self.elevations is not None
+        if not _is_built(self):
+            raise RuntimeError("ElevationBuilder.build() or load() must be called first")
         arrays = {
             "eb_plate_ids": np.array(self.plate_ids, dtype=np.int32),
             "eb_plate_omegas": self.plate_omegas.astype(np.float64),

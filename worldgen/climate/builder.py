@@ -1,7 +1,7 @@
 """Climate stage orchestrator — ClimateParams and ClimateBuilder."""
 from __future__ import annotations
 
-from typing import Callable, Mapping, Optional
+from typing import Callable, Mapping, Optional, Protocol, TypeGuard
 
 import numpy as np
 
@@ -177,6 +177,24 @@ def _dominant_biome_per_face(biome_tex: np.ndarray) -> np.ndarray:
         counts = np.bincount(flat[i], minlength=N_BIOMES)
         result[i] = counts.argmax()
     return result
+
+
+class _ClimateBuilt(Protocol):
+    humidity_face: np.ndarray
+    temperature_face: np.ndarray
+    winds: np.ndarray
+    params: ClimateParams
+    currents: Optional[CurrentsResult]
+    classifier: Callable[..., np.ndarray]
+    precipitation_face: Optional[np.ndarray]
+
+
+def _is_built(b: "ClimateBuilder") -> TypeGuard[_ClimateBuilt]:
+    return (
+        b.humidity_face is not None
+        and b.temperature_face is not None
+        and b.winds is not None
+    )
 
 
 class ClimateBuilder(Stage):
@@ -410,9 +428,8 @@ class ClimateBuilder(Stage):
         Call after build() and after HydrologyBuilder.build() has attached the
         lake_mask texture to the mesh.
         """
-        assert self.humidity_face is not None, "ClimateBuilder.build() must be called first"
-        assert self.temperature_face is not None
-        assert self.winds is not None
+        if not _is_built(self):
+            raise RuntimeError("ClimateBuilder.build() must be called first")
         pp = self.params.precipitation
 
         if pp.lake_feedback_iter <= 0 or pp.lake_evap_scale <= 0.0:

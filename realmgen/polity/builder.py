@@ -172,21 +172,27 @@ class PolityStage(Stage):
         # Stages 1-3 — grow the forest.
         forest = ForestBuilder(sctx)
         forest.build(capital_sidx, land_mask, ctx.report)
-        self.polities = forest.polities
-        self.polity_of_face = forest.polity_of_face
-        self.sovereign_of_face = forest.sovereign_of_face
-        self.control_of_face = forest.control_of_face
+        polities = forest.polities
+        polity_of_face = forest.polity_of_face
+        sovereign_of_face = forest.sovereign_of_face
+        control_of_face = forest.control_of_face
+        self.polities = polities
+        self.polity_of_face = polity_of_face
+        self.sovereign_of_face = sovereign_of_face
+        self.control_of_face = control_of_face
         self.authority_of_face = forest.authority_of_face
 
-        self._compute_tension(mesh, land_edge_costs, trade_flow)
-        self._write_outputs(mesh, world)
+        pair_tension, face_tension = self._compute_tension(
+            mesh, land_edge_costs, trade_flow, sovereign_of_face, polities
+        )
+        self.pair_tension = pair_tension
+        self.face_tension = face_tension
+        self._write_outputs(mesh, world, polities, polity_of_face, sovereign_of_face, control_of_face, face_tension, pair_tension)
 
-        assert self.polities is not None
-        assert self.pair_tension is not None
-        n_sov = sum(1 for pol in self.polities if pol.liege is None)
+        n_sov = sum(1 for pol in polities if pol.liege is None)
         ctx.report(
             f"Polity formation done: {n_sov} sovereigns, "
-            f"{len(self.polities) - n_sov} vassals, {len(self.pair_tension)} shared borders."
+            f"{len(polities) - n_sov} vassals, {len(pair_tension)} shared borders."
         )
         self._dump_tree(ctx)
 
@@ -233,48 +239,55 @@ class PolityStage(Stage):
 
     # ── tension + outputs ───────────────────────────────────────────────────────
 
-    def _compute_tension(self, mesh, land_edge_costs, trade_flow) -> None:
-        assert self.sovereign_of_face is not None
-        assert self.polities is not None
+    def _compute_tension(
+        self, mesh, land_edge_costs, trade_flow,
+        sovereign_of_face: np.ndarray, polities: List[Polity],
+    ) -> tuple[dict, np.ndarray]:
         p = self.params
         pos = trade_flow[trade_flow > 0.0]
         flow_ref = float(np.quantile(pos, 0.90)) if pos.size > 0 else 0.0
         norm_flow = trade_flow / flow_ref if flow_ref > 0.0 else trade_flow
         # Scored on the sovereign partition (top-level borders only).
-        self.pair_tension, self.face_tension = compute_border_tension(
-            mesh.face_adjacency, self.sovereign_of_face,
-            _root_power(self.polities), land_edge_costs, norm_flow,
+        return compute_border_tension(
+            mesh.face_adjacency, sovereign_of_face,
+            _root_power(polities), land_edge_costs, norm_flow,
             barrier_scale=p.tension.barrier_scale,
             flow_ref=p.tension.flow_ref,
             artery_weight=p.tension.artery_weight,
         )
 
-    def _write_outputs(self, mesh, world) -> None:
-        assert self.polity_of_face is not None
-        assert self.sovereign_of_face is not None
-        assert self.control_of_face is not None
-        assert self.face_tension is not None
-        assert self.pair_tension is not None
-        POLITY_ID.write(mesh, self.polity_of_face)
-        SOVEREIGN_ID.write(mesh, self.sovereign_of_face)
-        CONTROL_CLASS.write(mesh, self.control_of_face)
-        BORDER_TENSION.write(mesh, self.face_tension)
-        world.add_feature("polities", self.polities)
+    def _write_outputs(
+        self, mesh, world,
+        polities: List[Polity], polity_of_face: np.ndarray,
+        sovereign_of_face: np.ndarray, control_of_face: np.ndarray,
+        face_tension: np.ndarray, pair_tension: dict,
+    ) -> None:
+        POLITY_ID.write(mesh, polity_of_face)
+        SOVEREIGN_ID.write(mesh, sovereign_of_face)
+        CONTROL_CLASS.write(mesh, control_of_face)
+        BORDER_TENSION.write(mesh, face_tension)
+        world.add_feature("polities", polities)
         world.add_feature(
             "polity_tensions",
-            [(a, b, float(t)) for (a, b), t in sorted(self.pair_tension.items())],
+            [(a, b, float(t)) for (a, b), t in sorted(pair_tension.items())],
         )
 
     def _finalize_empty(self, mesh, world) -> None:
         n = len(mesh.faces)
-        self.polities = []
-        self.polity_of_face = np.full(n, -1, dtype=np.int32)
-        self.sovereign_of_face = np.full(n, -1, dtype=np.int32)
-        self.control_of_face = np.full(n, -1, dtype=np.int32)
+        polities: List[Polity] = []
+        polity_of_face = np.full(n, -1, dtype=np.int32)
+        sovereign_of_face = np.full(n, -1, dtype=np.int32)
+        control_of_face = np.full(n, -1, dtype=np.int32)
+        face_tension = np.zeros(n, dtype=np.float64)
+        pair_tension: dict = {}
+        self.polities = polities
+        self.polity_of_face = polity_of_face
+        self.sovereign_of_face = sovereign_of_face
+        self.control_of_face = control_of_face
         self.authority_of_face = np.zeros(n, dtype=np.float64)
-        self.face_tension = np.zeros(n, dtype=np.float64)
-        self.pair_tension = {}
-        self._write_outputs(mesh, world)
+        self.face_tension = face_tension
+        self.pair_tension = pair_tension
+        self._write_outputs(mesh, world, polities, polity_of_face, sovereign_of_face, control_of_face, face_tension, pair_tension)
 
     def _dump_tree(self, ctx: BuildContext) -> None:
         for pol in (self.polities or []):
