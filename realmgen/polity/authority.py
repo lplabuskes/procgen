@@ -127,16 +127,22 @@ def classify_settlements(
     *,
     direct_threshold: float,
     vassal_floor: float,
+    power_exponent: float = 1.0,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Label each settlement DIRECT / VASSAL / INDEPENDENT, in the same currency::
 
-        eff = projecting_power[claimant] * field[claimant, face] * authority_gain[claimant]
-        loc = population * defensibility[face]
+        eff = projecting_power[claimant]**e * field[claimant, face] * authority_gain[claimant]
+        loc = population**e * defensibility[face]
         r   = eff / loc   ->   r>=direct: DIRECT;  r>=vassal_floor: VASSAL;  else INDEPENDENT
 
     ``projecting_power`` is the claimant *capital's* own strength (not the whole
     domain) — so a sprawling realm with a modest capital cannot hold its far
     provinces directly. A capital is always DIRECT; an unclaimed face INDEPENDENT.
+
+    Both population terms are raised to ``power_exponent`` (``e``) before the
+    comparison. ``e=1`` is the raw population ratio, which spans ~70x across the
+    Zipf city distribution and swamps the geographic decay; ``e<1`` compresses it
+    (``e=0.5`` -> ~8x) so ``field`` (distance) drives the decision, as intended.
 
     Returns ``(control_class (S,) int32, ratio (S,) float64)``.
     """
@@ -153,10 +159,11 @@ def classify_settlements(
     defn = np.asarray(defensibility, dtype=np.float64)
     gain = np.asarray(authority_gain, dtype=np.float64)
 
+    e = float(power_exponent)
     valid = claimant >= 0
     vf, vc = faces[valid], claimant[valid]
-    eff = dom[vc] * field[vc, vf] * gain[vc]
-    loc = np.maximum(pop[valid] * defn[vf], 1e-9)
+    eff = dom[vc] ** e * field[vc, vf] * gain[vc]
+    loc = np.maximum(pop[valid] ** e * defn[vf], 1e-9)
     r = eff / loc
     ratio[valid] = r
     control[valid] = np.where(

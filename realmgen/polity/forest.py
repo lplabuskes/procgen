@@ -61,6 +61,9 @@ class HierarchyParams:
     """Direct/vassal/independent cutoffs and the cohesion→authority-gain map."""
     direct_threshold: float = _f(3.0, label="Direct-rule authority ratio", min=0.5, max=20.0)
     vassal_floor: float = _f(0.6, label="Vassal authority ratio floor", min=0.05, max=10.0)
+    power_exponent: float = _f(
+        0.5, label="Authority population exponent (1 = raw ratio)", min=0.0, max=1.0
+    )
     cohesion_gain_floor: float = _f(0.5, label="Cohesion gain floor", min=0.0, max=2.0)
     cohesion_gain_span: float = _f(1.0, label="Cohesion gain span", min=0.0, max=2.0)
     max_recursion_depth: int = _f(1, label="Vassal recursion depth", min=0, max=3)
@@ -181,6 +184,7 @@ class ForestBuilder:
                 s.settlement_faces.tolist(), s.populations, partition, fields,
                 cap_power, s.defensibility, gain, is_cap,
                 direct_threshold=p.hierarchy.direct_threshold, vassal_floor=p.hierarchy.vassal_floor,
+                power_exponent=p.hierarchy.power_exponent,
             )
             existing = set(capital_sidx)
             new_caps = [
@@ -245,7 +249,8 @@ class ForestBuilder:
         vassal_autonomy: Dict[int, float] = {}
         if depth < int(p.hierarchy.max_recursion_depth) and len(members) > 1:
             field_self = self._project([cap_face], sc)[0]
-            cap_power = float(s.populations[cap_sidx])
+            e = float(p.hierarchy.power_exponent)
+            cap_power = float(s.populations[cap_sidx]) ** e
             gain = float(cohesion_to_gain(
                 sc.cohesion,
                 gain_floor=p.hierarchy.cohesion_gain_floor, gain_span=p.hierarchy.cohesion_gain_span,
@@ -255,7 +260,7 @@ class ForestBuilder:
                     continue
                 face = int(s.settlement_faces[m])
                 eff = cap_power * float(field_self[face]) * gain
-                loc = float(s.populations[m]) * float(s.defensibility[face])
+                loc = float(s.populations[m]) ** e * float(s.defensibility[face])
                 r = eff / max(loc, 1e-9)
                 if r < p.hierarchy.direct_threshold:
                     vassal_members.append(m)
