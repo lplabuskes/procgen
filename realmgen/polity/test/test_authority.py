@@ -4,6 +4,8 @@ Lightweight stub graphs, no worldgen run.
 """
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pytest
 from scipy.sparse import csr_matrix
@@ -42,7 +44,7 @@ class TestAuthorityFields:
     def test_cheap_terrain_extends_field(self):
         cheap = _line_graph(5, cost=1.0)
         dear = _line_graph(5, cost=5.0)
-        kw = dict(base_range=3.0, range_floor=0.5)
+        kw: dict[str, Any] = dict(base_range=3.0, range_floor=0.5)
         f_cheap = compute_authority_fields(5, [0], np.array([1.0]), np.array([1.0]), np.array([0.0]), cheap, **kw)
         f_dear = compute_authority_fields(5, [0], np.array([1.0]), np.array([1.0]), np.array([0.0]), dear, **kw)
         assert f_cheap[0, 3] > f_dear[0, 3]                 # barrier pinches the field
@@ -124,7 +126,7 @@ class TestClaimFaces:
 
 
 class TestClassify:
-    def _setup(self, field_val, pop, defn, domain):
+    def _setup(self, field_val, pop, defn, domain) -> dict[str, Any]:
         # One polity (id 0), two settlements: capital at face 0, subject at face 1.
         # `domain` is the capital's projecting power.
         return dict(

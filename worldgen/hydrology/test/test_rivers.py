@@ -336,6 +336,7 @@ def _classify_river_mouth(river: River, all_rivers: list, gen: RiverGenerator) -
       tributaries end on their main stem at the confluence (Hack decomposition).
     - unknown: none of the above; indicates a stall, loop, or geometry failure.
     """
+    assert river.mouth is not None
     q = river.mouth.position.astype(np.float64)
     nearest = int(np.argmin(np.linalg.norm(gen.positions - q[None], axis=1)))
 

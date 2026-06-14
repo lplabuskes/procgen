@@ -64,6 +64,7 @@ def measure_seed(seed: int, rebuild: bool, detail: bool) -> None:
     pols = ps.polities or []
     sov = [p for p in pols if p.liege is None]
     vas = [p for p in pols if p.liege is not None]
+    assert ps.polity_of_face is not None
     claimed = int((ps.polity_of_face >= 0).sum())
 
     n_cities = len(world.get_feature("settlements") or [])

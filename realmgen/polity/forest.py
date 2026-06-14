@@ -138,7 +138,7 @@ class ForestBuilder:
             is_cap = np.zeros(s.settlement_faces.size, dtype=bool)
             is_cap[capital_sidx] = True
             control, _ = classify_settlements(
-                s.settlement_faces, s.populations, partition, fields,
+                s.settlement_faces.tolist(), s.populations, partition, fields,
                 cap_power, s.defensibility, gain, is_cap,
                 direct_threshold=p.hierarchy.direct_threshold, vassal_floor=p.hierarchy.vassal_floor,
             )

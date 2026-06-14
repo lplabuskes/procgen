@@ -1,6 +1,8 @@
 """Unit tests for `worldgen.resources.fertility`."""
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
 from worldgen.resources.fertility import (
@@ -16,7 +18,7 @@ DESERT = 8
 TROPICAL = 6
 
 
-def _default_kwargs(**overrides):
+def _default_kwargs(**overrides) -> dict[str, Any]:
     """Return the keyword args for ``compute_fertility`` — i.e. ``params=<FertilityParams>``.
 
     ``overrides`` set individual ``FertilityParams`` fields (e.g.
@@ -36,7 +38,7 @@ def _default_kwargs(**overrides):
         volcanic_max_hops=6,
     )
     defaults.update(overrides)
-    return dict(params=FertilityParams(**defaults))
+    return dict(params=FertilityParams(**defaults))  # type: ignore[arg-type]
 
 
 def _build_inputs(

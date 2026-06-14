@@ -67,7 +67,7 @@ def seed_capitals(
 
     threshold = float(min_pop_fraction) * float(pop.max())
     sep = max(float(min_separation), 0.0)
-    min_dist = np.full(cost_graph.shape[0], np.inf, dtype=np.float64)
+    min_dist = np.full(cost_graph.shape[0], np.inf, dtype=np.float64)  # type: ignore[union-attr]
     chosen: List[int] = []
 
     for idx in np.argsort(-w, kind="stable").tolist():

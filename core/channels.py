@@ -38,7 +38,7 @@ class MetaChannel:
     """
     name: str
     dtype: Any = np.float64
-    default: Union[float, bool, int] = 0.0
+    default: Any = 0.0
 
     def present(self, mesh: "PolygonMesh") -> bool:
         meta = mesh.face_metadata
@@ -52,7 +52,7 @@ class MetaChannel:
             )
         return np.full(len(meta), self.default, dtype=self.dtype)
 
-    def write(self, mesh: "PolygonMesh", values: np.ndarray) -> None:
+    def write(self, mesh: "PolygonMesh", values: Any) -> None:
         mesh.apply_metadata_channel(self.name, np.asarray(values).tolist())
 
 

@@ -21,7 +21,7 @@ from __future__ import annotations
 import dataclasses
 import json
 from pathlib import Path
-from typing import Iterable, Tuple, Union
+from typing import Any, Iterable, Tuple, Union
 
 import numpy as np
 
@@ -32,16 +32,16 @@ from core.world import World
 class NumpyEncoder(json.JSONEncoder):
     """JSON encoder that degrades numpy scalars/arrays to plain Python."""
 
-    def default(self, obj):
-        if isinstance(obj, np.integer):
-            return int(obj)
-        if isinstance(obj, np.floating):
-            return float(obj)
-        if isinstance(obj, np.bool_):
-            return bool(obj)
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        return super().default(obj)
+    def default(self, o):
+        if isinstance(o, np.integer):
+            return int(o)
+        if isinstance(o, np.floating):
+            return float(o)
+        if isinstance(o, np.bool_):
+            return bool(o)
+        if isinstance(o, np.ndarray):
+            return o.tolist()
+        return super().default(o)
 
 
 def deep_from_dict(cls, d: dict):
@@ -128,10 +128,10 @@ def save_world(world: World, params, stages: Iterable, path: Union[str, Path]) -
     for stage in stages:
         arrays.update(stage.serialize())
 
-    np.savez_compressed(path, **arrays)
+    np.savez_compressed(path, **arrays)  # type: ignore[call-arg]
 
 
-def load_world(path: Union[str, Path], params_cls) -> Tuple[object, World, object]:
+def load_world(path: Union[str, Path], params_cls) -> Tuple[Any, World, Any]:
     """Reconstruct ``(params, world, data)`` from a ``.npz``.
 
     Restores the params dataclass tree and a mesh-bearing ``World``; the caller

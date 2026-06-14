@@ -12,12 +12,13 @@ Usage::
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 paramclass = dataclass
 
 
 def param_field(default, *, label: str, min: float | int, max: float | int,
-                step: float | None = None, hidden: bool = False):
+                step: float | None = None, hidden: bool = False) -> Any:
     """Declare a leaf param field with UI dialog metadata."""
     meta: dict = {"label": label, "min": min, "max": max}
     if step is not None:

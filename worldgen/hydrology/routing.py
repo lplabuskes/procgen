@@ -30,6 +30,9 @@ try:
 except ImportError:  # pragma: no cover - numba is an optional accelerator
     _HAVE_NUMBA = False
 
+    def njit(func=None, **_):  # type: ignore[misc]
+        return func if func is not None else (lambda f: f)
+
 
 _EPS = 1e-6
 

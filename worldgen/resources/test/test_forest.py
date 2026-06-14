@@ -1,6 +1,8 @@
 """Unit tests for `worldgen.resources.forest`."""
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
 from worldgen.resources.forest import (
@@ -17,7 +19,7 @@ TROPICAL = 6
 DESERT = 8
 
 
-def _default_kwargs(**overrides):
+def _default_kwargs(**overrides) -> dict[str, Any]:
     """Return the keyword args for ``compute_forest_density`` — ``params=…`` + ``seed=…``.
 
     ``overrides`` set individual ``ForestDensityParams`` fields, or ``seed``.
@@ -34,7 +36,7 @@ def _default_kwargs(**overrides):
         noise_octaves=3,
     )
     defaults.update(overrides)
-    return dict(params=ForestDensityParams(**defaults), seed=seed)
+    return dict(params=ForestDensityParams(**defaults), seed=seed)  # type: ignore[arg-type]
 
 
 def _build_inputs(

@@ -165,7 +165,7 @@ class PolityStage(Stage):
             settlement_faces=settlement_faces, populations=populations,
             pop_norm=populations / float(populations.max()), trade_norm=trade_norm,
             defensibility=defensibility, land_graph=land_graph, hybrid_graph=hybrid_graph,
-            base_seed=int(world.seed) if getattr(world, "seed", None) is not None else 0, p=p,
+            base_seed=int(world.seed) if world.seed is not None else 0, p=p,
             face_to_settlement={int(f): k for k, f in enumerate(settlement_faces.tolist())},
         )
 
@@ -181,6 +181,8 @@ class PolityStage(Stage):
         self._compute_tension(mesh, land_edge_costs, trade_flow)
         self._write_outputs(mesh, world)
 
+        assert self.polities is not None
+        assert self.pair_tension is not None
         n_sov = sum(1 for pol in self.polities if pol.liege is None)
         ctx.report(
             f"Polity formation done: {n_sov} sovereigns, "
@@ -232,6 +234,8 @@ class PolityStage(Stage):
     # ── tension + outputs ───────────────────────────────────────────────────────
 
     def _compute_tension(self, mesh, land_edge_costs, trade_flow) -> None:
+        assert self.sovereign_of_face is not None
+        assert self.polities is not None
         p = self.params
         pos = trade_flow[trade_flow > 0.0]
         flow_ref = float(np.quantile(pos, 0.90)) if pos.size > 0 else 0.0
@@ -246,6 +250,11 @@ class PolityStage(Stage):
         )
 
     def _write_outputs(self, mesh, world) -> None:
+        assert self.polity_of_face is not None
+        assert self.sovereign_of_face is not None
+        assert self.control_of_face is not None
+        assert self.face_tension is not None
+        assert self.pair_tension is not None
         POLITY_ID.write(mesh, self.polity_of_face)
         SOVEREIGN_ID.write(mesh, self.sovereign_of_face)
         CONTROL_CLASS.write(mesh, self.control_of_face)

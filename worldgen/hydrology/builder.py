@@ -129,6 +129,8 @@ class HydrologyBuilder(Stage):
         """Flatten ``self.rivers`` (List[River]) into ``(positions, flows,
         in_lake)`` polyline tuples — the form used by both the world feature and
         the serialized arrays."""
+        if self.rivers is None:
+            return []
         paths = []
         for river in self.rivers:
             polyline = river.as_polyline()
@@ -196,7 +198,7 @@ class HydrologyBuilder(Stage):
                 )
                 for i in range(len(pos_offs) - 1)
             ]
-            self.rivers = paths_with_flow
+            self.rivers = paths_with_flow  # type: ignore[assignment]
             self._river_feature = paths_with_flow
             RIVERS.write(ctx.world, paths_with_flow)
         if "lake_poly_offsets" in arrays:

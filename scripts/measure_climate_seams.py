@@ -26,6 +26,7 @@ def measure_seed(seed: int) -> dict:
     e_builder = ElevationBuilder(ElevationParams(), seed=seed)
     e_builder.build(ctx)
     mesh = e_builder.mesh
+    assert mesh is not None
 
     c_builder = ClimateBuilder(ClimateParams())
     c_builder.build(ctx)

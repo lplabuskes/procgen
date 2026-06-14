@@ -39,6 +39,7 @@ def test_load_legacy_world():
     # Mesh + per-stage builder state rehydrated.
     assert globe.mesh is not None
     n = len(globe.mesh.faces)
+    assert builder.elevation_builder.plate_ids is not None
     assert len(builder.elevation_builder.plate_ids) == n
     assert builder.elevation_builder.max_speed > 0.0
     assert builder.hydrology_builder.rivers  # non-empty

@@ -411,6 +411,8 @@ class ClimateBuilder(Stage):
         lake_mask texture to the mesh.
         """
         assert self.humidity_face is not None, "ClimateBuilder.build() must be called first"
+        assert self.temperature_face is not None
+        assert self.winds is not None
         pp = self.params.precipitation
 
         if pp.lake_feedback_iter <= 0 or pp.lake_evap_scale <= 0.0:

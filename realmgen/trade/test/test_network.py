@@ -356,7 +356,7 @@ class TestComputeTradeNetwork:
         ec = _uniform_edge_costs(mesh, cost=1.0)
         settlements = [_settlement(0, tier=0), _settlement(7, tier=1)]
         sources = [(2, 3.0, 0), (5, 1.5, 0)]
-        kwargs = dict(flow_decay=0.1, hub_display_quantile=0.7)
+        kwargs: dict = dict(flow_decay=0.1, hub_display_quantile=0.7)
 
         r1 = compute_trade_network(
             mesh, settlements, sources, ec, land_p,

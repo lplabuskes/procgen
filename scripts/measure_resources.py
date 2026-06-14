@@ -80,6 +80,7 @@ def measure_seed(seed: int) -> dict:
     builder = GlobePipeline(params)
     builder.build(ctx)
 
+    assert builder.globe is not None
     mesh = builder.globe.mesh
     fertility = mesh.face_textures["fertility"][..., 0]               # (N, H, W)
     forest = mesh.face_textures["forest_density"][..., 0]             # (N, H, W)

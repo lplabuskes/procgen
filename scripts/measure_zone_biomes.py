@@ -71,6 +71,8 @@ def measure_seed(seed: int) -> dict:
     climate_builder.build(ctx)
 
     mesh = elev_builder.mesh
+    assert mesh is not None
+    assert elev_builder.elevations is not None
     elevations = elev_builder.elevations          # (N,) km
     n_faces = len(mesh.faces)
 

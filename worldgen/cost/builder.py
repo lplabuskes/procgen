@@ -125,7 +125,7 @@ class CostBuilder(Stage):
         self.params: CostParams = params or CostParams()
         self.surfaces: Optional[CostSurfaces] = None
 
-    def build(self, ctx: BuildContext) -> CostSurfaces:
+    def build(self, ctx: BuildContext) -> None:
         mesh = ctx.mesh
         rivers = RIVER_OBJECTS.read(ctx.world)
         _report = ctx.report
@@ -227,7 +227,6 @@ class CostBuilder(Stage):
         COST_SURFACES.write(ctx.world, surfaces)
 
         _report("Cost surfaces done.")
-        return surfaces
 
     # ── Display ──────────────────────────────────────────────────────────────
 

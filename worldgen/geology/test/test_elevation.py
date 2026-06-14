@@ -338,6 +338,9 @@ class TestOceanMaskComponents:
         builder.build(BuildContext(world=World(seed=72264827)))
 
         mesh = builder.mesh
+        assert mesh is not None
+        assert builder.elevation_textures is not None
+        assert builder.ocean_mask is not None
         elev = builder.elevation_textures[:, :, :, 0]   # (N, H, W)
         ocean = builder.ocean_mask[:, :, :, 0] > 0.5     # (N, H, W) bool
         N, H, W = ocean.shape

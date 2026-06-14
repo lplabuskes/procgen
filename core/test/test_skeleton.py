@@ -4,14 +4,16 @@ import numpy as np
 
 from core.channels import FeatureChannel, MetaChannel, TextureChannel
 from core.display import DisplayRegistry
+from core.mesh import PolygonMesh
 from core.pipeline import BuildContext, Pipeline, Stage
 from core.world import World
 
 
-class _FakeMesh:
+class _FakeMesh(PolygonMesh):
     """Minimal stand-in exposing the bits the channels touch."""
 
     def __init__(self, n_faces):
+        super().__init__(np.zeros((0, 3), dtype=np.float32), [])
         self.face_metadata = [dict() for _ in range(n_faces)]
         self.face_textures = {}
 
@@ -20,9 +22,9 @@ class _FakeMesh:
         for i, v in enumerate(values):
             self.face_metadata[i][key] = v
 
-    def set_face_textures(self, name, tex, n_channels=4):
-        assert tex.shape[-1] == n_channels
-        self.face_textures[name] = tex
+    def set_face_textures(self, name: str, textures: np.ndarray, n_channels: int = 4) -> None:
+        assert textures.shape[-1] == n_channels
+        self.face_textures[name] = textures
 
 
 # ── World ──────────────────────────────────────────────────────────────────────
@@ -161,5 +163,5 @@ def test_display_registry_hover_concatenates():
     reg = DisplayRegistry()
     reg.add_hover(lambda f, uv, w: [f"biome:{f}"])
     reg.add_hover(lambda f, uv, w: ["wet"] if f == 1 else [])
-    assert reg.hover(0, None, None) == ["biome:0"]
-    assert reg.hover(1, None, None) == ["biome:1", "wet"]
+    assert reg.hover(0, None, None) == ["biome:0"]  # type: ignore[arg-type]
+    assert reg.hover(1, None, None) == ["biome:1", "wet"]  # type: ignore[arg-type]

@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List
+from typing import TYPE_CHECKING, List, cast
+
+if TYPE_CHECKING:
+    from core.mesh import PolygonMesh
 
 import numpy as np
 
@@ -43,12 +46,12 @@ class TestFaceElevationRange:
 
 
 class TestFaceHopsFromSeeds:
-    def _line_mesh(self, n: int) -> _StubMesh:
+    def _line_mesh(self, n: int) -> "PolygonMesh":
         adj = [[] for _ in range(n)]
         for i in range(n - 1):
             adj[i].append(i + 1)
             adj[i + 1].append(i)
-        return _StubMesh(faces=[(0,)] * n, face_adjacency=adj)
+        return cast("PolygonMesh", _StubMesh(faces=[(0,)] * n, face_adjacency=adj))
 
     def test_seed_face_has_zero_hops(self):
         mesh = self._line_mesh(5)
@@ -71,7 +74,7 @@ class TestFaceHopsFromSeeds:
     def test_unreachable_returns_sentinel(self):
         # Two disconnected components.
         adj = [[1], [0], [3], [2]]
-        mesh = _StubMesh(faces=[(0,)] * 4, face_adjacency=adj)
+        mesh = cast("PolygonMesh", _StubMesh(faces=[(0,)] * 4, face_adjacency=adj))
         mask = np.array([True, False, False, False])
         h = face_hops_from_seeds(mesh, mask, max_hops=3)
         assert h[0] == 0
@@ -166,7 +169,7 @@ class TestLakeContainingFaces:
 
 class TestVolcanicFaces:
     def test_threshold(self):
-        mesh = _StubMesh(
+        mesh = cast("PolygonMesh", _StubMesh(
             faces=[(0,)] * 3,
             face_adjacency=[[], [], []],
             face_metadata=[
@@ -174,6 +177,6 @@ class TestVolcanicFaces:
                 {"volcanic_activity": 0.5},
                 {},
             ],
-        )
+        ))
         m = volcanic_faces(mesh, threshold=0.2)
         assert list(m) == [False, True, False]

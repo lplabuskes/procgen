@@ -18,10 +18,11 @@ python3 main.py                     # primary entrypoint — full procedural wor
 python3 -m viz.mapview.main         # 2-D map viewer (dev)
 ```
 
-No build step. Run the linter and test suite with:
+No build step. Run the linter, type checker, and test suite with:
 
 ```bash
 python3 -m flake8                   # lint (config in pyproject.toml: max-line-length=120)
+python3 -m pyright                  # static type checking (target: 0 errors)
 python3 -m pytest                   # all configured test paths (see pyproject.toml)
 ```
 

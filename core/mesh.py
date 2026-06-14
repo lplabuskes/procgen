@@ -325,10 +325,10 @@ class PolygonMesh:
         _, _, _, _, _, _, vertex_uvs = self.face_tangent_frames()
 
         # Enumerate qualifying face pairs and collect both sides' edge endpoints.
-        a0: List[np.ndarray] = []
-        a1: List[np.ndarray] = []
-        b0: List[np.ndarray] = []
-        b1: List[np.ndarray] = []
+        a0: Any = []
+        a1: Any = []
+        b0: Any = []
+        b1: Any = []
         pair_faces: List[Tuple[int, int]] = []
         for face_a, neighbors in enumerate(self.face_adjacency):
             verts_a = self.faces[face_a]

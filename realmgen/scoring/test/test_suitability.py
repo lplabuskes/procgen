@@ -294,7 +294,7 @@ class TestRealmPipeline:
         GlobePipeline(p).build(ctx)
         return ctx.world
 
-    def _run_realm(self, globe) -> "tuple[RealmPipeline, np.ndarray]":
+    def _run_realm(self, globe) -> "tuple[RealmPipeline, np.ndarray | None]":
         realm = RealmPipeline()
         realm.build(BuildContext(world=globe))
         return realm, realm.suitability
@@ -303,6 +303,7 @@ class TestRealmPipeline:
         globe = self._small_globe()
         n = len(globe.mesh.faces)
         _, suit = self._run_realm(globe)
+        assert suit is not None
         assert suit.shape == (n,)
         assert suit.min() >= 0.0
         assert suit.max() <= 1.0
@@ -315,6 +316,7 @@ class TestRealmPipeline:
     def test_water_faces_score_zero(self):
         globe = self._small_globe()
         _, suit = self._run_realm(globe)
+        assert suit is not None
         mesh = globe.mesh
         for i, m in enumerate(mesh.face_metadata):
             if m.get("is_water", m.get("is_ocean", False)):
@@ -323,6 +325,7 @@ class TestRealmPipeline:
     def test_land_face_suitability_nonzero_in_habitable_world(self):
         globe = self._small_globe()
         _, suit = self._run_realm(globe)
+        assert suit is not None
         mesh = globe.mesh
         land_suit = [suit[i] for i, m in enumerate(mesh.face_metadata)
                      if not m.get("is_water", m.get("is_ocean", False))]

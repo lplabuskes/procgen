@@ -163,8 +163,8 @@ class ElevationBuilder(Stage):
         state = np.random.SeedSequence([self._seed_base, h]).generate_state(1)
         return int(state[0])
 
-    def build(self, ctx: BuildContext) -> PolygonMesh:
-        """Decorate ``ctx.mesh`` with the elevation/tectonics layers; return it."""
+    def build(self, ctx: BuildContext) -> None:
+        """Decorate ``ctx.mesh`` with the elevation/tectonics layers."""
         _report = ctx.report
 
         p = self.params
@@ -288,7 +288,6 @@ class ElevationBuilder(Stage):
             ctx.world.add_feature("volcanoes", self.volcano_positions)
 
         _report("Done.")
-        return dual
 
     # ── Display ──────────────────────────────────────────────────────────────
 
@@ -342,6 +341,10 @@ class ElevationBuilder(Stage):
     # ── Persistence ──────────────────────────────────────────────────────────
 
     def serialize(self) -> dict:
+        assert self.plate_omegas is not None
+        assert self.face_velocities is not None
+        assert self.volcanism is not None
+        assert self.elevations is not None
         arrays = {
             "eb_plate_ids": np.array(self.plate_ids, dtype=np.int32),
             "eb_plate_omegas": self.plate_omegas.astype(np.float64),

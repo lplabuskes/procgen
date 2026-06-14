@@ -366,6 +366,7 @@ class TestRealmPipelineSituational:
         globe = self._small_globe()
         realm = self._run_realm(globe)
         sv = realm.situational_value
+        assert sv is not None
         for i, m in enumerate(globe.mesh.face_metadata):
             if m.get("is_water", m.get("is_ocean", False)):
                 assert sv[i] == 0.0, f"face {i} is water but situational_value = {sv[i]}"

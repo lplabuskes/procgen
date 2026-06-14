@@ -47,7 +47,10 @@ def _run_cost(dual, rivers=None):
     world = World.from_mesh(dual)
     if rivers is not None:
         world.add_feature("river_objects", rivers)
-    return CostBuilder().build(BuildContext(world=world))
+    builder = CostBuilder()
+    builder.build(BuildContext(world=world))
+    assert builder.surfaces is not None
+    return builder.surfaces
 
 
 @dataclass

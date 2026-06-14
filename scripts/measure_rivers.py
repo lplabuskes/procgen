@@ -130,6 +130,8 @@ def measure_seed(seed: int) -> dict:
         mouth_flows.append(float(river.segments[-1].flow_rate))
         # Classify the mouth as sea-reaching by sampling the ocean mask at the
         # mouth pixel (same mapping the delta-tagging logic uses).
+        if river.mouth is None:
+            continue
         face = int(river.mouth.face_id)
         u, v = river.mouth.uv
         row = min(max(int(round(v * (res - 1))), 0), res - 1)

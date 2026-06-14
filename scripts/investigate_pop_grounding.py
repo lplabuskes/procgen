@@ -115,7 +115,7 @@ def main() -> None:
             influence_scale=pp.hinterland_influence_scale,
             reach_scale=pp.hinterland_reach_scale,
         )
-        cap = compute_carrying_capacity(shares, fert, face_areas_sr)  # raw units (steradian)
+        cap = compute_carrying_capacity(shares, fert)  # raw units (steradian)
 
         print(f"\n  settlements={len(settlements)}")
         print(f"  carrying_cap (raw, steradian units): "
