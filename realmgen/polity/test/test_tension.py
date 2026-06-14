@@ -59,8 +59,10 @@ class TestComputeBorderTension:
         adj, costs = _line_adjacency(4)
         polity_of_face = np.array([0, 0, 1, 1], dtype=np.int32)
         flow = np.ones(4)
-        balanced, _ = compute_border_tension(adj, polity_of_face, np.array([1.0, 1.0]), costs, flow, barrier_scale=1.0, flow_ref=1.0)
-        lopsided, _ = compute_border_tension(adj, polity_of_face, np.array([100.0, 1.0]), costs, flow, barrier_scale=1.0, flow_ref=1.0)
+        balanced, _ = compute_border_tension(
+            adj, polity_of_face, np.array([1.0, 1.0]), costs, flow, barrier_scale=1.0, flow_ref=1.0)
+        lopsided, _ = compute_border_tension(
+            adj, polity_of_face, np.array([100.0, 1.0]), costs, flow, barrier_scale=1.0, flow_ref=1.0)
         assert lopsided[(0, 1)] < balanced[(0, 1)]
 
     def test_unclaimed_faces_create_no_border(self):

@@ -6,4 +6,5 @@ saved_worlds/
 .DS_Store
 .vscode/
 .venv/
+procgen.egg-info/
 TODO.md

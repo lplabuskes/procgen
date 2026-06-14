@@ -26,18 +26,15 @@ import argparse
 import datetime
 import json
 import random
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+import numpy as np
 
-import numpy as np  # noqa: E402
-
-from core.pipeline import BuildContext  # noqa: E402
-from core.world import World  # noqa: E402
-from worldgen.climate.builder import ClimateBuilder, ClimateParams  # noqa: E402
-from worldgen.climate.classification import BIOME_NAMES  # noqa: E402
-from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams  # noqa: E402
+from core.pipeline import BuildContext
+from core.world import World
+from worldgen.climate.builder import ClimateBuilder, ClimateParams
+from worldgen.climate.classification import BIOME_NAMES
+from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams
 
 RESULTS_DIR = Path(__file__).parent / "results"
 JSON_PATH = RESULTS_DIR / "zone_biome_results.json"

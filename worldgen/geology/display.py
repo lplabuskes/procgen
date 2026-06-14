@@ -65,6 +65,7 @@ def apply_water_masks(
 def ocean_gradient_scheme(meta_key: str, stops: list, default: float = 0.0):
     """Return a gradient scheme function that paints ocean faces with OCEAN_COLOR."""
     base = gradient_scheme(meta_key, stops, default)
+
     def fn(meta: dict) -> tuple:
         if is_ocean_face(meta):
             return OCEAN_COLOR
@@ -75,6 +76,7 @@ def ocean_gradient_scheme(meta_key: str, stops: list, default: float = 0.0):
 def ocean_categorical_scheme(meta_key: str, palette: np.ndarray, n: int, default: int = 0):
     """Return a categorical scheme function that paints ocean faces with OCEAN_COLOR."""
     base = categorical_scheme(meta_key, palette, n, default)
+
     def fn(meta: dict) -> tuple:
         if is_ocean_face(meta):
             return OCEAN_COLOR

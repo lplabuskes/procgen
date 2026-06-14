@@ -4,3 +4,5 @@ PyOpenGL
 pyside6
 pytest
 scipy
+flake8
+flake8-pyproject

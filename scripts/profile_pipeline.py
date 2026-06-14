@@ -22,17 +22,13 @@ from __future__ import annotations
 import argparse
 import cProfile
 import pstats
-import sys
 import time
 from collections import OrderedDict
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from core.pipeline import BuildContext  # noqa: E402
-from core.world import World  # noqa: E402
-from worldgen import GlobePipeline, GlobeParams  # noqa: E402
-from core import mesh_cache  # noqa: E402
+from core.pipeline import BuildContext
+from core.world import World
+from worldgen import GlobePipeline, GlobeParams
+from core import mesh_cache
 
 
 # Substring → stage name. The first phase whose message contains the key marks

@@ -42,18 +42,15 @@ import argparse
 import datetime
 import json
 import random
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+import numpy as np
 
-import numpy as np  # noqa: E402
-
-from core.pipeline import BuildContext  # noqa: E402
-from core.world import World  # noqa: E402
-from realmgen.builder import RealmParams, RealmPipeline  # noqa: E402
-from realmgen.placement.types import population_display_tier  # noqa: E402
-from worldgen import GlobeParams, GlobePipeline, load_globe, save_globe  # noqa: E402
+from core.pipeline import BuildContext
+from core.world import World
+from realmgen.builder import RealmParams, RealmPipeline
+from realmgen.placement.types import population_display_tier
+from worldgen import GlobeParams, GlobePipeline, load_globe, save_globe
 
 
 RESULTS_DIR = Path(__file__).parent / "results"

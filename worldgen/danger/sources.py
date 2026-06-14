@@ -252,7 +252,9 @@ _SOURCE_DEFS: list[tuple[str, tuple, _ParamFn, _MaskFn]] = [
         lambda t: t.is_ocean & (t.coast_hops <= SEA_SERPENT_COAST_MAX)),
     # Highland / Pass
     ("Harpy Peak",            _C_HIG, lambda p: p.harpy_peaks,
-        lambda t: (t.elev_mean >= HARPY_ELEV_MIN) & (t.elev_range >= PASS_RUGG_MIN) & (t.elev_range <= PASS_RUGG_MAX) & ~t.is_water),
+        lambda t: (
+            (t.elev_mean >= HARPY_ELEV_MIN) & (t.elev_range >= PASS_RUGG_MIN)
+            & (t.elev_range <= PASS_RUGG_MAX) & ~t.is_water)),
     ("Troll Hold",            _C_HIG, lambda p: p.troll_holds,
         lambda t: t.river_mask & ~t.is_water),
     ("Giant Lair",            _C_HIG, lambda p: p.giant_lairs,
@@ -261,25 +263,35 @@ _SOURCE_DEFS: list[tuple[str, tuple, _ParamFn, _MaskFn]] = [
     ("Goblin Warband",        _C_FOR, lambda p: p.goblin_warbands,
         lambda t: (t.forest_density_mean >= GOBLIN_FOREST_MIN) & ~t.is_water),
     ("Werewolf Range",        _C_FOR, lambda p: p.werewolf_ranges,
-        lambda t: (t.forest_density_mean >= WEREWOLF_FOREST_MIN) & np.isin(t.biome, list(GRASSLAND_BIOMES)) & ~t.is_water),
+        lambda t: (
+            (t.forest_density_mean >= WEREWOLF_FOREST_MIN)
+            & np.isin(t.biome, list(GRASSLAND_BIOMES)) & ~t.is_water)),
     ("Basilisk Territory",    _C_FOR, lambda p: p.basilisk_territories,
         lambda t: np.isin(t.biome, list(SCRUB_BIOMES)) & ~t.is_water),
     ("Cursed Forest",         _C_FOR, lambda p: p.cursed_forests,
-        lambda t: (t.forest_density_mean >= CURSED_FOREST_DENSITY_MIN) & (t.water_hops >= CURSED_FOREST_ISOLATION_MIN) & ~t.is_water),
+        lambda t: (
+            (t.forest_density_mean >= CURSED_FOREST_DENSITY_MIN)
+            & (t.water_hops >= CURSED_FOREST_ISOLATION_MIN) & ~t.is_water)),
     # Planar Intrusions
     ("Fire Rift",             _C_PLN, lambda p: p.fire_rifts,
         lambda t: t.volcanic_activity >= FIRE_RIFT_VOLCANIC_MIN),
     ("Earth Rift",            _C_PLN, lambda p: p.earth_rifts,
-        lambda t: np.isin(t.boundary_type, list(ACTIVE_BOUNDARY_TYPES)) & np.isin(t.plate_type, list(CONTINENTAL_TYPES))),
+        lambda t: (
+            np.isin(t.boundary_type, list(ACTIVE_BOUNDARY_TYPES))
+            & np.isin(t.plate_type, list(CONTINENTAL_TYPES)))),
     ("Air Rift",              _C_PLN, lambda p: p.air_rifts,
         lambda t: t.elev_mean >= AIR_RIFT_ELEV_MIN),
     ("Water Rift",            _C_PLN, lambda p: p.water_rifts,
         lambda t: t.is_ocean & (t.ocean_depth_hops >= WATER_RIFT_DEPTH_MIN)),
     # Undead / Necromantic
     ("Lich Stronghold",       _C_UND, lambda p: p.lich_strongholds,
-        lambda t: (t.elev_mean >= LICH_ELEV_MIN) & (t.fertility_mean <= LICH_FERTILITY_MAX) & (t.forest_density_mean <= LICH_FOREST_MAX)),
+        lambda t: (
+            (t.elev_mean >= LICH_ELEV_MIN) & (t.fertility_mean <= LICH_FERTILITY_MAX)
+            & (t.forest_density_mean <= LICH_FOREST_MAX))),
     ("Barrow Field",          _C_UND, lambda p: p.barrow_fields,
-        lambda t: (t.elev_mean <= BARROW_ELEV_MAX) & (t.elev_range <= BARROW_RUGG_MAX) & (t.water_hops >= BARROW_ISOLATION_MIN) & ~t.is_water),
+        lambda t: (
+            (t.elev_mean <= BARROW_ELEV_MAX) & (t.elev_range <= BARROW_RUGG_MAX)
+            & (t.water_hops >= BARROW_ISOLATION_MIN) & ~t.is_water)),
     ("Haunt",                 _C_UND, lambda p: p.haunt_concentrations,
         lambda t: (t.coast_hops <= HAUNT_COAST_MAX) & (t.fertility_mean <= HAUNT_FERTILITY_MAX) & ~t.is_water),
 ]

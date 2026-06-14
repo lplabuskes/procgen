@@ -120,18 +120,26 @@ def _collect_hybrid_edges(
     for i, (adj, costs) in enumerate(zip(face_adjacency, land_edge_costs)):
         for j, c in zip(adj, costs):
             if np.isfinite(c):
-                rows.append(i); cols.append(j); data.append(float(c))
+                rows.append(i)
+                cols.append(j)
+                data.append(float(c))
 
     for i, (adj, costs) in enumerate(zip(face_adjacency, sea_edge_costs)):
         for j, c in zip(adj, costs):
             if np.isfinite(c):
-                rows.append(n + i); cols.append(n + j); data.append(float(c))
+                rows.append(n + i)
+                cols.append(n + j)
+                data.append(float(c))
 
     sc = max(float(river_switch_cost), 0.0)
     for raw_i in np.where(amphibious)[0]:
         fi = int(raw_i)
-        rows.append(fi);     cols.append(n + fi); data.append(sc)
-        rows.append(n + fi); cols.append(fi);     data.append(sc)
+        rows.append(fi)
+        cols.append(n + fi)
+        data.append(sc)
+        rows.append(n + fi)
+        cols.append(fi)
+        data.append(sc)
 
     pc = max(float(port_cost), 0.0)
     for i, adj in enumerate(face_adjacency):
@@ -139,8 +147,12 @@ def _collect_hybrid_edges(
             continue
         for j in adj:
             if sea_p[j] and not land_p[j]:
-                rows.append(i);     cols.append(n + j); data.append(pc)
-                rows.append(n + j); cols.append(i);     data.append(pc)
+                rows.append(i)
+                cols.append(n + j)
+                data.append(pc)
+                rows.append(n + j)
+                cols.append(i)
+                data.append(pc)
 
     return rows, cols, data
 
@@ -250,7 +262,9 @@ def build_hybrid_cost_graph(
     demands = np.asarray(settlement_demands, dtype=np.float64)
     for s_node, demand in zip(settlement_land_nodes, demands):
         virtual_cost = dp * (1.0 - float(demand))
-        rows.append(virtual); cols.append(int(s_node)); data.append(virtual_cost)
+        rows.append(virtual)
+        cols.append(int(s_node))
+        data.append(virtual_cost)
 
     shape = (virtual + 1, virtual + 1)
     if not data:

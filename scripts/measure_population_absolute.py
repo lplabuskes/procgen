@@ -33,20 +33,17 @@ import argparse
 import datetime
 import json
 import random
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+import numpy as np
 
-import numpy as np  # noqa: E402
-
-from core.pipeline import BuildContext  # noqa: E402
-from core.world import World  # noqa: E402
-from realmgen.builder import RealmParams, RealmPipeline  # noqa: E402
-from realmgen.population.calibration import KM2_PER_STERADIAN  # noqa: E402
-from worldgen import GlobeParams, GlobePipeline, load_globe, save_globe  # noqa: E402
-from worldgen.cost.channels import IS_WATER  # noqa: E402
-from worldgen.resources.channels import FERTILITY_MEAN  # noqa: E402
+from core.pipeline import BuildContext
+from core.world import World
+from realmgen.builder import RealmParams, RealmPipeline
+from realmgen.population.calibration import KM2_PER_STERADIAN
+from worldgen import GlobeParams, GlobePipeline, load_globe, save_globe
+from worldgen.cost.channels import IS_WATER
+from worldgen.resources.channels import FERTILITY_MEAN
 
 RESULTS_DIR = Path(__file__).parent / "results"
 JSON_PATH = RESULTS_DIR / "population_absolute_results.json"

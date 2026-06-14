@@ -15,6 +15,7 @@ brew install python@3.13
 python3.13 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+pip install -e .
 ```
 
 After the first time, reactivate with:

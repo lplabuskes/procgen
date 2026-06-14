@@ -28,17 +28,14 @@ from __future__ import annotations
 
 import argparse
 import random
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+import numpy as np
 
-import numpy as np  # noqa: E402
-
-from core.pipeline import BuildContext  # noqa: E402
-from core.world import World  # noqa: E402
-from realmgen.builder import RealmParams, RealmPipeline  # noqa: E402
-from worldgen import GlobeParams, GlobePipeline, load_globe, save_globe  # noqa: E402
+from core.pipeline import BuildContext
+from core.world import World
+from realmgen.builder import RealmParams, RealmPipeline
+from worldgen import GlobeParams, GlobePipeline, load_globe, save_globe
 
 CACHE_DIR = Path(__file__).parent.parent / "saved_worlds"
 DEFAULT_SEEDS = [4, 31, 35]
@@ -73,7 +70,6 @@ def measure_seed(seed: int, rebuild: bool, detail: bool) -> None:
     n_vassal_seats = len(vas)
     largest = max((p.n_faces for p in sov), default=0)
     largest_frac = largest / claimed if claimed else 0.0
-    mean_depth = float(np.mean([p.depth for p in pols])) if pols else 0.0
     max_depth = max((p.depth for p in pols), default=0)
 
     # Does infrastructure drive fragmentation? (over realms big enough to split)

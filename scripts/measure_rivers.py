@@ -34,20 +34,17 @@ import argparse
 import datetime
 import json
 import random
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+import numpy as np
 
-import numpy as np  # noqa: E402
-
-from core.pipeline import BuildContext  # noqa: E402
-from core.world import World  # noqa: E402
-from worldgen import GlobeParams  # noqa: E402
-from worldgen.climate.builder import ClimateBuilder  # noqa: E402
-from worldgen.geology.channels import OCEAN_MASK  # noqa: E402
-from worldgen.geology.elevation_builder import ElevationBuilder  # noqa: E402
-from worldgen.hydrology.builder import HydrologyBuilder  # noqa: E402
+from core.pipeline import BuildContext
+from core.world import World
+from worldgen import GlobeParams
+from worldgen.climate.builder import ClimateBuilder
+from worldgen.geology.channels import OCEAN_MASK
+from worldgen.geology.elevation_builder import ElevationBuilder
+from worldgen.hydrology.builder import HydrologyBuilder
 
 
 RESULTS_DIR = Path(__file__).parent / "results"

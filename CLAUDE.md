@@ -13,13 +13,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 source .venv/bin/activate
+pip install -e .                    # one-time: installs project packages into the venv
 python3 main.py                     # primary entrypoint — full procedural world viewer
 python3 -m viz.mapview.main         # 2-D map viewer (dev)
 ```
 
-No build step or linter is configured. Run the test suites with:
+No build step. Run the linter and test suite with:
 
 ```bash
+python3 -m flake8                   # lint (config in pyproject.toml: max-line-length=120)
 python3 -m pytest                   # all configured test paths (see pyproject.toml)
 ```
 

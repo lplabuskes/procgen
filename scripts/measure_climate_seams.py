@@ -15,15 +15,10 @@ from __future__ import annotations
 
 import argparse
 import random
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from worldgen.climate.builder import ClimateBuilder, ClimateParams  # noqa: E402
-from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams  # noqa: E402
-from core.pipeline import BuildContext  # noqa: E402
-from core.world import World  # noqa: E402
+from worldgen.climate.builder import ClimateBuilder, ClimateParams
+from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams
+from core.pipeline import BuildContext
+from core.world import World
 
 
 def measure_seed(seed: int) -> dict:

@@ -27,29 +27,24 @@ from __future__ import annotations
 
 import argparse
 import random
-import sys
-from pathlib import Path
+import numpy as np
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import numpy as np  # noqa: E402
-
-from worldgen.geology.elevation import (  # noqa: E402
+from worldgen.geology.elevation import (
     compute_elevation_textures,
     compute_face_elevations,
     compute_erosion,
 )
-from core.pipeline import BuildContext  # noqa: E402
-from core.world import World  # noqa: E402
-from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams  # noqa: E402
-from worldgen.geology.tectonics import (  # noqa: E402
+from core.pipeline import BuildContext
+from core.world import World
+from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams
+from worldgen.geology.tectonics import (
     assign_plate_types,
     classify_plate_boundaries,
     generate_plate_velocities,
     generate_plates,
     relax_plates,
 )
-from worldgen.geology.volcanism import compute_volcanism  # noqa: E402
+from worldgen.geology.volcanism import compute_volcanism
 
 
 def _build_base_textures(seed: int):

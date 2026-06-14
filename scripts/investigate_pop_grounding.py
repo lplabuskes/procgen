@@ -11,10 +11,7 @@ population distributions, for the river-vetted seeds 4/31/35.
 """
 from __future__ import annotations
 
-import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import numpy as np
 
@@ -75,7 +72,7 @@ def main() -> None:
         print(f"  land faces={int(land.sum())}  land area={land_area/1e6:,.1f} M km² "
               f"({100*land_area/total_area:.1f}% land)")
         print(f"  land fertility: mean={land_fert.mean():.3f} median={np.median(land_fert):.3f} "
-              f"p90={np.percentile(land_fert,90):.3f} max={land_fert.max():.3f}")
+              f"p90={np.percentile(land_fert, 90):.3f} max={land_fert.max():.3f}")
         print(f"  Σ fertility·area over land = {fertile_area_land/1e6:,.2f} M km²-equiv "
               f"(={100*fertile_area_land/land_area:.0f}% of land area)")
 
@@ -133,7 +130,7 @@ def main() -> None:
         # total_people = D_max · R² · Σ cap   (carrying-only, before trade bonus)
         cap_km2 = cap.sum() * EARTH_R2  # km²-equiv claimed
         for target_total, label in [(70e6, "medieval Europe ~70M"),
-                                     (400e6, "world c.1300 ~400M")]:
+                                    (400e6, "world c.1300 ~400M")]:
             d_max = target_total / cap_km2
             print(f"    → to hit {label}: D_max={d_max:.1f} people/km² at fert=1")
 
