@@ -732,7 +732,7 @@ class MapWidget(QWidget):
         cx: float, cy: float,
         scale_x: float, scale_y: float,
     ) -> None:
-        from worldgen.danger.builder import SOURCE_COLORS
+        from worldgen.danger.sources import SOURCE_COLORS
         feature = self._globe.get_feature("danger_sources")  # type: ignore[union-attr]
         if feature is None:
             return
