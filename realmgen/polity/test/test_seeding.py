@@ -11,6 +11,7 @@ from scipy.sparse import csr_matrix
 from realmgen.polity.seeding import (
     cohesion_to_gain,
     compute_defensibility,
+    compute_settlement_defensibility,
     roll_polity_scalars,
     seed_capitals,
 )
@@ -82,6 +83,111 @@ class TestSeedCapitals:
         a = seed_capitals(faces, pop, g, min_separation=2.0, min_pop_fraction=0.0)
         b = seed_capitals(faces, pop, g, min_separation=2.0, min_pop_fraction=0.0)
         assert a == b
+
+
+def _settlement_defensibility_inputs(n: int = 10, s_faces: list | None = None):
+    """Return (land_base_cost, sv, river_flow, trade_wealth, danger, land_mask, faces)."""
+    if s_faces is None:
+        s_faces = [0, 3, 7]
+    rng = np.random.default_rng(0)
+    land_base_cost = rng.uniform(1.0, 5.0, n)
+    sv = rng.uniform(0.0, 1.0, n)
+    river_flow = np.zeros(n)
+    river_flow[3] = 10.0   # face 3 has a river
+    trade_wealth = rng.uniform(0.0, 1000.0, len(s_faces))
+    danger = rng.uniform(0.0, 0.5, n)
+    land_mask = np.ones(n, dtype=bool)
+    return land_base_cost, sv, river_flow, trade_wealth, danger, land_mask, s_faces
+
+
+class TestSettlementDefensibility:
+    def test_defensibility_at_least_one(self):
+        lbc, sv, rf, tw, dg, lm, faces = _settlement_defensibility_inputs()
+        defs, _, _ = compute_settlement_defensibility(faces, lbc, sv, rf, tw, dg, lm, base_seed=1)
+        assert (defs >= 1.0).all()
+
+    def test_empty_input(self):
+        n = 8
+        lbc = np.ones(n)
+        sv = np.zeros(n)
+        rf = np.zeros(n)
+        tw = np.empty(0)
+        dg = np.zeros(n)
+        lm = np.ones(n, dtype=bool)
+        defs, walls, wstr = compute_settlement_defensibility([], lbc, sv, rf, tw, dg, lm, base_seed=0)
+        assert defs.size == 0 and walls.size == 0 and wstr.size == 0
+
+    def test_river_bonus_adds_when_flow_present(self):
+        n = 10
+        lbc = np.full(n, 2.0)
+        sv = np.zeros(n)
+        dg = np.zeros(n)
+        lm = np.ones(n, dtype=bool)
+        # Face 0 has no river; face 1 has significant river flow.
+        rf_none = np.zeros(n)
+        rf_river = np.zeros(n)
+        rf_river[1] = 50.0
+        tw = np.zeros(2)
+        d_none, _, _ = compute_settlement_defensibility([0, 1], lbc, sv, rf_none, tw, dg, lm, base_seed=0)
+        d_riv, _, _ = compute_settlement_defensibility([0, 1], lbc, sv, rf_river, tw, dg, lm, base_seed=0)
+        assert d_riv[1] > d_none[1]    # river face gets bonus
+        assert d_riv[0] == pytest.approx(d_none[0])  # non-river face unchanged
+
+    def test_walls_increase_defensibility(self):
+        # Force wall_base_prob=1.0 so every settlement gets walls.
+        lbc, sv, rf, tw, dg, lm, faces = _settlement_defensibility_inputs()
+        d_wall, walls, wstr = compute_settlement_defensibility(
+            faces, lbc, sv, rf, tw, dg, lm, base_seed=5,
+            wall_base_prob=1.0, wall_min_strength=0.5, wall_max_strength=0.5,
+        )
+        d_none, _, _ = compute_settlement_defensibility(
+            faces, lbc, sv, rf, tw, dg, lm, base_seed=5,
+            wall_base_prob=0.0,
+        )
+        assert walls.all()
+        assert (d_wall > d_none).all()
+        assert np.allclose(wstr, 0.5)
+
+    def test_deterministic(self):
+        lbc, sv, rf, tw, dg, lm, faces = _settlement_defensibility_inputs()
+        a = compute_settlement_defensibility(faces, lbc, sv, rf, tw, dg, lm, base_seed=42)
+        b = compute_settlement_defensibility(faces, lbc, sv, rf, tw, dg, lm, base_seed=42)
+        for x, y in zip(a, b):
+            assert np.allclose(x, y)
+
+    def test_different_seeds_may_differ(self):
+        lbc, sv, rf, tw, dg, lm, faces = _settlement_defensibility_inputs()
+        d1, w1, _ = compute_settlement_defensibility(
+            faces, lbc, sv, rf, tw, dg, lm, base_seed=1, wall_base_prob=0.5,
+        )
+        d2, w2, _ = compute_settlement_defensibility(
+            faces, lbc, sv, rf, tw, dg, lm, base_seed=99, wall_base_prob=0.5,
+        )
+        # Different seeds can produce different wall assignments.
+        # At least one outcome (has_walls) or defensibility should differ.
+        assert not (np.allclose(d1, d2) and np.array_equal(w1, w2))
+
+    def test_danger_wealth_boost_wall_probability(self):
+        # With zero boost, wall_base_prob=0 → no walls.
+        n = 10
+        faces = [2, 5]
+        lbc = np.full(n, 2.0)
+        sv = np.zeros(n)
+        rf = np.zeros(n)
+        tw = np.array([500.0, 500.0])
+        dg = np.full(n, 0.8)
+        lm = np.ones(n, dtype=bool)
+        _, walls_none, _ = compute_settlement_defensibility(
+            faces, lbc, sv, rf, tw, dg, lm, base_seed=7,
+            wall_base_prob=0.0, wall_danger_boost=0.0, wall_wealth_boost=0.0,
+        )
+        assert not walls_none.any()
+        # With full boost probability clamped to 1.0 → always walls.
+        _, walls_all, _ = compute_settlement_defensibility(
+            faces, lbc, sv, rf, tw, dg, lm, base_seed=7,
+            wall_base_prob=0.0, wall_danger_boost=1.0, wall_wealth_boost=1.0,
+        )
+        assert walls_all.all()
 
 
 class TestScalars:

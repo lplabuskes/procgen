@@ -145,3 +145,112 @@ def roll_polity_scalars(
         maritime[k] = maritime_scale * float(trade_norm[k]) * (0.5 + 0.5 * rng.random())
 
     return Scalars(cohesion, infrastructure, legitimacy, maritime)
+
+
+def compute_settlement_defensibility(
+    settlement_faces: Sequence[int],
+    land_base_cost: np.ndarray,
+    situational_value: np.ndarray,
+    river_flow_mag: np.ndarray,
+    trade_wealth: np.ndarray,
+    danger: np.ndarray,
+    land_mask: np.ndarray,
+    base_seed: int,
+    *,
+    rugged_weight: float = 0.6,
+    situational_weight: float = 0.8,
+    river_weight: float = 0.4,
+    wall_base_prob: float = 0.3,
+    wall_danger_boost: float = 0.3,
+    wall_wealth_boost: float = 0.3,
+    wall_min_strength: float = 0.3,
+    wall_max_strength: float = 1.5,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per-settlement defensibility, wall presence, and wall strength.
+
+    Combines terrain (ruggedness + situational value), river barriers, and
+    walls (randomly assigned per settlement, biased by local danger and trade
+    wealth). Each settlement's wall roll is keyed on ``base_seed + face`` so
+    results are stable across polity-seeding reorder.
+
+    Parameters
+    ----------
+    settlement_faces : (S,) int
+        Face indices of the settlements, in order.
+    land_base_cost : (N,) float
+        Per-face traversal cost (higher = more rugged).
+    situational_value : (N,) float in [0, 1]
+        Per-face situational value (harbors, confluences, etc.).
+    river_flow_mag : (N,) float
+        Per-face representative river flow magnitude from CostSurfaces.
+    trade_wealth : (S,) float
+        Per-settlement trade wealth (aligned with ``settlement_faces``).
+    danger : (N,) float
+        Per-face danger field (0 if not present).
+    land_mask : (N,) bool
+        True for land faces (used for normalization percentiles).
+    base_seed : int
+        World seed for deterministic wall rolls.
+
+    Returns
+    -------
+    defensibility : (S,) float64  — composite multiplier (>= 1)
+    has_walls : (S,) bool         — whether the settlement has defensive walls
+    wall_strength : (S,) float64  — wall contribution to defensibility (0 if none)
+    """
+    faces = np.asarray(settlement_faces, dtype=np.int64)
+    s = len(faces)
+    if s == 0:
+        return np.empty(0, np.float64), np.empty(0, bool), np.empty(0, np.float64)
+
+    cost = np.asarray(land_base_cost, dtype=np.float64)
+    sv = np.clip(np.asarray(situational_value, dtype=np.float64), 0.0, 1.0)
+    flow = np.asarray(river_flow_mag, dtype=np.float64)
+    danger_arr = np.asarray(danger, dtype=np.float64)
+    wealth = np.asarray(trade_wealth, dtype=np.float64)
+    lmask = np.asarray(land_mask, dtype=bool)
+
+    # Ruggedness: normalize land_base_cost over land p50..p90 (same as compute_defensibility).
+    valid_cost = cost[lmask & np.isfinite(cost)]
+    lo = float(np.percentile(valid_cost, 50.0)) if valid_cost.size else 0.0
+    hi = float(np.percentile(valid_cost, 90.0)) if valid_cost.size else 1.0
+    rugged_norm = np.clip((cost[faces] - lo) / max(hi - lo, 1e-9), 0.0, 1.0)
+
+    # River: normalize flow over p90 of non-zero land flow.
+    land_flow = flow[lmask & (flow > 0.0)]
+    flow_ref = float(np.percentile(land_flow, 90.0)) if land_flow.size else 1.0
+    river_norm = np.clip(flow[faces] / max(flow_ref, 1e-9), 0.0, 1.0)
+
+    # Danger: normalize per-face over land p90.
+    land_danger = danger_arr[lmask & (danger_arr > 0.0)]
+    danger_ref = float(np.percentile(land_danger, 90.0)) if land_danger.size else 1.0
+    danger_norm = np.clip(danger_arr[faces] / max(danger_ref, 1e-9), 0.0, 1.0)
+
+    # Wealth: normalize over settlement max.
+    wealth_max = float(wealth.max()) if wealth.size else 0.0
+    wealth_norm = np.clip(wealth / max(wealth_max, 1e-9), 0.0, 1.0)
+
+    # Terrain component (same formula as compute_defensibility but per-settlement).
+    terrain = 1.0 + rugged_weight * rugged_norm + situational_weight * sv[faces]
+
+    # River barrier component: a large river on the settlement's face is a
+    # natural defensive obstacle on at least one flank.
+    river_bonus = river_weight * river_norm
+
+    # Walls — deterministic per (seed, face), biased by danger and wealth.
+    wall_prob = np.clip(
+        wall_base_prob + wall_danger_boost * danger_norm + wall_wealth_boost * wealth_norm,
+        0.0, 1.0,
+    )
+    has_walls = np.zeros(s, dtype=bool)
+    wall_str = np.zeros(s, dtype=np.float64)
+    for k, face in enumerate(faces.tolist()):
+        rng = np.random.default_rng(np.random.SeedSequence([int(base_seed), int(face)]))
+        if rng.random() < float(wall_prob[k]):
+            has_walls[k] = True
+            # Quality biased toward better walls in more dangerous/wealthy locations.
+            bias = 0.5 * (float(danger_norm[k]) + float(wealth_norm[k]))
+            quality = np.clip(0.5 * rng.random() + 0.5 * bias, 0.0, 1.0)
+            wall_str[k] = wall_min_strength + (wall_max_strength - wall_min_strength) * quality
+
+    return terrain + river_bonus + wall_str, has_walls, wall_str

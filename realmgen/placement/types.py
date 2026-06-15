@@ -59,10 +59,17 @@ class Settlement:
     radius and seeds ``population``).  No downstream computation reads ``tier``
     directly — all generation operates on ``population``.  Display tiers are
     derived at render time via :func:`population_display_tier`.
+
+    ``defensibility``, ``has_walls``, and ``wall_strength`` are set by
+    PopulationStage after final populations are known (danger + wealth inform
+    walls; ruggedness + situational value + rivers contribute to terrain defense).
     """
 
     face_id: int
     position: np.ndarray   # (3,) unit-sphere centroid of the face
     tier: int              # seeding label: 0=capital, 1=city, 2=town, 3=village
     score: float           # combined placement score at seeding time
-    population: float = 0.0  # seeded from tier initial_population; updated by PopulationStage
+    population: float = 0.0    # seeded from tier initial_population; updated by PopulationStage
+    defensibility: float = 1.0  # composite multiplier used by PolityStage; set by PopulationStage
+    has_walls: bool = False     # whether the settlement has defensive walls
+    wall_strength: float = 0.0  # wall contribution to defensibility (0 if no walls)

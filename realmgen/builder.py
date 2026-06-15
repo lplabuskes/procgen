@@ -91,7 +91,7 @@ class RealmPipeline(Pipeline):
         p = self._params
         self.scoring_stage = ScoringStage(p.suitability, p.situational, p.danger)
         self.placement_stage = PlacementStage(p.seeder, p.danger)
-        self.population_stage = PopulationStage(p.trade, p.population, p.seeder, p.danger)
+        self.population_stage = PopulationStage(p.trade, p.population, p.seeder, p.danger, p.polity.defensibility)
         self.polity_stage = PolityStage(p.polity, p.danger)
         super().__init__([
             self.scoring_stage,

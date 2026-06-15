@@ -22,7 +22,6 @@ from realmgen.channels import (
     CONTROL_CLASS,
     POLITY_ID,
     POPULATION,
-    SITUATIONAL_VALUE,
     SOVEREIGN_ID,
     TRADE_FLOW,
 )
@@ -35,7 +34,7 @@ from realmgen.polity.forest import (
     ProjectionParams,
     _Ctx,
 )
-from realmgen.polity.seeding import compute_defensibility, seed_capitals
+from realmgen.polity.seeding import seed_capitals
 from realmgen.polity.tension import compute_border_tension
 from realmgen.polity.types import Polity
 from realmgen.trade.network import build_base_hybrid_graph
@@ -54,9 +53,15 @@ class CapitalSeedingParams:
 
 @paramclass
 class DefensibilityParams:
-    """Terrain-derived local-power multiplier (consumed here)."""
+    """Per-settlement defensibility multiplier — computed in PopulationStage and stored on Settlement."""
     rugged_weight: float = _f(0.6, label="Defensibility: ruggedness", min=0.0, max=3.0)
     situational_weight: float = _f(0.8, label="Defensibility: situational", min=0.0, max=3.0)
+    river_weight: float = _f(0.4, label="Defensibility: river barrier", min=0.0, max=3.0)
+    wall_base_prob: float = _f(0.3, label="Walls: base probability", min=0.0, max=1.0)
+    wall_danger_boost: float = _f(0.3, label="Walls: danger boost to prob", min=0.0, max=1.0)
+    wall_wealth_boost: float = _f(0.3, label="Walls: wealth boost to prob", min=0.0, max=1.0)
+    wall_min_strength: float = _f(0.3, label="Walls: min strength bonus", min=0.0, max=5.0)
+    wall_max_strength: float = _f(1.5, label="Walls: max strength bonus", min=0.0, max=5.0)
 
 
 @paramclass
@@ -93,7 +98,7 @@ class PolityStage(Stage):
     """Authority-field territory growth and tree (sovereign/vassal) classification."""
 
     name = "realm_polity"
-    requires = (POPULATION, SITUATIONAL_VALUE, IS_WATER, COST_SURFACES)
+    requires = (POPULATION, IS_WATER, COST_SURFACES)
     provides = (POLITY_ID, SOVEREIGN_ID, CONTROL_CLASS, BORDER_TENSION)
 
     def __init__(self, params: PolityParams, danger_params=None) -> None:
@@ -123,10 +128,6 @@ class PolityStage(Stage):
 
         settlement_faces = np.array([s.face_id for s in settlements], dtype=np.int64)
         populations = np.array([s.population for s in settlements], dtype=np.float64)
-        situational = (
-            SITUATIONAL_VALUE.read(mesh).astype(np.float64)
-            if SITUATIONAL_VALUE.present(mesh) else np.zeros(n)
-        )
         trade_flow = (
             TRADE_FLOW.read(mesh).astype(np.float64)
             if TRADE_FLOW.present(mesh) else np.zeros(n)
@@ -138,11 +139,12 @@ class PolityStage(Stage):
             mesh, world, is_water, danger, danger_scale,
         )
         land_graph = build_cost_graph(mesh.face_adjacency, land_edge_costs)
-        defensibility = compute_defensibility(
-            land_base_cost, situational, land_mask,
-            rugged_weight=p.defensibility.rugged_weight,
-            situational_weight=p.defensibility.situational_weight,
-        )
+
+        # Build per-face defensibility from values stamped on settlements by PopulationStage.
+        # Only settlement faces are ever read by the forest algorithm; non-settlement faces get 1.0.
+        defensibility = np.ones(n, dtype=np.float64)
+        for s in settlements:
+            defensibility[s.face_id] = s.defensibility
 
         # Stage 0 — seed sovereign capitals (weighted).
         trade_ref = float(trade_wealth.max())

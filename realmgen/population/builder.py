@@ -12,7 +12,7 @@ import numpy as np
 from core.display import DisplayRegistry
 from core.params import field, param_field as _f, paramclass
 from core.pipeline import BuildContext, Stage
-from realmgen.channels import HINTERLAND_ID, POPULATION, RURAL_POPULATION, SUITABILITY, TRADE_FLOW
+from realmgen.channels import HINTERLAND_ID, POPULATION, RURAL_POPULATION, SITUATIONAL_VALUE, SUITABILITY, TRADE_FLOW
 from realmgen.placement.builder import SeederParams
 from realmgen.placement.seeder import build_cost_graph
 from realmgen.placement.types import Settlement, population_display_tier
@@ -163,11 +163,13 @@ class PopulationStage(Stage):
         population_params: PopulationParams,
         seeder_params: SeederParams,
         danger_params=None,
+        defensibility_params=None,
     ) -> None:
         self.trade_params = trade_params
         self.population_params = population_params
         self.seeder_params = seeder_params
         self.danger_params = danger_params
+        self.defensibility_params = defensibility_params
         self.settlements: Optional[list[Settlement]] = None
         self.trade_result = None
         self.population: Optional[np.ndarray] = None
@@ -382,6 +384,39 @@ class PopulationStage(Stage):
         self.population = population
         self.carrying_cap = carrying_cap
         self.trade_wealth = trade_wealth
+
+        # Assign defensibility now that final populations and trade wealth are known.
+        if self.defensibility_params is not None and self.settlements and COST_SURFACES.present(world):
+            from realmgen.polity.seeding import compute_settlement_defensibility
+            cs = COST_SURFACES.read(world)
+            sv = (
+                SITUATIONAL_VALUE.read(mesh).astype(np.float64)
+                if SITUATIONAL_VALUE.present(mesh) else np.zeros(n, dtype=np.float64)
+            )
+            dp = self.defensibility_params
+            defs, has_walls_arr, wall_str_arr = compute_settlement_defensibility(
+                [s.face_id for s in self.settlements],
+                cs.land_base_cost, sv, cs.river_flow_mag,
+                trade_wealth, danger, ~is_water,
+                int(world.seed) if world.seed is not None else 0,
+                rugged_weight=dp.rugged_weight,
+                situational_weight=dp.situational_weight,
+                river_weight=dp.river_weight,
+                wall_base_prob=dp.wall_base_prob,
+                wall_danger_boost=dp.wall_danger_boost,
+                wall_wealth_boost=dp.wall_wealth_boost,
+                wall_min_strength=dp.wall_min_strength,
+                wall_max_strength=dp.wall_max_strength,
+            )
+            self.settlements = [
+                dataclasses.replace(
+                    s,
+                    defensibility=float(defs[k]),
+                    has_walls=bool(has_walls_arr[k]),
+                    wall_strength=float(wall_str_arr[k]),
+                )
+                for k, s in enumerate(self.settlements)
+            ]
 
         _shares, self.hinterland = compute_hinterland_shares(
             n, self.settlements, hinterland_cost_graph,
