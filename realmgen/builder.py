@@ -139,6 +139,7 @@ class RealmPipeline(Pipeline):
             return
 
         prev_hover = window._map._hover_callback
+        pol_by_id = {pol.polity_id: pol for pol in (self.polity_stage.polities or [])}
 
         def _realm_hover(face_src, uv=None):
             if prev_hover is not None:
@@ -161,10 +162,19 @@ class RealmPipeline(Pipeline):
                     parts.append(f"Pop: {format_population(float(pop))}")
             pid = meta.get("polity_id")
             if pid is not None and int(pid) >= 0:
-                parts.append(f"Polity {int(pid)}")
-                sid = meta.get("sovereign_id")
-                if sid is not None and int(sid) >= 0 and int(sid) != int(pid):
-                    parts.append(f"⊂ Sovereign {int(sid)}")
+                chain: list[int] = []
+                node = int(pid)
+                while node >= 0:
+                    chain.append(node)
+                    node_pol = pol_by_id.get(node)
+                    if node_pol is None or node_pol.liege is None:
+                        break
+                    node = node_pol.liege
+                chain.reverse()
+                if len(chain) == 1:
+                    parts.append(f"Sovereign {chain[0]}")
+                else:
+                    parts.append("Pol: " + " › ".join(str(p) for p in chain))
                 cc = meta.get("control_class")
                 if cc is not None and int(cc) >= 0:
                     parts.append(["Direct", "Vassal", "Independent"][int(cc)])

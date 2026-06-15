@@ -67,7 +67,7 @@ class HierarchyParams:
     )
     cohesion_gain_floor: float = _f(0.5, label="Cohesion gain floor", min=0.0, max=2.0)
     cohesion_gain_span: float = _f(1.0, label="Cohesion gain span", min=0.0, max=2.0)
-    max_recursion_depth: int = _f(1, label="Vassal recursion depth", min=0, max=3)
+    max_recursion_depth: int = _f(2, label="Vassal recursion depth", min=0, max=3)
 
 
 @dataclass

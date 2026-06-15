@@ -65,9 +65,9 @@ def make_polity_tree_color(polities: List["Polity"]):
         depth = depth_of.get(pid, 0)
 
         if depth > 0:
-            # Hue jitter ±20° — stable, unique per polity_id.
+            # Hue jitter ±10° — stable, unique per polity_id.
             t = ((pid * 2654435761) & 0xFFFF) / 0xFFFF  # 0..1
-            h = (h + (t - 0.5) * (40.0 / 360.0)) % 1.0
+            h = (h + (t - 0.5) * (20.0 / 360.0)) % 1.0
             # Lighten toward white with depth so vassals are visually lighter.
             lit = min(lit + 0.08 + depth * 0.05, 0.82)
 

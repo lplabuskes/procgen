@@ -411,6 +411,10 @@ class MapWidget(QWidget):
                 and self._globe is not None
                 and self._globe.has_feature("settlements")):
             self._draw_settlements_overlay(painter, W, H, cx, cy, scale_x, scale_y)
+        if (self._overlay_visible.get("polity_borders")
+                and self._globe is not None
+                and self._globe.has_feature("polity_borders")):
+            self._draw_polity_borders_overlay(painter, W, H, cx, cy, scale_x, scale_y)
 
         self._draw_legend(painter, W, H)
 
@@ -945,6 +949,65 @@ class MapWidget(QWidget):
                 painter.drawLine(
                     QPointF(float(sx[j - 1]), float(sy[j - 1])),
                     QPointF(float(sx[j]), float(sy[j])),
+                )
+
+    def _draw_polity_borders_overlay(
+        self,
+        painter: QPainter,
+        W: float, H: float,
+        cx: float, cy: float,
+        scale_x: float, scale_y: float,
+    ) -> None:
+        borders_by_depth = self._globe.get_feature("polity_borders")  # type: ignore[union-attr]
+        if not borders_by_depth:
+            return
+
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        # Depth style: (line_width, alpha) — fainter at higher depth.
+        def _style(depth: int) -> tuple[float, int]:
+            if depth == 0:
+                return 2.0, 220
+            elif depth == 1:
+                return 1.2, 140
+            else:
+                return 0.7, 75
+
+        # Draw deeper (fainter) borders first so sovereign borders render on top.
+        for depth in sorted(borders_by_depth.keys(), reverse=True):
+            segs: np.ndarray = borders_by_depth[depth]
+            if segs.shape[0] == 0:
+                continue
+            width, alpha = _style(depth)
+            pen = QPen(QColor(0, 0, 0, alpha))
+            pen.setWidthF(width * self._zoom ** 0.3)
+            painter.setPen(pen)
+
+            pos0 = segs[:, :3]
+            pos1 = segs[:, 3:]
+            lon0 = self._shift_lon(np.arctan2(pos0[:, 1], pos0[:, 0]))
+            lat0 = np.arcsin(np.clip(pos0[:, 2], -1.0, 1.0))
+            lon1 = self._shift_lon(np.arctan2(pos1[:, 1], pos1[:, 0]))
+            lat1 = np.arcsin(np.clip(pos1[:, 2], -1.0, 1.0))
+
+            # Skip segments that cross the antimeridian.
+            valid = np.abs(lon1 - lon0) <= np.pi
+            if not np.any(valid):
+                continue
+
+            lonlat0 = np.column_stack([lon0[valid], lat0[valid]])
+            lonlat1 = np.column_stack([lon1[valid], lat1[valid]])
+            proj0 = self._projection.project_lonlat(lonlat0)
+            proj1 = self._projection.project_lonlat(lonlat1)
+            sx0 = (proj0[:, 0] - cx) * scale_x + W * 0.5
+            sy0 = -(proj0[:, 1] - cy) * scale_y + H * 0.5
+            sx1 = (proj1[:, 0] - cx) * scale_x + W * 0.5
+            sy1 = -(proj1[:, 1] - cy) * scale_y + H * 0.5
+
+            for i in range(len(sx0)):
+                painter.drawLine(
+                    QPointF(float(sx0[i]), float(sy0[i])),
+                    QPointF(float(sx1[i]), float(sy1[i])),
                 )
 
     def register_legend(self, scheme_name: str, kind: str, entries: list) -> None:

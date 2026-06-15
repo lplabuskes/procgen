@@ -36,15 +36,21 @@ class Scalars(NamedTuple):
 # make_polity_tree_color) land visibly lighter while staying clearly in the same family.
 # Yellow-green band (~75°–115°) is intentionally skipped to avoid muddy colours.
 POLITY_COLORS: List[tuple] = [
-    (0.69, 0.19, 0.11, 1.0),  # crimson      [ 8°]
-    (0.72, 0.44, 0.12, 1.0),  # orange       [32°]
-    (0.71, 0.67, 0.13, 1.0),  # gold         [55°]
+    (0.69, 0.19, 0.11, 1.0),  # crimson      [  8°]
+    (0.72, 0.44, 0.12, 1.0),  # orange       [ 32°]
+    (0.71, 0.67, 0.13, 1.0),  # gold         [ 55°]
     (0.14, 0.62, 0.21, 1.0),  # forest green [128°]
+    (0.10, 0.70, 0.38, 1.0),  # sea green    [148°]
     (0.13, 0.63, 0.54, 1.0),  # teal         [170°]
+    (0.10, 0.58, 0.70, 1.0),  # cerulean     [192°]
     (0.14, 0.37, 0.70, 1.0),  # sky blue     [215°]
+    (0.10, 0.15, 0.70, 1.0),  # indigo       [235°]
     (0.26, 0.13, 0.67, 1.0),  # cobalt       [255°]
+    (0.42, 0.10, 0.70, 1.0),  # purple       [272°]
     (0.57, 0.15, 0.65, 1.0),  # violet       [290°]
+    (0.70, 0.10, 0.65, 1.0),  # fuchsia      [305°]
     (0.66, 0.14, 0.49, 1.0),  # magenta      [320°]
+    (0.70, 0.10, 0.30, 1.0),  # rose         [340°]
 ]
 
 # Land that no polity reached (remote wilderness / out of range).

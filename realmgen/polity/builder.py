@@ -188,7 +188,7 @@ class PolityStage(Stage):
         self.pair_tension = pair_tension
         self.face_tension = face_tension
         self._write_outputs(mesh, world, polities, polity_of_face, sovereign_of_face, control_of_face, face_tension,
-                            pair_tension)
+                            pair_tension, is_water)
 
         n_sov = sum(1 for pol in polities if pol.liege is None)
         ctx.report(
@@ -262,6 +262,7 @@ class PolityStage(Stage):
         polities: List[Polity], polity_of_face: np.ndarray,
         sovereign_of_face: np.ndarray, control_of_face: np.ndarray,
         face_tension: np.ndarray, pair_tension: dict,
+        is_water: np.ndarray,
     ) -> None:
         POLITY_ID.write(mesh, polity_of_face)
         SOVEREIGN_ID.write(mesh, sovereign_of_face)
@@ -272,6 +273,82 @@ class PolityStage(Stage):
             "polity_tensions",
             [(a, b, float(t)) for (a, b), t in sorted(pair_tension.items())],
         )
+        world.add_feature(
+            "polity_borders",
+            self._compute_polity_borders(mesh, polities, polity_of_face, is_water),
+        )
+
+    def _compute_polity_borders(
+        self, mesh, polities: List[Polity],
+        polity_of_face: np.ndarray, is_water: np.ndarray,
+    ) -> dict:
+        """Return {depth: np.ndarray shape (N, 6)} with border segment endpoints (xyz, xyz).
+
+        Depth 0 = sovereign borders (between different sovereigns or vs. unclaimed).
+        Depth d > 0 = borders between different depth-d subtrees within the same parent.
+        """
+        if not polities:
+            return {}
+
+        pol_by_id = {p.polity_id: p for p in polities}
+        max_depth = max(p.depth for p in polities)
+        n = len(polity_of_face)
+
+        # Build root-to-leaf ancestor chain for each polity.
+        pol_chain: dict[int, list[int]] = {}
+        for pol in polities:
+            chain: list[int] = []
+            cur: Optional[Polity] = pol
+            while cur is not None:
+                chain.append(cur.polity_id)
+                cur = pol_by_id.get(cur.liege) if cur.liege is not None else None
+            chain.reverse()
+            pol_chain[pol.polity_id] = chain
+
+        # ancestor_at[d, face] = polity_id of the face's ancestor at depth d
+        # (clamped to the deepest ancestor when depth exceeds chain length).
+        ancestor_at = np.full((max_depth + 1, n), -1, dtype=np.int32)
+        for face_idx in range(n):
+            if is_water[face_idx]:
+                continue
+            pid = int(polity_of_face[face_idx])
+            if pid < 0:
+                continue
+            chain = pol_chain.get(pid, [pid])
+            for d in range(max_depth + 1):
+                ancestor_at[d, face_idx] = chain[min(d, len(chain) - 1)]
+
+        vertices = np.asarray(mesh.vertices, dtype=np.float32)
+        faces = mesh.faces
+
+        by_depth: dict[int, list] = {}
+        for face_a, neighbors in enumerate(mesh.face_adjacency):
+            if is_water[face_a]:
+                continue
+            verts_a = set(faces[face_a])
+            for face_b in neighbors:
+                if face_b <= face_a:
+                    continue
+                if is_water[face_b]:
+                    continue
+                # Skip if both unclaimed.
+                if ancestor_at[0, face_a] < 0 and ancestor_at[0, face_b] < 0:
+                    continue
+                # Find the shallowest depth where they differ.
+                border_depth = -1
+                for d in range(max_depth + 1):
+                    if ancestor_at[d, face_a] != ancestor_at[d, face_b]:
+                        border_depth = d
+                        break
+                if border_depth < 0:
+                    continue
+                shared = list(verts_a & set(faces[face_b]))
+                if len(shared) != 2:
+                    continue
+                seg = np.concatenate([vertices[shared[0]], vertices[shared[1]]])
+                by_depth.setdefault(border_depth, []).append(seg)
+
+        return {d: np.array(segs, dtype=np.float32) for d, segs in by_depth.items()}
 
     def _finalize_empty(self, mesh, world) -> None:
         n = len(mesh.faces)
@@ -289,7 +366,7 @@ class PolityStage(Stage):
         self.face_tension = face_tension
         self.pair_tension = pair_tension
         self._write_outputs(mesh, world, polities, polity_of_face, sovereign_of_face, control_of_face, face_tension,
-                            pair_tension)
+                            pair_tension, np.zeros(n, dtype=bool))
 
     def _dump_tree(self, ctx: BuildContext) -> None:
         for pol in (self.polities or []):
@@ -308,6 +385,8 @@ class PolityStage(Stage):
             reg.add_scheme("Polities", disp.make_polity_tree_color(self.polities))
         if self.face_tension is not None:
             reg.add_scheme("Border Tension", disp.tension_color)
+        if world is not None and world.has_feature("polity_borders"):
+            reg.add_overlay("polity_borders", "Polity Borders")
         if debug:
             if self.sovereign_of_face is not None:
                 reg.add_scheme("Sovereigns", disp.sovereign_color)
