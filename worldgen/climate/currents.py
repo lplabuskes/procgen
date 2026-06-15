@@ -80,19 +80,7 @@ def _tangent_gradient(face_centroids: np.ndarray,
                       face_adjacency: Sequence[Sequence[int]],
                       face_field: np.ndarray,
                       earth_radius_km: float = EARTH_RADIUS_KM) -> np.ndarray:
-    """Per-face least-squares gradient of a scalar (or vector) face field.
-
-    Args:
-        face_centroids: (N, 3) unit-sphere face positions.
-        face_adjacency: per-face neighbour index lists.
-        face_field: (N,) for a scalar, or (N, K) for K independent scalar
-            fields (e.g. the east/north components of a vector field).
-
-    Returns:
-        (N, 2) or (N, 2, K) gradient in the per-face (east, north) basis,
-        in units of (field-unit) / km. Faces with degenerate neighbourhoods
-        get the minimum-norm pinv solution (typically zero).
-    """
+    """Per-face least-squares gradient; returns (N, 2) or (N, 2, K) in (field-unit)/km."""
     n = face_centroids.shape[0]
     east, north = _tangent_frames(face_centroids)
 

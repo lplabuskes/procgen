@@ -198,14 +198,10 @@ def _is_built(b: "ClimateBuilder") -> TypeGuard[_ClimateBuilt]:
 
 
 class ClimateBuilder(Stage):
-    """Runs the first climate pass on a built elevation mesh (a pipeline ``Stage``).
+    """Pipeline Stage: first climate pass; attaches temperature/precipitation/biome textures.
 
-    ``build(ctx)`` reads the mesh and its ``"elevation"`` texture from the world.
-    Attaches `temperature` (N,H,W,4 float32 °C), `precipitation` (N,H,W,4
-    float32 mm/season), and `biome` (N,H,W,1 uint8) textures, and writes
-    per-face aggregates into `mesh.face_metadata`. Intermediate per-face
-    results are kept as attributes so downstream code (display, future
-    currents stage) can read them without re-running anything.
+    Intermediate per-face results are kept as instance attributes so downstream
+    stages can read them without re-running any work.
     """
 
     name = "climate"
@@ -419,14 +415,10 @@ class ClimateBuilder(Stage):
         lake_mask_tex: np.ndarray,
         progress: Optional[Callable[[str], None]] = None,
     ) -> None:
-        """Add lake evaporation as an extra moisture source, then refresh precipitation and biomes.
+        """Add lake evaporation as a moisture source, then refresh precipitation and biomes.
 
-        Lakes are open-water evaporation sources proportional to their area and
-        temperature. This single correction pass approximates the hydrology→climate
-        feedback without re-running the full pipeline.
-
-        Call after build() and after HydrologyBuilder.build() has attached the
-        lake_mask texture to the mesh.
+        Single correction pass approximating the hydrology→climate feedback; must be called
+        after build() and after HydrologyBuilder has attached the lake_mask texture.
         """
         if not _is_built(self):
             raise RuntimeError("ClimateBuilder.build() must be called first")
@@ -641,11 +633,7 @@ class ClimateBuilder(Stage):
 
 
 class ClimateLakeFeedbackStage(Stage):
-    """Second climate pass: lake evaporation feedback (runs after hydrology).
-
-    Shares the :class:`ClimateBuilder` instance so it reuses the per-face climate
-    state computed in the first pass.
-    """
+    """Second climate pass: lake evaporation feedback; shares ClimateBuilder state from pass 1."""
 
     name = "climate_lake_feedback"
 

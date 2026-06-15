@@ -15,13 +15,8 @@ def generate_plates(
 ) -> List[int]:
     """Assign each face to a plate via per-plate randomized-priority flood fill.
 
-    Returns a list of length len(mesh.faces) where entry i is the plate id (0-indexed)
-    of face i.  Each step picks a plate uniformly at random (so frontier size gives no
-    compounding advantage) and expands it one face using a distance-biased heap so
-    that cells closer to the seed are preferred, producing compact plates.
-
-    compactness in [0, 1]: 0 = fully random priority (snaky), 1 = pure distance
-    (circular). Default 0.7 gives compact plates with irregular borders.
+    Each step picks a plate uniformly at random (so frontier size gives no compounding
+    advantage) and expands it one face using a distance-biased heap (compactness knob).
     """
     rng = random.Random(seed)
     n_faces = len(mesh.faces)
@@ -100,13 +95,7 @@ def compute_plate_centroids(
     plate_ids: List[int],
     n_plates: int,
 ) -> tuple[np.ndarray, List[int]]:
-    """Return unit-sphere plate centroids and the index of each plate's representative face.
-
-    Returns:
-        centroids: (n_plates, 3) float64 array of unit-sphere centroids.
-        centroid_faces: centroid_faces[k] is the face in plate k whose centroid is
-            closest to the plate's geometric center.
-    """
+    """Return (centroids, centroid_faces): unit-sphere plate centroids and nearest-center face per plate."""
     face_centroids = mesh.face_centroids
     ids = np.array(plate_ids, dtype=np.int32)
 

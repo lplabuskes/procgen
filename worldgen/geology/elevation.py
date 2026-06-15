@@ -64,24 +64,9 @@ def compute_face_elevations(
     max_hops: int = 8,
     rate_norm: float = 1.0,
 ) -> np.ndarray:
-    """Compute elevation (km) for each face based on plate type and boundary effects.
+    """Compute per-face elevation (km) from plate type and boundary effects.
 
-    Baseline elevation is set by plate type (oceanic/continental). Each boundary face
-    receives a delta based on boundary type, convergence rate, and neighboring plate
-    type context. That delta is then propagated outward via BFS with exponential decay
-    over hop distance.
-
-    Args:
-        mesh: The dual polygon mesh.
-        plate_types_by_face: Per-face plate type string ('oceanic' or 'continental').
-        boundary_data: Per-face dicts from classify_plate_boundaries(), containing
-            boundary_type, normal_avg, and neighbor_plate_types.
-        decay_rate: Controls how fast boundary effects decay with hop distance.
-            elevation_contribution = delta * exp(-decay_rate * hops).
-        max_hops: Maximum BFS hops each boundary face influences.
-
-    Returns:
-        float64 array of shape (n_faces,) with elevation in km.
+    Boundary deltas are propagated outward via BFS with exponential decay over hop distance.
     """
     n_faces = len(mesh.faces)
     adjacency = mesh.face_adjacency
@@ -136,21 +121,8 @@ def compute_erosion(
 ) -> np.ndarray:
     """Apply hydraulic then thermal erosion to face-level elevations.
 
-    Hydraulic pass: iteratively fills local sinks (priority-queue fill to lowest
-    outflow neighbor), then erodes high faces proportional to flow volume received
-    from uphill neighbors, depositing sediment on the receiving face.
-
-    Thermal pass: for each face, if the elevation difference to a neighbor exceeds
-    `thermal_talus` (km), transfer `thermal_erosion_rate` of the excess to that
-    neighbor (gravity-driven slumping).
-
-    Args:
-        mesh: The dual polygon mesh.
-        elevations: Per-face elevations in km, shape (n_faces,).
-        params: `FaceErosionParams` — hydraulic/thermal iteration counts and rates.
-
-    Returns:
-        float64 array of shape (n_faces,) with eroded elevations.
+    Hydraulic pass: fill sinks → accumulate flow downhill → erode high faces and deposit at sinks.
+    Thermal pass: transfer elevation across edges exceeding the talus angle (gravity slumping).
     """
     hydraulic_iterations = params.hydraulic_iterations
     hydraulic_erosion_rate = params.hydraulic_erosion_rate
@@ -243,21 +215,8 @@ def compute_noise_elevation_deltas(
 ) -> np.ndarray:
     """Per-pixel fBm simplex noise at uniform amplitude across all faces.
 
-    Fully vectorized — evaluates all pixels in one numpy pass per octave.
-
-    The fBm sum is band-limited to the pixel grid: octaves whose spatial
-    frequency exceeds `nyquist_safety / max_pixel_spacing` (cycles per unit)
-    are skipped, where `max_pixel_spacing` is the largest adjacent-pixel 3D
-    distance across the whole mesh. Without this, high-frequency octaves
-    alias against the per-face pixel grids, and because adjacent faces sample
-    the same continuous noise field on slightly different grids, bilinear
-    reconstruction near a shared edge gives different values on each side —
-    a visible seam. `nyquist_safety=0.5` keeps the highest octave at no more
-    than ~4 samples per cycle.
-
-    Returns:
-        float32 array of shape (N_faces, tex_size, tex_size, 1).
-        Channel 0 = noise delta in km.
+    Band-limited to the pixel grid: octaves above nyquist_safety/max_pixel_spacing are
+    skipped to prevent aliasing across face UV boundaries (which appears as seams).
     """
     n_faces = len(mesh.faces)
     positions = mesh.face_texture_positions(tex_size, tex_size)  # (N, H, W, 3)
@@ -299,14 +258,6 @@ def compute_noise_elevation_deltas(
 
 
 def face_elevations_from_texture(elevation_textures: np.ndarray) -> np.ndarray:
-    """Derive per-face elevation by averaging the elevation channel over each face's texture pixels.
-
-    Args:
-        elevation_textures: float32 (N, H, W, 1); channel 0 is elevation in km.
-
-    Returns:
-        float64 array of shape (N,) with mean elevation per face.
-    """
     return elevation_textures[:, :, :, 0].mean(axis=(1, 2)).astype(np.float64)
 
 
@@ -315,19 +266,10 @@ def rasterize_face_values(
     face_values: np.ndarray,
     tex_size: int,
 ) -> np.ndarray:
-    """Rasterize per-face scalar or multi-channel values to per-pixel textures.
+    """Rasterize per-face scalars to per-pixel textures via vertex averaging + barycentric interp.
 
-    Average face values onto shared vertices, then barycentric-interpolate
-    within each face's fan triangles.  Adjacent faces share the same vertex
-    values, so rasterized values agree continuously across face boundaries.
-
-    Args:
-        mesh: PolygonMesh with _face_vertex_uvs populated.
-        face_values: (N,) or (N, K) float array.
-        tex_size: Output resolution; textures are tex_size × tex_size.
-
-    Returns:
-        float32 (N, tex_size, tex_size, K).  K=1 when face_values is 1-D.
+    Adjacent faces share vertex values, so rasterized values agree continuously across boundaries.
+    Returns float32 (N, tex_size, tex_size, K); K=1 when face_values is 1-D.
     """
     values = np.asarray(face_values, dtype=np.float64)
     if values.ndim == 1:
@@ -414,20 +356,7 @@ def smooth_texture_seams(
     textures: np.ndarray,
     n_passes: int = 1,
 ) -> np.ndarray:
-    """Average matched boundary pixel pairs across face edges to close seams.
-
-    Works on textures of any number of channels K.  One pass fully closes
-    the gap at boundary pixels; additional passes propagate smoothing one
-    pixel inward per pass.
-
-    Args:
-        mesh: PolygonMesh.
-        textures: float (N, H, W, K); modified in place.
-        n_passes: Number of averaging passes.
-
-    Returns:
-        The modified textures array (same object).
-    """
+    """Average matched boundary pixel pairs across face edges to close texture seams."""
     tex_size = textures.shape[1]
     fa, fb, ra, ca, rb, cb = mesh.boundary_pixel_pairs(tex_size)
     if fa.size == 0:
@@ -456,12 +385,7 @@ def compute_elevation_textures(
     elevations: np.ndarray,
     tex_size: int = 32,
 ) -> np.ndarray:
-    """Per-face elevation textures for smooth cross-face gradients.
-
-    Returns:
-        float32 array of shape (N_faces, tex_size, tex_size, 1).
-        Channel 0 = elevation in km.
-    """
+    """Rasterize per-face elevations; returns float32 (N, tex_size, tex_size, 1) in km."""
     return rasterize_face_values(mesh, elevations, tex_size)
 
 
@@ -470,16 +394,6 @@ def smooth_elevation_seams(
     elevation_textures: np.ndarray,
     n_passes: int = 1,
 ) -> np.ndarray:
-    """Reduce elevation discontinuities at face boundaries by averaging matched seam pixels.
-
-    Args:
-        mesh: PolygonMesh.
-        elevation_textures: float32 (N, H, W, 1); modified in place.
-        n_passes: Number of averaging passes.
-
-    Returns:
-        The modified elevation_textures array (same object).
-    """
     return smooth_texture_seams(mesh, elevation_textures, n_passes)
 
 
@@ -491,22 +405,10 @@ def compute_ocean_mask_texture(
 ) -> np.ndarray:
     """Pixel-level ocean flood fill using exact cross-face pixel pairs.
 
-    Phase 1 — seed faces: faces whose MAXIMUM pixel elevation is at or below
-    `seed_level` are unambiguously ocean and seed the face BFS.
-
-    Phase 2 — face BFS: expands from seed faces to adjacent faces whose max
-    elevation is at or below `sea_level`.  This connects marginal faces to the
-    open ocean without allowing isolated sub-sea-level depressions to qualify.
-
-    Phase 3 — pixel BFS: seeds all pixels of core ocean faces, then propagates
-    via two edge types:
-      • Intra-face: 4-connected moves to pixels at or below `sea_level`.
-      • Cross-face: matched pixel pairs from `_iter_boundary_pixel_pairs` whose
-        partner is at or below `sea_level`.  Isolated sub-sea-level depressions
-        unreachable from any core ocean face remain land.
-
-    Returns:
-        uint8 (N, H, W, 1) with 1 = ocean pixel, 0 = land pixel.
+    Phase 1: faces with max elevation ≤ seed_level seed the BFS.
+    Phase 2: face BFS expands to adjacent faces with max elevation ≤ sea_level.
+    Phase 3: pixel BFS propagates 4-connected intra-face and cross-face via matched pairs.
+    Isolated sub-sea-level depressions unreachable from any ocean seed remain land.
     """
     N, H, W, _ = elevation_textures.shape
     elevs = elevation_textures[:, :, :, 0]    # (N, H, W)

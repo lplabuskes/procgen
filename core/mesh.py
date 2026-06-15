@@ -43,17 +43,7 @@ def _edge_band_batch(
     grid_v: np.ndarray,
     tol_sq: float,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Vectorised :func:`_edge_pixels` over many edges at once.
-
-    Args:
-        p0, p1: (E, 2) edge endpoints in UV.
-        grid_u, grid_v: (P,) flattened pixel-centre UV coords (P = tex_size²).
-        tol_sq: squared perpendicular tolerance.
-
-    Returns:
-        (t, mask) each (E, P), computed identically to ``_edge_pixels`` so the
-        downstream matching reproduces it bit-for-bit.
-    """
+    """Vectorised _edge_pixels over many edges; returns (t, mask) each (E, P)."""
     edge = p1 - p0                                       # (E, 2)
     elen_sq = (edge * edge).sum(axis=1)                  # (E,)
     safe = elen_sq >= 1e-12
@@ -193,14 +183,7 @@ class PolygonMesh:
         self.face_metadata[face_idx].update(metadata)
 
     def set_face_textures(self, name: str, textures: np.ndarray, n_channels: int = 4) -> None:
-        """Add or replace a named texture layer.
-
-        Shape must be (N_faces, H, W, n_channels). Dtype must be float32, float16,
-        or uint8. Use n_channels=4 for display textures (RGBA); use n_channels=1 for
-        single-channel data layers (elevation, lake mask, biome index, etc.).
-        Dtype is preserved as-is — pass uint8 for integer-index layers, float16
-        for bounded continuous data, float32 for everything else.
-        """
+        """Add or replace a named texture layer; shape must be (N, H, W, n_channels)."""
         if textures.ndim != 4:
             raise ValueError(f"textures must be 4-D (N, H, W, C), got shape {textures.shape}")
         if textures.shape[0] != len(self.faces):
@@ -224,19 +207,10 @@ class PolygonMesh:
             self.face_metadata[face_idx][key] = value
 
     def face_tangent_frames(self):
-        """Return pre-computed per-face tangent-plane data.
+        """Return (u_axes, v_axes, u_offsets, v_offsets, u_ranges, v_ranges, vertex_uvs).
 
-        Returns (u_axes, v_axes, u_offsets, v_offsets, u_ranges, v_ranges, vertex_uvs):
-        - u_axes, v_axes: float32 (n_faces, 3) — orthonormal tangent-plane axes
-        - u_offsets, v_offsets: float32 (n_faces,) — min projected coord per axis
-        - u_ranges, v_ranges: float32 (n_faces,) — coord span per axis
-        - vertex_uvs: list of (n_v, 2) float32 — per-face vertex UV coords in [0, 1]²
-
-        To project a 3D point p onto face i's UV plane:
-            offset = p - _tangent_centroids[i]
-            u_norm = (dot(offset, u_axes[i]) - u_offsets[i]) / u_ranges[i]
-            v_norm = (dot(offset, v_axes[i]) - v_offsets[i]) / v_ranges[i]
-        The face centroid maps to UV (-u_offsets[i]/u_ranges[i], -v_offsets[i]/v_ranges[i]).
+        Project 3D point p onto face i: offset = p - _tangent_centroids[i];
+        u = (dot(offset, u_axes[i]) - u_offsets[i]) / u_ranges[i], similarly for v.
         """
         return (
             self._u_axes,
@@ -268,13 +242,7 @@ class PolygonMesh:
         return u, v
 
     def iter_boundary_pixel_pairs(self, tex_size: int):
-        """Yield (face_a, face_b, r_a, c_a, r_b, c_b) for every matched seam pixel pair.
-
-        For each pair of adjacent faces sharing exactly 2 vertices, finds the
-        pixels in each face's UV grid that lie within ~0.75 pixel of the shared
-        edge, then matches them by their parameter t along that edge.  Yields
-        each matched pair exactly once (face_a < face_b always).
-        """
+        """Yield (face_a, face_b, r_a, c_a, r_b, c_b) for matched cross-edge pixel pairs."""
         coords = np.linspace(0.0, 1.0, tex_size)
         u_grid, v_grid = np.meshgrid(coords, coords)
         tol_sq = (0.75 / (tex_size - 1)) ** 2
@@ -310,12 +278,7 @@ class PolygonMesh:
                     yield face_a, face_b, r_a, c_a, r_b, c_b
 
     def _compute_boundary_pairs(self, tex_size: int) -> Tuple[np.ndarray, ...]:
-        """Batched equivalent of consuming :meth:`iter_boundary_pixel_pairs`.
-
-        Computes the edge-band geometry for both sides of every shared edge in
-        two vectorised passes, then runs the same per-pair t-matching. Produces
-        the six pair arrays in the exact same order the generator yields them.
-        """
+        """Batched vectorised equivalent of iter_boundary_pixel_pairs."""
         coords = np.linspace(0.0, 1.0, tex_size)
         u_grid, v_grid = np.meshgrid(coords, coords)
         grid_u = u_grid.reshape(-1)                       # flat index = row*tex_size + col
@@ -399,15 +362,9 @@ class PolygonMesh:
         )
 
     def boundary_pixel_pairs(self, tex_size: int) -> Tuple[np.ndarray, ...]:
-        """Cached matched seam pixel pairs for an `tex_size`×`tex_size` grid.
+        """Cached (face_a, face_b, row_a, col_a, row_b, col_b) matched seam pixel pairs.
 
-        Returns six parallel int32 arrays
-        ``(face_a, face_b, row_a, col_a, row_b, col_b)`` — one entry per matched
-        cross-edge pixel pair (always ``face_a < face_b``). The pairing is a pure
-        function of mesh geometry and `tex_size`, so it is computed once (batched,
-        equivalent to consuming :meth:`iter_boundary_pixel_pairs`) and cached;
-        subsequent seam-smoothing, ocean-mask, and jump-measurement passes reuse
-        the arrays instead of re-deriving every pair. Treat the result read-only.
+        Computed once per tex_size and cached; result is read-only.
         """
         cached = self._boundary_pair_cache.get(tex_size)
         if cached is not None:
@@ -418,14 +375,7 @@ class PolygonMesh:
         return result
 
     def measure_boundary_texture_jumps(self, texture: np.ndarray) -> Dict[str, float]:
-        """Measure discontinuities in a (N, H, W, C) texture at face boundaries.
-
-        For each matched seam pixel pair the mean absolute difference across all
-        C channels is computed; summary statistics are returned over all pairs.
-
-        Returns:
-            dict with keys mean, median, max, rms, n_pairs (in texture units).
-        """
+        """Mean absolute difference per matched seam pair; returns {mean, median, max, rms, n_pairs}."""
         tex_size = texture.shape[1]
         fa, fb, ra, ca, rb, cb = self.boundary_pixel_pairs(tex_size)
         if fa.size == 0:
@@ -444,23 +394,11 @@ class PolygonMesh:
         }
 
     def face_texture_positions(self, h: int, w: int) -> np.ndarray:
-        """Return unit-sphere 3D positions for an (H, W) texture grid over every face.
+        """Return float32 (N, H, W, 3) unit-sphere positions for each face's pixel grid.
 
-        For each pixel UV, finds the fan triangle (same fan triangulation the renderer
-        uses) containing that UV, computes barycentric coordinates in UV space, and
-        interpolates the triangle's actual 3D mesh-vertex positions before normalizing
-        to the unit sphere. Because adjacent faces share their edge vertices, pixels
-        sitting on a shared edge map to the same great-circle 3D point in both
-        neighboring faces — so per-pixel sphere-coordinate computations (e.g. 3D
-        simplex noise) are naturally continuous across face boundaries.
-
-        Pixels whose UV falls outside the polygon (in the four corners of the [0,1]²
-        bounding box) are assigned to whichever fan triangle they fit "least badly"
-        (largest minimum barycentric); the resulting linear extrapolation keeps edge-
-        adjacent pixels well-behaved for bilinear texture filtering.
-
-        Returns:
-            float32 array of shape (N_faces, H, W, 3).
+        Adjacent faces share edge vertices, so shared-edge pixels map to the same 3D point
+        in both faces (continuous across boundaries). Corner pixels outside the polygon are
+        assigned to the nearest fan triangle by largest-minimum-barycentric extrapolation.
         """
         u_coords = np.linspace(0.0, 1.0, w, dtype=np.float64)
         v_coords = np.linspace(0.0, 1.0, h, dtype=np.float64)

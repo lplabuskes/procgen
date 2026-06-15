@@ -1,10 +1,7 @@
 """River generation via per-face grid sampling and D-infinity routing.
 
-Priority-Flood fills depressions; D-infinity routes flow; rivers are routed
-along the single-receiver accumulation tree and decomposed into main stems and
-tributaries (Hack ordering).
-
-Sibling modules: types.py, crossings.py, stitching.py, routing.py.
+Priority-Flood fills depressions; D-infinity routes flow; rivers follow the
+single-receiver accumulation tree, decomposed into main stems and tributaries (Hack ordering).
 """
 from __future__ import annotations
 

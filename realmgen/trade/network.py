@@ -1,41 +1,15 @@
 """Trade network — two-phase flow accumulation on the hybrid land/sea cost graph.
 
-Phase 1 — Resources to settlements
-    Each deposit routes to its nearest settlement (by hybrid cost).  Short,
-    local routes.  The settlement accumulates the raw abundance as "goods,"
-    tracked per good type.
+Phase 1: each resource deposit routes to its nearest settlement; settlement accumulates goods.
+Phase 2: each settlement routes goods to all others, modulated by rarity and destination supply:
 
-Phase 2 — Inter-settlement trade
-    Each settlement with goods routes to every other settlement.  Flow is
-    modulated by good-type rarity and the destination's local supply:
+    demand_modifier[dst, g] = 1 − local_supply_fraction[dst, g]
+    flow = Σ_g(goods[src,g] × rarity[g] × demand_modifier[dst,g])
+           × settlement_demand[dst] × exp(−flow_decay × cost)
 
-        demand_modifier[dst, g] = 1 − local_supply_fraction[dst, g]
-        flow = Σ_g(goods[src,g] × rarity[g] × demand_modifier[dst,g])
-               × settlement_demand[dst] × exp(−flow_decay × cost)
-
-    A settlement already rich in silk therefore has low demand for more silk
-    but still wants spices it doesn't locally produce — producing realistic
-    long-distance routes for rare goods.
-
-The underlying graph is (2N, 2N): land nodes 0..N-1, sea nodes N..2N-1.
-Surface switching happens at navigable-river faces (amphibious, zero cost) and
-at coastal port transitions (land face ↔ adjacent sea face, port_cost).
-
-A single undirected multi-source Dijkstra from all settlement nodes provides
-both the nearest-settlement assignment (Phase 1) and inter-settlement distances
-(Phase 2) in one pass.
-
-Node indexing
--------------
-- Land node for face i: index i
-- Sea node for face i: index i + N
-
-Good-type IDs
--------------
-Type IDs are assigned by the caller (realmgen.builder).  The namespace used
-in practice: minerals occupy 0..N_MINERAL_TYPES-1, rare bio occupy
-N_MINERAL_TYPES..N_MINERAL_TYPES+N_RARE_BIO_TYPES-1.  See GOOD_RARITY_WEIGHTS
-for per-type values.
+A settlement rich in silk has low silk demand but high spice demand, producing realistic
+long-distance routes for rare goods. One undirected multi-source Dijkstra from all
+settlements covers both phases. Land node i = i; sea node i = i + N.
 """
 from __future__ import annotations
 
@@ -89,12 +63,7 @@ class TradeResult:
     face_flow: np.ndarray   # (N,) float32 — aggregate trade flow across all good types
     hub_mask: np.ndarray    # (N,) bool — high-flow junction faces
     routes: list            # [(start_3d, end_3d, flow)] segments above display threshold
-    # (S, S) float32 — directional inter-settlement trade attribution.  ``pair_flow[i, j]``
-    # is the Phase-2 flow that settlement *i* (exporter) sends to settlement *j* (importer),
-    # before path decay is shared out over the route.  Row ``i`` = exports, column ``j`` =
-    # imports.  Index-aligned with the ``settlements`` argument.  Lets downstream consumers
-    # attribute a settlement's trade wealth to specific partners (economic-grip / peripheral-
-    # wealth levers in the polity stage) rather than seeing only the aggregate ``face_flow``.
+    # (S, S) float32 — Phase-2 flow from settlement i (exporter) to j (importer); index-aligned with settlements arg
     pair_flow: np.ndarray = field(default_factory=lambda: np.zeros((0, 0), dtype=np.float32))
 
 

@@ -142,14 +142,7 @@ def _is_built(b: "ElevationBuilder") -> TypeGuard[_ElevationBuilt]:
 
 
 class ElevationBuilder(Stage):
-    """Decorates the world mesh with the elevation/tectonics layers.
-
-    A pipeline ``Stage``: ``build(ctx)`` reads the mesh the ``World`` already
-    owns (``ctx.mesh``), runs every sub-step, and stores the intermediate results
-    as attributes so callers (visualization, downstream stages, scripts) can read
-    them without re-running any work. The ``seed`` (the world seed, passed in by
-    the orchestrator) keys the name-keyed sub-seed draws.
-    """
+    """Pipeline Stage: builds elevation/tectonics layers onto ctx.mesh."""
 
     name = "elevation"
 
