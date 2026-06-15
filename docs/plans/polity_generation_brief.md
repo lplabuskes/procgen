@@ -8,10 +8,11 @@ into the physical simulation. Downstream consumers (trade, border forts) read th
 layer; they do not feed into it during generation.
 
 **Inputs (read-only) — actual availability (see per-stage flags for detail):**
-- **Settlements** (`world.get_feature("settlements")` → list of `Settlement`): only
-  `face_id`, `position`, `tier`, `score`, `population`. `tier` is a *seeding label* that
-  nothing downstream reads — key off `population`. **No** `archetype`, `walls`,
-  defensibility, or water-adjacency fields exist; derive them.
+- **Settlements** (`world.get_feature("settlements")` → list of `Settlement`):
+  `face_id`, `position`, `tier`, `score`, `population`, `defensibility`, `has_walls`,
+  `wall_strength`. `tier` is a *seeding label* nothing downstream reads — key off `population`.
+  `defensibility` is the composite multiplier (terrain + river + walls) stamped by
+  `PopulationStage`. **No** `archetype` or water-adjacency fields exist.
 - **Per-settlement trade wealth**: *not* on the record. It is `population_stage.trade_wealth`
   (an `(S,)` array aligned with `settlements`) and per-face via the `TRADE_FLOW` channel
   (= flow sampled at the settlement face).
@@ -32,27 +33,27 @@ or independent — and to let those decisions recurse.
 
 ---
 
-## Starting point in the codebase
+## Current state of the codebase
 
-`PolityStage` (`realmgen/polity/builder.py`) already exists and runs **last** in
-`RealmPipeline` (scoring → placement → population → polity), so settlements carry their
-final populations and trade flow. What it does today is **one flat pass**: a power-weighted
-Voronoi partition (`grow_territory`) keyed on population, plus a post-hoc border-tension
-score. No hierarchy, no per-polity scalar, no sea projection. Treat the brief as a rewrite
-of Stages 1–3 that *reuses* the existing pieces, not a greenfield build:
+**Stages 0–3 are fully implemented.** `PolityStage` runs last in `RealmPipeline`, and
+`ForestBuilder` (`realmgen/polity/forest.py`) drives the complete sovereign/vassal tree:
 
-- **Authority field ≈ existing cost-distance.** `grow_territory` already runs a multi-source
-  Dijkstra for `cost_dist[capital, face]`, then takes `argmin`. The brief's projection field
-  is the same `cost_dist` with `exp(-cost/range)` applied instead — a small change, not new
-  infrastructure. (This also makes the Stage-1 saddle check trivial to prototype.)
-- **`Polity` record is flat** (`polity_id, capital_face, capital_position, power, n_faces,
-  member_settlement_faces`). The forest output needs `liege`, `autonomy`, `control_class`,
-  and sub-territory added (Stage 0).
-- **No RNG.** The stage is fully deterministic with no seeded generator. Every per-polity
-  scalar (`cohesion`, `infrastructure`, `legitimacy`, `maritime_reach`) needs one — thread a
-  `Generator` off `ctx.world.seed`.
-- **`power` = population.** Both "projected authority" and "local power" collapse to
-  population today; the direct/vassal/independent comparison is entirely new.
+- **Stage 0**: capitals seeded by `seed_capitals` (weighted by population × trade × defensibility),
+  per-polity scalars rolled by `roll_polity_scalars` (deterministic, keyed on `world.seed` + face).
+  `Settlement` now carries `defensibility`, `has_walls`, and `wall_strength` — computed in
+  `PopulationStage` by `compute_settlement_defensibility` (terrain + river + walls), so trade
+  wealth is available when walls are rolled.
+- **Stage 1**: `compute_authority_fields` projects land + sea authority fields (`(C, N)`) from
+  each capital via exponential decay over cost-distance, with range modulated by `infrastructure`
+  and a sea channel scaled by `maritime_reach` and `sea_range_factor`.
+- **Stage 2**: `claim_faces` argmax-assigns every land face with an incumbent-hysteresis bonus,
+  iterated to a fixed point. An outer loop promotes INDEPENDENT settlements to new sovereigns.
+- **Stage 3**: `classify_settlements` labels each settlement DIRECT/VASSAL/INDEPENDENT by
+  comparing `capital_power^e × field × gain` vs `population^e × defensibility`; `_build_subtree`
+  recurses for vassals (capped by `max_recursion_depth`).
+
+**Outstanding work is Stage 4 tuning levers and Stage 5 fragmentation epochs** — described below.
+The "Starting point" context in earlier drafts of this brief is now superseded by the above.
 
 ### Every settlement here is significant — tune accordingly
 
@@ -111,17 +112,21 @@ Seed candidate capitals from top-tier settlements, weighted by trade wealth and 
 **Validation:** N capitals seeded, no duplicates, weighting visibly favors high-tier/defensible
 settlements. Inspect by dumping seed list with weights.
 
-> ✅ **Resolved — settlement records.** `Settlement` (`realmgen/placement/types.py`) =
-> `face_id, position, tier, score, population` only. `tier` is a seeding label nothing
-> downstream reads — weight capitals by `population`. Trade wealth for trade-weighted seeding
-> is `population_stage.trade_wealth` (`(S,)`, aligned with `settlements`) or the per-face
-> `TRADE_FLOW` channel; it is **not** on the record. No `archetype`/`walls`/water-adjacency
-> fields exist — don't reference them.
+> ✅ **Resolved — settlement records.** `Settlement` (`realmgen/placement/types.py`) has
+> five core fields (`face_id, position, tier, score, population`) plus three defensibility
+> fields added in 2026-06: `defensibility: float = 1.0` (composite multiplier consumed by
+> `classify_settlements`), `has_walls: bool = False`, `wall_strength: float = 0.0`. `tier`
+> is a seeding label nothing downstream reads — weight capitals by `population`. Trade wealth
+> for trade-weighted seeding is the per-face `TRADE_FLOW` channel sampled at settlement faces;
+> it is **not** on the record. No `archetype` or water-adjacency fields exist.
 
-> ✅ **Resolved — defensibility.** Not a stored field, and there are **no walls/garrison**
-> anywhere. Derive it: per-face ruggedness already feeds `cs.land_base_cost`
-> (`worldgen/cost/surfaces.py`), and `situational_value` is per-face metadata. Until wall/
-> garrison fields exist, "local power" = `population` + terrain-derived defensibility.
+> ✅ **Resolved — defensibility.** Now stored on `Settlement` and computed in `PopulationStage`
+> (after final trade wealth is known) via `compute_settlement_defensibility`
+> (`realmgen/polity/seeding.py`). Formula: `terrain(ruggedness + situational_value) + river_bonus
+> + wall_strength`. Walls are randomly assigned per settlement using a per-(seed, face) RNG;
+> wall probability is boosted by local danger and trade wealth normalized over the settlement
+> pool. `PolityStage.build()` reads `s.defensibility` directly from each `Settlement` —
+> no re-derivation needed.
 
 ### Stage 1 — Authority projection field (single polity)
 Implement projection from one capital: accumulate travel cost outward over the **land** cost
@@ -151,7 +156,7 @@ authority beads along coastlines, not just a land blob.
 > river-projection bonus is a **surface modifier already present** in the cost graph — no
 > second pass. (Raw `River` geometry is a world feature if you ever need finer adjacency.)
 
-### Stage 2 — Competition / claiming pass
+### Stage 2 — Competition / claiming pass ✅
 Every settlement is claimed by whichever polity projects the most authority over it. Add a
 **hysteresis bonus** for the incumbent claimant so borders settle rather than flicker. Iterate
 until quiescent (no reassignments, or below a churn threshold).
@@ -159,7 +164,11 @@ until quiescent (no reassignments, or below a churn threshold).
 **Validation:** iteration count to convergence is bounded; borders are stable across reruns with
 the same seed; lowering hysteresis visibly increases border churn. Render the partition.
 
-### Stage 3 — Hierarchy classification + recursion
+**Implementation:** `claim_faces` (`realmgen/polity/authority.py`) — argmax with incumbent
+hysteresis, iterated to a fixed point. The outer `_resolve_sovereigns` loop promotes INDEPENDENT
+settlements to new capitals and re-runs claiming until convergence.
+
+### Stage 3 — Hierarchy classification + recursion ✅
 Within each polity, classify each settlement by `projected_authority` vs `local_power`:
 - authority ≫ local power → **direct rule** (province)
 - authority ≈ local power → **vassal** (gets `liege` pointer, an `autonomy` float, its own
@@ -172,31 +181,39 @@ Recurse one level for vassals (cap recursion depth — 2–3 levels is plenty).
 a high-cohesion realm on cheap terrain produces mostly direct rule (Song); an in-between realm
 shows a strong core + semi-independent periphery (France c.1100). Dump the tree per polity.
 
+**Implementation:** `classify_settlements` (`realmgen/polity/authority.py`) — ratio
+`capital_power^e × field × gain / population^e × defensibility`, thresholded by
+`direct_threshold` and `vassal_floor`. `ForestBuilder._build_subtree` recursion carves vassal
+sub-territories, capped by `max_recursion_depth`. Validation harness: `scripts/measure_polities.py`.
+
 ### Stage 4 — Tuning levers
 Apply as modifiers on top of the working base. Group by what they touch so each is independently
 toggleable and inspectable.
 
 **Projection modifiers (change the field):**
-- **Capital archetype bonus.** River-confluence capital → cheaper projection along river network.
-  Coastal → the maritime bonus from Stage 1. Mountain-pass → strong projection in two directions,
-  pinched hinterland. Drive from the settlement's functional archetype.
-- **Maritime reach.** Already in Stage 1; expose `maritime_reach` as trade-wealth-scaled.
+- **Capital archetype bonus.** ❌ *Not implemented.* River-confluence capital → cheaper
+  projection along river network. Coastal → the maritime bonus from Stage 1. Mountain-pass →
+  strong projection in two directions, pinched hinterland. Drive from the settlement's functional
+  archetype. (Archetype fields don't exist yet; would need to be derived or stored.)
+- **Maritime reach.** ✅ *Implemented in Stage 1.* `maritime_reach` scales with capital trade
+  wealth and modulates the sea authority channel via `sea_range_factor` and `sea_weight`.
 
 **Loyalty modifiers (change secession resistance without changing the field):**
-- **Economic grip.** Compute a dependency score per settlement: fraction of its imported rare
-  goods routed through the capital vs alternate routes. High dependency dampens secession even
-  when military authority is low (Venice / Hanse archetype). Vulnerability falls out for free:
-  cut the route, dissolve the loyalty.
-- **External pressure consolidation.** A polity adjacent to a strong rival field or a
-  high-danger-field zone gets a temporary `cohesion` bonus (rally-around-the-flag). Recedes when
-  the pressure does. Feedback with the danger field with no module coupling — danger field stays
-  read-only.
+- **Economic grip.** ⛔ *Blocked — trade route attribution.* See note below. Only aggregate
+  `trade_wealth` is available; per-route provenance needed.
+- **External pressure consolidation.** ❌ *Not implemented.* A polity adjacent to a strong rival
+  field or a high-danger-field zone gets a temporary `cohesion` bonus (rally-around-the-flag).
+  The danger field (`DANGER_ARRAY`) is available and already read by `PolityStage` — the lever
+  logic itself is the remaining work.
 
 **Fragmentation triggers (override classification):**
-- **Marcher autonomy.** Settlements on the boundary between two strong authority fields get an
-  `autonomy` bonus. Reuse the existing border-tension field as the boundary signal.
-- **Peripheral wealth secession.** If a vassal's trade wealth substantially exceeds its liege
-  capital's, flag it as a secession candidate regardless of authority (Lombard-cities pattern).
+- **Marcher autonomy.** ⚠️ *Conflict not resolved.* Border tension is an output of this stage
+  (computed post-classification), so using it as input is chicken-and-egg. Resolution paths:
+  recompute tension inside the classification loop, or switch to the authority-field saddle
+  depth as a proxy for "contested fringe."
+- **Peripheral wealth secession.** ❌ *Not implemented.* Partially blocked (per-route attribution
+  would make this cleaner), but could be approximated from `trade_wealth` alone: flag vassals
+  whose trade wealth substantially exceeds their liege capital's.
 
 **Validation:** toggle each lever individually and confirm the predicted archetype appears —
 a militarily-weak but trade-dependent coastal cluster survives as one polity (economic grip);
@@ -223,10 +240,11 @@ a squeezed peripheral realm tightens then loosens (external pressure); rich vass
 > external-pressure-consolidation lever can now read `DANGER_ARRAY` directly — no field build
 > required. Remaining work is the lever's logic itself.
 
-### Stage 5 — Fragmentation epochs (optional, cheap, high-value)
-Run 2–3 "historical epochs." Each epoch: roll cohesion shocks; any polity whose `cohesion` falls
-below what its territory size demands sheds its weakest-authority vassals as independents, or
-splits along the lowest-authority **saddle** in its field. Re-run Stages 2–4 after each shock.
+### Stage 5 — Fragmentation epochs (optional, cheap, high-value) ❌
+*Not started.* Run 2–3 "historical epochs." Each epoch: roll cohesion shocks; any polity whose
+`cohesion` falls below what its territory size demands sheds its weakest-authority vassals as
+independents, or splits along the lowest-authority **saddle** in its field. Re-run Stages 2–4
+after each shock.
 
 **Validation:** successor-state texture appears (one large realm fragments into a strong core +
 several breakaways along interior low-authority corridors) without simulating real history.
@@ -235,10 +253,17 @@ several breakaways along interior low-authority corridors) without simulating re
 
 ## Implementation order
 
-0 → 1 → 2 → 3 establishes the base partition-to-hierarchy pipeline; validate the three historical
-textures (Song / HRE / France) at the end of Stage 3 **before** touching levers. Stage 4 levers
-are additive and independently toggleable — implement and validate one at a time. Stage 5 is
-optional and should come last.
+**Stages 0–3 are complete.** The base partition-to-hierarchy pipeline is in place. Remaining
+work, in recommended order:
+
+1. **Stage 4 unblocked levers** (implement and validate one at a time):
+   - External pressure consolidation (danger field is available, no new infra needed)
+   - Peripheral wealth secession (approximable from `trade_wealth` without full route attribution)
+   - Capital archetype bonus (requires deriving or storing settlement archetypes first)
+   - Marcher autonomy (resolve border-tension chicken-and-egg; consider authority saddle depth as proxy)
+2. **Stage 4 blocked levers** — Economic grip: blocked until `compute_trade_network` is extended
+   to return per-settlement import/route attribution.
+3. **Stage 5** — Fragmentation epochs: optional; implement after Stage 4 levers are stable.
 
 ## Design guidelines
 - Each stage independently inspectable (heatmap / tree dump / partition render) before integration.

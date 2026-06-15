@@ -70,7 +70,11 @@ Stage reference docs (read the relevant one before working on a stage):
 - [docs/hydrology.md](docs/hydrology.md) — `worldgen/hydrology/`
 - [docs/resources.md](docs/resources.md) — `worldgen/resources/`
 - [docs/cost.md](docs/cost.md) — `worldgen/cost/`
-- [docs/realmgen.md](docs/realmgen.md) — `realmgen/`
+- [docs/realmgen.md](docs/realmgen.md) — `realmgen/` orchestration (`RealmParams`, `DangerInfluenceParams`, `RealmPipeline`)
+- [docs/realm_scoring.md](docs/realm_scoring.md) — `realmgen/scoring/`
+- [docs/realm_placement.md](docs/realm_placement.md) — `realmgen/placement/`
+- [docs/realm_population.md](docs/realm_population.md) — `realmgen/population/`, `realmgen/trade/`
+- [docs/realm_polity.md](docs/realm_polity.md) — `realmgen/polity/`
 
 Historical design specs live in `docs/plans/`.
 
