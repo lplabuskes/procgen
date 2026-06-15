@@ -1,4 +1,4 @@
-"""Profile where time goes in the full globe-generation pipeline.
+"""Profile where time goes in the full worldgen + realmgen pipeline.
 
 Every stage builder threads a ``progress(msg)`` callback that is called once at
 the start of each internal phase. By wrapping that callback with a timer we get
@@ -6,8 +6,9 @@ a per-phase wall-clock breakdown of the entire pipeline without touching any
 builder code — the duration of a phase is simply the gap between its progress
 message and the next one (the final phase is closed when ``build()`` returns).
 
-Phases are rolled up into the five top-level stages (elevation, climate,
-hydrology, lake-feedback, resources) by recognising each stage's first message.
+Phases are rolled up into top-level stages by recognising each stage's first
+message: five worldgen stages (elevation, climate, hydrology, lake_feedback,
+resources) and four realmgen stages (scoring, placement, population, polity).
 
 Usage:
     python3 scripts/profile_pipeline.py              # seed 42, 1 timed run
@@ -16,6 +17,7 @@ Usage:
     python3 scripts/profile_pipeline.py --top 15     # show only 15 slowest phases
     python3 scripts/profile_pipeline.py --cprofile   # cProfile drill-down by function
     python3 scripts/profile_pipeline.py --cprofile --module hydrology
+    python3 scripts/profile_pipeline.py --cprofile --module realmgen/polity
 """
 from __future__ import annotations
 
@@ -28,18 +30,28 @@ from collections import OrderedDict
 from core.pipeline import BuildContext
 from core.world import World
 from worldgen import GlobePipeline, GlobeParams
+from realmgen.builder import RealmPipeline, RealmParams
 from core import mesh_cache
 
 
 # Substring → stage name. The first phase whose message contains the key marks
 # the start of that stage; everything before the first match is "elevation".
 STAGE_MARKERS = [
+    # worldgen
     ("insolation", "climate"),
     ("rivers and lakes", "hydrology"),
     ("lake humidity feedback", "lake_feedback"),
     ("terrain ruggedness", "resources"),
+    # realmgen
+    ("Reading physical layers", "scoring"),
+    ("Building land cost graph", "placement"),
+    ("Building trade network", "population"),
+    ("Seeding sovereign capitals", "polity"),
 ]
-STAGE_ORDER = ["elevation", "climate", "hydrology", "lake_feedback", "resources"]
+STAGE_ORDER = [
+    "elevation", "climate", "hydrology", "lake_feedback", "resources",
+    "scoring", "placement", "population", "polity",
+]
 
 
 class PhaseTimer:
@@ -74,14 +86,14 @@ def _stage_of(msg: str, current: str) -> str:
 
 
 def profile_once(seed: int) -> list[tuple[str, str, float]]:
-    """Run the full pipeline once; return [(stage, phase_msg, duration_s)]."""
+    """Run the full worldgen + realmgen pipeline; return [(stage, phase_msg, duration_s)]."""
     params = GlobeParams()
     params.seed = seed
 
     timer = PhaseTimer()
     ctx = BuildContext(world=World(params.mesh, seed=params.seed), progress=timer)
-    builder = GlobePipeline(params)
-    builder.build(ctx)
+    GlobePipeline(params).build(ctx)
+    RealmPipeline(RealmParams()).build(ctx)
     timer.finish()
 
     rows: list[tuple[str, str, float]] = []
@@ -127,16 +139,19 @@ def run_cprofile(seed: int, module: str, top: int) -> None:
     params.seed = seed
 
     ctx = BuildContext(world=World(params.mesh, seed=params.seed), progress=lambda _msg: None)
-    builder = GlobePipeline(params)
     profiler = cProfile.Profile()
     print(f"Running build under cProfile (seed={seed})…", flush=True)
     profiler.enable()
-    builder.build(ctx)
+    GlobePipeline(params).build(ctx)
+    RealmPipeline(RealmParams()).build(ctx)
     profiler.disable()
 
     restriction: tuple = (top or 25,)
     if module:
-        restriction = (f"worldgen/{module}/", top or 25)
+        # Accept bare name (e.g. "hydrology" → "worldgen/hydrology/")
+        # or a full sub-path (e.g. "realmgen/polity" used as-is).
+        path_filter = module if "/" in module else f"worldgen/{module}/"
+        restriction = (path_filter, top or 25)
 
     stats = pstats.Stats(profiler)
     stats.strip_dirs = lambda: stats  # keep paths so the module filter works

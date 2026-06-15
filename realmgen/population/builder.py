@@ -58,7 +58,7 @@ class TradeSpawnParams:
 
 @paramclass
 class PopulationParams:
-    relaxation_passes: int = _f(4, label="Relaxation passes", min=1, max=5)
+    relaxation_passes: int = _f(2, label="Relaxation passes", min=1, max=5)
     rural_density_max: float = _f(16.0, label="Max rural density (people/km² at fertility 1)", min=1.0, max=100.0)
     fertility_exponent: float = _f(2.0, label="Fertility exponent γ (density contrast)", min=0.5, max=4.0)
     surplus_rate: float = _f(0.15, label="Agricultural surplus rate s", min=0.0, max=0.5)
