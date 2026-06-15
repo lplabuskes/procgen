@@ -31,7 +31,7 @@ After `build(ctx)`, each stage stores its results as attributes. `apply_display(
 
 Writes per-face metadata: `"suitability"`, `"situational_value"`, `"settlement_tier"`, `"trade_flow"`, `"is_trade_hub"`, `"population"` (urban headcount in people), `"rural_population"` (per-face people, land only), `"hinterland_id"`, `"polity_id"` (directly-governing), `"sovereign_id"` (root), `"control_class"`, `"border_tension"`.
 
-Registers features: `"settlements"` (list of `Settlement` with `.population`, `.defensibility`, `.has_walls`, `.wall_strength` set), `"trade_routes"`, `"polities"` (list of `Polity`), `"polity_tensions"` (list of `(a, b, score)`), `"polity_borders"` (`dict[depth, np.ndarray]` with border segment endpoints keyed by hierarchy depth).
+Registers features: `"settlements"` (list of `Settlement` with `.population`, `.defensibility`, `.has_walls`, `.wall_strength` set), `"trade_routes"`, `"polities"` (list of `Polity`), `"polity_history"` (list of `FragmentationEvent` — the Stage 5 secession chronicle for later history generation), `"polity_tensions"` (list of `(a, b, score)`), `"polity_borders"` (`dict[depth, np.ndarray]` with border segment endpoints keyed by hierarchy depth).
 
 ## Key design constraint
 

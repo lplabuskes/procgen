@@ -27,9 +27,9 @@ from realmgen.channels import (
 )
 from realmgen.placement.seeder import build_cost_graph
 from realmgen.polity import display as disp
+from realmgen.polity.epochs import FragmentationEvent, FragmentationParams, run_fragmentation_epochs
 from realmgen.polity.forest import (
     ClaimingParams,
-    ForestBuilder,
     HierarchyParams,
     ProjectionParams,
     _Ctx,
@@ -89,6 +89,9 @@ class PolityParams:
     hierarchy: HierarchyParams = field(
         default_factory=HierarchyParams, metadata={"label": "Hierarchy classification"}
     )
+    fragmentation: FragmentationParams = field(
+        default_factory=FragmentationParams, metadata={"label": "Fragmentation epochs"}
+    )
     tension: BorderTensionParams = field(
         default_factory=BorderTensionParams, metadata={"label": "Border tension"}
     )
@@ -111,6 +114,7 @@ class PolityStage(Stage):
         self.authority_of_face: Optional[np.ndarray] = None
         self.face_tension: Optional[np.ndarray] = None
         self.pair_tension: Optional[dict] = None
+        self.polity_history: List[FragmentationEvent] = []
 
     def build(self, ctx: BuildContext) -> None:
         world, mesh = ctx.world, ctx.mesh
@@ -171,9 +175,10 @@ class PolityStage(Stage):
             face_to_settlement={int(f): k for k, f in enumerate(settlement_faces.tolist())},
         )
 
-        # Stages 1-3 — grow the forest.
-        forest = ForestBuilder(sctx)
-        forest.build(capital_sidx, land_mask, ctx.report)
+        # Stages 1-3 — grow the forest; Stage 5 — fragmentation epochs on top.
+        forest, self.polity_history = run_fragmentation_epochs(
+            sctx, capital_sidx, land_mask, ctx.report, params=p.fragmentation
+        )
         polities = forest.polities
         polity_of_face = forest.polity_of_face
         sovereign_of_face = forest.sovereign_of_face
@@ -271,6 +276,7 @@ class PolityStage(Stage):
         CONTROL_CLASS.write(mesh, control_of_face)
         BORDER_TENSION.write(mesh, face_tension)
         world.add_feature("polities", polities)
+        world.add_feature("polity_history", list(self.polity_history))
         world.add_feature(
             "polity_tensions",
             [(a, b, float(t)) for (a, b), t in sorted(pair_tension.items())],

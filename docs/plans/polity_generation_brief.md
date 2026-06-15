@@ -52,8 +52,9 @@ or independent — and to let those decisions recurse.
   comparing `capital_power^e × field × gain` vs `population^e × defensibility`; `_build_subtree`
   recurses for vassals (capped by `max_recursion_depth`).
 
-**Outstanding work is Stage 4 tuning levers and Stage 5 fragmentation epochs** — described below.
-The "Starting point" context in earlier drafts of this brief is now superseded by the above.
+**Stage 5 fragmentation epochs are now implemented** (see below). Outstanding work is the remaining
+Stage 4 tuning levers. The "Starting point" context in earlier drafts of this brief is now
+superseded by the above.
 
 ### Every settlement here is significant — tune accordingly
 
@@ -240,14 +241,25 @@ a squeezed peripheral realm tightens then loosens (external pressure); rich vass
 > external-pressure-consolidation lever can now read `DANGER_ARRAY` directly — no field build
 > required. Remaining work is the lever's logic itself.
 
-### Stage 5 — Fragmentation epochs (optional, cheap, high-value) ❌
-*Not started.* Run 2–3 "historical epochs." Each epoch: roll cohesion shocks; any polity whose
-`cohesion` falls below what its territory size demands sheds its weakest-authority vassals as
-independents, or splits along the lowest-authority **saddle** in its field. Re-run Stages 2–4
-after each shock.
+### Stage 5 — Fragmentation epochs (optional, cheap, high-value) ✅
+*Implemented* in `realmgen/polity/epochs.py` (`run_fragmentation_epochs`, `select_breakaway_seats`,
+`FragmentationParams`; wired into `PolityStage` as `PolityParams.fragmentation`). Runs `n_epochs`
+"historical epochs" (default 2). Each epoch rolls a per-(seed, capital, epoch) cohesion shock; any
+sovereign whose `cohesion - shock` falls below what its territory size demands
+(`demand = min(domain_face_count / size_reference, 1)`) sheds **one** peripheral seat — its
+weakest-held vassal (highest `autonomy`) if it has vassals, else the lowest-`authority_of_face`
+directly-held settlement (the interior **saddle**). The shed seat is added to the capital set and
+Stages 2–4 are re-run (fresh `ForestBuilder` build); the loop early-outs once an epoch is stable and
+converges because each shed shrinks the domain (lower demand). With `n_epochs == 0` the result is
+the plain Stage 0–3 forest — a modifier, never a rewrite. Every shed is recorded as a
+`FragmentationEvent` (epoch, parent + breakaway capital faces, `kind`, cohesion/shock/demand/domain)
+and exposed as the `polity_history` world feature — a secession chronicle kept as raw material for a
+later history-generation pass.
 
-**Validation:** successor-state texture appears (one large realm fragments into a strong core +
-several breakaways along interior low-authority corridors) without simulating real history.
+**Validation:** `scripts/measure_polities.py` shows successor-state texture — e.g. seed 31's largest
+domain drops 41% → 30% of claimed and sovereign count rises (14 → 25) while breakaways are
+substantial realms (80/61/53/30 faces around a strong 539-face core), not 1-face statelets;
+`corr(infrastructure, vassal_fraction)` stays negative (Song ↔ Mongol axis preserved).
 
 ---
 
@@ -263,7 +275,7 @@ work, in recommended order:
    - Marcher autonomy (resolve border-tension chicken-and-egg; consider authority saddle depth as proxy)
 2. **Stage 4 blocked levers** — Economic grip: blocked until `compute_trade_network` is extended
    to return per-settlement import/route attribution.
-3. **Stage 5** — Fragmentation epochs: optional; implement after Stage 4 levers are stable.
+3. **Stage 5** — Fragmentation epochs: ✅ implemented (`realmgen/polity/epochs.py`).
 
 ## Design guidelines
 - Each stage independently inspectable (heatmap / tree dump / partition render) before integration.

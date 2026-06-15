@@ -21,6 +21,9 @@ knob: a large factor flattens the maritime field into a global plateau that lets
 sea power out-claim every nearer land capital. ``projection.base_range`` sets overall
 reach; ``hierarchy.direct_threshold`` sets where the (post-sea-taming) field puts the
 direct/vassal cutoff; ``hierarchy.vassal_floor`` sets the secession cutoff — re-run, compare.
+``fragmentation`` (Stage 5) runs historical shocks that break over-extended low-cohesion
+empires into successor states: ``n_epochs`` (0 = off), ``shock_scale`` (shock magnitude),
+``size_reference`` (domain face count demanding full cohesion — lower fragments more).
 
 Texture targets (qualitative, from docs/plans/polity_generation_brief.md):
     - a believable mix: a dominant empire + competing kingdoms + city-states;

@@ -4,12 +4,13 @@ Part of `realmgen/`. [Back to realmgen overview](realmgen.md)
 
 ## Overview
 
-A polity is a **tree, not a flat partition** (`docs/plans/polity_generation_brief.md`): sovereigns are roots, vassals are children. The stage seeds sovereign capitals, projects an authority field from each over the land + sea cost surfaces, lets every face be claimed by the strongest projector, then classifies each settlement direct / vassal / independent by comparing projected authority against local power — recursing to carve vassal sub-territories. Per-polity scalars (`cohesion`, `infrastructure`, `legitimacy`, `maritime_reach`) — rolled from a per-capital RNG substream keyed on `world.seed` + capital face — modulate the field; their cross-product is the main generator of variety (Song ↔ Mongol ↔ HRE ↔ city-state belt).
+A polity is a **tree, not a flat partition** (`docs/plans/polity_generation_brief.md`): sovereigns are roots, vassals are children. The stage seeds sovereign capitals, projects an authority field from each over the land + sea cost surfaces, lets every face be claimed by the strongest projector, then classifies each settlement direct / vassal / independent by comparing projected authority against local power — recursing to carve vassal sub-territories. Per-polity scalars (`cohesion`, `infrastructure`, `legitimacy`, `maritime_reach`) — rolled from a per-capital RNG substream keyed on `world.seed` + capital face — modulate the field; their cross-product is the main generator of variety (Song ↔ Mongol ↔ HRE ↔ city-state belt). **Stage 5 fragmentation epochs** then run a few historical shocks on top: over-extended low-cohesion sovereigns shed peripheral seats as new sovereigns and the partition is re-resolved, producing successor-state texture.
 
 ## Files
 
 - `realmgen/polity/builder.py` — `PolityStage`, `PolityParams` (IO, cost graphs, tension, display)
 - `realmgen/polity/forest.py` — `ForestBuilder` + `_Ctx` (the sovereign/vassal tree algorithm)
+- `realmgen/polity/epochs.py` — `FragmentationParams` + `run_fragmentation_epochs` (Stage 5)
 - `realmgen/polity/seeding.py` — defensibility, capital seeding, scalar rolls (Stage 0 pure functions)
 - `realmgen/polity/authority.py` — authority field, claiming, classification (Stages 1-3 pure functions)
 - `realmgen/polity/tension.py` — border-crossing tension
@@ -25,6 +26,7 @@ Sub-paramclasses (consumed location noted):
 - **`projection: ProjectionParams`** (forest.py) — `base_range` (master consolidation knob: larger → fewer, bigger polities), `range_floor`, `sea_range_factor` (× land range for the sea channel), `sea_weight` (sea-channel magnitude vs land), `legitimacy_spread` (±, field magnitude jitter), `maritime_scale` (maritime_reach ← scale × trade_norm), `cohesion_min`, `infrastructure_min`, `infrastructure_emergent` (weight of pop+trade in infrastructure roll)
 - **`claiming: ClaimingParams`** (forest.py) — `hysteresis` (incumbent face-claim bonus), `max_iters` (claim inner loop), `outer_max_iters` (independence-relaxation outer loop), `max_capitals`
 - **`hierarchy: HierarchyParams`** (forest.py) — `direct_threshold` (authority ratio to hold directly), `vassal_floor` (authority ratio floor for vassal), `power_exponent` (0.5 = sqrt of raw population, dampens size dominance), `cohesion_gain_floor`, `cohesion_gain_span`, `max_recursion_depth`
+- **`fragmentation: FragmentationParams`** (epochs.py) — `n_epochs` (historical shocks; 0 = off), `shock_scale` (max downward cohesion roll per epoch), `size_reference` (domain face count demanding full cohesion)
 - **`tension: BorderTensionParams`** (builder.py) — `barrier_scale`, `flow_ref`, `artery_weight`
 
 ## Types (`polity/types.py`)
@@ -55,6 +57,12 @@ Sub-paramclasses (consumed location noted):
 
 `ForestBuilder` threads the pure functions into the tree: `resolve_sovereigns` (claim + promote independents in an outer loop) then `_build_subtree` recursion (carve each sovereign into directly-held core + vassal sub-territories). `_Ctx` holds read-only shared inputs (centroids, settlement arrays, graphs, params).
 
+## Fragmentation epochs (`polity/epochs.py`, Stage 5)
+
+`run_fragmentation_epochs` builds the base forest, then runs `n_epochs` historical shocks on top. Each epoch, `select_breakaway_seats` rolls a per-(seed, capital, epoch) cohesion shock for every sovereign and fragments those whose `cohesion - shock < demand`, where `demand = min(domain_face_count / size_reference, 1)` (bigger domains demand more cohesion). A fragmenting sovereign sheds **one** peripheral seat — its weakest-held vassal (highest `autonomy`) if it has vassals, else the lowest-`authority_of_face` directly-held settlement (the interior **saddle**). The shed seats are added to the capital set and Stages 2-4 are re-run via a fresh `ForestBuilder`, so the empire retreats to its strong core while breakaways hold the periphery beyond the saddle. Domains shrink each shed, so demand drops and the process converges (early-out once an epoch is stable). With `n_epochs == 0` the result is the plain Stage 0-3 forest. This is a modifier over the base mechanism, never a rewrite.
+
+Each shed is recorded as a `FragmentationEvent` (epoch, parent + breakaway capital faces, `kind` ∈ {`vassal_secession`, `saddle_split`}, parent cohesion / shock / demand / domain face count). `run_fragmentation_epochs` returns `(ForestBuilder, list[FragmentationEvent])`; `PolityStage` exposes the chronicle as `self.polity_history` and the `polity_history` world feature. Faces are stable identifiers, so both endpoints map to final sovereigns by capital face — the chronicle is intended as raw material for a later history-generation pass (who broke away from whom, in which epoch).
+
 ## Tension (`polity/tension.py`)
 
 `compute_border_tension` — scored on the final sovereign partition. Border edges with high cross-border trade flow and large polities on both sides produce the highest tension. Scored once after the tree is fully resolved.
@@ -68,7 +76,7 @@ Builds per-face defensibility array from `Settlement.defensibility` (non-settlem
 ## Outputs
 
 Per-face: `POLITY_ID` (directly-governing polity), `SOVEREIGN_ID` (root), `CONTROL_CLASS`, `BORDER_TENSION`.
-Features: `polities` (the full forest), `polity_tensions` (list of `(a, b, score)`), `polity_borders` (`dict[int, np.ndarray shape (M, 6)]` — border segment endpoints as `(xyz, xyz)`, keyed by hierarchy depth; depth 0 = sovereign borders, depth d > 0 = internal subtree borders within the same depth-d parent).
+Features: `polities` (the full forest), `polity_history` (ordered list of `FragmentationEvent` — the Stage 5 secession chronicle, kept for later history generation; faces are stable ids that map to final sovereigns), `polity_tensions` (list of `(a, b, score)`), `polity_borders` (`dict[int, np.ndarray shape (M, 6)]` — border segment endpoints as `(xyz, xyz)`, keyed by hierarchy depth; depth 0 = sovereign borders, depth d > 0 = internal subtree borders within the same depth-d parent).
 
 Color schemes (always): Polities, Border Tension, Polity Borders overlay.
 Debug schemes: Authority Field, Sovereigns, Control Class.
