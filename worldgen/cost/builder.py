@@ -51,6 +51,7 @@ class LandCostParams:
     navigable_ruggedness_km: float = _f(
         0.6, label="Navigable ruggedness (km)", min=0.05, max=5.0
     )
+    forest_cost_strength: float = _f(1.0, label="Forest cost strength", min=0.0, max=5.0)
 
 
 @paramclass
@@ -141,12 +142,19 @@ class CostBuilder(Stage):
         temperature_tex = TEMPERATURE.read(mesh) if TEMPERATURE.present(mesh) else None
 
         _report("Computing land base cost…")
+        face_forest_density: np.ndarray | None = None
+        if mesh.face_metadata and "forest_density_mean" in mesh.face_metadata[0]:
+            face_forest_density = np.array(
+                [m.get("forest_density_mean", 0.0) for m in mesh.face_metadata], dtype=np.float32
+            )
         land_cost, land_passable = compute_land_base_cost(
             face_biome,
             elev_range,
             is_water,
             biome_cost_scale=p.land.biome_cost_scale,
             ruggedness_cost_per_km=p.land.ruggedness_cost_per_km,
+            face_forest_density=face_forest_density,
+            forest_cost_strength=p.land.forest_cost_strength,
         )
 
         _report("Computing river flow field…")

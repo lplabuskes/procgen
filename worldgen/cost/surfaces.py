@@ -123,8 +123,10 @@ def compute_land_base_cost(
     *,
     biome_cost_scale: float = 1.0,
     ruggedness_cost_per_km: float = 1.5,
+    face_forest_density: np.ndarray | None = None,
+    forest_cost_strength: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Isotropic per-face land cost = biome difficulty + ruggedness.
+    """Isotropic per-face land cost = biome difficulty + ruggedness + forest penalty.
 
     Open water (ocean ∪ lake) is impassable on the land surface. Water faces keep
     a finite (meaningless) cost value — gate them with the returned mask. A
@@ -137,6 +139,9 @@ def compute_land_base_cost(
         face_elev_range_km: (N,) float — per-face pixel elevation span (km), the
             ruggedness proxy (per-pixel slope is noise-dominated; see terrain.py).
         is_water: (N,) bool — open water (ocean ∪ lake) is impassable on land.
+        face_forest_density: (N,) float in [0, 1] — mean forest density per face;
+            None disables the forest term.
+        forest_cost_strength: additive scale on forest density (0 = no effect).
 
     Returns:
         (land_base_cost (N,) float32, land_passable (N,) bool). Water faces keep a
@@ -147,6 +152,9 @@ def compute_land_base_cost(
         biome_cost_scale * BIOME_TRAVERSAL_COST[biome]
         + ruggedness_cost_per_km * np.maximum(np.asarray(face_elev_range_km, dtype=np.float64), 0.0)
     ).astype(np.float32)
+    if face_forest_density is not None and forest_cost_strength > 0.0:
+        forest = np.clip(np.asarray(face_forest_density, dtype=np.float32), 0.0, 1.0)
+        cost = cost + float(forest_cost_strength) * forest
     passable = ~np.asarray(is_water, dtype=bool)
     return cost, passable
 
