@@ -16,6 +16,10 @@ layer; they do not feed into it during generation.
 - **Per-settlement trade wealth**: *not* on the record. It is `population_stage.trade_wealth`
   (an `(S,)` array aligned with `settlements`) and per-face via the `TRADE_FLOW` channel
   (= flow sampled at the settlement face).
+- **Per-settlement trade attribution**: `trade_attribution` world feature — an `(S, S)`
+  directional matrix aligned with `settlements`, where `[i, j]` is the trade volume exporter
+  *i* sends to importer *j*. Column-sum ≈ `trade_wealth` (imports); row = exports. Lets the
+  loyalty levers attribute a settlement's wealth to specific partners (intra- vs extra-polity).
 - **Land + sea cost surfaces** (`COST_SURFACES` feature → `CostSurfaces`): separate per-face
   `land_base_cost`/`land_passable` and `sea_base_cost`/`sea_passable`/`strait_mask`. Ports
   are *edges*, not tiles.
@@ -200,8 +204,11 @@ toggleable and inspectable.
   wealth and modulates the sea authority channel via `sea_range_factor` and `sea_weight`.
 
 **Loyalty modifiers (change secession resistance without changing the field):**
-- **Economic grip.** ⛔ *Blocked — trade route attribution.* See note below. Only aggregate
-  `trade_wealth` is available; per-route provenance needed.
+- **Economic grip.** ✅ *Unblocked — trade route attribution implemented.* See note below. The
+  per-settlement, per-partner trade matrix is now available as the `trade_attribution` world
+  feature (`(S, S)`, aligned with `settlements`). The lever logic itself is the remaining work:
+  a settlement whose imports/exports are dominated by intra-polity partners gets a secession-
+  resistance bonus.
 - **External pressure consolidation.** ❌ *Not implemented.* A polity adjacent to a strong rival
   field or a high-danger-field zone gets a temporary `cohesion` bonus (rally-around-the-flag).
   The danger field (`DANGER_ARRAY`) is available and already read by `PolityStage` — the lever
@@ -212,21 +219,27 @@ toggleable and inspectable.
   (computed post-classification), so using it as input is chicken-and-egg. Resolution paths:
   recompute tension inside the classification loop, or switch to the authority-field saddle
   depth as a proxy for "contested fringe."
-- **Peripheral wealth secession.** ❌ *Not implemented.* Partially blocked (per-route attribution
-  would make this cleaner), but could be approximated from `trade_wealth` alone: flag vassals
-  whose trade wealth substantially exceeds their liege capital's.
+- **Peripheral wealth secession.** ❌ *Not implemented (now fully unblocked).* Can be
+  approximated from `trade_wealth` alone (flag vassals whose trade wealth substantially exceeds
+  their liege capital's), but the `trade_attribution` matrix now makes the cleaner version
+  available: flag a vassal whose wealth flows through *external* partners rather than its liege's
+  network.
 
 **Validation:** toggle each lever individually and confirm the predicted archetype appears —
 a militarily-weak but trade-dependent coastal cluster survives as one polity (economic grip);
 a squeezed peripheral realm tightens then loosens (external pressure); rich vassals break off
 (peripheral wealth); frontier vassals are more autonomous than interior ones (marcher).
 
-> ⛔ **Blocked — trade route attribution.** `compute_trade_network` (`realmgen/trade/network.py`)
-> returns only `face_flow`, `hub_mask`, and anonymous `routes` polylines. The per-settlement
-> provenance (`edge_flow`, `deposit_goods`) is **computed and discarded** — there is no "which
-> capital does this settlement's rare goods flow through." Economic-grip and peripheral-wealth
-> **block on extending the trade module** to return import/route attribution. Only the aggregate
-> scalar `trade_wealth` is available today.
+> ✅ **Unblocked — trade route attribution implemented.** `compute_trade_network`
+> (`realmgen/trade/network.py`) now returns `pair_flow` alongside `face_flow`, `hub_mask`, and
+> `routes`: an `(S, S)` directional matrix where `pair_flow[i, j]` is the inter-settlement trade
+> volume exporter *i* sends to importer *j* (the Phase-2 `inter_flow`, previously computed and
+> discarded). `PopulationStage` publishes the final-pass matrix as the `trade_attribution` world
+> feature, index-aligned with the `settlements` feature; column *j* answers "which partners feed
+> settlement *j*'s trade wealth" and row *i* "where do *i*'s exports go." Economic-grip and
+> peripheral-wealth secession can read it directly — only the lever logic itself remains. (The
+> aggregate scalar `trade_wealth` is still available and equals each settlement's import-column
+> sum to within transit flow.)
 
 > ⚠️ **Conflict — border tension is an *output*, not an input.** It's produced by this stage
 > *after* assignment (`compute_border_tension`, run on `polity_of_face`) and stored two ways:
@@ -270,12 +283,11 @@ work, in recommended order:
 
 1. **Stage 4 unblocked levers** (implement and validate one at a time):
    - External pressure consolidation (danger field is available, no new infra needed)
-   - Peripheral wealth secession (approximable from `trade_wealth` without full route attribution)
+   - Economic grip (`trade_attribution` world feature now available — implement the lever logic)
+   - Peripheral wealth secession (approximable from `trade_wealth`; cleaner with `trade_attribution`)
    - Capital archetype bonus (requires deriving or storing settlement archetypes first)
    - Marcher autonomy (resolve border-tension chicken-and-egg; consider authority saddle depth as proxy)
-2. **Stage 4 blocked levers** — Economic grip: blocked until `compute_trade_network` is extended
-   to return per-settlement import/route attribution.
-3. **Stage 5** — Fragmentation epochs: ✅ implemented (`realmgen/polity/epochs.py`).
+2. **Stage 5** — Fragmentation epochs: ✅ implemented (`realmgen/polity/epochs.py`).
 
 ## Design guidelines
 - Each stage independently inspectable (heatmap / tree dump / partition render) before integration.

@@ -23,7 +23,9 @@ All populations are **real people**, anchored to a medieval-tech Earth (~300–4
 
 ## Trade network
 
-**`trade/network.py`**: `compute_trade_network` — routes trade flows from resource deposits (minerals + rare bio) to settlements over the combined land + sea graph. Returns `face_flow` (per-face scalar), `routes` (polylines for rendering), and `hub_mask` (top-flow faces). Called at the start and after each relaxation pass with population-weighted demands.
+**`trade/network.py`**: `compute_trade_network` — routes trade flows from resource deposits (minerals + rare bio) to settlements over the combined land + sea graph. Returns `face_flow` (per-face scalar), `routes` (polylines for rendering), `hub_mask` (top-flow faces), and `pair_flow` (the `(S, S)` directional inter-settlement trade matrix — `pair_flow[i, j]` = volume exporter *i* sends to importer *j*, index-aligned with `settlements`). Called at the start and after each relaxation pass with population-weighted demands.
+
+The final-pass `pair_flow` is published by `PopulationStage` as the `trade_attribution` world feature (aligned with the `settlements` feature). It is per-settlement trade-route provenance — column *j* = settlement *j*'s imports by source, row *i* = its exports by destination — consumed by the polity stage's economic-grip / peripheral-wealth secession levers (a settlement whose trade is dominated by intra-polity partners has stronger economic incentive to stay).
 
 ## PopulationStage
 
@@ -65,5 +67,5 @@ Returns `(defensibility, has_walls, wall_strength)`, all stamped onto `Settlemen
 ## Outputs
 
 Per-face: `TRADE_FLOW`, `POPULATION`, `HINTERLAND_ID`, `RURAL_POPULATION`, `is_trade_hub`, `settlement_tier`.
-Features: `settlements` (updated with population, defensibility, has_walls, wall_strength), `trade_routes`.
+Features: `settlements` (updated with population, defensibility, has_walls, wall_strength), `trade_routes`, `trade_attribution` (`(S, S)` directional inter-settlement trade matrix, aligned with `settlements`).
 Color schemes: Trade Flow, Hinterland, and (debug) Rural Population.

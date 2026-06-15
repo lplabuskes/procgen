@@ -39,7 +39,7 @@ for per-type values.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List
 
 import numpy as np
@@ -89,6 +89,13 @@ class TradeResult:
     face_flow: np.ndarray   # (N,) float32 — aggregate trade flow across all good types
     hub_mask: np.ndarray    # (N,) bool — high-flow junction faces
     routes: list            # [(start_3d, end_3d, flow)] segments above display threshold
+    # (S, S) float32 — directional inter-settlement trade attribution.  ``pair_flow[i, j]``
+    # is the Phase-2 flow that settlement *i* (exporter) sends to settlement *j* (importer),
+    # before path decay is shared out over the route.  Row ``i`` = exports, column ``j`` =
+    # imports.  Index-aligned with the ``settlements`` argument.  Lets downstream consumers
+    # attribute a settlement's trade wealth to specific partners (economic-grip / peripheral-
+    # wealth levers in the polity stage) rather than seeing only the aggregate ``face_flow``.
+    pair_flow: np.ndarray = field(default_factory=lambda: np.zeros((0, 0), dtype=np.float32))
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -310,7 +317,10 @@ def compute_trade_network(
                      × settlement_demand[dst] × exp(−flow_decay × cost)
 
     This produces long-distance routes for rare goods that destinations lack,
-    while keeping short-distance routes for common goods.
+    while keeping short-distance routes for common goods.  The directional
+    ``inter_flow`` between every settlement pair is retained in
+    :attr:`TradeResult.pair_flow` so downstream consumers can attribute a
+    settlement's trade wealth to specific partners.
 
     Args:
         mesh: ``PolygonMesh`` — provides ``face_adjacency`` and ``face_centroids``.
@@ -340,13 +350,16 @@ def compute_trade_network(
             :data:`GOOD_RARITY_WEIGHTS`.  Unknown type IDs get weight 1.0.
 
     Returns:
-        :class:`TradeResult`.
+        :class:`TradeResult`, including ``pair_flow`` — the ``(S, S)`` directional
+        inter-settlement trade matrix index-aligned with ``settlements``.
     """
     n = len(mesh.faces)
+    s = len(settlements)
     empty = TradeResult(
         face_flow=np.zeros(n, dtype=np.float32),
         hub_mask=np.zeros(n, dtype=bool),
         routes=[],
+        pair_flow=np.zeros((s, s), dtype=np.float32),
     )
     if not settlements or not good_sources:
         return empty
@@ -435,6 +448,9 @@ def compute_trade_network(
     # Rarity-weighted goods: how much value each settlement can export per type.
     weighted_goods = deposit_goods * rarity_arr  # (S, n_types)
 
+    # Per-pair attribution: pair_flow[src, dst] = trade volume src exports to dst.
+    pair_flow = np.zeros((len(settlements), len(settlements)), dtype=np.float64)
+
     for k_src in range(len(settlements)):
         if weighted_goods[k_src].sum() <= 0.0:
             continue
@@ -453,6 +469,7 @@ def compute_trade_network(
             inter_flow = total_goods * float(norm_demands[k_dst]) * np.exp(-decay * d)
             if inter_flow < 1e-9:
                 continue
+            pair_flow[k_src, k_dst] = inter_flow
             _accumulate_path(pred[k_src], dst_node, src_node, inter_flow, edge_flow)
 
     if not edge_flow:
@@ -484,4 +501,5 @@ def compute_trade_network(
         face_flow=face_flow.astype(np.float32),
         hub_mask=hub_mask,
         routes=routes,
+        pair_flow=pair_flow.astype(np.float32),
     )

@@ -445,6 +445,13 @@ class PopulationStage(Stage):
 
         world.add_feature("settlements", self.settlements)
         world.add_feature("trade_routes", self.trade_result.routes)
+        # Per-settlement trade attribution (S, S), index-aligned with `settlements`.
+        # The polity stage reads this for economic-grip / peripheral-wealth secession.
+        # Guard against a stale shape if the final settlement set is empty.
+        attribution = self.trade_result.pair_flow
+        if attribution.shape != (len(self.settlements), len(self.settlements)):
+            attribution = np.zeros((len(self.settlements), len(self.settlements)), dtype=np.float32)
+        world.add_feature("trade_attribution", attribution)
         rural_total = float(self.rural_population.sum())
         urban_total = float(population.sum())
         ctx.report(

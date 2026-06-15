@@ -408,6 +408,65 @@ class TestComputeTradeNetwork:
         )
         assert rare.face_flow.sum() > common.face_flow.sum()
 
+    def test_pair_flow_shape_and_empty(self):
+        # No sources → (S, S) zeros, dtype float32, aligned with settlements.
+        mesh = _line_mesh(4)
+        n = 4
+        land_p = np.ones(n, dtype=bool)
+        sea_p = np.zeros(n, dtype=bool)
+        ec = _uniform_edge_costs(mesh)
+        settlements = [_settlement(0), _settlement(2)]
+        result = compute_trade_network(
+            mesh, settlements, [],
+            ec, land_p, [np.empty(0)] * n, sea_p,
+        )
+        assert result.pair_flow.shape == (2, 2)
+        assert result.pair_flow.dtype == np.float32
+        assert np.all(result.pair_flow == 0.0)
+
+    def test_pair_flow_directional_attribution(self):
+        # Producer at settlement 0's face, importer at settlement 1's face.
+        # Flow is attributed 0→1 (exporter→importer), never the reverse, never self.
+        mesh = _line_mesh(9)
+        n = 9
+        land_p = np.ones(n, dtype=bool)
+        sea_p = np.zeros(n, dtype=bool)
+        ec = _uniform_edge_costs(mesh, cost=1.0)
+        settlements = [_settlement(0, tier=0), _settlement(8, tier=1)]
+        result = compute_trade_network(
+            mesh, settlements, [(0, 10.0, RARE_BIO_TYPE_OFFSET)],
+            ec, land_p, [np.empty(0)] * n, sea_p,
+            flow_decay=0.0,
+        )
+        assert result.pair_flow.shape == (2, 2)
+        assert result.pair_flow[0, 1] > 0.0          # producer exports to importer
+        assert result.pair_flow[1, 0] == pytest.approx(0.0)  # importer has nothing to send
+        assert result.pair_flow[0, 0] == pytest.approx(0.0)  # no self-trade
+        assert result.pair_flow[1, 1] == pytest.approx(0.0)
+
+    def test_pair_flow_reflects_local_supply(self):
+        # Y topology: src=face0, dst_rich=face2 (already has the good), dst_poor=face4.
+        # The producer's exports are attributed more to the unmet-demand destination.
+        n = 5
+        adj = [[1, 3], [0, 2], [1], [0, 4], [3]]
+        angles = np.linspace(0, 2 * np.pi, n, endpoint=False)
+        centroids = np.column_stack([np.cos(angles), np.sin(angles), np.zeros(n)])
+        mesh = _Mesh(adj, centroids)
+
+        land_p = np.ones(n, dtype=bool)
+        sea_p = np.zeros(n, dtype=bool)
+        ec = [np.ones(len(nbrs), dtype=np.float64) for nbrs in adj]
+
+        settlements = [_settlement(0, tier=0), _settlement(2, tier=1), _settlement(4, tier=1)]
+        sources = [(0, 10.0, 0), (2, 10.0, 0)]  # dst_rich (idx 1) already saturated for type 0
+        result = compute_trade_network(
+            mesh, settlements, sources,
+            ec, land_p, [np.empty(0)] * n, sea_p,
+            flow_decay=0.0,
+        )
+        # src (idx 0) → dst_poor (idx 2) outweighs src → dst_rich (idx 1).
+        assert result.pair_flow[0, 2] > result.pair_flow[0, 1]
+
     def test_local_supply_suppresses_demand(self):
         # Y-shaped topology: hub (face 0) with two separate arms.
         #   arm A: 0 — 1 — 2   (dst_rich at face 2)
