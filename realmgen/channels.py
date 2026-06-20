@@ -17,3 +17,4 @@ POLITY_ID = MetaChannel("polity_id", dtype=np.int32, default=-1)  # directly-gov
 SOVEREIGN_ID = MetaChannel("sovereign_id", dtype=np.int32, default=-1)  # root polity of the face's tree or -1
 CONTROL_CLASS = MetaChannel("control_class", dtype=np.int32, default=-1)  # ControlClass at settlement faces, else -1
 BORDER_TENSION = MetaChannel("border_tension", dtype=np.float64)  # contested-border heat
+AUTHORITY = MetaChannel("authority", dtype=np.float64)  # winning authority value per face (control strength)

@@ -28,6 +28,7 @@ from realmgen.placement.builder import PlacementStage, SeederParams
 from realmgen.placement.types import TIER_NAMES, format_population
 from realmgen.polity.builder import PolityParams, PolityStage
 from realmgen.population.builder import PopulationParams, PopulationStage, TradeParams
+from realmgen.refine.builder import RefineParams, RefineStage
 from realmgen.scoring.builder import ScoringStage, SituationalValueParams, SuitabilityParams
 
 
@@ -67,6 +68,9 @@ class RealmParams:
     polity: PolityParams = field(
         default_factory=PolityParams, metadata={"label": "Polities"}
     )
+    refine: RefineParams = field(
+        default_factory=RefineParams, metadata={"label": "Texel refinement"}
+    )
     danger: DangerInfluenceParams = field(
         default_factory=DangerInfluenceParams, metadata={"label": "Danger influence"}
     )
@@ -93,11 +97,13 @@ class RealmPipeline(Pipeline):
         self.placement_stage = PlacementStage(p.seeder, p.danger)
         self.population_stage = PopulationStage(p.trade, p.population, p.seeder, p.danger, p.polity.defensibility)
         self.polity_stage = PolityStage(p.polity, p.danger)
+        self.refine_stage = RefineStage(p.refine)
         super().__init__([
             self.scoring_stage,
             self.placement_stage,
             self.population_stage,
             self.polity_stage,
+            self.refine_stage,
         ])
         self.world: Optional[World] = None
 

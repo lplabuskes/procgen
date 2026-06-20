@@ -58,7 +58,7 @@ python3 scripts/profile_pipeline.py       [seeds…|--repeat N|--top N|--cprofil
 
 Pipeline: mesh → deregularize → dual → **elevation/tectonics** → **climate** → **hydrology** → **climate lake-feedback** → **resources** → **cost** → *(optional)* **realmgen**
 
-Top-level orchestrator: `GlobePipeline` in `worldgen/builder.py`. Each stage is a `Stage` that reads from and writes to a `BuildContext`. Realmgen is a separate `RealmPipeline` with sub-stages: scoring → placement → trade → population → polity. Both pipelines are wired together in `main.py` via `AppParams`.
+Top-level orchestrator: `GlobePipeline` in `worldgen/builder.py`. Each stage is a `Stage` that reads from and writes to a `BuildContext`. Realmgen is a separate `RealmPipeline` with sub-stages: scoring → placement → trade → population → polity → refine. Both pipelines are wired together in `main.py` via `AppParams`.
 
 Stage reference docs (read the relevant one before working on a stage):
 
@@ -75,6 +75,7 @@ Stage reference docs (read the relevant one before working on a stage):
 - [docs/realm_placement.md](docs/realm_placement.md) — `realmgen/placement/`
 - [docs/realm_population.md](docs/realm_population.md) — `realmgen/population/`, `realmgen/trade/`
 - [docs/realm_polity.md](docs/realm_polity.md) — `realmgen/polity/`
+- [docs/realm_refine.md](docs/realm_refine.md) — `realmgen/refine/`
 
 Historical design specs live in `docs/plans/`.
 

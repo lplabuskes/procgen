@@ -18,6 +18,7 @@ from core.display import DisplayRegistry
 from core.params import field, param_field as _f, paramclass
 from core.pipeline import BuildContext, Stage
 from realmgen.channels import (
+    AUTHORITY,
     BORDER_TENSION,
     CONTROL_CLASS,
     POLITY_ID,
@@ -288,6 +289,8 @@ class PolityStage(Stage):
         SOVEREIGN_ID.write(mesh, sovereign_of_face)
         CONTROL_CLASS.write(mesh, control_of_face)
         BORDER_TENSION.write(mesh, face_tension)
+        if self.authority_of_face is not None:
+            AUTHORITY.write(mesh, np.asarray(self.authority_of_face, dtype=np.float64))
         world.add_feature("polities", polities)
         world.add_feature("polity_history", list(self.polity_history))
         world.add_feature(
