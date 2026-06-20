@@ -137,12 +137,14 @@ def classify_settlements(
     direct_threshold: float,
     vassal_floor: float,
     power_exponent: float = 1.0,
+    loyalty_mult: Optional[np.ndarray] = None,
+    force_independent: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Label each settlement DIRECT / VASSAL / INDEPENDENT, in the same currency::
 
         eff = projecting_power[claimant]**e * field[claimant, face] * authority_gain[claimant]
         loc = population**e * defensibility[face]
-        r   = eff / loc   ->   r>=direct: DIRECT;  r>=vassal_floor: VASSAL;  else INDEPENDENT
+        r   = eff / loc * loyalty_mult  ->  r>=direct: DIRECT;  r>=vassal_floor: VASSAL;  else INDEPENDENT
 
     ``projecting_power`` is the claimant *capital's* own strength (not the whole
     domain) — so a sprawling realm with a modest capital cannot hold its far
@@ -152,6 +154,13 @@ def classify_settlements(
     comparison. ``e=1`` is the raw population ratio, which spans ~70x across the
     Zipf city distribution and swamps the geographic decay; ``e<1`` compresses it
     (``e=0.5`` -> ~8x) so ``field`` (distance) drives the decision, as intended.
+
+    ``loyalty_mult`` (``(S,)``, optional) scales the ratio per settlement — the
+    Stage-4 **economic-grip** lever raises it for trade-bloc-bound cities so they
+    resist secession without changing the field. ``force_independent`` (``(S,)``
+    bool, optional) overrides any non-capital settlement to INDEPENDENT — the
+    Stage-4 **peripheral-wealth secession** trigger. Capitals are pinned DIRECT
+    last, so neither lever can dislodge a seat.
 
     Returns ``(control_class (S,) int32, ratio (S,) float64)``.
     """
@@ -174,11 +183,16 @@ def classify_settlements(
     eff = dom[vc] ** e * field[vc, vf] * gain[vc]
     loc = np.maximum(pop[valid] ** e * defn[vf], 1e-9)
     r = eff / loc
+    if loyalty_mult is not None:
+        r = r * np.asarray(loyalty_mult, dtype=np.float64)[valid]
     ratio[valid] = r
     control[valid] = np.where(
         r >= float(direct_threshold), int(ControlClass.DIRECT),
         np.where(r >= float(vassal_floor), int(ControlClass.VASSAL), int(ControlClass.INDEPENDENT)),
     ).astype(np.int32)
+
+    if force_independent is not None:
+        control[np.asarray(force_independent, dtype=bool)] = int(ControlClass.INDEPENDENT)
 
     cap = np.asarray(is_capital, dtype=bool)
     control[cap] = int(ControlClass.DIRECT)

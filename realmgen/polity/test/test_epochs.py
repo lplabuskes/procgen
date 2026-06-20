@@ -170,6 +170,7 @@ def _line_ctx(n: int = 6) -> _Ctx:
         n=n, centroids=np.zeros((n, 3), dtype=np.float64),
         settlement_faces=settlement_faces, populations=populations,
         pop_norm=populations / populations.max(), trade_norm=np.zeros(2),
+        trade_wealth=np.zeros(2), trade_attribution=np.zeros((0, 0)),
         defensibility=np.ones(n), land_graph=_line_graph(n), hybrid_graph=None,
         base_seed=0, p=PolityParams(),
         face_to_settlement={0: 0, n - 1: 1},

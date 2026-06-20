@@ -19,6 +19,11 @@ from realmgen.polity.authority import (
     classify_settlements,
     compute_authority_fields,
 )
+from realmgen.polity.loyalty import (
+    compute_internal_trade_fraction,
+    economic_grip_multiplier,
+    peripheral_wealth_breakaways,
+)
 from realmgen.polity.seeding import cohesion_to_gain, roll_polity_scalars
 from realmgen.polity.types import ControlClass, Polity, Scalars
 
@@ -55,14 +60,13 @@ class ClaimingParams:
     hysteresis: float = _f(0.15, label="Claim hysteresis (incumbent bonus)", min=0.0, max=1.0)
     max_iters: int = _f(8, label="Claim max iterations", min=1, max=50)
     outer_max_iters: int = _f(6, label="Independence relaxation iterations", min=1, max=20)
-    max_capitals: int = _f(40, label="Max sovereign capitals", min=1, max=200)
 
 
 @paramclass
 class HierarchyParams:
     """Direct/vassal/independent cutoffs and the cohesion→authority-gain map."""
-    direct_threshold: float = _f(1.5, label="Direct-rule authority ratio", min=0.5, max=20.0)
-    vassal_floor: float = _f(0.6, label="Vassal authority ratio floor", min=0.05, max=10.0)
+    direct_threshold: float = _f(1.0, label="Direct-rule authority ratio", min=0.5, max=20.0)
+    vassal_floor: float = _f(0.3, label="Vassal authority ratio floor", min=0.05, max=10.0)
     power_exponent: float = _f(
         0.5, label="Authority population exponent (1 = raw ratio)", min=0.0, max=1.0
     )
@@ -83,6 +87,8 @@ class _Ctx:
     populations: np.ndarray             # (S,) raw people
     pop_norm: np.ndarray                # (S,) populations / peak
     trade_norm: np.ndarray              # (S,) trade wealth / peak
+    trade_wealth: np.ndarray            # (S,) raw trade wealth (loyalty levers)
+    trade_attribution: np.ndarray       # (S, S) directional pair flow (loyalty levers)
     defensibility: np.ndarray           # (N,)
     land_graph: csr_matrix
     hybrid_graph: Optional[csr_matrix]
@@ -186,11 +192,13 @@ class ForestBuilder:
             )
             is_cap = np.zeros(s.settlement_faces.size, dtype=bool)
             is_cap[capital_sidx] = True
+            loyalty_mult, force_ind = self._loyalty_modifiers(partition, capital_sidx)
             control, _ = classify_settlements(
                 s.settlement_faces.tolist(), s.populations, partition, fields,
                 cap_power, s.defensibility, gain, is_cap,
                 direct_threshold=p.hierarchy.direct_threshold, vassal_floor=p.hierarchy.vassal_floor,
                 power_exponent=p.hierarchy.power_exponent,
+                loyalty_mult=loyalty_mult, force_independent=force_ind,
             )
             existing = set(capital_sidx)
             new_caps = [
@@ -200,7 +208,7 @@ class ForestBuilder:
             # On the final pass we must not extend after rolling, or the returned
             # scalars/fields/partition would be stale (shorter than capital_sidx).
             last_pass = outer == n_outer - 1
-            if not new_caps or last_pass or len(capital_sidx) + len(new_caps) > int(p.claiming.max_capitals):
+            if not new_caps or last_pass:
                 report(
                     f"  Sovereigns settled after {outer + 1} pass(es): "
                     f"{len(capital_sidx)} capitals ({n_iters} claim iters)."
@@ -210,6 +218,37 @@ class ForestBuilder:
             report(f"  +{len(new_caps)} seceded → {len(capital_sidx)} sovereigns.")
 
         return partition, fields, scalars
+
+    # ── Stage-4 loyalty levers ─────────────────────────────────────────────────
+
+    def _loyalty_modifiers(self, partition: np.ndarray, capital_sidx: List[int]):
+        """``(loyalty_mult, force_independent)`` for the current claim partition.
+
+        Economic grip scales each settlement's secession-resistance ratio up by its
+        intra-polity trade fraction; peripheral-wealth secession flags rich,
+        outward-trading settlements to break away as new sovereigns. Both read the
+        ``trade_attribution`` matrix; either is ``None`` when its lever is disabled
+        or no trade attribution is available.
+        """
+        s, lp = self.s, self.s.p.loyalty
+        grip_on = lp.economic_grip > 0.0
+        peripheral_on = lp.peripheral_wealth_ratio > 0.0
+        if (not grip_on and not peripheral_on) or s.trade_attribution.size == 0:
+            return None, None
+
+        frac = compute_internal_trade_fraction(
+            s.settlement_faces, partition, s.trade_attribution
+        )
+        mult = economic_grip_multiplier(frac, lp.economic_grip) if grip_on else None
+        force = (
+            peripheral_wealth_breakaways(
+                s.settlement_faces, partition, capital_sidx, s.trade_wealth, frac,
+                wealth_ratio=lp.peripheral_wealth_ratio,
+                external_floor=lp.peripheral_external_floor,
+            )
+            if peripheral_on else None
+        )
+        return mult, force
 
     # ── projection / scalar helpers ───────────────────────────────────────────
 

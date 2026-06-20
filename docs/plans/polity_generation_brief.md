@@ -204,11 +204,12 @@ toggleable and inspectable.
   wealth and modulates the sea authority channel via `sea_range_factor` and `sea_weight`.
 
 **Loyalty modifiers (change secession resistance without changing the field):**
-- **Economic grip.** ✅ *Unblocked — trade route attribution implemented.* See note below. The
-  per-settlement, per-partner trade matrix is now available as the `trade_attribution` world
-  feature (`(S, S)`, aligned with `settlements`). The lever logic itself is the remaining work:
-  a settlement whose imports/exports are dominated by intra-polity partners gets a secession-
-  resistance bonus.
+- **Economic grip.** ✅ *Implemented* (`realmgen/polity/loyalty.py`). `compute_internal_trade_fraction`
+  reads the `trade_attribution` matrix against the live claim partition; `economic_grip_multiplier`
+  scales each settlement's classification ratio by `1 + economic_grip · internal_fraction`, so a
+  city whose trade is dominated by intra-polity partners resists secession. Off by default
+  (`economic_grip = 0.0`). Validated monotonic on seeds 4/31/35: raising grip reduces sovereign
+  count and grows the largest domain (trade blocs hold).
 - **External pressure consolidation.** ❌ *Not implemented.* A polity adjacent to a strong rival
   field or a high-danger-field zone gets a temporary `cohesion` bonus (rally-around-the-flag).
   The danger field (`DANGER_ARRAY`) is available and already read by `PolityStage` — the lever
@@ -219,11 +220,13 @@ toggleable and inspectable.
   (computed post-classification), so using it as input is chicken-and-egg. Resolution paths:
   recompute tension inside the classification loop, or switch to the authority-field saddle
   depth as a proxy for "contested fringe."
-- **Peripheral wealth secession.** ❌ *Not implemented (now fully unblocked).* Can be
-  approximated from `trade_wealth` alone (flag vassals whose trade wealth substantially exceeds
-  their liege capital's), but the `trade_attribution` matrix now makes the cleaner version
-  available: flag a vassal whose wealth flows through *external* partners rather than its liege's
-  network.
+- **Peripheral wealth secession.** ✅ *Implemented* (`realmgen/polity/loyalty.py`).
+  `peripheral_wealth_breakaways` flags a non-capital settlement that is claimed, outward-facing
+  (external trade fraction ≥ `peripheral_external_floor`), and whose trade wealth is ≥
+  `peripheral_wealth_ratio` × its claiming capital's — forcing it INDEPENDENT (a rich, externally-
+  trading edge breaks off as a new sovereign). Off by default (`peripheral_wealth_ratio = 0.0`).
+  Validated on seeds 4/31/35: more aggressive thresholds raise sovereign count as prosperous edges
+  secede.
 
 **Validation:** toggle each lever individually and confirm the predicted archetype appears —
 a militarily-weak but trade-dependent coastal cluster survives as one polity (economic grip);
@@ -282,9 +285,9 @@ substantial realms (80/61/53/30 faces around a strong 539-face core), not 1-face
 work, in recommended order:
 
 1. **Stage 4 unblocked levers** (implement and validate one at a time):
+   - ✅ Economic grip (implemented — `realmgen/polity/loyalty.py`)
+   - ✅ Peripheral wealth secession (implemented — `realmgen/polity/loyalty.py`)
    - External pressure consolidation (danger field is available, no new infra needed)
-   - Economic grip (`trade_attribution` world feature now available — implement the lever logic)
-   - Peripheral wealth secession (approximable from `trade_wealth`; cleaner with `trade_attribution`)
    - Capital archetype bonus (requires deriving or storing settlement archetypes first)
    - Marcher autonomy (resolve border-tension chicken-and-egg; consider authority saddle depth as proxy)
 2. **Stage 5** — Fragmentation epochs: ✅ implemented (`realmgen/polity/epochs.py`).

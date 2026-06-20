@@ -34,6 +34,7 @@ from realmgen.polity.forest import (
     ProjectionParams,
     _Ctx,
 )
+from realmgen.polity.loyalty import LoyaltyParams
 from realmgen.polity.seeding import seed_capitals
 from realmgen.polity.tension import compute_border_tension
 from realmgen.polity.types import Polity
@@ -89,6 +90,9 @@ class PolityParams:
     hierarchy: HierarchyParams = field(
         default_factory=HierarchyParams, metadata={"label": "Hierarchy classification"}
     )
+    loyalty: LoyaltyParams = field(
+        default_factory=LoyaltyParams, metadata={"label": "Loyalty modifiers"}
+    )
     fragmentation: FragmentationParams = field(
         default_factory=FragmentationParams, metadata={"label": "Fragmentation epochs"}
     )
@@ -137,6 +141,14 @@ class PolityStage(Stage):
             if TRADE_FLOW.present(mesh) else np.zeros(n)
         )
         trade_wealth = trade_flow[settlement_faces]
+        # Per-settlement, per-partner trade matrix (S, S) for the Stage-4 loyalty
+        # levers; index-aligned with `settlements`. Absent ⇒ levers no-op.
+        n_settle = len(settlements)
+        trade_attribution = world.get_feature("trade_attribution")
+        if trade_attribution is None or np.shape(trade_attribution) != (n_settle, n_settle):
+            trade_attribution = np.zeros((0, 0), dtype=np.float64)
+        else:
+            trade_attribution = np.asarray(trade_attribution, dtype=np.float64)
 
         danger, danger_scale = self._read_danger(world, n)
         land_base_cost, land_edge_costs, hybrid_graph = self._build_cost_graphs(
@@ -170,6 +182,7 @@ class PolityStage(Stage):
             n=n, centroids=np.asarray(mesh.face_centroids, dtype=np.float64),
             settlement_faces=settlement_faces, populations=populations,
             pop_norm=populations / float(populations.max()), trade_norm=trade_norm,
+            trade_wealth=trade_wealth, trade_attribution=trade_attribution,
             defensibility=defensibility, land_graph=land_graph, hybrid_graph=hybrid_graph,
             base_seed=int(world.seed) if world.seed is not None else 0, p=p,
             face_to_settlement={int(f): k for k, f in enumerate(settlement_faces.tolist())},

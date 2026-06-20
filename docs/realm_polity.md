@@ -13,6 +13,7 @@ A polity is a **tree, not a flat partition** (`docs/plans/polity_generation_brie
 - `realmgen/polity/epochs.py` — `FragmentationParams` + `run_fragmentation_epochs` (Stage 5)
 - `realmgen/polity/seeding.py` — defensibility, capital seeding, scalar rolls (Stage 0 pure functions)
 - `realmgen/polity/authority.py` — authority field, claiming, classification (Stages 1-3 pure functions)
+- `realmgen/polity/loyalty.py` — `LoyaltyParams` + economic-grip / peripheral-wealth pure functions (Stage 4 levers)
 - `realmgen/polity/tension.py` — border-crossing tension
 - `realmgen/polity/display.py` — color schemes
 - `realmgen/polity/types.py` — `Polity` / `Scalars` / `ControlClass` + `POLITY_COLORS` palette
@@ -24,8 +25,9 @@ Sub-paramclasses (consumed location noted):
 - **`seeding: CapitalSeedingParams`** (builder.py) — `min_separation`, `min_pop_fraction`, `trade_weight`
 - **`defensibility: DefensibilityParams`** (builder.py, but consumed by `PopulationStage`) — `rugged_weight`, `situational_weight`, `river_weight`, `wall_base_prob`, `wall_danger_boost`, `wall_wealth_boost`, `wall_min_strength`, `wall_max_strength`. Governs `compute_settlement_defensibility` called from `PopulationStage`; see [realm_population.md](realm_population.md#defensibility).
 - **`projection: ProjectionParams`** (forest.py) — `base_range` (master consolidation knob: larger → fewer, bigger polities), `range_floor`, `sea_range_factor` (× land range for the sea channel), `sea_weight` (sea-channel magnitude vs land), `legitimacy_spread` (±, field magnitude jitter), `maritime_scale` (maritime_reach ← scale × trade_norm), `cohesion_min`, `infrastructure_min`, `infrastructure_emergent` (weight of pop+trade in infrastructure roll)
-- **`claiming: ClaimingParams`** (forest.py) — `hysteresis` (incumbent face-claim bonus), `max_iters` (claim inner loop), `outer_max_iters` (independence-relaxation outer loop), `max_capitals`
+- **`claiming: ClaimingParams`** (forest.py) — `hysteresis` (incumbent face-claim bonus), `max_iters` (claim inner loop), `outer_max_iters` (independence-relaxation outer loop — the loop promotes independents to new sovereigns until none remain or this bound is hit; there is no cap on the sovereign count)
 - **`hierarchy: HierarchyParams`** (forest.py) — `direct_threshold` (authority ratio to hold directly), `vassal_floor` (authority ratio floor for vassal), `power_exponent` (0.5 = sqrt of raw population, dampens size dominance), `cohesion_gain_floor`, `cohesion_gain_span`, `max_recursion_depth`
+- **`loyalty: LoyaltyParams`** (loyalty.py) — Stage-4 trade-attribution levers, both **off (`0.0`) by default**: `economic_grip` (scales secession-resistance up by intra-polity trade fraction → trade blocs hold), `peripheral_wealth_ratio` (a non-capital settlement ≥ this × its claiming capital's trade wealth breaks away; `0` = off), `peripheral_external_floor` (min external trade fraction to qualify). With no sovereign cap the levers are cleanly monotonic — more `economic_grip` → fewer sovereigns / bigger domains; more aggressive peripheral thresholds → more sovereigns.
 - **`fragmentation: FragmentationParams`** (epochs.py) — `n_epochs` (historical shocks; 0 = off), `shock_scale` (max downward cohesion roll per epoch), `size_reference` (domain face count demanding full cohesion)
 - **`tension: BorderTensionParams`** (builder.py) — `barrier_scale`, `flow_ref`, `artery_weight`
 
@@ -51,7 +53,16 @@ Sub-paramclasses (consumed location noted):
 
 - `compute_authority_fields` — `legitimacy · exp(−land_dist / range)` (range from infrastructure) max-combined with sea channel (`maritime_reach`, over hybrid land/sea graph, attenuated by `sea_weight`)
 - `claim_faces` — argmax-authority face assignment with hysteresis bonus for incumbents, iterated to bounded fixed point
-- `classify_settlements` — direct/vassal/independent from `projecting_authority × cohesion_gain` vs `population^power_exponent × defensibility`
+- `classify_settlements` — direct/vassal/independent from `projecting_authority × cohesion_gain` vs `population^power_exponent × defensibility`. Two optional Stage-4 hooks: `loyalty_mult` (scales the ratio per settlement — economic grip) and `force_independent` (overrides a non-capital settlement to INDEPENDENT — peripheral-wealth secession). Capitals are pinned DIRECT last, so neither lever can dislodge a seat.
+
+## Stage 4 loyalty levers (`polity/loyalty.py`)
+
+Two **opposite-direction** modifiers keyed on the `trade_attribution` matrix + the live claim partition; both answer "who does this city's economy depend on?" and adjust *secession resistance* without touching the authority field. Applied in `ForestBuilder._loyalty_modifiers` during sovereign resolution, so they shape which settlements become independent sovereigns.
+
+- `compute_internal_trade_fraction(settlement_faces, partition, trade_attribution)` — per-settlement fraction of bilateral trade (`attr + attr.T`) with partners in the same claim cell; `0` for an untraded or unclaimed settlement. **Economic grip:** `economic_grip_multiplier(frac, strength) = 1 + strength·frac` scales the classification ratio up, so a trade-bloc-bound city resists secession even under a weak field.
+- `peripheral_wealth_breakaways(...)` — flags a non-capital settlement that is claimed, outward-facing (`1 − internal ≥ external_floor`), and ≥ `wealth_ratio` × its claiming capital's trade wealth → forced INDEPENDENT (a rich, externally-trading edge breaks off as a new sovereign). `wealth_ratio ≤ 0` disables it.
+
+Note the partition is recomputed each relaxation pass, so the internal fraction (hence grip) is measured against the *current* partition — as a realm fragments the grip holding its periphery weakens (a deliberate feedback).
 
 ## Forest algorithm (`polity/forest.py`)
 
