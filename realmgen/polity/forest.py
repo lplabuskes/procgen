@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence
 
 import numpy as np
 from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import dijkstra
 
 from core.params import param_field as _f, paramclass
 from realmgen.polity.authority import (
@@ -68,6 +69,9 @@ class HierarchyParams:
     cohesion_gain_floor: float = _f(0.5, label="Cohesion gain floor", min=0.0, max=2.0)
     cohesion_gain_span: float = _f(1.0, label="Cohesion gain span", min=0.0, max=2.0)
     max_recursion_depth: int = _f(2, label="Vassal recursion depth", min=0, max=3)
+    vassal_cluster_distance: float = _f(
+        15.0, label="Vassal cluster distance (cost-dist, 0=off)", min=0.0, max=200.0
+    )
 
 
 @dataclass
@@ -232,6 +236,29 @@ class ForestBuilder:
         lookup = self.s.face_to_settlement
         return [lookup[int(f)] for f in faces.tolist() if int(f) in lookup]
 
+    def _cluster_vassal_members(self, vassal_members: List[int], threshold: float) -> List[List[int]]:
+        """Greedily group vassal members within `threshold` cost distance of one another."""
+        s = self.s
+        source_faces = [int(s.settlement_faces[m]) for m in vassal_members]
+        # dists[i, face] = cost distance from source_faces[i] to face
+        dists = dijkstra(s.land_graph, directed=False, indices=source_faces)
+        n = len(vassal_members)
+        assigned = np.zeros(n, dtype=bool)
+        clusters: List[List[int]] = []
+        for i in range(n):
+            if assigned[i]:
+                continue
+            cluster = [vassal_members[i]]
+            assigned[i] = True
+            for j in range(i + 1, n):
+                if assigned[j]:
+                    continue
+                if dists[i, source_faces[j]] <= threshold:
+                    cluster.append(vassal_members[j])
+                    assigned[j] = True
+            clusters.append(cluster)
+        return clusters
+
     # ── recursive subtree builder ─────────────────────────────────────────────
 
     def _build_subtree(
@@ -272,6 +299,17 @@ class ForestBuilder:
                     vassal_autonomy[m] = float(
                         np.clip(1.0 - r / max(p.hierarchy.direct_threshold, 1e-9), 0.0, 1.0)
                     )
+
+            cluster_dist = float(p.hierarchy.vassal_cluster_distance)
+            if vassal_members and cluster_dist > 0.0:
+                clusters = self._cluster_vassal_members(vassal_members, cluster_dist)
+                vassal_members = []
+                new_autonomy: Dict[int, float] = {}
+                for cluster in clusters:
+                    cap_m = max(cluster, key=lambda m: float(s.populations[m]))
+                    vassal_members.append(cap_m)
+                    new_autonomy[cap_m] = vassal_autonomy[cap_m]
+                vassal_autonomy = new_autonomy
 
         self.polities.append(None)  # type: ignore[arg-type]  # reserve slot for child ids
         own_faces = territory

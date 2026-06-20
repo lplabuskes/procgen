@@ -75,6 +75,8 @@ def measure_seed(seed: int, rebuild: bool, detail: bool) -> None:
 
     n_cities = len(world.get_feature("settlements") or [])
     n_vassal_seats = len(vas)
+    single_city_vassals = sum(1 for p in vas if len(p.member_settlement_faces) == 1)
+    single_city_frac = single_city_vassals / n_vassal_seats if n_vassal_seats else 0.0
     # Largest *domain* (sovereign + all its vassals), not just directly-held faces —
     # this is the consolidation number the "one realm eats the world" complaint is about.
     sof = ps.sovereign_of_face
@@ -97,6 +99,7 @@ def measure_seed(seed: int, rebuild: bool, detail: bool) -> None:
 
     print(
         f"seed {seed:>4}: {len(sov):>2} sovereigns, {n_vassal_seats:>2} vassals "
+        f"({single_city_frac * 100:.0f}% single-city) "
         f"| {n_cities} cities | largest domain {largest_frac * 100:4.1f}% of claimed "
         f"| max depth {max_depth} | corr(infra, vassal_frac) {corr:+.2f}"
     )
