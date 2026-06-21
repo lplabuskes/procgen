@@ -5,10 +5,9 @@ position to the texel within the same face that best matches a placement
 preference, in priority order:
 
 1. **Coast** — a land texel adjacent to water, preferring ocean over lake.
-2. **River** — a land texel within a texel-spacing of a river polyline.
-3. **Fertility** — among the remaining candidates, the highest per-face fertility
-   (a no-op tiebreak within a single face, kept for correctness if candidates
-   ever span faces).
+2. **River confluence** — a land texel near a point where a tributary meets a
+   larger stem (highest-value river site).
+3. **River** — a land texel within a texel-spacing of any river polyline.
 4. **Nearest centroid** — deterministic final tiebreak; keeps the marker stable
    and central among equally-ranked candidates.
 
@@ -54,6 +53,47 @@ def _build_river_tree(rivers) -> Optional[KDTree]:
     return KDTree(np.concatenate(chunks, axis=0))
 
 
+def _build_confluence_tree(rivers, search_radius: float = 0.01) -> Optional[KDTree]:
+    """KD-tree over river confluence points.
+
+    In the Hack decomposition each river terminates either at an ocean/sink
+    outlet or at the interior of a larger stem (a true confluence).  A mouth is
+    a confluence when it lands within ``search_radius`` (chord distance on the
+    unit sphere) of an interior vertex that belongs to a *different* river.
+    """
+    if not rivers or len(rivers) < 2:
+        return None
+
+    mouths: list[tuple[int, np.ndarray]] = []
+    interior_chunks: list[np.ndarray] = []
+    river_id_list: list[int] = []
+
+    for i, entry in enumerate(rivers):
+        pts = np.asarray(entry[0], dtype=np.float64)
+        if pts.ndim != 2 or pts.shape[0] < 2:
+            continue
+        mouths.append((i, pts[-1]))
+        interior_chunks.append(pts[:-1])          # all but the last (mouth) point
+        river_id_list.extend([i] * (len(pts) - 1))
+
+    if not mouths or not interior_chunks:
+        return None
+
+    interior_arr = np.concatenate(interior_chunks, axis=0)
+    river_ids = np.array(river_id_list, dtype=np.int32)
+    interior_tree = KDTree(interior_arr)
+
+    confluence_pts = []
+    for river_idx, mouth in mouths:
+        neighbors = interior_tree.query_ball_point(mouth, r=search_radius)
+        if any(river_ids[nb] != river_idx for nb in neighbors):
+            confluence_pts.append(mouth)
+
+    if not confluence_pts:
+        return None
+    return KDTree(np.stack(confluence_pts))
+
+
 def refine_settlement_positions(
     settlements,
     *,
@@ -63,6 +103,7 @@ def refine_settlement_positions(
     fertility: np.ndarray,
     rivers,
     river_threshold_factor: float = 1.5,
+    confluence_search_radius: float = 0.01,
 ) -> dict[tuple[float, float, float], np.ndarray]:
     """Snap each settlement to its best in-face texel; mutate ``position`` in place.
 
@@ -82,6 +123,7 @@ def refine_settlement_positions(
     land = ~(ocean | lake)
 
     river_tree = _build_river_tree(rivers)
+    confluence_tree = _build_confluence_tree(rivers, search_radius=confluence_search_radius)
 
     for s in settlements:
         f = int(s.face_id)
@@ -101,11 +143,24 @@ def refine_settlement_positions(
         elif coast_lake.any():
             candidate = coast_lake
 
-        # River preference among current candidates.
-        if river_tree is not None and candidate.any():
-            cand_pos = pos_f[candidate]
-            spacing = _texel_spacing(positions[f])
-            dists, _ = river_tree.query(cand_pos)
+        spacing = _texel_spacing(positions[f])
+
+        # Confluence preference: river junction beats generic river proximity.
+        # Only falls through to the river check when no confluence is nearby.
+        at_confluence = False
+        if confluence_tree is not None and candidate.any():
+            dists, _ = confluence_tree.query(pos_f[candidate])
+            near = dists < (river_threshold_factor * spacing)
+            if near.any():
+                idx = np.flatnonzero(candidate)[near]
+                new_mask = np.zeros_like(candidate)
+                new_mask[idx] = True
+                candidate = new_mask
+                at_confluence = True
+
+        # River proximity (fallback when no confluence found in candidates).
+        if not at_confluence and river_tree is not None and candidate.any():
+            dists, _ = river_tree.query(pos_f[candidate])
             near = dists < (river_threshold_factor * spacing)
             if near.any():
                 idx = np.flatnonzero(candidate)[near]
@@ -117,11 +172,9 @@ def refine_settlement_positions(
         if cand_idx.size == 0:
             continue
 
-        # Fertility tiebreak (per-face → constant within one face), then nearest
-        # to the centroid as the deterministic final selector.
+        # Nearest to centroid as the deterministic final selector.
         cand_pos = pos_f[cand_idx]
         d_centroid = np.linalg.norm(cand_pos - centroids[f][None, :], axis=1)
-        # All candidates share face f, so fertility is uniform; rank by distance.
         best = cand_idx[int(np.argmin(d_centroid))]
         new_pos = pos_f[best].copy()
 
