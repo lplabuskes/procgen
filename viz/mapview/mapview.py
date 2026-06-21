@@ -1214,7 +1214,7 @@ class MapWidget(QWidget):
 
 
 class MapWindow(QMainWindow):
-    def __init__(self, mesh: Optional[PolygonMesh] = None) -> None:
+    def __init__(self, mesh: Optional[PolygonMesh] = None, debug: bool = False) -> None:
         super().__init__()
         self.setWindowTitle("Map Viewer")
         self.resize(900, 500)
@@ -1233,13 +1233,16 @@ class MapWindow(QMainWindow):
         self._has_save_callback = False
         toolbar_layout.addWidget(self._save_btn)
 
-        toolbar_layout.addWidget(QLabel("Projection:"))
+        self._proj_label = QLabel("Projection:")
+        self._proj_label.setVisible(debug)
+        toolbar_layout.addWidget(self._proj_label)
         self._combo = QComboBox()
         for proj in ALL_PROJECTIONS:
             self._combo.addItem(proj.name)
         self._combo.currentIndexChanged.connect(
             lambda i: self._map.set_projection(ALL_PROJECTIONS[i])
         )
+        self._combo.setVisible(debug)
         toolbar_layout.addWidget(self._combo)
 
         self._color_label = QLabel("Coloration:")

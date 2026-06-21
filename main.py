@@ -37,7 +37,7 @@ def main() -> None:
 
     app = QApplication(sys.argv)
 
-    window = MapWindow()
+    window = MapWindow(debug=debug)
     window.setWindowTitle("Procedural World")
 
     current_params: list[AppParams] = [AppParams()]

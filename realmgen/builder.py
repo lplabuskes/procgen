@@ -166,7 +166,7 @@ class RealmPipeline(Pipeline):
                 return
             parts: list[str] = []
             suit = meta.get("suitability")
-            if not debug and suit is not None:
+            if debug and suit is not None:
                 parts.append(f"Suit: {float(suit):.2f}")
             tier = meta.get("settlement_tier")
             if tier is not None and int(tier) >= 0:
@@ -194,7 +194,7 @@ class RealmPipeline(Pipeline):
                 if cc is not None and int(cc) >= 0:
                     parts.append(["Direct", "Vassal", "Independent"][int(cc)])
                 tension = meta.get("border_tension")
-                if tension is not None and float(tension) > 0.01:
+                if debug and tension is not None and float(tension) > 0.01:
                     parts.append(f"Tension: {float(tension):.2f}")
             if parts:
                 cur = window._status_label.text()
