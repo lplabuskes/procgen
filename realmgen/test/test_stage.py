@@ -64,7 +64,7 @@ def test_scoring_register_display_gated_on_results():
     stage.suitability = np.array([0.5], dtype=np.float32)
     stage.situational_value = np.array([0.5], dtype=np.float32)
     reg2 = DisplayRegistry()
-    stage.register_display(None, reg2)  # type: ignore[arg-type]
+    stage.register_display(None, reg2, debug=True)  # type: ignore[arg-type]
     assert set(reg2.schemes) == {"Suitability", "Situational Value"}
 
 
@@ -81,7 +81,7 @@ def test_population_register_display_gated_on_results():
     stage.settlements = []
     stage.hinterland = np.full(4, -1, dtype=np.int32)
     reg2 = DisplayRegistry()
-    stage.register_display(None, reg2)  # type: ignore[arg-type]
+    stage.register_display(None, reg2, debug=True)  # type: ignore[arg-type]
     assert "Trade Flow" in reg2.schemes
     assert "Hinterland" in reg2.schemes
     assert any(ov.feature == "settlements" for ov in reg2.overlays)
@@ -101,6 +101,6 @@ def test_polity_register_display_gated_on_results():
     ]
     stage.face_tension = np.zeros(4, dtype=np.float64)
     reg2 = DisplayRegistry()
-    stage.register_display(None, reg2)  # type: ignore[arg-type]
+    stage.register_display(None, reg2, debug=True)  # type: ignore[arg-type]
     assert "Polities" in reg2.schemes
     assert "Border Tension" in reg2.schemes
