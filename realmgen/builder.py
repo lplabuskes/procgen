@@ -166,7 +166,7 @@ class RealmPipeline(Pipeline):
                 return
             parts: list[str] = []
             suit = meta.get("suitability")
-            if suit is not None:
+            if not debug and suit is not None:
                 parts.append(f"Suit: {float(suit):.2f}")
             tier = meta.get("settlement_tier")
             if tier is not None and int(tier) >= 0:

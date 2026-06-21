@@ -104,6 +104,7 @@ def refine_settlement_positions(
     rivers,
     river_threshold_factor: float = 1.5,
     confluence_search_radius: float = 0.01,
+    border_texels: int = 2,
 ) -> dict[tuple[float, float, float], np.ndarray]:
     """Snap each settlement to its best in-face texel; mutate ``position`` in place.
 
@@ -125,6 +126,17 @@ def refine_settlement_positions(
     river_tree = _build_river_tree(rivers)
     confluence_tree = _build_confluence_tree(rivers, search_radius=confluence_search_radius)
 
+    # Interior mask: excludes border_texels rows/cols on each edge of the face grid.
+    # Applied when snapping to rivers, confluences, or fertility so markers don't
+    # land right at the face seam. Falls back to the full set when no interior
+    # candidates survive.
+    if border_texels > 0 and h > 2 * border_texels and w > 2 * border_texels:
+        _interior_2d = np.zeros((h, w), dtype=bool)
+        _interior_2d[border_texels:h - border_texels, border_texels:w - border_texels] = True
+        interior_flat = _interior_2d.reshape(-1)
+    else:
+        interior_flat = np.ones(h * w, dtype=bool)
+
     for s in settlements:
         f = int(s.face_id)
         if f < 0 or f >= n:
@@ -145,25 +157,31 @@ def refine_settlement_positions(
 
         spacing = _texel_spacing(positions[f])
 
+        # Interior-only candidate pool for river/confluence/fertility snapping.
+        # Falls back to the full candidate set when the interior yields nothing.
+        inner = candidate & interior_flat
+        if not inner.any():
+            inner = candidate
+
         # Confluence preference: river junction beats generic river proximity.
         # Only falls through to the river check when no confluence is nearby.
         at_confluence = False
-        if confluence_tree is not None and candidate.any():
-            dists, _ = confluence_tree.query(pos_f[candidate])
+        if confluence_tree is not None and inner.any():
+            dists, _ = confluence_tree.query(pos_f[inner])
             near = dists < (river_threshold_factor * spacing)
             if near.any():
-                idx = np.flatnonzero(candidate)[near]
+                idx = np.flatnonzero(inner)[near]
                 new_mask = np.zeros_like(candidate)
                 new_mask[idx] = True
                 candidate = new_mask
                 at_confluence = True
 
         # River proximity (fallback when no confluence found in candidates).
-        if not at_confluence and river_tree is not None and candidate.any():
-            dists, _ = river_tree.query(pos_f[candidate])
+        if not at_confluence and river_tree is not None and inner.any():
+            dists, _ = river_tree.query(pos_f[inner])
             near = dists < (river_threshold_factor * spacing)
             if near.any():
-                idx = np.flatnonzero(candidate)[near]
+                idx = np.flatnonzero(inner)[near]
                 new_mask = np.zeros_like(candidate)
                 new_mask[idx] = True
                 candidate = new_mask
