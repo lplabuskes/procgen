@@ -181,15 +181,21 @@ def trace_label_borders(positions: np.ndarray, labels: np.ndarray,
     ctr = 0.25 * (P[:, :-1, :-1, :] + P[:, :-1, 1:, :]
                   + P[:, 1:, :-1, :] + P[:, 1:, 1:, :])                  # (N,H-1,W-1,3)
 
+    # Depth-d ancestor of every texel label (negative water/unclaimed pass
+    # through), so the saddle resolver can read the four corner regions of a cell.
+    claimed = labels >= 0
+
     out: dict[int, np.ndarray] = {}
     for depth in range(max_depth + 1):
-        segs = _trace_depth(depth, hbd, vbd, hmid, vmid, ctr, iterations)
+        anc_d = labels.copy()
+        anc_d[claimed] = lut[depth, labels[claimed]]
+        segs = _trace_depth(depth, hbd, vbd, hmid, vmid, ctr, anc_d, iterations)
         if segs:
             out[depth] = np.asarray(segs, dtype=np.float32)
     return out
 
 
-def _trace_depth(depth: int, hbd, vbd, hmid, vmid, ctr, iterations: int) -> list:
+def _trace_depth(depth: int, hbd, vbd, hmid, vmid, ctr, anc, iterations: int) -> list:
     # Per-cell crossing flags for the four cell edges (cells span i,j in
     # 0..H-2, 0..W-2).
     top = hbd[:, :-1, :] == depth                       # (N,H-1,W-1)
@@ -218,14 +224,27 @@ def _trace_depth(depth: int, hbd, vbd, hmid, vmid, ctr, iterations: int) -> list
         edges.add((kp, kq) if kp < kq else (kq, kp))
 
     for f, i, j in cells:
+        t, b, lft, rgt = top[f, i, j], bot[f, i, j], left[f, i, j], right[f, i, j]
+        if int(t) + int(b) + int(lft) + int(rgt) == 4:
+            # 2×2 saddle.  A two-region checkerboard (TL==BR, TR==BL) routed as
+            # four spokes to the centre draws a self-crossing X (a visible knot).
+            # Resolve it into two non-crossing links that keep the equal diagonal
+            # connected.  Genuine 3-/4-region junctions keep the centre hub.
+            tl, tr = anc[f, i, j], anc[f, i, j + 1]
+            bl, br = anc[f, i + 1, j], anc[f, i + 1, j + 1]
+            if tl == br and tr == bl and tl != tr:
+                # keep TL/BR connected: cut the TR and BL corners
+                add(m_top[f, i, j], m_right[f, i, j])
+                add(m_bot[f, i, j], m_left[f, i, j])
+                continue
         mids = []
-        if top[f, i, j]:
+        if t:
             mids.append(m_top[f, i, j])
-        if bot[f, i, j]:
+        if b:
             mids.append(m_bot[f, i, j])
-        if left[f, i, j]:
+        if lft:
             mids.append(m_left[f, i, j])
-        if right[f, i, j]:
+        if rgt:
             mids.append(m_right[f, i, j])
         if len(mids) == 2:
             add(mids[0], mids[1])

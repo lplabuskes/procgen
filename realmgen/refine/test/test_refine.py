@@ -15,7 +15,7 @@ from realmgen.refine.borders import (
     smooth_polity_borders,
     trace_label_borders,
 )
-from realmgen.refine.fill import build_polity_fill_texture
+from realmgen.refine.fill import build_polity_fill_texture, domain_warp
 from realmgen.refine.settlements import (
     _neighbor_any,
     position_key,
@@ -160,6 +160,39 @@ def test_trace_label_borders_splits_two_polities():
     xs = np.concatenate([segs[:, 0], segs[:, 3]])
     ys = np.concatenate([segs[:, 1], segs[:, 4]])
     assert np.ptp(ys) > np.ptp(xs)
+
+
+def test_domain_warp_identity_and_continuity():
+    rng = np.random.default_rng(0)
+    pos = rng.normal(size=(50, 3))
+    pos /= np.linalg.norm(pos, axis=1, keepdims=True)
+    # amplitude 0 is a no-op (warp off → bit-identical positions).
+    assert np.array_equal(domain_warp(pos, amplitude=0.0, base_frequency=40.0,
+                                      octaves=3), pos)
+    # Pure function of position: coincident points (the basis for seam continuity)
+    # get an identical displacement.
+    dup = np.vstack([pos, pos[:5]])
+    w = domain_warp(dup, amplitude=0.02, base_frequency=40.0, octaves=3, seed=7)
+    assert np.allclose(w[:5], w[50:55])
+    # Displacement is bounded by the amplitude (fBm is normalised to ~[-1, 1]).
+    assert np.max(np.linalg.norm(w[:50] - pos, axis=1)) < 0.02 * 3
+
+
+def test_trace_label_borders_resolves_saddle_without_center_x():
+    # A 2x2 checkerboard makes a single cell whose four edges are all borders.
+    # Routing every crossing to the cell centre would draw a self-crossing X
+    # (the visible knot); it must instead emit two non-crossing links that skip
+    # the centre point entirely.
+    pos = _polar_grid(2, 2)
+    labels = np.array([[[0, 1], [1, 0]]], dtype=np.int32)
+    out = trace_label_borders(pos, labels, [_pol(0), _pol(1)], iterations=0)
+    segs = out[0]
+    assert len(segs) == 2                                    # two links, not four
+    center = pos[0].reshape(-1, 3).mean(axis=0)
+    pts = np.concatenate([segs[:, :3], segs[:, 3:]], axis=0)
+    pts = pts / np.linalg.norm(pts, axis=1, keepdims=True)
+    center = center / np.linalg.norm(center)
+    assert np.all(np.linalg.norm(pts - center, axis=1) > 1e-6)  # never the centre
 
 
 def test_trace_label_borders_ignores_coastline():

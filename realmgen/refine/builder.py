@@ -40,6 +40,15 @@ class RefineParams:
     border_control_floor: float = _f(
         1e-3, label="Border control floor", min=1e-6, max=1.0, hidden=True
     )
+    boundary_warp_amplitude: float = _f(
+        0.012, label="Boundary erosion strength", min=0.0, max=0.05, step=0.001
+    )
+    boundary_warp_frequency: float = _f(
+        45.0, label="Boundary erosion frequency", min=5.0, max=200.0, step=5.0
+    )
+    boundary_warp_octaves: int = _f(
+        3, label="Boundary erosion octaves", min=1, max=5, step=1, hidden=True
+    )
 
 
 class RefineStage(Stage):
@@ -91,6 +100,10 @@ class RefineStage(Stage):
                 labels = compute_texel_labels(
                     mesh, pof, is_water, authority, ocean_tex, lake_tex,
                     control_floor=float(p.border_control_floor),
+                    warp_amplitude=float(p.boundary_warp_amplitude),
+                    warp_frequency=float(p.boundary_warp_frequency),
+                    warp_octaves=int(p.boundary_warp_octaves),
+                    warp_seed=int(world.seed or 0),
                 )
                 world.add_feature("polity_borders", smooth_polity_borders(
                     mesh, polities, labels,

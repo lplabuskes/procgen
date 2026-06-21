@@ -30,10 +30,52 @@ import numpy as np
 
 from realmgen.polity.display import make_polity_tree_color
 from realmgen.polity.types import UNCLAIMED_COLOR
+from utils.simplex import fbm_sum, make_perm
 from worldgen.geology.display import OCEAN_COLOR
 
 WATER = -2
 UNCLAIMED = -1
+
+
+def domain_warp(
+    positions: np.ndarray,
+    *,
+    amplitude: float,
+    base_frequency: float,
+    octaves: int,
+    lacunarity: float = 2.0,
+    persistence: float = 0.5,
+    seed: int = 0,
+) -> np.ndarray:
+    """Displace 3-D ``positions`` by a coherent fBm-simplex vector field.
+
+    Used to perturb the texel positions fed to the polity Voronoi so the
+    classification boundary wiggles organically instead of hugging the straight
+    perpendicular bisectors between face centroids (the polygonal staircase).
+
+    The displacement is a pure function of position, so coincident texels on a
+    shared mesh edge get the *same* warp — the warp never introduces seams of its
+    own; cross-face label disagreements are still reconciled downstream.
+    """
+    if amplitude <= 0.0 or octaves <= 0:
+        return np.asarray(positions, dtype=np.float64)
+    flat = np.asarray(positions, dtype=np.float64).reshape(-1, 3)
+    freqs, amps, total = [], [], 0.0
+    f, a = float(base_frequency), 1.0
+    for _ in range(int(octaves)):
+        freqs.append(f)
+        amps.append(a)
+        total += a
+        a *= persistence
+        f *= lacunarity
+    freqs_arr, amps_arr = np.asarray(freqs), np.asarray(amps)
+    total = total or 1.0
+    disp = np.empty_like(flat)
+    for c in range(3):
+        perm = make_perm(seed * 3 + c + 1)
+        disp[:, c] = fbm_sum(flat, perm, freqs_arr, amps_arr) / total
+    warped = flat + amplitude * disp
+    return warped.reshape(np.asarray(positions).shape)
 
 
 def _polity_color_map(polities: List) -> dict:
@@ -63,16 +105,30 @@ def compute_texel_labels(
     lake_tex: Optional[np.ndarray],
     *,
     control_floor: float = 1e-3,
+    warp_amplitude: float = 0.0,
+    warp_frequency: float = 40.0,
+    warp_octaves: int = 3,
+    warp_seed: int = 0,
     reconcile_edges: bool = True,
 ) -> np.ndarray:
     """Return an ``(N, H, W)`` int32 per-texel label grid.
 
     Values: ``>= 0`` polity id, ``UNCLAIMED`` (-1) for unclaimed land, ``WATER``
     (-2) for ocean/lake texels.
+
+    When ``warp_amplitude > 0`` the texel positions fed to the polity Voronoi are
+    domain-warped (see :func:`domain_warp`) so the classification boundary erodes
+    the polygonal face-bisector staircase into an organic wiggle. The warp affects
+    only the *classification decision*; rendered border geometry still uses the
+    true texel positions, so lines stay on the warped fill's region edges.
     """
     n = len(mesh.faces)
     H, W = int(ocean_tex.shape[1]), int(ocean_tex.shape[2])
     positions = np.asarray(mesh.face_texture_positions(H, W), dtype=np.float64)
+    warped = domain_warp(
+        positions, amplitude=warp_amplitude, base_frequency=warp_frequency,
+        octaves=warp_octaves, seed=warp_seed,
+    ) if warp_amplitude > 0.0 else positions
     centroids = np.asarray(mesh.face_centroids, dtype=np.float64)
     control = np.maximum(np.asarray(authority, dtype=np.float64), control_floor)
     pof = np.asarray(polity_of_face, dtype=np.int64)
@@ -104,7 +160,7 @@ def compute_texel_labels(
         cand_arr = np.asarray(cand, dtype=np.int64)
         C = centroids[cand_arr]                                   # (k, 3)
         wsq = control[cand_arr] ** 2                              # (k,)
-        P = positions[f].reshape(-1, 3)                           # (HW, 3)
+        P = warped[f].reshape(-1, 3)                              # (HW, 3)
         d2 = ((P[:, None, :] - C[None, :, :]) ** 2).sum(axis=-1)  # (HW, k)
         winners = cand_arr[np.argmin(d2 / wsq[None, :], axis=1)]  # (HW,) face ids
         label[f] = pof[winners].reshape(H, W)
@@ -139,6 +195,10 @@ def build_polity_fill_texture(
     lake_tex: Optional[np.ndarray],
     *,
     control_floor: float = 1e-3,
+    warp_amplitude: float = 0.0,
+    warp_frequency: float = 40.0,
+    warp_octaves: int = 3,
+    warp_seed: int = 0,
     labels: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Return an ``(N, H, W, 4)`` float16 RGBA polity-fill texture.
@@ -150,7 +210,9 @@ def build_polity_fill_texture(
     if labels is None:
         labels = compute_texel_labels(
             mesh, polity_of_face, is_water, authority, ocean_tex, lake_tex,
-            control_floor=control_floor,
+            control_floor=control_floor, warp_amplitude=warp_amplitude,
+            warp_frequency=warp_frequency, warp_octaves=warp_octaves,
+            warp_seed=warp_seed,
         )
     labels = np.asarray(labels)
 

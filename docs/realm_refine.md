@@ -29,6 +29,13 @@ Runs after `PolityStage`; reads the textures attached by worldgen (`ocean_mask`,
   to the chained border polylines. Higher = rounder, denser lines.
 - `border_control_floor` (hidden, default 1e-3) — floor on per-face authority so a
   zero-authority (unclaimed-adjacent) face still yields a finite Voronoi weight.
+- `boundary_warp_amplitude` (default 0.012) — magnitude (unit-sphere units, ~⅓ of a
+  face) of the fBm domain warp applied to the texel positions fed to the polity
+  Voronoi. `0` disables the warp (boundaries fall on the bare face-centroid
+  bisectors — the polygonal staircase). The warp is seeded from `World.seed`.
+- `boundary_warp_frequency` (default 45) — base frequency of the warp noise; higher =
+  finer, busier wiggles. Pushed too high it aliases against the texel grid.
+- `boundary_warp_octaves` (hidden, default 3) — fBm octave count for the warp.
 
 ## Settlement snapping (`settlements.py`)
 
@@ -69,6 +76,16 @@ is a polity id (`≥ 0`), `UNCLAIMED` (-1) for claimed-by-nobody land, or `WATER
   Voronoi over the face's own centroid and its claimed-land neighbours
   (`argmin |x−c|² / control²`), so the stronger polity bulges into the weaker one.
   Interior claimed-land faces stay uniform.
+- **Boundary erosion (domain warp).** The texel positions `x` fed to that Voronoi
+  are first displaced by a coherent fBm-simplex vector field (`domain_warp`,
+  `boundary_warp_*`). Without it the boundary is the bare perpendicular bisector
+  between two face centroids — a straight line / circular arc that hugs the
+  hexagon edges, so the map reads as polygonal. The warp wiggles the boundary
+  organically. It is a pure function of 3D position, so coincident shared-edge
+  texels get the *same* displacement (it never introduces seams of its own);
+  residual cross-face label disagreements are still reconciled below. Only the
+  *classification* is warped — the border tracer still uses the true texel
+  positions, so the lines land exactly on the warped fill's region edges.
 - **Orphan land in water faces.** A face counts as water at *face* level once
   **more than half** its texels are water (`is_ocean_per_face`), so a coastal
   "water" face can still hold a large minority of genuine land texels. Those
@@ -108,6 +125,12 @@ the texel label grid**, so the lines are exactly the edges of the fill's regions
   edge midpoints; otherwise each crossing links to the cell centre (handles 3+
   region junctions and coastal terminations). Even-parity is broken only at the
   coast, which is the desired dangling endpoint.
+- **Saddle resolution.** A 2×2 *checkerboard* cell (all four edges are borders but
+  only two regions are present, `TL==BR ≠ TR==BL`) would, under the centre-hub
+  rule, route four spokes through the centre — a self-crossing X that Chaikin
+  rounds into a visible knot/loop. Such cells are instead split into the two
+  non-crossing links that keep the equal-label diagonal connected. Genuine 3-/4-
+  region junctions still use the centre hub.
 - **Continuity across seams is free**: a crossing midpoint on a shared mesh edge
   is the average of two coincident edge texels, i.e. the *same 3D point in both
   faces*. Reconciled edge labels (above) make both faces emit that crossing, so
@@ -140,5 +163,6 @@ Mutates in place: `settlements` (`.position`), `trade_routes` (endpoint geometry
 
 `realmgen/refine/test/test_refine.py` — stub-mesh snapping (coast/ocean-vs-lake/
 river), route remapping, Chaikin corner-cutting + edge chaining (open/closed),
-texel border tracing (two-polity split, coastline ignored), and fill-texture
+texel border tracing (two-polity split, coastline ignored, saddle resolved
+without a centre X), domain-warp identity/continuity, and fill-texture
 shape/coastline/orphan-land behaviour.
