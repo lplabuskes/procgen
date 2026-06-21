@@ -298,6 +298,8 @@ class ScoringStage(Stage):
         SITUATIONAL_VALUE.write(mesh, situational_value)
 
     def register_display(self, world, reg: DisplayRegistry, *, debug: bool = False) -> None:
+        if not debug:
+            return
         if self.suitability is not None:
             reg.add_scheme("Suitability", _suitability_color)
         if self.situational_value is not None:

@@ -461,14 +461,14 @@ class PopulationStage(Stage):
         )
 
     def register_display(self, world, reg: DisplayRegistry, *, debug: bool = False) -> None:
-        if self.trade_result is not None:
+        if debug and self.trade_result is not None:
             max_flow = float(self.trade_result.face_flow.max()) if self.trade_result.face_flow.size else 0.0
             _max_flow_ref = [max_flow]
             reg.add_scheme(
                 "Trade Flow",
                 lambda meta, _ref=_max_flow_ref: _trade_flow_color(meta, _ref),
             )
-        if self.hinterland is not None and self.settlements is not None:
+        if debug and self.hinterland is not None and self.settlements is not None:
             reg.add_scheme("Hinterland", _make_hinterland_color(self.settlements))
         if debug and self.rural_population is not None:
             reg.add_scheme("Rural Population", _make_rural_pop_color(self.rural_population))

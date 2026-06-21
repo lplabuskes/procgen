@@ -409,7 +409,7 @@ class PolityStage(Stage):
             tex = ("polity_fill" if world is not None
                    and "polity_fill" in world.mesh.face_textures else None)
             reg.add_scheme("Polities", disp.make_polity_tree_color(self.polities), texture=tex)
-        if self.face_tension is not None:
+        if debug and self.face_tension is not None:
             reg.add_scheme("Border Tension", disp.tension_color)
         if world is not None and world.has_feature("polity_borders"):
             reg.add_overlay("polity_borders", "Polity Borders")

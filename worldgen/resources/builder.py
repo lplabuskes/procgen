@@ -381,7 +381,7 @@ class ResourcesBuilder(Stage):
                 "Forest Density", forest_density_color,
                 texture="forest_density_rgba", legend=("gradient", forest_density_legend_entries()),
             )
-        if "dominant_crop" in mesh.face_textures:
+        if debug and "dominant_crop" in mesh.face_textures:
             mesh.set_face_textures(
                 "dominant_crop_rgba",
                 build_dominant_crop_display_texture(
@@ -394,26 +394,24 @@ class ResourcesBuilder(Stage):
                 texture="dominant_crop_rgba", legend=("categorical", crop_legend_entries()),
             )
 
-        # Resource → face lookups (built once, closed over by the hover fns).
-        centroids = mesh.face_centroids.astype(np.float32)
-        pos_to_face = {tuple(c): i for i, c in enumerate(centroids)}
-
-        minerals_by_face: dict = {}
-        if world.has_feature("minerals"):
-            from worldgen.resources.minerals import MINERAL_NAMES
-            m_pos, m_kinds, m_abund = world.get_feature("minerals")
-            for p, k, a in zip(m_pos, m_kinds, m_abund):
-                fi = pos_to_face.get(tuple(p))
-                if fi is not None:
-                    minerals_by_face.setdefault(fi, []).append((MINERAL_NAMES[int(k)], float(a)))
-            reg.add_overlay(
-                "minerals", "Minerals", checked=False,
-                legend=("categorical", mineral_legend_entries()),
-            )
-
-        # Debug crop/fertility/forest fragments come first (matching the original
-        # status-bar order), then minerals (always), then rare-bio (debug).
         if debug:
+            # Resource → face lookups (built once, closed over by the hover fns).
+            centroids = mesh.face_centroids.astype(np.float32)
+            pos_to_face = {tuple(c): i for i, c in enumerate(centroids)}
+
+            minerals_by_face: dict = {}
+            if world.has_feature("minerals"):
+                from worldgen.resources.minerals import MINERAL_NAMES
+                m_pos, m_kinds, m_abund = world.get_feature("minerals")
+                for p, k, a in zip(m_pos, m_kinds, m_abund):
+                    fi = pos_to_face.get(tuple(p))
+                    if fi is not None:
+                        minerals_by_face.setdefault(fi, []).append((MINERAL_NAMES[int(k)], float(a)))
+                reg.add_overlay(
+                    "minerals", "Minerals", checked=False,
+                    legend=("categorical", mineral_legend_entries()),
+                )
+
             from worldgen.resources.crops import CROP_NAMES
 
             def _resources_meta_hover(face: int, _uv, _w) -> list:
@@ -432,13 +430,13 @@ class ResourcesBuilder(Stage):
 
             reg.add_hover(_resources_meta_hover)
 
-        def _minerals_hover(face: int, _uv, _w) -> list:
-            if face in minerals_by_face:
-                best = max(minerals_by_face[face], key=lambda x: x[1])
-                return [f"{best[0]}: {best[1]:.2f}"]
-            return []
+            def _minerals_hover(face: int, _uv, _w) -> list:
+                if face in minerals_by_face:
+                    best = max(minerals_by_face[face], key=lambda x: x[1])
+                    return [f"{best[0]}: {best[1]:.2f}"]
+                return []
 
-        reg.add_hover(_minerals_hover)
+            reg.add_hover(_minerals_hover)
 
         if debug:
             rare_bio_by_face: dict = {}
