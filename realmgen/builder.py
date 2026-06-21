@@ -136,6 +136,15 @@ class RealmPipeline(Pipeline):
             for name, spec in reg.schemes.items():
                 merged[name] = spec.fn
             window.set_color_schemes(merged)
+            # Wire per-scheme textures (e.g. the texel-level "Polities" fill) and
+            # legends — mirrors viz.mapview.registry.apply_registry, which the
+            # realm path bypasses because it *merges* into worldgen's schemes.
+            for name, spec in reg.schemes.items():
+                if spec.texture is not None:
+                    window.associate_scheme_texture(name, spec.texture)
+                if spec.legend is not None:
+                    kind, entries = spec.legend
+                    window.register_legend(name, kind, entries)
 
         for ov in reg.overlays:
             window.add_overlay(ov.feature, label=ov.label, checked=ov.checked)

@@ -8,7 +8,14 @@ from __future__ import annotations
 import numpy as np
 
 from realmgen.placement.types import Settlement
-from realmgen.refine.borders import _weighted_voronoi_offset
+from realmgen.polity.types import Polity
+from realmgen.refine.borders import (
+    _chaikin,
+    _chain_edges,
+    smooth_polity_borders,
+    trace_label_borders,
+)
+from realmgen.refine.fill import build_polity_fill_texture
 from realmgen.refine.settlements import (
     _neighbor_any,
     position_key,
@@ -110,33 +117,147 @@ def test_remap_routes_moves_matching_endpoints():
     assert out[0][2] == 5.0
 
 
-# ── weighted-Voronoi border offset ───────────────────────────────────────────
+# ── border chaining + Chaikin smoothing ──────────────────────────────────────
 
 
-def test_voronoi_offset_equal_control_is_zero():
-    a = np.array([-1.0, 0.0, 0.0])
-    b = np.array([1.0, 0.0, 0.0])
-    s = np.array([0.0, 0.0, 1.0])           # equidistant from a and b
-    d = np.array([1.0, 0.0, 0.0])
-    lam = _weighted_voronoi_offset(s, d, a, b, 1.0, 1.0, max_off=10.0)
-    assert abs(lam) < 1e-9
+def test_chaikin_cuts_corner_keeps_open_endpoints():
+    pts = [np.array([0.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0]), np.array([1.0, 1.0, 0.0])]
+    out = _chaikin(pts, 1, closed=False)
+    assert np.allclose(out[0], pts[0]) and np.allclose(out[-1], pts[-1])  # endpoints fixed
+    assert len(out) > len(pts)                                            # corner cut in two
+    assert not any(np.allclose(o, pts[1]) for o in out)                   # sharp corner gone
 
 
-def test_voronoi_offset_biases_toward_weaker():
-    a = np.array([-1.0, 0.0, 0.0])
-    b = np.array([1.0, 0.0, 0.0])
-    s = np.array([0.0, 0.0, 1.0])
-    d = np.array([1.0, 0.0, 0.0])
-    # a stronger (w_a > w_b): boundary pushed toward b (positive λ along d).
-    lam = _weighted_voronoi_offset(s, d, a, b, 2.0, 1.0, max_off=10.0)
-    assert lam > 0.0
+def test_chain_edges_open_and_closed():
+    open_chains = _chain_edges({(0, 1), (1, 2), (2, 3)})
+    assert len(open_chains) == 1 and len(open_chains[0]) == 4
+    loop = _chain_edges({(0, 1), (1, 2), (2, 3), (3, 0)})
+    assert len(loop) == 1 and loop[0][0] == loop[0][-1]                   # closed ring
 
 
-def test_voronoi_offset_clamped():
-    a = np.array([-1.0, 0.0, 0.0])
-    b = np.array([1.0, 0.0, 0.0])
-    s = np.array([0.0, 0.0, 1.0])
-    d = np.array([1.0, 0.0, 0.0])
-    # Unclamped this root is ≈0.785 (see bias test); max_off=0.5 clamps it.
-    lam = _weighted_voronoi_offset(s, d, a, b, 2.0, 1.0, max_off=0.5)
-    assert lam == 0.5
+# ── texel border tracing ─────────────────────────────────────────────────────
+
+
+def _polar_grid(h, w):
+    """One face's (1, h, w, 3) texel positions on a small patch near +z."""
+    pos = np.zeros((1, h, w, 3), dtype=np.float64)
+    for i in range(h):
+        for j in range(w):
+            v = np.array([(j - (w - 1) / 2) * 0.1, (i - (h - 1) / 2) * 0.1, 1.0])
+            pos[0, i, j] = v / np.linalg.norm(v)
+    return pos
+
+
+def test_trace_label_borders_splits_two_polities():
+    # Left half polity 0, right half polity 1 → a single depth-0 border down the
+    # column seam between j=1 and j=2.
+    pos = _polar_grid(4, 4)
+    labels = np.array([[[0, 0, 1, 1]] * 4], dtype=np.int32)
+    out = trace_label_borders(pos, labels, [_pol(0), _pol(1)], iterations=0)
+    assert 0 in out and out[0].shape[1] == 6 and len(out[0]) >= 1
+    # The border runs vertically: endpoints span a range of y but a narrow x.
+    segs = out[0]
+    xs = np.concatenate([segs[:, 0], segs[:, 3]])
+    ys = np.concatenate([segs[:, 1], segs[:, 4]])
+    assert np.ptp(ys) > np.ptp(xs)
+
+
+def test_trace_label_borders_ignores_coastline():
+    # Land polity 0 against water (-2): a coastline, not a border.
+    pos = _polar_grid(4, 4)
+    labels = np.array([[[0, 0, -2, -2]] * 4], dtype=np.int32)
+    out = trace_label_borders(pos, labels, [_pol(0), _pol(1)], iterations=0)
+    assert all(seg.shape[0] == 0 for seg in out.values()) or out == {}
+
+
+# ── border / fill stub mesh ──────────────────────────────────────────────────
+
+
+class _BorderMesh:
+    """Two faces sharing edge (1, 2); texels collapse to their face centroid."""
+
+    def __init__(self):
+        v = np.array([[0.0, 0.0, 1.0], [1.0, 0.0, 0.0],
+                      [0.0, 1.0, 0.0], [1.0, 1.0, 1.0]])
+        self.vertices = v / np.linalg.norm(v, axis=1, keepdims=True)
+        self.faces = [(0, 1, 2), (1, 2, 3)]
+        self.face_adjacency = [[1], [0]]
+        c = np.array([self.vertices[list(f)].mean(0) for f in self.faces])
+        self.face_centroids = c / np.linalg.norm(c, axis=1, keepdims=True)
+
+    def face_texture_positions(self, h, w):
+        pos = np.zeros((2, h, w, 3))
+        for f in range(2):
+            pos[f, :, :] = self.face_centroids[f]
+        return pos
+
+
+def _pol(pid):
+    return Polity(polity_id=pid, capital_face=pid, capital_position=np.array([1.0, 0.0, 0.0]),
+                  power=10.0, n_faces=1, member_settlement_faces=[pid])
+
+
+class _GridMesh:
+    """One face whose texel grid is a small patch near +z."""
+
+    def face_texture_positions(self, h, w):
+        return _polar_grid(h, w)
+
+
+def test_smooth_polity_borders_emits_depth0_segments():
+    mesh = _GridMesh()
+    labels = np.array([[[0, 0, 1, 1]] * 4], dtype=np.int32)
+    out = smooth_polity_borders(mesh, [_pol(0), _pol(1)], labels)
+    assert 0 in out and out[0].shape[1] == 6 and len(out[0]) >= 1
+
+
+def test_fill_texture_shape_and_coastline():
+    from worldgen.geology.display import OCEAN_COLOR
+
+    mesh = _BorderMesh()
+    ocean = np.zeros((2, 2, 2, 1))
+    ocean[0, 0, 0, 0] = 1.0                       # one water texel on face 0
+    rgba = build_polity_fill_texture(
+        mesh, [_pol(0), _pol(1)], np.array([0, 1]), np.array([False, False]),
+        authority=np.array([1.0, 1.0]), ocean_tex=ocean, lake_tex=None,
+    )
+    assert rgba.shape == (2, 2, 2, 4) and rgba.dtype == np.float16
+    assert np.allclose(rgba[..., 3], 1.0)
+    assert np.allclose(rgba[0, 0, 0, :3].astype(float), OCEAN_COLOR[:3], atol=1e-2)  # coast
+    assert not np.allclose(rgba[1, 0, 0, :3].astype(float), OCEAN_COLOR[:3], atol=1e-2)
+
+
+def test_fill_covers_orphan_land_in_water_face():
+    """A face that is water at *face* level (>50% texels water) but holds genuine
+    land texels: those land texels belong to the claimed-land neighbour, not the
+    ocean — the polity colour must cover them at texel level."""
+    from realmgen.refine.fill import _polity_color_map
+
+    mesh = _BorderMesh()
+    ocean = np.zeros((2, 2, 2, 1))               # all texels land per the mask
+    rgba = build_polity_fill_texture(
+        mesh, [_pol(0), _pol(1)],
+        polity_of_face=np.array([-1, 1]),        # face 0 unclaimed + water, face 1 polity 1
+        is_water=np.array([True, False]),
+        authority=np.array([1.0, 1.0]), ocean_tex=ocean, lake_tex=None,
+    )
+    pid_rgb = _polity_color_map([_pol(0), _pol(1)])
+    # Face 0's land texels take the neighbouring polity colour, not ocean/grey.
+    assert np.allclose(rgba[0, 0, 0, :3].astype(float), pid_rgb[1], atol=1e-2)
+
+
+def test_fill_texture_lake_distinct_from_ocean():
+    from worldgen.geology.display import OCEAN_COLOR
+    from worldgen.hydrology.builder import LAKE_COLOR
+
+    mesh = _BorderMesh()
+    ocean = np.zeros((2, 2, 2, 1))
+    lake = np.zeros((2, 2, 2, 1))
+    lake[0, 0, 0, 0] = 1.0                        # one lake texel on face 0
+    rgba = build_polity_fill_texture(
+        mesh, [_pol(0), _pol(1)], np.array([0, 1]), np.array([False, False]),
+        authority=np.array([1.0, 1.0]), ocean_tex=ocean, lake_tex=lake,
+    )
+    got = rgba[0, 0, 0, :3].astype(float)
+    assert np.allclose(got, LAKE_COLOR[:3], atol=1e-2)            # lake colour, not ocean
+    assert not np.allclose(got, OCEAN_COLOR[:3], atol=1e-2)

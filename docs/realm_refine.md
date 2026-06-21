@@ -18,14 +18,15 @@ Runs after `PolityStage`; reads the textures attached by worldgen (`ocean_mask`,
 
 - `realmgen/refine/builder.py` — `RefineStage`, `RefineParams`
 - `realmgen/refine/settlements.py` — settlement snapping + trade-route remapping
-- `realmgen/refine/borders.py` — control-biased weighted-Voronoi border refinement
+- `realmgen/refine/borders.py` — continuous border polylines traced on the texel polity classification
+- `realmgen/refine/fill.py` — texel polity classification (`compute_texel_labels`) + authority-weighted fill texture
 
 ## `RefineParams`
 
 - `river_threshold_factor` (default 1.5) — a candidate texel counts as "on a river"
   if it lies within `factor × texel_spacing` of a river polyline vertex.
-- `border_samples` (default 5) — sample points per shared edge; the refined border
-  emits `border_samples − 1` segments per face-pair.
+- `border_smoothing_iterations` (default 2) — Chaikin corner-cutting passes applied
+  to the chained border polylines. Higher = rounder, denser lines.
 - `border_control_floor` (hidden, default 1e-3) — floor on per-face authority so a
   zero-authority (unclaimed-adjacent) face still yields a finite Voronoi weight.
 
@@ -55,32 +56,89 @@ old centroid to its refined position — same connections, adjusted geometry. (R
 endpoints are face centroids bit-identical to the pre-refine settlement positions,
 so the match is exact; deposit-side and intermediate endpoints are untouched.)
 
+## Texel polity classification (`fill.py`)
+
+`compute_texel_labels` is the **single source of truth** for both the fill colours
+and the border lines. It returns an `(N, H, W)` int32 label grid where each texel
+is a polity id (`≥ 0`), `UNCLAIMED` (-1) for claimed-by-nobody land, or `WATER`
+(-2) for ocean/lake:
+
+- Each face starts uniform: claimed land → its polity id; everything else → -1.
+- **Border faces** (claimed land with a differing claimed-land neighbour) have
+  their texels reclassified by an authority-weighted (multiplicatively-weighted)
+  Voronoi over the face's own centroid and its claimed-land neighbours
+  (`argmin |x−c|² / control²`), so the stronger polity bulges into the weaker one.
+  Interior claimed-land faces stay uniform.
+- **Orphan land in water faces.** A face counts as water at *face* level once
+  **more than half** its texels are water (`is_ocean_per_face`), so a coastal
+  "water" face can still hold a large minority of genuine land texels. Those
+  faces, when they have a claimed-land neighbour, are run through the same
+  weighted Voronoi over their claimed neighbours — so their land texels take the
+  winning polity instead of being painted ocean. This closes the coastal gap
+  where the face-level land map disagreed with the texel map.
+- Ocean and lake texels (per-texel `ocean_mask`/`lake_mask`) override any land
+  label with `WATER`.
+- **Shared-edge reconciliation.** `face_texture_positions` makes shared-edge
+  texels coincident in 3D across adjacent faces; `compute_texel_labels` uses
+  `mesh.boundary_pixel_pairs` to force those coincident texels to agree (land-vs-
+  land disagreements only). This is what lets the border tracer produce lines that
+  are continuous across face seams.
+
+`build_polity_fill_texture` colourises the labels into the `(N, H, W, 4)` float16
+RGBA "Polities" fill texture: polity ids → the exact `make_polity_tree_color`
+palette, negative labels → unclaimed grey, then ocean/lake texels are repainted
+their own blues (matching the elevation view's `apply_water_masks`).
+
 ## Border refinement (`borders.py`)
 
-`refine_polity_borders` replaces each straight shared-edge border segment with a
-control-biased, texel-resolution polyline. Because the cost surface is face-level,
-the boundary is refined *geometrically* as a multiplicatively-weighted Voronoi
-boundary between the two faces' centroids:
+`PolityStage` emits borders as a soup of independent hexagon edges — angular and,
+read as a whole, a staircase, and they stop at hexagon corners rather than the
+texel coastline. `smooth_polity_borders` instead traces the borders **directly on
+the texel label grid**, so the lines are exactly the edges of the fill's regions:
 
-- The ancestor-depth table mirrors `PolityStage._compute_polity_borders` (depth 0 =
-  sovereign borders, depth d > 0 = internal subtree borders), so the refined
-  `{depth: (M, 6)}` structure is a drop-in replacement.
-- For each adjacent differing-polity face pair, the shared edge is sampled at
-  `border_samples` points. At each sample the boundary is offset across the edge to
-  the point where `dist / control` equalises between the two centroids
-  (`_weighted_voronoi_offset` solves the quadratic `w_b²·|x−a|² = w_a²·|x−b|²`,
-  picking the smallest-magnitude root, clamped to ±0.4·|a−b|). Control is the
-  per-face `authority` value, so the higher-authority polity bulges into the
-  weaker one. Equal control → the boundary tracks the geometric bisector near the
-  edge. Each sampled point is renormalised onto the unit sphere.
+- For each hierarchy depth (depth 0 = sovereign borders, *including* polity vs.
+  unclaimed land; depth d > 0 = internal subtree borders), an edge between two
+  adjacent texels is a border at the **shallowest** depth where their depth-d
+  ancestors differ (`_edge_border_depth`, vectorised over an ancestor LUT). The
+  resulting `{depth: (M, 6)}` structure is a drop-in replacement. Coastlines
+  (land vs. `WATER`) are *not* borders, so a polity-vs-polity line simply
+  terminates at the texel waterline.
+- Within each 2×2 texel cell the crossings around the four cell edges are joined
+  marching-squares style: exactly two crossings → a straight link between their
+  edge midpoints; otherwise each crossing links to the cell centre (handles 3+
+  region junctions and coastal terminations). Even-parity is broken only at the
+  coast, which is the desired dangling endpoint.
+- **Continuity across seams is free**: a crossing midpoint on a shared mesh edge
+  is the average of two coincident edge texels, i.e. the *same 3D point in both
+  faces*. Reconciled edge labels (above) make both faces emit that crossing, so
+  the per-face pieces chain through the shared point. Chaining (`_chain_edges`,
+  keyed on quantised 3D positions) therefore yields lines continuous across faces;
+  on seed 4 ~97% of endpoints are degree-2 (interior chain), the rest coastal
+  terminations and junction hubs.
+- Each chain is **Chaikin-smoothed** (`border_smoothing_iterations` passes), with
+  open-chain endpoints held fixed so chains meeting at a junction stay joined, then
+  renormalised onto the unit sphere — rounding off the texel staircase.
+
+`RefineStage` computes the labels once and feeds them to both the fill and the
+border tracer, then stores the fill via `mesh.set_face_textures("polity_fill", …)`,
+and
+`PolityStage.register_display` attaches it to the "Polities" scheme (via
+`add_scheme(..., texture="polity_fill")`) when present — so it renders per-pixel
+and only when that mode is active.  `RealmPipeline.apply_display` then calls
+`window.associate_scheme_texture` for every scheme carrying a texture (it merges
+into worldgen's schemes rather than going through `apply_registry`, so it has to
+do this wiring itself); without that the Polities mode falls back to flat
+per-face colours.
 
 ## Outputs
 
 Mutates in place: `settlements` (`.position`), `trade_routes` (endpoint geometry),
-`polity_borders` (`{depth: (M, 6)}` refined segments). No new channels, features,
-color schemes, or overlays.
+`polity_borders` (`{depth: (M, 6)}` smoothed segments). Adds one face texture,
+`polity_fill`, consumed by the "Polities" scheme. No new features or overlays.
 
 ## Validation
 
 `realmgen/refine/test/test_refine.py` — stub-mesh snapping (coast/ocean-vs-lake/
-river), route remapping, and weighted-Voronoi offset sign/clamp behaviour.
+river), route remapping, Chaikin corner-cutting + edge chaining (open/closed),
+texel border tracing (two-polity split, coastline ignored), and fill-texture
+shape/coastline/orphan-land behaviour.
