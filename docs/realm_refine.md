@@ -18,8 +18,8 @@ Runs after `PolityStage`; reads the textures attached by worldgen (`ocean_mask`,
 
 - `realmgen/refine/builder.py` — `RefineStage`, `RefineParams`
 - `realmgen/refine/settlements.py` — settlement snapping + trade-route remapping
-- `realmgen/refine/borders.py` — continuous border polylines traced on the texel polity classification
-- `realmgen/refine/fill.py` — texel polity classification (`compute_texel_labels`) + authority-weighted fill texture
+- `realmgen/refine/borders.py` — continuous border polylines traced on the texel polity classification, clipped to each face's rendered polygon (de-doubling) with cross-face seam welding
+- `realmgen/refine/fill.py` — texel polity classification (`compute_texel_labels`, incl. domain-warp erosion + single-pixel de-speckle) + authority-weighted fill texture
 
 ## `RefineParams`
 
@@ -95,11 +95,21 @@ is a polity id (`≥ 0`), `UNCLAIMED` (-1) for claimed-by-nobody land, or `WATER
   where the face-level land map disagreed with the texel map.
 - Ocean and lake texels (per-texel `ocean_mask`/`lake_mask`) override any land
   label with `WATER`.
-- **Shared-edge reconciliation.** `face_texture_positions` makes shared-edge
-  texels coincident in 3D across adjacent faces; `compute_texel_labels` uses
-  `mesh.boundary_pixel_pairs` to force those coincident texels to agree (land-vs-
-  land disagreements only). This is what lets the border tracer produce lines that
-  are continuous across face seams.
+- **De-speckle.** The warp + weighted Voronoi can strand a lone texel of one
+  polity completely surrounded by another. `_despeckle_interior_exclaves`
+  dissolves every *interior* single-pixel exclave (a claimed-land texel whose
+  label matches none of its 4 orthogonal (D4) neighbours) into the dominant claimed-land label
+  among its neighbours — killing the speckle and the tiny isolated border loops it
+  would otherwise spawn. Single-texel land islands surrounded only by
+  water/unclaimed are left alone (no land neighbour to merge into); edge-ring
+  texels are skipped so reconciliation below is untouched.
+- **Shared-edge reconciliation.** `mesh.boundary_pixel_pairs` pairs the two
+  faces' shared-edge texels; `compute_texel_labels` forces each pair to agree
+  (land-vs-land disagreements only) so the fill colour is consistent across the
+  seam. Note the pairing is *approximate* — `face_texture_positions` does **not**
+  place paired texels exactly coincident (they sit up to ~2 texels apart and the
+  mapping is many-to-many), which is why the border tracer cannot rely on
+  midpoints coinciding and instead welds seam endpoints explicitly (see below).
 
 `build_polity_fill_texture` colourises the labels into the `(N, H, W, 4)` float16
 RGBA "Polities" fill texture: polity ids → the exact `make_polity_tree_color`
@@ -120,6 +130,15 @@ the texel label grid**, so the lines are exactly the edges of the fill's regions
   resulting `{depth: (M, 6)}` structure is a drop-in replacement. Coastlines
   (land vs. `WATER`) are *not* borders, so a polity-vs-polity line simply
   terminates at the texel waterline.
+- **Polygon clip (de-doubling).** Each face's 16×16 texture is a *square* that
+  over-hangs its hexagon, so a border running along a shared edge would be traced
+  twice — once in each face's over-hang (a doubled line, "one from each side").
+  The trace is clipped to the rendered polygon (`mesh.face_texture_in_polygon`):
+  out-of-polygon texels are treated as non-region, so each boundary is traced only
+  by the face that actually renders it. This roughly *halves* the total border
+  geometry (seed 4: 94k → 49k segments) and is what removes the doubled lines; the
+  clipped per-face pieces meet at the hexagon edge and are rejoined by the weld
+  (below).
 - Within each 2×2 texel cell the crossings around the four cell edges are joined
   marching-squares style: exactly two crossings → a straight link between their
   edge midpoints; otherwise each crossing links to the cell centre (handles 3+
@@ -131,13 +150,17 @@ the texel label grid**, so the lines are exactly the edges of the fill's regions
   rounds into a visible knot/loop. Such cells are instead split into the two
   non-crossing links that keep the equal-label diagonal connected. Genuine 3-/4-
   region junctions still use the centre hub.
-- **Continuity across seams is free**: a crossing midpoint on a shared mesh edge
-  is the average of two coincident edge texels, i.e. the *same 3D point in both
-  faces*. Reconciled edge labels (above) make both faces emit that crossing, so
-  the per-face pieces chain through the shared point. Chaining (`_chain_edges`,
-  keyed on quantised 3D positions) therefore yields lines continuous across faces;
-  on seed 4 ~97% of endpoints are degree-2 (interior chain), the rest coastal
-  terminations and junction hubs.
+- **Seam welding** (`_weld_seam_endpoints`) rejoins the clipped per-face pieces
+  across a shared edge. With the polygon clip, a border crossing a seam terminates
+  at the hexagon boundary on *each* face; the two faces' grids are *not* aligned
+  there (paired texels sit up to ~2 texels apart, many-to-many), so the two
+  terminations sit a small gap apart. Crossings in a clip *frontier* cell (a cell
+  touching an out-of-polygon texel) are flagged with their emitting face; after
+  tracing, degree-1 frontier endpoints from *mesh-adjacent* faces that fall within
+  `weld_factor × texel_spacing` (default 2.5) are merged onto one canonical point
+  via union-find, so the per-face pieces join into one line. The adjacency guard
+  keeps the generous tolerance from fusing unrelated borders; clusters where 3+
+  faces meet (mesh vertices / pentagon corners) collapse together.
 - Each chain is **Chaikin-smoothed** (`border_smoothing_iterations` passes), with
   open-chain endpoints held fixed so chains meeting at a junction stay joined, then
   renormalised onto the unit sphere — rounding off the texel staircase.
@@ -164,5 +187,9 @@ Mutates in place: `settlements` (`.position`), `trade_routes` (endpoint geometry
 `realmgen/refine/test/test_refine.py` — stub-mesh snapping (coast/ocean-vs-lake/
 river), route remapping, Chaikin corner-cutting + edge chaining (open/closed),
 texel border tracing (two-polity split, coastline ignored, saddle resolved
-without a centre X), domain-warp identity/continuity, and fill-texture
-shape/coastline/orphan-land behaviour.
+without a centre X, polygon-clip suppresses out-of-polygon borders), seam-weld
+(cross-adjacent-face dangles join, non-adjacent don't), single-pixel de-speckle
+(interior exclave dissolved, diagonal-only exclave dissolved, water island /
+edge-ring preserved), domain-warp identity/continuity, and fill-texture
+shape/coastline/orphan-land behaviour. `core/test/test_mymesh.py` covers
+`face_texture_in_polygon` (centre inside / corners outside / matches positions).

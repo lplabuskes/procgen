@@ -195,3 +195,35 @@ class TestFaceTexturePositions:
         assert pos.shape == (len(mesh.faces), 4, 4, 3)
         norms = np.linalg.norm(pos, axis=-1)
         np.testing.assert_allclose(norms, 1.0, atol=1e-5)
+
+
+class TestFaceTextureInPolygon:
+    def test_shape_and_dtype(self):
+        dual = Mesh.icosphere(2).mesh_dual()
+        mask = dual.face_texture_in_polygon(16, 16)
+        assert mask.shape == (len(dual.faces), 16, 16)
+        assert mask.dtype == bool
+
+    def test_centre_inside_corners_outside(self):
+        # A hexagon/pentagon inscribed in its square texture leaves the square's
+        # corners outside the polygon; the central texels are always inside.
+        dual = Mesh.icosphere(2).mesh_dual()
+        mask = dual.face_texture_in_polygon(16, 16)
+        assert mask[:, 7:9, 7:9].all()                 # centre 2×2 always inside
+        corners = mask[:, [0, 0, -1, -1], [0, -1, 0, -1]]
+        assert not corners.any()                       # all four corners outside
+        # The polygon is strictly smaller than the square it is drawn in.
+        assert 0.4 < mask.mean() < 0.95
+
+    def test_inside_pixels_match_positions(self):
+        # Inside texels are exactly the fan-triangle interior the renderer uses, so
+        # an inside texel must be closer to its own face centroid than the texture
+        # extrapolation pushes the over-hanging corners.
+        dual = Mesh.icosphere(1).mesh_dual()
+        pos = dual.face_texture_positions(16, 16)
+        mask = dual.face_texture_in_polygon(16, 16)
+        centroids = np.asarray(dual.face_centroids)
+        dots = np.einsum('nhwc,nc->nhw', pos, centroids / np.linalg.norm(
+            centroids, axis=1, keepdims=True))
+        # Inside texels sit nearer their centroid than the worst outside texel.
+        assert dots[mask].min() >= dots[~mask].min()

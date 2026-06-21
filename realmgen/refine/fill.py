@@ -78,6 +78,43 @@ def domain_warp(
     return warped.reshape(np.asarray(positions).shape)
 
 
+def _despeckle_interior_exclaves(label: np.ndarray) -> np.ndarray:
+    """Dissolve single-pixel interior land exclaves into their dominant neighbour.
+
+    The warp + weighted Voronoi can strand a lone texel of one polity completely
+    surrounded by others; these read as speckle and spawn tiny isolated border
+    loops. A *single-pixel exclave* is an interior claimed-land texel whose label
+    matches **none** of its 4 orthogonal (D4) neighbours; it is reassigned to the
+    most common claimed-land label among them — guaranteed to dissolve it (the
+    chosen label is one of its neighbours). Such texels are isolated by definition,
+    so they never cluster and a single pass suffices. Edge-ring texels are left
+    untouched so the shared-edge reconciliation below is preserved.
+    """
+    lab = np.asarray(label)
+    n, h, w = lab.shape
+    if h < 3 or w < 3:
+        return lab
+    core = lab[:, 1:-1, 1:-1]
+    nb4 = [lab[:, :-2, 1:-1], lab[:, 1:-1, :-2],
+           lab[:, 1:-1, 2:], lab[:, 2:, 1:-1]]
+    same = np.zeros(core.shape, bool)
+    for nb in nb4:
+        same |= nb == core
+    isolated = (core >= 0) & ~same            # (n, h-2, w-2) over interior texels
+    idx = np.argwhere(isolated)
+    if idx.size == 0:
+        return lab
+    out = lab.copy()
+    for f, ii, jj in idx:
+        i, j = int(ii) + 1, int(jj) + 1
+        nb = np.array([lab[f, i - 1, j], lab[f, i + 1, j],
+                       lab[f, i, j - 1], lab[f, i, j + 1]])
+        nb = nb[nb >= 0]
+        if nb.size:
+            out[f, i, j] = np.bincount(nb).argmax()
+    return out
+
+
 def _polity_color_map(polities: List) -> dict:
     """``polity_id -> rgb`` using the exact "Polities" scheme colours."""
     pol_by_id = {p.polity_id: p for p in polities}
@@ -169,6 +206,9 @@ def compute_texel_labels(
     label[ocean_tex[..., 0] > 0.5] = WATER
     if lake_tex is not None:
         label[lake_tex[..., 0] > 0.5] = WATER
+
+    # Remove single-pixel interior speckle left by the warped Voronoi.
+    label = _despeckle_interior_exclaves(label)
 
     # Reconcile coincident texels along shared mesh edges so the border tracer
     # produces continuous lines across face seams.  Only land-vs-land

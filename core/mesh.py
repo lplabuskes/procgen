@@ -453,6 +453,46 @@ class PolygonMesh:
 
         return positions
 
+    def face_texture_in_polygon(self, h: int, w: int, *, eps: float = 1e-9) -> np.ndarray:
+        """Return a bool ``(N, H, W)`` mask: which texels fall *inside* each face's
+        rendered polygon (vs. the square texture's over-hanging corners).
+
+        A texel is inside iff it lies within one of the face's fan triangles (all
+        barycentric coords >= -eps).  This is the exact clip the renderer applies,
+        so it identifies the texels a face actually owns — the rest belong to a
+        neighbour and must not be classified or traced as this face's own.
+        """
+        u_coords = np.linspace(0.0, 1.0, w, dtype=np.float64)
+        v_coords = np.linspace(0.0, 1.0, h, dtype=np.float64)
+        uu, vv = np.meshgrid(u_coords, v_coords)
+        pixel_uv = np.stack([uu.ravel(), vv.ravel()], axis=1)  # (h*w, 2)
+
+        n_faces = len(self.faces)
+        mask = np.zeros((n_faces, h, w), dtype=bool)
+
+        for face_idx in range(n_faces):
+            verts_uv = self._face_vertex_uvs[face_idx].astype(np.float64)  # (n_v, 2)
+            v0_uv = verts_uv[0]
+            e1_uv = verts_uv[1:-1] - v0_uv   # (n_tris, 2)
+            e2_uv = verts_uv[2:] - v0_uv     # (n_tris, 2)
+
+            det = e1_uv[:, 0] * e2_uv[:, 1] - e1_uv[:, 1] * e2_uv[:, 0]
+            det = np.where(np.abs(det) < 1e-12, 1.0, det)
+
+            pv = pixel_uv - v0_uv  # (n_pix, 2)
+            pv_cross_e2 = (pv[:, 0:1] * e2_uv[None, :, 1]
+                           - pv[:, 1:2] * e2_uv[None, :, 0])
+            e1_cross_pv = (e1_uv[None, :, 0] * pv[:, 1:2]
+                           - e1_uv[None, :, 1] * pv[:, 0:1])
+            beta = pv_cross_e2 / det[None, :]
+            gamma = e1_cross_pv / det[None, :]
+            alpha = 1.0 - beta - gamma
+            min_bary = np.minimum(alpha, np.minimum(beta, gamma))  # (n_pix, n_tris)
+            inside = (min_bary.max(axis=1) >= -eps)
+            mask[face_idx] = inside.reshape(h, w)
+
+        return mask
+
 
 class Mesh(PolygonMesh):
     def __init__(self, vertices: np.ndarray, faces: List[Tuple[int, int, int]]):

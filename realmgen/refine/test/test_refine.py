@@ -12,10 +12,15 @@ from realmgen.polity.types import Polity
 from realmgen.refine.borders import (
     _chaikin,
     _chain_edges,
+    _weld_seam_endpoints,
     smooth_polity_borders,
     trace_label_borders,
 )
-from realmgen.refine.fill import build_polity_fill_texture, domain_warp
+from realmgen.refine.fill import (
+    _despeckle_interior_exclaves,
+    build_polity_fill_texture,
+    domain_warp,
+)
 from realmgen.refine.settlements import (
     _neighbor_any,
     position_key,
@@ -162,6 +167,27 @@ def test_trace_label_borders_splits_two_polities():
     assert np.ptp(ys) > np.ptp(xs)
 
 
+def test_trace_label_borders_clips_to_polygon():
+    # Each face's square texture over-hangs its hexagon; tracing the whole square
+    # draws a border in both faces' over-hang (the doubled line). Passing an
+    # in-polygon mask must clip out-of-polygon texels so they emit no border.
+    pos = _polar_grid(4, 4)
+    labels = np.array([[[0, 0, 1, 1]] * 4], dtype=np.int32)
+    full = trace_label_borders(pos, labels, [_pol(0), _pol(1)], iterations=0)
+    n_full = sum(len(v) for v in full.values())
+    # Clip away the bottom two rows: the border survives only in the kept rows.
+    in_poly = np.ones((1, 4, 4), dtype=bool)
+    in_poly[0, 2:, :] = False
+    clipped = trace_label_borders(pos, labels, [_pol(0), _pol(1)], iterations=0,
+                                  in_poly=in_poly)
+    assert 0 < sum(len(v) for v in clipped.values()) < n_full
+    # Everything out-of-polygon → no border at all.
+    none_mask = np.zeros((1, 4, 4), dtype=bool)
+    none = trace_label_borders(pos, labels, [_pol(0), _pol(1)], iterations=0,
+                               in_poly=none_mask)
+    assert sum(len(v) for v in none.values()) == 0
+
+
 def test_domain_warp_identity_and_continuity():
     rng = np.random.default_rng(0)
     pos = rng.normal(size=(50, 3))
@@ -193,6 +219,63 @@ def test_trace_label_borders_resolves_saddle_without_center_x():
     pts = pts / np.linalg.norm(pts, axis=1, keepdims=True)
     center = center / np.linalg.norm(center)
     assert np.all(np.linalg.norm(pts - center, axis=1) > 1e-6)  # never the centre
+
+
+def test_despeckle_dissolves_single_pixel_exclave():
+    # A lone polity-7 texel surrounded by polity 0 is reassigned to 0; an island
+    # texel surrounded only by water (-2) is left alone (no land neighbour).
+    labels = np.zeros((1, 5, 5), dtype=np.int32)
+    labels[0, 2, 2] = 7                      # interior exclave
+    out = _despeckle_interior_exclaves(labels)
+    assert out[0, 2, 2] == 0
+    water = np.full((1, 5, 5), -2, dtype=np.int32)
+    water[0, 2, 2] = 7                        # claimed island in water
+    assert _despeckle_interior_exclaves(water)[0, 2, 2] == 7
+
+
+def test_despeckle_dissolves_diagonal_only_exclave():
+    # A polity-7 texel touching another 7 only diagonally has no orthogonal (D4)
+    # same-label neighbour, so it is dissolved into the surrounding 0.
+    labels = np.zeros((1, 5, 5), dtype=np.int32)
+    labels[0, 2, 2] = 7
+    labels[0, 3, 3] = 7                       # diagonal partner only
+    out = _despeckle_interior_exclaves(labels)
+    assert out[0, 2, 2] == 0
+
+
+def test_despeckle_leaves_edge_ring_untouched():
+    # An exclave on the outer ring is preserved (shared-edge reconciliation owns it).
+    labels = np.zeros((1, 5, 5), dtype=np.int32)
+    labels[0, 0, 2] = 7
+    assert _despeckle_interior_exclaves(labels)[0, 0, 2] == 7
+
+
+def test_weld_seam_endpoints_joins_cross_face_dangles():
+    from realmgen.refine.settlements import position_key
+    a = np.array([2.0, 0.0, 0.0])       # face 0 interior endpoint
+    b = np.array([1.0, 0.0, 0.0])       # face 0 seam endpoint
+    c = np.array([1.0008, 0.0, 0.0])    # face 1 seam endpoint (near b)
+    d = np.array([0.0, 0.0, 0.0])       # face 1 interior endpoint
+    ka, kb, kc, kd = (position_key(p) for p in (a, b, c, d))
+    pt_of = {ka: a, kb: b, kc: c, kd: d}
+    edges = {tuple(sorted((ka, kb))), tuple(sorted((kc, kd)))}
+    key_face = {kb: 0, kc: 1}                 # b and c are outer-ring crossings
+
+    def deg1(e):
+        d_: dict = {}
+        for x, y in e:
+            d_[x] = d_.get(x, 0) + 1
+            d_[y] = d_.get(y, 0) + 1
+        return sum(1 for v in d_.values() if v == 1)
+
+    # Adjacent faces within tolerance → b and c weld, leaving only a and d dangling.
+    welded, _ = _weld_seam_endpoints(set(edges), dict(pt_of), key_face,
+                                     tol=0.01, adj=[[1], [0]])
+    assert deg1(welded) == 2
+    # Non-adjacent faces → no weld (all four endpoints stay dangling pairs).
+    same = _weld_seam_endpoints(set(edges), dict(pt_of), key_face,
+                                tol=0.01, adj=[[], []])[0]
+    assert same == edges
 
 
 def test_trace_label_borders_ignores_coastline():
