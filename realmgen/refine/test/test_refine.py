@@ -167,25 +167,84 @@ def test_trace_label_borders_splits_two_polities():
     assert np.ptp(ys) > np.ptp(xs)
 
 
-def test_trace_label_borders_clips_to_polygon():
-    # Each face's square texture over-hangs its hexagon; tracing the whole square
-    # draws a border in both faces' over-hang (the doubled line). Passing an
-    # in-polygon mask must clip out-of-polygon texels so they emit no border.
-    pos = _polar_grid(4, 4)
-    labels = np.array([[[0, 0, 1, 1]] * 4], dtype=np.int32)
-    full = trace_label_borders(pos, labels, [_pol(0), _pol(1)], iterations=0)
-    n_full = sum(len(v) for v in full.values())
-    # Clip away the bottom two rows: the border survives only in the kept rows.
-    in_poly = np.ones((1, 4, 4), dtype=bool)
-    in_poly[0, 2:, :] = False
-    clipped = trace_label_borders(pos, labels, [_pol(0), _pol(1)], iterations=0,
-                                  in_poly=in_poly)
-    assert 0 < sum(len(v) for v in clipped.values()) < n_full
-    # Everything out-of-polygon → no border at all.
-    none_mask = np.zeros((1, 4, 4), dtype=bool)
-    none = trace_label_borders(pos, labels, [_pol(0), _pol(1)], iterations=0,
-                               in_poly=none_mask)
-    assert sum(len(v) for v in none.values()) == 0
+def _overlap_pair():
+    """Two faces whose square textures overlap near +z, both carrying the same
+    polity-0/polity-1 boundary down the j=1|j=2 seam — the configuration the
+    over-hang doubling arises from. The two grids are slightly *offset* (as real
+    neighbour faces are), so the two boundary copies have distinct vertex keys."""
+    def grid(dx):
+        g = np.zeros((4, 4, 3), dtype=np.float64)
+        for i in range(4):
+            for j in range(4):
+                v = np.array([(j - 1.5) * 0.2 + dx, (i - 1.5) * 0.2, 1.0])
+                g[i, j] = v / np.linalg.norm(v)
+        return g
+    pos = np.stack([grid(0.0), grid(0.07)])            # (2, 4, 4, 3) offset grids
+    labels = np.array([[[0, 0, 1, 1]] * 4] * 2, dtype=np.int32)
+    c = np.array([[-0.1, 0.0, 1.0], [0.1, 0.0, 1.0]])  # centroids straddle x=0
+    centroids = c / np.linalg.norm(c, axis=1, keepdims=True)
+    return pos, labels, centroids
+
+
+def test_texel_owner_assigns_by_nearest_centroid():
+    from realmgen.refine.borders import _texel_owner
+    pos, _, centroids = _overlap_pair()
+    owner = _texel_owner(pos, centroids, adj=[[1], [0]])
+    assert owner.shape == (2, 4, 4)
+    # Midline is x=0: the two left columns go to face 0, the two right to face 1,
+    # for *both* faces' (identical) grids.
+    assert (owner[:, :, :2] == 0).all()
+    assert (owner[:, :, 2:] == 1).all()
+
+
+def test_texel_owner_polygon_assigns_overhang_to_neighbour():
+    from realmgen.refine.borders import _texel_owner
+    # With a polygon mask, a texel inside its own face's polygon is owned by that
+    # face *definitively* (no centroid-bisector sliver); an over-hang texel goes to
+    # the neighbour. Mark face 0's right half as over-hang.
+    pos, _, centroids = _overlap_pair()
+    in_poly = np.ones((2, 4, 4), dtype=bool)
+    in_poly[0, :, 2:] = False
+    owner = _texel_owner(pos, centroids, adj=[[1], [0]], in_poly=in_poly)
+    assert (owner[0, :, :2] == 0).all()                # in-polygon → own face
+    assert (owner[0, :, 2:] == 1).all()                # over-hang → neighbour
+
+
+def test_collapse_tiny_loops_drops_thin_lens_keeps_round():
+    from realmgen.refine.borders import _collapse_tiny_loops, position_key
+
+    def loop(corners):
+        pts = [c / np.linalg.norm(c) for c in corners]
+        keys = [position_key(p) for p in pts]
+        pt_of = {k: p for k, p in zip(keys, pts)}
+        edges = {tuple(sorted((keys[i], keys[(i + 1) % len(keys)])))
+                 for i in range(len(keys))}
+        return edges, pt_of
+
+    thin = [np.array(v) for v in ([-0.30, -0.02, 1], [0.30, -0.02, 1],
+                                  [0.30, 0.02, 1], [-0.30, 0.02, 1])]
+    round_ = [np.array(v) for v in ([-0.12, -0.12, 1], [0.12, -0.12, 1],
+                                    [0.12, 0.12, 1], [-0.12, 0.12, 1])]
+    e_thin, p_thin = loop(thin)
+    e_round, p_round = loop(round_)
+    # A thin lens (minor extent ≈ 0.04) collapses; a round loop (≈ 0.24) survives.
+    assert _collapse_tiny_loops(e_thin, p_thin, max_diag=1.0, min_width=0.1) == set()
+    assert _collapse_tiny_loops(e_round, p_round, max_diag=1.0, min_width=0.1) == e_round
+
+
+def test_trace_label_borders_dedoubles_overlap():
+    # Both faces' over-hangs carry the same boundary. Without centroids each face
+    # draws it → a doubled line. Voronoi ownership makes only the lower-id face-cell
+    # draw each edge, halving the geometry to a single line.
+    pos, labels, centroids = _overlap_pair()
+    pols = [_pol(0), _pol(1)]
+    doubled = trace_label_borders(pos, labels, pols, iterations=0, weld_factor=0.0)
+    single = trace_label_borders(pos, labels, pols, iterations=0, weld_factor=0.0,
+                                 adj=[[1], [0]], centroids=centroids)
+    n_doubled = sum(len(v) for v in doubled.values())
+    n_single = sum(len(v) for v in single.values())
+    assert n_single >= 1
+    assert n_doubled == 2 * n_single                   # exactly the duplicate removed
 
 
 def test_domain_warp_identity_and_continuity():

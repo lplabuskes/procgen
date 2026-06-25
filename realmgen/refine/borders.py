@@ -12,16 +12,18 @@ and stop short of the texel coastline.  This module traces them from the same
    ancestors differ.  Coastlines (land vs. water) are *not* borders.
 2. Each face's 16×16 texture is a *square* that over-hangs its hexagon.  Tracing
    the whole square would draw every shared-edge border twice — once in each
-   face's over-hang (a doubled line).  So the trace is **clipped to the rendered
-   polygon** (``mesh.face_texture_in_polygon``): texels outside the hexagon are
-   treated as non-region, so each boundary is traced only by the face that
-   actually renders it.
+   face's over-hang (a doubled line).  We instead **de-double by Voronoi
+   ownership** (``_texel_owner``): each texel belongs to its nearest face centroid,
+   and every texel-edge is drawn from only the lower-id of the two face-cells its
+   endpoints fall in.  Unlike clipping the over-hang away, this keeps the over-hang
+   labels, so a border that runs *along* a seam (which exists only in the
+   over-hang) is preserved and drawn exactly once instead of vanishing.
 3. Within each face, the crossings around a 2×2 texel cell are joined
    (marching-squares style): two crossings → a straight link between their edge
    midpoints; otherwise each crossing links to the cell centre (handles junctions
-   and coastal terminations).  The clipped per-face pieces meet at the hexagon
-   edge and are joined into continuous lines by welding their terminations
-   (``_weld_seam_endpoints``) across mesh-adjacent faces.
+   and coastal terminations).  Where a border crosses a seam the two faces' pieces
+   meet ~1 texel apart and are joined into continuous lines by welding their
+   terminations (``_weld_seam_endpoints``) across mesh-adjacent faces.
 4. The chained polylines are Chaikin-smoothed to round off the texel staircase.
 """
 from __future__ import annotations
@@ -164,9 +166,51 @@ def _edge_border_depth(la: np.ndarray, lb: np.ndarray,
 # ── tracing ───────────────────────────────────────────────────────────────────
 
 
+def _texel_owner(P: np.ndarray, centroids: np.ndarray, adj: list,
+                 in_poly: np.ndarray | None = None) -> np.ndarray:
+    """Per-texel owning face id, used to draw each border edge from only one face.
+
+    Each face's square texture over-hangs its hexagon into neighbouring cells, so
+    the *same* boundary gets drawn in several faces' over-hangs (the doubled line).
+    We de-duplicate by ownership: a texel inside its own face's rendered polygon
+    (``in_poly``) is owned by that face — definitively, matching the exact render
+    clip; an over-hang texel (outside the polygon) is owned by the mesh neighbour it
+    spilled into, found by nearest centroid. Using the polygon (not a bare
+    centroid-Voronoi) is what avoids the thin sliver between the centroid bisector
+    and the real hexagon seam where both faces would otherwise draw a short doubled
+    stretch (a ``lens`` artifact). The neighbour candidates are ordered by ascending
+    face id so the ``argmax`` tie-break resolves to the lowest id, keeping the
+    per-edge owner test symmetric across the two faces.
+    """
+    N, H, W, _ = P.shape
+    C = np.asarray(centroids, dtype=np.float64)
+    C = C / np.linalg.norm(C, axis=1, keepdims=True)
+    owner = np.empty((N, H, W), dtype=np.int64)
+    flat = P.reshape(N, H * W, 3)
+    inside = in_poly.reshape(N, H * W) if in_poly is not None else None
+    for f in range(N):
+        if inside is None:
+            # No polygon mask: nearest centroid among own face and neighbours
+            # (a bare centroid-Voronoi — leaves a thin seam sliver, hence lenses).
+            cand = np.array(sorted({f, *adj[f]}), dtype=np.int64)
+            owner[f] = cand[np.argmax(flat[f] @ C[cand].T, axis=1)].reshape(H, W)
+            continue
+        own = np.full(H * W, f, dtype=np.int64)
+        out = ~inside[f]
+        if out.any():
+            # Over-hang texels: nearest neighbour centroid (own face excluded — the
+            # texel is outside its own polygon, so it belongs to a neighbour).
+            nbrs = np.array(sorted(adj[f]), dtype=np.int64)
+            own[out] = nbrs[np.argmax(flat[f][out] @ C[nbrs].T, axis=1)]
+        owner[f] = own.reshape(H, W)
+    return owner
+
+
 def trace_label_borders(positions: np.ndarray, labels: np.ndarray,
                         polities: List, *, iterations: int = 2,
-                        weld_factor: float = 2.5, adj: list | None = None,
+                        weld_factor: float = 2.5, loop_cull_factor: float = 1.4,
+                        adj: list | None = None,
+                        centroids: np.ndarray | None = None,
                         in_poly: np.ndarray | None = None) -> dict:
     """Return ``{depth: (M, 6)}`` smoothed border segments from a texel label grid.
 
@@ -174,16 +218,22 @@ def trace_label_borders(positions: np.ndarray, labels: np.ndarray,
     the matching ``(N, H, W)`` per-texel polity classification.  ``weld_factor``
     (× texel spacing) is the tolerance for joining cross-face dangling endpoints at
     shared mesh edges (``_weld_seam_endpoints``); ``0`` disables welding.  ``adj``
-    is the per-face neighbour list (``mesh.face_adjacency``) used to restrict
-    welds to genuinely adjacent faces.
+    is the per-face neighbour list (``mesh.face_adjacency``) used both to restrict
+    welds to genuinely adjacent faces and to compute texel ownership.
 
-    ``in_poly`` is a ``(N, H, W)`` bool mask of which texels fall inside each
-    face's rendered polygon (``mesh.face_texture_in_polygon``).  Each face's
-    16×16 texture is a *square* that over-hangs its hexagon, so without clipping a
-    border running along a shared edge gets traced once in **each** face's
-    over-hang — a doubled line.  Texels outside the polygon are clipped (treated as
-    non-region) so each boundary is traced only by the face that actually renders
-    it; the per-face pieces meet at the hexagon edge and are joined by the weld.
+    Each face's 16×16 texture is a *square* that over-hangs its hexagon, so without
+    de-duplication a border running along a shared edge gets drawn once in **each**
+    face's over-hang — a doubled line.  We instead keep the over-hang labels (so
+    seam-running borders are never deleted) and draw each texel-edge from only
+    **one** face: the lower-id of the two face-cells its endpoints fall in
+    (``_texel_owner``).  ``in_poly`` (``mesh.face_texture_in_polygon``) makes that
+    ownership match the exact render clip — a texel inside its own hexagon is owned
+    by that face, the over-hang by the neighbour — which avoids the thin sliver
+    between the centroid bisector and the real seam where both faces would otherwise
+    draw a short doubled stretch; ``centroids`` resolve the over-hang.  The remaining
+    ~1-texel seam crossings are joined by the weld, and ``loop_cull_factor`` (× texel
+    spacing) sets the width below which a residual thin seam ``lens`` loop — the
+    per-face fill Voronoi disagreeing by a texel across a seam — is collapsed away.
     """
     if not polities:
         return {}
@@ -191,28 +241,40 @@ def trace_label_borders(positions: np.ndarray, labels: np.ndarray,
     P = np.asarray(positions, dtype=np.float64)
     lut, max_depth = _ancestor_lut(polities)
 
-    # Clip the square texture's over-hanging corners: texels outside the rendered
-    # polygon become WATER (a non-border filler) so borders stop at the hexagon
-    # edge instead of being drawn in both faces' over-hangs.
-    frontier = None
-    if in_poly is not None:
-        out_mask = ~np.asarray(in_poly, dtype=bool)
-        labels = labels.copy()
-        labels[out_mask] = WATER
-        # A 2×2 cell is on the clip frontier if any of its texels is out-of-polygon
-        # — that is where a clipped border terminates and must weld to its
-        # neighbour-face counterpart.
-        frontier = (out_mask[:, :-1, :-1] | out_mask[:, :-1, 1:]
-                    | out_mask[:, 1:, :-1] | out_mask[:, 1:, 1:])       # (N,H-1,W-1)
-
     # Texel spacing → seam-weld tolerance (a crossing pair across a seam lands
     # within ~1–2 texels; see _weld_seam_endpoints).
     spacing = float(np.median(np.linalg.norm(P[:, :, 1:, :] - P[:, :, :-1, :], axis=-1)))
     weld_tol = weld_factor * spacing if weld_factor > 0.0 else 0.0
+    # Thin closed loops (minor extent below this) are seam ``lens`` doublings rather
+    # than real territories, and are collapsed to a point (see
+    # ``_collapse_tiny_loops``).  ``loop_cull_factor`` is that width threshold in
+    # texel-spacings; ``max_diag`` only caps which loops are considered so large real
+    # outlines are skipped outright.
+    min_width = loop_cull_factor * spacing if loop_cull_factor > 0.0 else 0.0
+    max_diag = 12.0 * spacing
 
     # Per-edge border depth.  H-edges link (i, j)|(i, j+1); V-edges (i, j)|(i+1, j).
     hbd = _edge_border_depth(labels[:, :, :-1], labels[:, :, 1:], lut)   # (N,H,W-1)
     vbd = _edge_border_depth(labels[:, :-1, :], labels[:, 1:, :], lut)   # (N,H-1,W)
+
+    # De-double by ownership: draw each edge only from the lower-id of the two
+    # face-cells its two texels fall in.  Interior edges (both texels own-face) are
+    # always drawn; over-hang copies of a neighbour's interior border are dropped;
+    # a seam-running border is kept by exactly one of the two faces.
+    frontier = None
+    if centroids is not None and adj is not None:
+        owner = _texel_owner(P, centroids, adj, in_poly)
+        fid = np.arange(labels.shape[0], dtype=np.int64)[:, None, None]
+        h_owns = np.minimum(owner[:, :, :-1], owner[:, :, 1:]) == fid     # (N,H,W-1)
+        v_owns = np.minimum(owner[:, :-1, :], owner[:, 1:, :]) == fid     # (N,H-1,W)
+        hbd = np.where(h_owns, hbd, -1)
+        vbd = np.where(v_owns, vbd, -1)
+        # A 2×2 cell is on the ownership frontier (a seam) if any of its texels is
+        # owned by another face — that is where a border crossing the seam stops on
+        # this face and must weld to its neighbour-face counterpart.
+        notmine = owner != fid
+        frontier = (notmine[:, :-1, :-1] | notmine[:, :-1, 1:]
+                    | notmine[:, 1:, :-1] | notmine[:, 1:, 1:])           # (N,H-1,W-1)
 
     # Edge midpoints and cell centres (shared-edge midpoints coincide across faces).
     hmid = 0.5 * (P[:, :, :-1, :] + P[:, :, 1:, :])                      # (N,H,W-1,3)
@@ -229,7 +291,8 @@ def trace_label_borders(positions: np.ndarray, labels: np.ndarray,
         anc_d = labels.copy()
         anc_d[claimed] = lut[depth, labels[claimed]]
         segs = _trace_depth(depth, hbd, vbd, hmid, vmid, ctr, anc_d, iterations,
-                            weld_tol=weld_tol, adj=adj, frontier=frontier)
+                            weld_tol=weld_tol, adj=adj, frontier=frontier,
+                            max_diag=max_diag, min_width=min_width)
         if segs:
             out[depth] = np.asarray(segs, dtype=np.float32)
     return out
@@ -237,33 +300,38 @@ def trace_label_borders(positions: np.ndarray, labels: np.ndarray,
 
 def _weld_seam_endpoints(edges: set, pt_of: dict, key_face: dict,
                          tol: float, adj: list | None = None) -> tuple[set, dict]:
-    """Weld dangling border endpoints that straddle a shared mesh edge.
+    """Weld dangling border endpoints onto the neighbour face's seam border.
 
-    With the trace clipped to each face's polygon, a border crossing a shared edge
-    terminates at the hexagon boundary on *each* face (``face_texture_positions``
-    does not place the two faces' edge texels exactly coincident — the pairing is
-    many-to-many and up to ~2 texels apart), leaving a small gap. We merge such
-    cross-face degree-1 endpoints (those flagged as lying on a clip *frontier*
-    cell) that fall within ``tol`` of one another onto a single canonical point, so
-    the per-face pieces join into one continuous line. Clusters where 3+ faces meet
-    (mesh vertices / pentagon corners) collapse together.
+    With the trace de-doubled by ownership, a border crossing a shared edge stops
+    when ownership flips at the seam, leaving a ~1-texel gap to where the neighbour
+    face draws the same border (``face_texture_positions`` does not place the two
+    faces' edge texels exactly coincident — the pairing is many-to-many and up to ~2
+    texels apart). The ownership tie-break lets the lower-id face carry a
+    seam-crossing border straight *through* the seam, so the neighbour's matching
+    point is usually **mid-chain**, not another loose end — a T-join the old
+    endpoint-to-endpoint weld could not make.
 
-    Endpoints are only welded when their emitting faces are *mesh-adjacent* (when
-    ``adj`` is supplied) — two crossings on a shared edge necessarily come from
-    adjacent faces, so this guards against fusing unrelated borders and lets the
-    tolerance be generous.
+    So every degree-1 endpoint that lies on an ownership *frontier* cell is snapped
+    onto the nearest frontier border *vertex* of a **mesh-adjacent** face (any
+    degree) within ``tol``, merging the dangle there. Two mutually-near loose ends
+    (a genuine 3-face / pentagon-corner junction) collapse together; a dangle facing
+    a continuous neighbour chain joins it as a T. The adjacency guard keeps the
+    generous tolerance from fusing unrelated borders.
     """
     deg: dict = defaultdict(int)
     for a, b in edges:
         deg[a] += 1
         deg[b] += 1
-    cand = [k for k in key_face if deg.get(k, 0) == 1]
-    if len(cand) < 2:
+
+    fkeys = [k for k in key_face if k in pt_of]        # all frontier vertices
+    dangles = [k for k in fkeys if deg.get(k, 0) == 1]
+    if not dangles or len(fkeys) < 2:
         return edges, pt_of
 
-    pts = np.array([pt_of[k] for k in cand])
-    pairs = KDTree(pts).query_pairs(tol)
-    parent = {k: k for k in cand}
+    fpts = np.array([pt_of[k] for k in fkeys])
+    tree = KDTree(fpts)
+    parent = {k: k for k in fkeys}
+    rank = {k: deg.get(k, 0) for k in fkeys}           # union toward higher degree
 
     def find(x):
         while parent[x] != x:
@@ -271,31 +339,55 @@ def _weld_seam_endpoints(edges: set, pt_of: dict, key_face: dict,
             x = parent[x]
         return x
 
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            return
+        if rank[ra] > rank[rb]:
+            ra, rb = rb, ra            # rb is the higher-degree (anchor) root
+        parent[ra] = rb
+
     def faces_adjacent(fa, fb) -> bool:
-        return adj is None or fb in adj[fa]
+        return adj is None or (fa is not None and fb is not None and fb in adj[fa])
 
     welded = False
-    for i, j in pairs:
-        ki, kj = cand[i], cand[j]
-        fi, fj = key_face.get(ki), key_face.get(kj)
-        if fi != fj and faces_adjacent(fi, fj):  # only weld across adjacent faces
-            ri, rj = find(ki), find(kj)
-            if ri != rj:
-                parent[ri] = rj
-                welded = True
+    for d in dangles:
+        fd = key_face.get(d)
+        idxs = tree.query_ball_point(pt_of[d], tol)
+        # nearest eligible frontier vertex on a different, mesh-adjacent face
+        best, best_d2 = None, np.inf
+        pd = pt_of[d]
+        for ix in idxs:
+            t = fkeys[ix]
+            if t == d or find(t) == find(d):
+                continue
+            ft = key_face.get(t)
+            if ft == fd or not faces_adjacent(fd, ft):
+                continue
+            d2 = float(np.sum((pd - fpts[ix]) ** 2))
+            if d2 < best_d2:
+                best, best_d2 = t, d2
+        if best is not None:
+            union(d, best)
+            welded = True
     if not welded:
         return edges, pt_of
 
     clusters: dict = defaultdict(list)
-    for k in cand:
+    for k in fkeys:
         clusters[find(k)].append(k)
     remap: dict = {}
-    for members in clusters.values():
+    for root, members in clusters.items():
         if len(members) < 2:
             continue
-        mean = np.mean([pt_of[m] for m in members], axis=0)
-        ck = position_key(mean)
-        pt_of[ck] = mean
+        anchors = [m for m in members if deg.get(m, 0) >= 2]
+        if anchors:
+            # Keep a continuous chain in place; snap the loose ends onto it.
+            ck = max(anchors, key=lambda m: deg[m])
+        else:
+            mean = np.mean([pt_of[m] for m in members], axis=0)
+            ck = position_key(mean)
+            pt_of[ck] = mean
         for m in members:
             remap[m] = ck
 
@@ -307,9 +399,71 @@ def _weld_seam_endpoints(edges: set, pt_of: dict, key_face: dict,
     return new_edges, pt_of
 
 
+def _loop_extents(verts: np.ndarray) -> tuple[float, float]:
+    """Major/minor extent of a closed loop, from its principal axes in-plane.
+
+    Projects the loop onto the tangent plane at its centroid, finds the principal
+    axes (eigenvectors of the 2D covariance) and returns the point spread (max−min)
+    along each — so a long thin ``lens`` has ``minor ≪ major`` while a round exclave
+    has comparable extents.
+    """
+    c = verts.mean(axis=0)
+    cn = c / np.linalg.norm(c)
+    ref = verts[0] - c
+    e1 = ref - cn * float(ref @ cn)
+    e1 = e1 / (np.linalg.norm(e1) + 1e-30)
+    e2 = np.cross(cn, e1)
+    xy = np.column_stack([(verts - c) @ e1, (verts - c) @ e2])   # (n, 2)
+    cov = xy.T @ xy
+    _, vecs = np.linalg.eigh(cov)                                # ascending
+    proj = xy @ vecs                                             # cols: minor, major
+    minor = float(proj[:, 0].max() - proj[:, 0].min())
+    major = float(proj[:, 1].max() - proj[:, 1].min())
+    return major, minor
+
+
+def _collapse_tiny_loops(edges: set, pt_of: dict, max_diag: float,
+                         min_width: float) -> set:
+    """Collapse spurious thin border loops (seam ``lens`` doublings) to a point.
+
+    The per-face fill Voronoi can place a boundary a texel apart on either side of a
+    seam, so the same border is traced as two nearly-parallel copies joined at both
+    ends — a thin lens that reads as a spurious little loop on an otherwise clean
+    border. A lens is narrower than a texel (``minor extent < min_width``), whereas a
+    genuine exclave is round (minor extent ≈ its size). So every small closed loop
+    (major extent below ``max_diag``, sparing large real outlines) whose minor extent
+    is below ``min_width`` is merged to its centroid: an isolated lens vanishes, a
+    lens hanging off a junction collapses to a point the through-line still passes
+    through (no new gap). Round loops and real exclaves are untouched.
+    """
+    remap: dict = {}
+    for chain in _chain_edges(edges):
+        if not (len(chain) > 3 and chain[0] == chain[-1]):
+            continue
+        members = chain[:-1]
+        verts = np.array([pt_of[k] for k in members])
+        major, minor = _loop_extents(verts)
+        if major >= max_diag or minor >= min_width:
+            continue
+        mean = verts.mean(axis=0)
+        ck = position_key(mean)
+        pt_of[ck] = mean
+        for m in members:
+            remap[m] = ck
+    if not remap:
+        return edges
+    new_edges: set = set()
+    for a, b in edges:
+        a, b = remap.get(a, a), remap.get(b, b)
+        if a != b:
+            new_edges.add((a, b) if a < b else (b, a))
+    return new_edges
+
+
 def _trace_depth(depth: int, hbd, vbd, hmid, vmid, ctr, anc, iterations: int,
                  weld_tol: float = 0.0, adj: list | None = None,
-                 frontier: np.ndarray | None = None) -> list:
+                 frontier: np.ndarray | None = None,
+                 max_diag: float = 0.0, min_width: float = 0.0) -> list:
     # Per-cell crossing flags for the four cell edges (cells span i,j in
     # 0..H-2, 0..W-2).
     top = hbd[:, :-1, :] == depth                       # (N,H-1,W-1)
@@ -378,6 +532,9 @@ def _trace_depth(depth: int, hbd, vbd, hmid, vmid, ctr, anc, iterations: int,
     if weld_tol > 0.0:
         edges, pt_of = _weld_seam_endpoints(edges, pt_of, key_face, weld_tol, adj)
 
+    if min_width > 0.0 and max_diag > 0.0:
+        edges = _collapse_tiny_loops(edges, pt_of, max_diag, min_width)
+
     segs: list = []
     for chain in _chain_edges(edges):
         closed = len(chain) > 3 and chain[0] == chain[-1]
@@ -404,7 +561,8 @@ def smooth_polity_borders(mesh, polities: List, labels: np.ndarray,
     _, H, W = labels.shape
     positions = np.asarray(mesh.face_texture_positions(H, W), dtype=np.float64)
     adj = getattr(mesh, "face_adjacency", None)
+    centroids = getattr(mesh, "face_centroids", None)
     in_poly = (mesh.face_texture_in_polygon(H, W)
                if hasattr(mesh, "face_texture_in_polygon") else None)
     return trace_label_borders(positions, labels, polities, iterations=iterations,
-                               adj=adj, in_poly=in_poly)
+                               adj=adj, centroids=centroids, in_poly=in_poly)

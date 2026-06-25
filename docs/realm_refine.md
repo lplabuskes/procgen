@@ -18,7 +18,7 @@ Runs after `PolityStage`; reads the textures attached by worldgen (`ocean_mask`,
 
 - `realmgen/refine/builder.py` — `RefineStage`, `RefineParams`
 - `realmgen/refine/settlements.py` — settlement snapping + trade-route remapping
-- `realmgen/refine/borders.py` — continuous border polylines traced on the texel polity classification, clipped to each face's rendered polygon (de-doubling) with cross-face seam welding
+- `realmgen/refine/borders.py` — continuous border polylines traced on the texel polity classification, de-doubled by per-texel polygon ownership, with cross-face seam welding and thin-lens-loop collapse
 - `realmgen/refine/fill.py` — texel polity classification (`compute_texel_labels`, incl. domain-warp erosion + single-pixel de-speckle) + authority-weighted fill texture
 
 ## `RefineParams`
@@ -130,15 +130,22 @@ the texel label grid**, so the lines are exactly the edges of the fill's regions
   resulting `{depth: (M, 6)}` structure is a drop-in replacement. Coastlines
   (land vs. `WATER`) are *not* borders, so a polity-vs-polity line simply
   terminates at the texel waterline.
-- **Polygon clip (de-doubling).** Each face's 16×16 texture is a *square* that
+- **Ownership de-doubling.** Each face's 16×16 texture is a *square* that
   over-hangs its hexagon, so a border running along a shared edge would be traced
   twice — once in each face's over-hang (a doubled line, "one from each side").
-  The trace is clipped to the rendered polygon (`mesh.face_texture_in_polygon`):
-  out-of-polygon texels are treated as non-region, so each boundary is traced only
-  by the face that actually renders it. This roughly *halves* the total border
-  geometry (seed 4: 94k → 49k segments) and is what removes the doubled lines; the
-  clipped per-face pieces meet at the hexagon edge and are rejoined by the weld
-  (below).
+  Rather than clip the over-hang away (which *deletes* a border that runs *along* a
+  seam, since that border lives only in the over-hang — the cause of the gap
+  regression), the trace keeps the over-hang labels and de-doubles by **ownership**
+  (`_texel_owner`): every texel-edge is drawn from only the **lower-id** of the two
+  face-cells its endpoints fall in. A texel's owner is its own face if it lies
+  inside that face's rendered polygon (`mesh.face_texture_in_polygon`, the exact
+  render clip) and otherwise the neighbour the over-hang spilled into (nearest
+  centroid). Using the polygon — not a bare centroid-Voronoi — avoids the thin
+  sliver between the centroid bisector and the real hexagon seam where both faces
+  would draw a short doubled stretch. Each boundary is therefore drawn exactly once
+  (seed 4: ~90k → ~45k segments) with no gaps where a border follows a seam. A
+  seam-*crossing* border is carried straight through by the lower-id face, so its
+  neighbour's matching point is mid-chain — rejoined by the weld (below).
 - Within each 2×2 texel cell the crossings around the four cell edges are joined
   marching-squares style: exactly two crossings → a straight link between their
   edge midpoints; otherwise each crossing links to the cell centre (handles 3+
@@ -150,17 +157,29 @@ the texel label grid**, so the lines are exactly the edges of the fill's regions
   rounds into a visible knot/loop. Such cells are instead split into the two
   non-crossing links that keep the equal-label diagonal connected. Genuine 3-/4-
   region junctions still use the centre hub.
-- **Seam welding** (`_weld_seam_endpoints`) rejoins the clipped per-face pieces
-  across a shared edge. With the polygon clip, a border crossing a seam terminates
-  at the hexagon boundary on *each* face; the two faces' grids are *not* aligned
-  there (paired texels sit up to ~2 texels apart, many-to-many), so the two
-  terminations sit a small gap apart. Crossings in a clip *frontier* cell (a cell
-  touching an out-of-polygon texel) are flagged with their emitting face; after
-  tracing, degree-1 frontier endpoints from *mesh-adjacent* faces that fall within
-  `weld_factor × texel_spacing` (default 2.5) are merged onto one canonical point
-  via union-find, so the per-face pieces join into one line. The adjacency guard
-  keeps the generous tolerance from fusing unrelated borders; clusters where 3+
-  faces meet (mesh vertices / pentagon corners) collapse together.
+- **Seam welding** (`_weld_seam_endpoints`) rejoins the per-face pieces across a
+  shared edge. A border crossing a seam stops on one face where ownership flips,
+  leaving a ~1-texel gap to where the neighbour face draws the same border (the two
+  faces' grids are *not* aligned there — paired texels sit up to ~2 texels apart,
+  many-to-many). Because the ownership tie-break lets the lower-id face carry a
+  crossing border straight *through* the seam, the neighbour's matching point is
+  usually **mid-chain**, not another loose end. So each degree-1 endpoint lying in
+  an ownership *frontier* cell (a cell touching a not-owned-by-this-face texel) is
+  snapped onto the nearest frontier border *vertex* of a *mesh-adjacent* face (any
+  degree) within `weld_factor × texel_spacing` (default 2.5) — a T-join. The
+  adjacency guard keeps the generous tolerance from fusing unrelated borders;
+  mutually-near loose ends at 3-face / pentagon corners collapse together.
+- **Lens-loop collapse** (`_collapse_tiny_loops`). The per-face fill Voronoi can
+  place a boundary a texel apart on either side of a seam, so the same border is
+  traced as two nearly-parallel copies joined at both ends — a thin `lens` that
+  reads as a spurious little loop. A lens is long-and-thin (minor extent ≪ 1 texel)
+  where a real exclave is round, so every small closed loop whose minor principal
+  extent is below `loop_cull_factor × texel_spacing` (default 1.4) is merged to its
+  centroid: an isolated lens vanishes, a lens hanging off a junction collapses to a
+  point the through-line still passes through (no new gap). (Sub-texel speckle
+  collapses with it; single-texel interior exclaves are already de-speckled in
+  `fill.py`.) Truly fixing the lens at the source needs cross-seam-consistent fill
+  labels — a larger `fill.py` change.
 - Each chain is **Chaikin-smoothed** (`border_smoothing_iterations` passes), with
   open-chain endpoints held fixed so chains meeting at a junction stay joined, then
   renormalised onto the unit sphere — rounding off the texel staircase.
@@ -187,9 +206,12 @@ Mutates in place: `settlements` (`.position`), `trade_routes` (endpoint geometry
 `realmgen/refine/test/test_refine.py` — stub-mesh snapping (coast/ocean-vs-lake/
 river), route remapping, Chaikin corner-cutting + edge chaining (open/closed),
 texel border tracing (two-polity split, coastline ignored, saddle resolved
-without a centre X, polygon-clip suppresses out-of-polygon borders), seam-weld
-(cross-adjacent-face dangles join, non-adjacent don't), single-pixel de-speckle
-(interior exclave dissolved, diagonal-only exclave dissolved, water island /
-edge-ring preserved), domain-warp identity/continuity, and fill-texture
-shape/coastline/orphan-land behaviour. `core/test/test_mymesh.py` covers
-`face_texture_in_polygon` (centre inside / corners outside / matches positions).
+without a centre X), ownership de-doubling (`_texel_owner` assigns by nearest
+centroid, and by polygon — over-hang texels go to the neighbour; an overlapping
+doubled trace halves to a single line), lens-loop collapse (a thin loop is
+dropped, a round one kept), seam-weld (cross-adjacent-face dangles join,
+non-adjacent don't), single-pixel de-speckle (interior exclave dissolved,
+diagonal-only exclave dissolved, water island / edge-ring preserved), domain-warp
+identity/continuity, and fill-texture shape/coastline/orphan-land behaviour.
+`core/test/test_mymesh.py` covers `face_texture_in_polygon` (centre inside /
+corners outside / matches positions).
