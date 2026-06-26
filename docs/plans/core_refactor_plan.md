@@ -226,6 +226,23 @@ class DisplayRegistry:
    `worldgen/main_mesh.py`. `pyproject.toml` testpath updated. **297 tests green.**
 8. **`humangen/`** — rename/expand `realmgen` once city/name stages exist; not required for
    the refactor itself.
+9. **[DONE 2026-06-25] Nestable pipelines + hover decomposition.** `Pipeline` now subclasses
+   `Stage` (`core/pipeline.py`): its `build`/`register_display`/`serialize`/`load` delegate to
+   its children, and it grows a single `apply_display(window, *, debug)` that builds **one**
+   `DisplayRegistry` from the whole (recursive) stage tree and calls `apply_registry` once. So
+   pipelines nest: `main.py`'s new `AppPipeline(Pipeline)` holds `GlobePipeline` + `RealmPipeline`
+   as ordinary stages, and the top level collapsed to **build once / display once / save once**
+   (the two-pass `globe.apply_display` + `realm.apply_display` is gone). `GlobePipeline` lost its
+   `build`/`apply_display` overrides (`globe` is now a read-only property over `self.world`);
+   `load_globe` calls `pipeline.load(...)`. The big win: `RealmPipeline.apply_display` (~80 lines)
+   is **deleted** — it had bypassed `apply_registry` to hand-merge schemes into
+   `window._map._color_schemes` and re-implement a bespoke `_realm_hover` off
+   `window._map._hover_callback`. That hover decomposed into per-stage `reg.add_hover`
+   contributors next to the existing worldgen ones: suitability→`ScoringStage`,
+   settlement tier+pop→`PopulationStage`, polity chain/control/tension→`PolityStage`. Persistence
+   stays physical-world-only via `AppPipeline.globe_pipeline`. **472 tests green**; verified
+   end-to-end nested build + single-pass registry assembly (28 schemes / 14 overlays / 9 hover
+   contributors).
 
 Each step keeps `python3 -m pytest` and `python3 main.py` green before the next.
 

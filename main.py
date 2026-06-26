@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
 
-from core.pipeline import BuildContext
+from core.pipeline import BuildContext, Pipeline
 from core.world import World
 from viz.mapview.mapview import MapWindow
 from viz.params_dialog import ParamsDialog
@@ -21,6 +21,20 @@ class AppParams:
     realm: RealmParams = dataclasses.field(
         default_factory=RealmParams, metadata={"label": "Realm / Settlements"}
     )
+
+
+class AppPipeline(Pipeline):
+    """Top-level nested pipeline: physical world then human geography.
+
+    Both sub-pipelines are ordinary :class:`~core.pipeline.Stage` objects, so a
+    single ``build`` / ``apply_display`` walks the whole tree. Persistence stays
+    scoped to the physical world via :attr:`globe_pipeline`.
+    """
+
+    def __init__(self, params: AppParams) -> None:
+        self.globe_pipeline = GlobePipeline(params.globe)
+        self.realm_pipeline = RealmPipeline(params.realm)
+        super().__init__([self.globe_pipeline, self.realm_pipeline])
 
 
 class AppParamsDialog(ParamsDialog):
@@ -41,7 +55,7 @@ def main() -> None:
     window.setWindowTitle("Procedural World")
 
     current_params: list[AppParams] = [AppParams()]
-    current_globe_pipeline: list[GlobePipeline | None] = [None]
+    current_pipeline: list[Pipeline | None] = [None]
 
     def _build_and_apply(params: AppParams) -> None:
         window.set_rebuild_enabled(False)
@@ -54,21 +68,18 @@ def main() -> None:
         if globe_params.seed is None:
             globe_params = dataclasses.replace(globe_params, seed=random.randint(0, 2**31 - 1))
 
-        current_params[0] = dataclasses.replace(params, globe=globe_params)
+        params = dataclasses.replace(params, globe=globe_params)
+        current_params[0] = params
 
         world = World(globe_params.mesh, seed=globe_params.seed, progress=_progress)
         ctx = BuildContext(world=world, progress=_progress)
-        globe_pipeline = GlobePipeline(globe_params)
-        globe_pipeline.build(ctx)
-        current_globe_pipeline[0] = globe_pipeline
-
-        realm_pipeline = RealmPipeline(params.realm)
-        realm_pipeline.build(ctx)
+        pipeline = AppPipeline(params)
+        pipeline.build(ctx)
+        current_pipeline[0] = pipeline
 
         prev_scheme = window.active_scheme
         window.set_globe(ctx.world)
-        globe_pipeline.apply_display(window, debug=debug)
-        realm_pipeline.apply_display(window, debug=debug)
+        pipeline.apply_display(window, debug=debug)
         if prev_scheme:
             window.set_active_scheme(prev_scheme)
 
@@ -82,7 +93,7 @@ def main() -> None:
 
         globe_pipeline, globe = load_globe(path)
         current_params[0] = AppParams(globe=globe_pipeline.params)
-        current_globe_pipeline[0] = globe_pipeline
+        current_pipeline[0] = globe_pipeline
 
         window.set_globe(globe)
         globe_pipeline.apply_display(window, debug=debug)
@@ -103,8 +114,11 @@ def main() -> None:
                 _build_and_apply(new_params)
 
     def _save() -> None:
-        globe_pipeline = current_globe_pipeline[0]
-        if globe_pipeline is None:
+        pipeline = current_pipeline[0]
+        if pipeline is None:
+            return
+        globe_pipeline = getattr(pipeline, "globe_pipeline", pipeline)
+        if not isinstance(globe_pipeline, GlobePipeline):
             return
         path, _ = QFileDialog.getSaveFileName(
             window, "Save World", "", "World files (*.npz)"

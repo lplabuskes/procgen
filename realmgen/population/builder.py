@@ -15,7 +15,12 @@ from core.pipeline import BuildContext, Stage
 from realmgen.channels import HINTERLAND_ID, POPULATION, RURAL_POPULATION, SITUATIONAL_VALUE, SUITABILITY, TRADE_FLOW
 from realmgen.placement.builder import SeederParams
 from realmgen.placement.seeder import build_cost_graph
-from realmgen.placement.types import Settlement, population_display_tier
+from realmgen.placement.types import (
+    TIER_NAMES,
+    Settlement,
+    format_population,
+    population_display_tier,
+)
 from realmgen.population.calibration import (
     apply_population_to_settlements,
     compute_carrying_capacity,
@@ -476,3 +481,16 @@ class PopulationStage(Stage):
             reg.add_overlay("settlements", "Settlements", checked=True)
         if self.trade_result is not None and self.trade_result.routes:
             reg.add_overlay("trade_routes", "Trade Routes", checked=True)
+
+        def _settlement_hover(face: int, _uv, w) -> list:
+            meta = w.mesh.face_metadata[face]
+            tier = meta.get("settlement_tier")
+            if tier is None or int(tier) < 0:
+                return []
+            parts = [TIER_NAMES[min(int(tier), len(TIER_NAMES) - 1)]]
+            pop = meta.get("population")
+            if pop is not None and float(pop) > 0:
+                parts.append(f"Pop: {format_population(float(pop))}")
+            return parts
+
+        reg.add_hover(_settlement_hover)

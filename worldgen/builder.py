@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Union
 
-from core.display import DisplayRegistry
 from core.mesh_cache import MeshParams
 from core.persistence import load_world, save_world
 from core.pipeline import BuildContext, Pipeline
@@ -61,23 +60,10 @@ class GlobePipeline(Pipeline):
             self.danger_builder,
             self.cost_builder,
         ])
-        self.globe: Optional[World] = None
 
-    def build(self, ctx: BuildContext) -> None:
-        super().build(ctx)
-        self.globe = ctx.world
-
-    def apply_display(self, window, debug: bool = False) -> None:
-        from viz.mapview.registry import apply_registry
-
-        world = self.globe
-        assert world is not None and world.mesh is not None, (
-            "GlobePipeline.build() must be called before apply_display"
-        )
-        reg = DisplayRegistry()
-        for stage in self:
-            stage.register_display(world, reg, debug=debug)
-        apply_registry(reg, window, world)
+    @property
+    def globe(self) -> Optional[World]:
+        return self.world
 
 
 def save_globe(pipeline: GlobePipeline, path: Union[str, Path]) -> None:
@@ -89,8 +75,5 @@ def save_globe(pipeline: GlobePipeline, path: Union[str, Path]) -> None:
 def load_globe(path: Union[str, Path]) -> tuple[GlobePipeline, World]:
     params, world, data = load_world(path, GlobeParams)
     pipeline = GlobePipeline(params)
-    ctx = BuildContext(world=world)
-    for stage in pipeline:
-        stage.load(data, ctx)
-    pipeline.globe = world
+    pipeline.load(data, BuildContext(world=world))
     return pipeline, world

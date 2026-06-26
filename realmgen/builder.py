@@ -18,14 +18,9 @@ Usage::
 """
 from __future__ import annotations
 
-from typing import Optional
-
-from core.display import DisplayRegistry
 from core.params import field, param_field as _f, paramclass
-from core.pipeline import BuildContext, Pipeline
-from core.world import World
+from core.pipeline import Pipeline
 from realmgen.placement.builder import PlacementStage, SeederParams
-from realmgen.placement.types import TIER_NAMES, format_population
 from realmgen.polity.builder import PolityParams, PolityStage
 from realmgen.population.builder import PopulationParams, PopulationStage, TradeParams
 from realmgen.refine.builder import RefineParams, RefineStage
@@ -105,7 +100,6 @@ class RealmPipeline(Pipeline):
             self.polity_stage,
             self.refine_stage,
         ])
-        self.world: Optional[World] = None
 
     @property
     def params(self) -> RealmParams:
@@ -118,87 +112,3 @@ class RealmPipeline(Pipeline):
     @property
     def situational_value(self):
         return self.scoring_stage.situational_value
-
-    def build(self, ctx: BuildContext) -> None:
-        super().build(ctx)
-        self.world = ctx.world
-
-    def apply_display(self, window, debug: bool = False) -> None:
-        """Merge realm color schemes, overlays, and hover into a MapWindow after build()."""
-        if self.world is None:
-            return
-        reg = DisplayRegistry()
-        for stage in self.stages:
-            stage.register_display(self.world, reg, debug=debug)
-
-        if reg.schemes:
-            merged = dict(window._map._color_schemes)
-            for name, spec in reg.schemes.items():
-                merged[name] = spec.fn
-            window.set_color_schemes(merged)
-            # Wire per-scheme textures (e.g. the texel-level "Polities" fill) and
-            # legends — mirrors viz.mapview.registry.apply_registry, which the
-            # realm path bypasses because it *merges* into worldgen's schemes.
-            for name, spec in reg.schemes.items():
-                if spec.texture is not None:
-                    window.associate_scheme_texture(name, spec.texture)
-                if spec.legend is not None:
-                    kind, entries = spec.legend
-                    window.register_legend(name, kind, entries)
-
-        for ov in reg.overlays:
-            window.add_overlay(ov.feature, label=ov.label, checked=ov.checked)
-
-        mesh = self.world.mesh if self.world else None
-        if mesh is None:
-            return
-
-        prev_hover = window._map._hover_callback
-        pol_by_id = {pol.polity_id: pol for pol in (self.polity_stage.polities or [])}
-
-        def _realm_hover(face_src, uv=None):
-            if prev_hover is not None:
-                prev_hover(face_src, uv)
-            if face_src is None:
-                return
-            meta = mesh.face_metadata[face_src]
-            if meta.get("is_water", meta.get("is_ocean", False)):
-                return
-            parts: list[str] = []
-            suit = meta.get("suitability")
-            if debug and suit is not None:
-                parts.append(f"Suit: {float(suit):.2f}")
-            tier = meta.get("settlement_tier")
-            if tier is not None and int(tier) >= 0:
-                t = int(tier)
-                parts.append(TIER_NAMES[min(t, len(TIER_NAMES) - 1)])
-                pop = meta.get("population")
-                if pop is not None and float(pop) > 0:
-                    parts.append(f"Pop: {format_population(float(pop))}")
-            pid = meta.get("polity_id")
-            if pid is not None and int(pid) >= 0:
-                chain: list[int] = []
-                node = int(pid)
-                while node >= 0:
-                    chain.append(node)
-                    node_pol = pol_by_id.get(node)
-                    if node_pol is None or node_pol.liege is None:
-                        break
-                    node = node_pol.liege
-                chain.reverse()
-                if len(chain) == 1:
-                    parts.append(f"Sovereign {chain[0]}")
-                else:
-                    parts.append("Pol: " + " › ".join(str(p) for p in chain))
-                cc = meta.get("control_class")
-                if cc is not None and int(cc) >= 0:
-                    parts.append(["Direct", "Vassal", "Independent"][int(cc)])
-                tension = meta.get("border_tension")
-                if debug and tension is not None and float(tension) > 0.01:
-                    parts.append(f"Tension: {float(tension):.2f}")
-            if parts:
-                cur = window._status_label.text()
-                fragment = "  ".join(parts)
-                window.set_status(f"{cur}  |  {fragment}" if cur else fragment)
-
-        window.set_hover_callback(_realm_hover)

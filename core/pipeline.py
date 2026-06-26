@@ -99,11 +99,21 @@ class Stage(ABC):
         return None
 
 
-class Pipeline:
-    """An ordered collection of stages run against a shared ``BuildContext``."""
+class Pipeline(Stage):
+    """An ordered collection of stages run against a shared ``BuildContext``.
+
+    A ``Pipeline`` *is* a ``Stage`` — its ``build``/``register_display``/
+    ``serialize``/``load`` hooks delegate to its children — so pipelines nest:
+    an app-level pipeline can hold a worldgen sub-pipeline and a realm
+    sub-pipeline as ordinary stages, and the whole tree builds, displays, and
+    serializes through one uniform walk.
+    """
+
+    name: str = "pipeline"
 
     def __init__(self, stages: List[Stage]) -> None:
         self.stages: List[Stage] = list(stages)
+        self.world: "World | None" = None
 
     def __iter__(self) -> Iterator[Stage]:
         return iter(self.stages)
@@ -114,3 +124,33 @@ class Pipeline:
     def build(self, ctx: BuildContext) -> None:
         for stage in self.stages:
             stage.build(ctx)
+        self.world = ctx.world
+
+    def register_display(
+        self, world: World, reg: "DisplayRegistry", *, debug: bool = False
+    ) -> None:
+        for stage in self.stages:
+            stage.register_display(world, reg, debug=debug)
+
+    def serialize(self) -> dict[str, np.ndarray]:
+        arrays: dict[str, np.ndarray] = {}
+        for stage in self.stages:
+            arrays.update(stage.serialize())
+        return arrays
+
+    def load(self, arrays: Mapping[str, np.ndarray], ctx: BuildContext) -> None:
+        for stage in self.stages:
+            stage.load(arrays, ctx)
+        self.world = ctx.world
+
+    def apply_display(self, window, *, debug: bool = False) -> None:
+        """Build one ``DisplayRegistry`` from every (nested) stage and wire it
+        into ``window`` in a single pass."""
+        from viz.mapview.registry import apply_registry
+        from core.display import DisplayRegistry
+
+        if self.world is None:
+            return
+        reg = DisplayRegistry()
+        self.register_display(self.world, reg, debug=debug)
+        apply_registry(reg, window, self.world)

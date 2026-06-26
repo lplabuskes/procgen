@@ -409,6 +409,35 @@ class PolityStage(Stage):
             tex = ("polity_fill" if world is not None
                    and "polity_fill" in world.mesh.face_textures else None)
             reg.add_scheme("Polities", disp.make_polity_tree_color(self.polities), texture=tex)
+            pol_by_id = {pol.polity_id: pol for pol in self.polities}
+
+            def _polity_hover(face: int, _uv, w) -> list:
+                meta = w.mesh.face_metadata[face]
+                pid = meta.get("polity_id")
+                if pid is None or int(pid) < 0:
+                    return []
+                chain: List[int] = []
+                node = int(pid)
+                while node >= 0:
+                    chain.append(node)
+                    node_pol = pol_by_id.get(node)
+                    if node_pol is None or node_pol.liege is None:
+                        break
+                    node = node_pol.liege
+                chain.reverse()
+                parts = [
+                    f"Sovereign {chain[0]}" if len(chain) == 1
+                    else "Pol: " + " › ".join(str(p) for p in chain)
+                ]
+                cc = meta.get("control_class")
+                if cc is not None and int(cc) >= 0:
+                    parts.append(["Direct", "Vassal", "Independent"][int(cc)])
+                tension = meta.get("border_tension")
+                if debug and tension is not None and float(tension) > 0.01:
+                    parts.append(f"Tension: {float(tension):.2f}")
+                return parts
+
+            reg.add_hover(_polity_hover)
         if debug and self.face_tension is not None:
             reg.add_scheme("Border Tension", disp.tension_color)
         if world is not None and world.has_feature("polity_borders"):

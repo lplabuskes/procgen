@@ -16,7 +16,8 @@
 - `register_display(world, reg, *, debug=False)` — adds color schemes/overlays to `DisplayRegistry`
 - `serialize() → dict[str, np.ndarray]` / `load(arrays, ctx)` — persistence hooks
 
-**`Pipeline`**: Ordered list of stages run against a shared `BuildContext`. Iterable; `build(ctx)` runs each stage in order.
+**`Pipeline`** (subclass of `Stage`): Ordered list of stages run against a shared `BuildContext`. Iterable; `build(ctx)` runs each stage in order and caches `self.world`. Because a `Pipeline` *is* a `Stage`, pipelines nest — its `register_display` / `serialize` / `load` hooks delegate to its children, so an app-level pipeline can hold sub-pipelines (e.g. `GlobePipeline` + `RealmPipeline`) as ordinary stages and build/display/serialize the whole tree in one uniform walk.
+- `apply_display(window, *, debug=False)` — builds **one** `DisplayRegistry` from the whole (recursive) stage tree and wires it into `window` via `viz.mapview.registry.apply_registry` in a single pass (imported lazily so `core` stays Qt-free).
 
 ## `core/channels.py` — Inter-stage data contract
 

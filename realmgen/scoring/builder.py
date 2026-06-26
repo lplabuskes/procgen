@@ -304,3 +304,12 @@ class ScoringStage(Stage):
             reg.add_scheme("Suitability", _suitability_color)
         if self.situational_value is not None:
             reg.add_scheme("Situational Value", _situational_color)
+
+        def _suitability_hover(face: int, _uv, w) -> list:
+            meta = w.mesh.face_metadata[face]
+            if meta.get("is_water", meta.get("is_ocean", False)):
+                return []
+            suit = meta.get("suitability")
+            return [f"Suit: {float(suit):.2f}"] if suit is not None else []
+
+        reg.add_hover(_suitability_hover)
