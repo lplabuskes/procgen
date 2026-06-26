@@ -36,6 +36,7 @@ from realmgen.polity.forest import (
     _Ctx,
 )
 from realmgen.polity.loyalty import LoyaltyParams
+from realmgen.persistence import pack_polities, unpack_polities
 from realmgen.polity.seeding import seed_capitals
 from realmgen.polity.tension import compute_border_tension
 from realmgen.polity.types import Polity
@@ -451,6 +452,32 @@ class PolityStage(Stage):
                 mx = float(self.authority_of_face.max()) if self.authority_of_face.size else 0.0
                 world.mesh.apply_metadata_channel("authority", self.authority_of_face.tolist())
                 reg.add_scheme("Authority Field", disp.make_authority_color(mx))
+
+    # ── Persistence ───────────────────────────────────────────────────────────
+    # The polity forest is the feature this stage owns; per-face polity/sovereign/
+    # control/tension/authority fields round-trip via metadata, so load() rebuilds
+    # the Polity objects and re-derives the per-face attrs from the restored mesh.
+
+    def serialize(self) -> dict:
+        if self.polities:
+            return pack_polities(self.polities)
+        return {}
+
+    def load(self, arrays, ctx: BuildContext) -> None:
+        world, mesh = ctx.world, ctx.mesh
+        if "pol_id" in arrays:
+            self.polities = unpack_polities(arrays)
+            world.add_feature("polities", self.polities)
+        if POLITY_ID.present(mesh):
+            self.polity_of_face = np.asarray(POLITY_ID.read(mesh), dtype=np.int32)
+        if SOVEREIGN_ID.present(mesh):
+            self.sovereign_of_face = np.asarray(SOVEREIGN_ID.read(mesh), dtype=np.int32)
+        if CONTROL_CLASS.present(mesh):
+            self.control_of_face = np.asarray(CONTROL_CLASS.read(mesh), dtype=np.int32)
+        if BORDER_TENSION.present(mesh):
+            self.face_tension = np.asarray(BORDER_TENSION.read(mesh), dtype=np.float64)
+        if AUTHORITY.present(mesh):
+            self.authority_of_face = np.asarray(AUTHORITY.read(mesh), dtype=np.float64)
 
 
 def _root_power(polities: List[Polity]) -> np.ndarray:

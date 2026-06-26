@@ -20,6 +20,7 @@ import numpy as np
 from core.params import param_field as _f, paramclass
 from core.pipeline import BuildContext, Stage
 from realmgen.channels import AUTHORITY, POLITY_ID
+from realmgen.persistence import pack_borders, pack_routes, unpack_borders, unpack_routes
 from realmgen.refine.borders import smooth_polity_borders
 from realmgen.refine.fill import build_polity_fill_texture, compute_texel_labels
 from realmgen.refine.settlements import refine_settlement_positions, remap_routes
@@ -59,6 +60,10 @@ class RefineStage(Stage):
 
     def __init__(self, params: RefineParams | None = None) -> None:
         self.params = params or RefineParams()
+        # Final realm geometry, cached for serialization (refine is the last stage,
+        # so these are the post-refine route/border features).
+        self._routes: list | None = None
+        self._borders: dict | None = None
 
     def build(self, ctx: BuildContext) -> None:
         world = ctx.world
@@ -66,55 +71,80 @@ class RefineStage(Stage):
         p = self.params
 
         settlements = world.get_feature("settlements") or []
-        if not settlements or not OCEAN_MASK.present(mesh):
-            return
+        if settlements and OCEAN_MASK.present(mesh):
+            ocean_tex = OCEAN_MASK.read(mesh)
+            lake_tex = LAKE_MASK.read(mesh) if LAKE_MASK.present(mesh) else None
+            fertility = FERTILITY_MEAN.read(mesh)
+            rivers = world.get_feature("rivers")
 
-        ocean_tex = OCEAN_MASK.read(mesh)
-        lake_tex = LAKE_MASK.read(mesh) if LAKE_MASK.present(mesh) else None
-        fertility = FERTILITY_MEAN.read(mesh)
-        rivers = world.get_feature("rivers")
+            moved = refine_settlement_positions(
+                settlements,
+                mesh=mesh,
+                ocean_tex=ocean_tex,
+                lake_tex=lake_tex,
+                fertility=fertility,
+                rivers=rivers,
+                river_threshold_factor=float(p.river_threshold_factor),
+            )
 
-        moved = refine_settlement_positions(
-            settlements,
-            mesh=mesh,
-            ocean_tex=ocean_tex,
-            lake_tex=lake_tex,
-            fertility=fertility,
-            rivers=rivers,
-            river_threshold_factor=float(p.river_threshold_factor),
-        )
+            routes = world.get_feature("trade_routes")
+            if routes and moved:
+                world.add_feature("trade_routes", remap_routes(routes, moved))
 
-        routes = world.get_feature("trade_routes")
-        if routes and moved:
-            world.add_feature("trade_routes", remap_routes(routes, moved))
+            if world.has_feature("polity_borders") and POLITY_ID.present(mesh):
+                polities = world.get_feature("polities") or []
+                pof = np.asarray(POLITY_ID.read(mesh), dtype=np.int32)
+                is_water = np.asarray(IS_WATER.read(mesh), dtype=bool)
+                authority = (np.asarray(AUTHORITY.read(mesh), dtype=np.float64)
+                             if AUTHORITY.present(mesh) else None)
+                if polities and authority is not None:
+                    # Single texel classification feeds both the fill and the borders,
+                    # so the lines fall exactly on the fill's region edges.
+                    labels = compute_texel_labels(
+                        mesh, pof, is_water, authority, ocean_tex, lake_tex,
+                        control_floor=float(p.border_control_floor),
+                        warp_amplitude=float(p.boundary_warp_amplitude),
+                        warp_frequency=float(p.boundary_warp_frequency),
+                        warp_octaves=int(p.boundary_warp_octaves),
+                        warp_seed=int(world.seed or 0),
+                    )
+                    world.add_feature("polity_borders", smooth_polity_borders(
+                        mesh, polities, labels,
+                        iterations=int(p.border_smoothing_iterations),
+                    ))
+                    rgba = build_polity_fill_texture(
+                        mesh, polities, pof, is_water,
+                        authority, ocean_tex, lake_tex,
+                        control_floor=float(p.border_control_floor),
+                        labels=labels,
+                    )
+                    mesh.set_face_textures("polity_fill", rgba, n_channels=4)
 
-        if world.has_feature("polity_borders") and POLITY_ID.present(mesh):
-            polities = world.get_feature("polities") or []
-            pof = np.asarray(POLITY_ID.read(mesh), dtype=np.int32)
-            is_water = np.asarray(IS_WATER.read(mesh), dtype=bool)
-            authority = (np.asarray(AUTHORITY.read(mesh), dtype=np.float64)
-                         if AUTHORITY.present(mesh) else None)
-            if polities and authority is not None:
-                # Single texel classification feeds both the fill and the borders,
-                # so the lines fall exactly on the fill's region edges.
-                labels = compute_texel_labels(
-                    mesh, pof, is_water, authority, ocean_tex, lake_tex,
-                    control_floor=float(p.border_control_floor),
-                    warp_amplitude=float(p.boundary_warp_amplitude),
-                    warp_frequency=float(p.boundary_warp_frequency),
-                    warp_octaves=int(p.boundary_warp_octaves),
-                    warp_seed=int(world.seed or 0),
-                )
-                world.add_feature("polity_borders", smooth_polity_borders(
-                    mesh, polities, labels,
-                    iterations=int(p.border_smoothing_iterations),
-                ))
-                rgba = build_polity_fill_texture(
-                    mesh, polities, pof, is_water,
-                    authority, ocean_tex, lake_tex,
-                    control_floor=float(p.border_control_floor),
-                    labels=labels,
-                )
-                mesh.set_face_textures("polity_fill", rgba, n_channels=4)
+            ctx.report(f"  ✦ Refined {len(moved)} settlement position(s) to texel level.")
 
-        ctx.report(f"  ✦ Refined {len(moved)} settlement position(s) to texel level.")
+        # Capture the final realm geometry for serialization regardless of whether
+        # refinement ran (these may be the raw routes/borders from earlier stages).
+        self._routes = world.get_feature("trade_routes")
+        self._borders = world.get_feature("polity_borders")
+
+    # ── Persistence ───────────────────────────────────────────────────────────
+    # Trade-route and polity-border geometry reach their final form here (routes
+    # remapped, borders smoothed), so this stage owns their round-trip. The
+    # polity_fill RGBA texture persists generically via mesh textures.
+
+    def serialize(self) -> dict:
+        arrays: dict = {}
+        if self._routes:
+            arrays.update(pack_routes(self._routes))
+        if self._borders:
+            arrays.update(pack_borders(self._borders))
+        return arrays
+
+    def load(self, arrays, ctx: BuildContext) -> None:
+        world = ctx.world
+        if "route_flow" in arrays:
+            self._routes = unpack_routes(arrays)
+            world.add_feature("trade_routes", self._routes)
+        if "border_segs" in arrays:
+            self._borders = unpack_borders(arrays)
+            world.add_feature("polity_borders", self._borders)

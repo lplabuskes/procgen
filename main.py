@@ -5,12 +5,13 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
 
+from core.persistence import load_world, save_world
 from core.pipeline import BuildContext, Pipeline
 from core.world import World
 from viz.mapview.mapview import MapWindow
 from viz.params_dialog import ParamsDialog
 from realmgen.builder import RealmParams, RealmPipeline
-from worldgen import GlobePipeline, GlobeParams, load_globe, save_globe
+from worldgen import GlobePipeline, GlobeParams
 
 
 @dataclasses.dataclass
@@ -91,12 +92,14 @@ def main() -> None:
         window.set_status(f"Loading {Path(path).name}…")
         QApplication.processEvents()
 
-        globe_pipeline, globe = load_globe(path)
-        current_params[0] = AppParams(globe=globe_pipeline.params)
-        current_pipeline[0] = globe_pipeline
+        params, world, data = load_world(path, AppParams)
+        pipeline = AppPipeline(params)
+        pipeline.load(data, BuildContext(world=world))
+        current_params[0] = params
+        current_pipeline[0] = pipeline
 
-        window.set_globe(globe)
-        globe_pipeline.apply_display(window, debug=debug)
+        window.set_globe(world)
+        pipeline.apply_display(window, debug=debug)
 
         window.set_status("")
         window.set_rebuild_enabled(True)
@@ -115,10 +118,7 @@ def main() -> None:
 
     def _save() -> None:
         pipeline = current_pipeline[0]
-        if pipeline is None:
-            return
-        globe_pipeline = getattr(pipeline, "globe_pipeline", pipeline)
-        if not isinstance(globe_pipeline, GlobePipeline):
+        if pipeline is None or pipeline.world is None:
             return
         path, _ = QFileDialog.getSaveFileName(
             window, "Save World", "", "World files (*.npz)"
@@ -129,7 +129,7 @@ def main() -> None:
             path += ".npz"
         window.set_status(f"Saving {Path(path).name}…")
         QApplication.processEvents()
-        save_globe(globe_pipeline, path)
+        save_world(pipeline.world, current_params[0], pipeline, path)
         window.set_status("")
 
     window.set_save_callback(_save)

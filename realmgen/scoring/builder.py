@@ -313,3 +313,12 @@ class ScoringStage(Stage):
             return [f"Suit: {float(suit):.2f}"] if suit is not None else []
 
         reg.add_hover(_suitability_hover)
+
+    def load(self, arrays, ctx: BuildContext) -> None:
+        # Suitability / situational value round-trip via per-face metadata; just
+        # re-attach the stage attrs so register_display fires.
+        mesh = ctx.mesh
+        if SUITABILITY.present(mesh):
+            self.suitability = SUITABILITY.read(mesh)
+        if SITUATIONAL_VALUE.present(mesh):
+            self.situational_value = SITUATIONAL_VALUE.read(mesh)

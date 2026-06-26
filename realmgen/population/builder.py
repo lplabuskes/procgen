@@ -33,7 +33,8 @@ from realmgen.population.calibration import (
 )
 from realmgen.population.trade_spawn import spawn_trade_settlements
 from realmgen.scoring.suitability import _positions_to_face_ids
-from realmgen.trade.network import RARE_BIO_TYPE_OFFSET, compute_trade_network
+from realmgen.persistence import pack_settlements, unpack_settlements
+from realmgen.trade.network import RARE_BIO_TYPE_OFFSET, TradeResult, compute_trade_network
 from viz.color_stops import interp_stops_scalar
 from worldgen.cost.channels import COST_SURFACES, IS_WATER
 from worldgen.geology.display import OCEAN_COLOR
@@ -479,7 +480,11 @@ class PopulationStage(Stage):
             reg.add_scheme("Rural Population", _make_rural_pop_color(self.rural_population))
         if self.settlements is not None:
             reg.add_overlay("settlements", "Settlements", checked=True)
-        if self.trade_result is not None and self.trade_result.routes:
+        has_routes = (
+            (self.trade_result is not None and bool(self.trade_result.routes))
+            or (world is not None and world.has_feature("trade_routes"))
+        )
+        if has_routes:
             reg.add_overlay("trade_routes", "Trade Routes", checked=True)
 
         def _settlement_hover(face: int, _uv, w) -> list:
@@ -494,3 +499,35 @@ class PopulationStage(Stage):
             return parts
 
         reg.add_hover(_settlement_hover)
+
+    # ── Persistence ───────────────────────────────────────────────────────────
+    # Settlements are the only realm *feature* this stage owns; their final
+    # positions (refined in place by RefineStage) are captured here. Per-face
+    # population / rural / hinterland / trade-flow round-trip via metadata, so
+    # load() just re-derives the stage attrs from the restored mesh.
+
+    def serialize(self) -> dict:
+        if self.settlements:
+            return pack_settlements(self.settlements)
+        return {}
+
+    def load(self, arrays, ctx: BuildContext) -> None:
+        world, mesh = ctx.world, ctx.mesh
+        if "settle_face_id" in arrays:
+            self.settlements = unpack_settlements(arrays)
+            world.add_feature("settlements", self.settlements)
+        if RURAL_POPULATION.present(mesh):
+            self.rural_population = RURAL_POPULATION.read(mesh)
+        if HINTERLAND_ID.present(mesh):
+            self.hinterland = HINTERLAND_ID.read(mesh)
+        if POPULATION.present(mesh):
+            self.population = POPULATION.read(mesh)
+        if TRADE_FLOW.present(mesh):
+            face_flow = TRADE_FLOW.read(mesh).astype(np.float32)
+            hub_mask = np.array(
+                [bool(m.get("is_trade_hub", False)) for m in mesh.face_metadata],
+                dtype=bool,
+            )
+            # Routes live on the world feature (restored by RefineStage.load); the
+            # debug Trade Flow scheme only reads face_flow.
+            self.trade_result = TradeResult(face_flow=face_flow, hub_mask=hub_mask, routes=[])
