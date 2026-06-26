@@ -18,7 +18,7 @@ Runs after `PolityStage`; reads the textures attached by worldgen (`ocean_mask`,
 
 - `realmgen/refine/builder.py` — `RefineStage`, `RefineParams`
 - `realmgen/refine/settlements.py` — settlement snapping + trade-route remapping
-- `realmgen/refine/borders.py` — continuous border polylines traced on the texel polity classification, de-doubled by per-texel polygon ownership, with cross-face seam welding and thin-lens-loop collapse
+- `realmgen/refine/borders.py` — continuous border polylines traced on the texel polity classification, de-doubled by per-texel polygon ownership, with cross-face seam welding
 - `realmgen/refine/fill.py` — texel polity classification (`compute_texel_labels`, incl. domain-warp erosion + single-pixel de-speckle) + authority-weighted fill texture
 
 ## `RefineParams`
@@ -169,17 +169,15 @@ the texel label grid**, so the lines are exactly the edges of the fill's regions
   degree) within `weld_factor × texel_spacing` (default 2.5) — a T-join. The
   adjacency guard keeps the generous tolerance from fusing unrelated borders;
   mutually-near loose ends at 3-face / pentagon corners collapse together.
-- **Lens-loop collapse** (`_collapse_tiny_loops`). The per-face fill Voronoi can
-  place a boundary a texel apart on either side of a seam, so the same border is
-  traced as two nearly-parallel copies joined at both ends — a thin `lens` that
-  reads as a spurious little loop. A lens is long-and-thin (minor extent ≪ 1 texel)
-  where a real exclave is round, so every small closed loop whose minor principal
-  extent is below `loop_cull_factor × texel_spacing` (default 1.4) is merged to its
-  centroid: an isolated lens vanishes, a lens hanging off a junction collapses to a
-  point the through-line still passes through (no new gap). (Sub-texel speckle
-  collapses with it; single-texel interior exclaves are already de-speckled in
-  `fill.py`.) Truly fixing the lens at the source needs cross-seam-consistent fill
-  labels — a larger `fill.py` change.
+- **Residual lens doubling (left in place).** Where the per-face fill Voronoi
+  disagrees by a texel across a seam, a border is traced as two near-parallel copies
+  joined at both ends — a thin `lens` (≤ ~2 texels) that reads as a faint doubling on
+  the line. An earlier pass *collapsed* such thin closed loops to a point, but the
+  collapse merged the loop's junction vertices and so pulled the **through-border**
+  in with them, punching visible multi-texel gaps into otherwise-complete sovereign
+  borders. That cure was worse than the disease (a faint doubling vs. a missing
+  chunk), so it was removed: the lens is left alone. The real fix is upstream —
+  cross-seam-consistent fill labels in `fill.py`, a larger change.
 - Each chain is **Chaikin-smoothed** (`border_smoothing_iterations` passes), with
   open-chain endpoints held fixed so chains meeting at a junction stay joined, then
   renormalised onto the unit sphere — rounding off the texel staircase.
@@ -208,8 +206,7 @@ river), route remapping, Chaikin corner-cutting + edge chaining (open/closed),
 texel border tracing (two-polity split, coastline ignored, saddle resolved
 without a centre X), ownership de-doubling (`_texel_owner` assigns by nearest
 centroid, and by polygon — over-hang texels go to the neighbour; an overlapping
-doubled trace halves to a single line), lens-loop collapse (a thin loop is
-dropped, a round one kept), seam-weld (cross-adjacent-face dangles join,
+doubled trace halves to a single line), seam-weld (cross-adjacent-face dangles join,
 non-adjacent don't), single-pixel de-speckle (interior exclave dissolved,
 diagonal-only exclave dissolved, water island / edge-ring preserved), domain-warp
 identity/continuity, and fill-texture shape/coastline/orphan-land behaviour.

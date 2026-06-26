@@ -208,7 +208,7 @@ def _texel_owner(P: np.ndarray, centroids: np.ndarray, adj: list,
 
 def trace_label_borders(positions: np.ndarray, labels: np.ndarray,
                         polities: List, *, iterations: int = 2,
-                        weld_factor: float = 2.5, loop_cull_factor: float = 1.4,
+                        weld_factor: float = 2.5,
                         adj: list | None = None,
                         centroids: np.ndarray | None = None,
                         in_poly: np.ndarray | None = None) -> dict:
@@ -231,9 +231,14 @@ def trace_label_borders(positions: np.ndarray, labels: np.ndarray,
     by that face, the over-hang by the neighbour — which avoids the thin sliver
     between the centroid bisector and the real seam where both faces would otherwise
     draw a short doubled stretch; ``centroids`` resolve the over-hang.  The remaining
-    ~1-texel seam crossings are joined by the weld, and ``loop_cull_factor`` (× texel
-    spacing) sets the width below which a residual thin seam ``lens`` loop — the
-    per-face fill Voronoi disagreeing by a texel across a seam — is collapsed away.
+    ~1-texel seam crossings are joined by the weld.
+
+    A residual artifact survives: where the per-face fill Voronoi disagrees by a
+    texel across a seam, a border is drawn as two near-parallel copies (a thin
+    ``lens``, ≤ ~2 texels). These are left in place — they read as a faint doubling
+    on the line, far less disruptive than the visible gaps that collapsing them used
+    to punch into the through-border. The real cure is cross-seam-consistent fill
+    labels in ``fill.py``.
     """
     if not polities:
         return {}
@@ -245,13 +250,6 @@ def trace_label_borders(positions: np.ndarray, labels: np.ndarray,
     # within ~1–2 texels; see _weld_seam_endpoints).
     spacing = float(np.median(np.linalg.norm(P[:, :, 1:, :] - P[:, :, :-1, :], axis=-1)))
     weld_tol = weld_factor * spacing if weld_factor > 0.0 else 0.0
-    # Thin closed loops (minor extent below this) are seam ``lens`` doublings rather
-    # than real territories, and are collapsed to a point (see
-    # ``_collapse_tiny_loops``).  ``loop_cull_factor`` is that width threshold in
-    # texel-spacings; ``max_diag`` only caps which loops are considered so large real
-    # outlines are skipped outright.
-    min_width = loop_cull_factor * spacing if loop_cull_factor > 0.0 else 0.0
-    max_diag = 12.0 * spacing
 
     # Per-edge border depth.  H-edges link (i, j)|(i, j+1); V-edges (i, j)|(i+1, j).
     hbd = _edge_border_depth(labels[:, :, :-1], labels[:, :, 1:], lut)   # (N,H,W-1)
@@ -291,8 +289,7 @@ def trace_label_borders(positions: np.ndarray, labels: np.ndarray,
         anc_d = labels.copy()
         anc_d[claimed] = lut[depth, labels[claimed]]
         segs = _trace_depth(depth, hbd, vbd, hmid, vmid, ctr, anc_d, iterations,
-                            weld_tol=weld_tol, adj=adj, frontier=frontier,
-                            max_diag=max_diag, min_width=min_width)
+                            weld_tol=weld_tol, adj=adj, frontier=frontier)
         if segs:
             out[depth] = np.asarray(segs, dtype=np.float32)
     return out
@@ -399,71 +396,9 @@ def _weld_seam_endpoints(edges: set, pt_of: dict, key_face: dict,
     return new_edges, pt_of
 
 
-def _loop_extents(verts: np.ndarray) -> tuple[float, float]:
-    """Major/minor extent of a closed loop, from its principal axes in-plane.
-
-    Projects the loop onto the tangent plane at its centroid, finds the principal
-    axes (eigenvectors of the 2D covariance) and returns the point spread (max−min)
-    along each — so a long thin ``lens`` has ``minor ≪ major`` while a round exclave
-    has comparable extents.
-    """
-    c = verts.mean(axis=0)
-    cn = c / np.linalg.norm(c)
-    ref = verts[0] - c
-    e1 = ref - cn * float(ref @ cn)
-    e1 = e1 / (np.linalg.norm(e1) + 1e-30)
-    e2 = np.cross(cn, e1)
-    xy = np.column_stack([(verts - c) @ e1, (verts - c) @ e2])   # (n, 2)
-    cov = xy.T @ xy
-    _, vecs = np.linalg.eigh(cov)                                # ascending
-    proj = xy @ vecs                                             # cols: minor, major
-    minor = float(proj[:, 0].max() - proj[:, 0].min())
-    major = float(proj[:, 1].max() - proj[:, 1].min())
-    return major, minor
-
-
-def _collapse_tiny_loops(edges: set, pt_of: dict, max_diag: float,
-                         min_width: float) -> set:
-    """Collapse spurious thin border loops (seam ``lens`` doublings) to a point.
-
-    The per-face fill Voronoi can place a boundary a texel apart on either side of a
-    seam, so the same border is traced as two nearly-parallel copies joined at both
-    ends — a thin lens that reads as a spurious little loop on an otherwise clean
-    border. A lens is narrower than a texel (``minor extent < min_width``), whereas a
-    genuine exclave is round (minor extent ≈ its size). So every small closed loop
-    (major extent below ``max_diag``, sparing large real outlines) whose minor extent
-    is below ``min_width`` is merged to its centroid: an isolated lens vanishes, a
-    lens hanging off a junction collapses to a point the through-line still passes
-    through (no new gap). Round loops and real exclaves are untouched.
-    """
-    remap: dict = {}
-    for chain in _chain_edges(edges):
-        if not (len(chain) > 3 and chain[0] == chain[-1]):
-            continue
-        members = chain[:-1]
-        verts = np.array([pt_of[k] for k in members])
-        major, minor = _loop_extents(verts)
-        if major >= max_diag or minor >= min_width:
-            continue
-        mean = verts.mean(axis=0)
-        ck = position_key(mean)
-        pt_of[ck] = mean
-        for m in members:
-            remap[m] = ck
-    if not remap:
-        return edges
-    new_edges: set = set()
-    for a, b in edges:
-        a, b = remap.get(a, a), remap.get(b, b)
-        if a != b:
-            new_edges.add((a, b) if a < b else (b, a))
-    return new_edges
-
-
 def _trace_depth(depth: int, hbd, vbd, hmid, vmid, ctr, anc, iterations: int,
                  weld_tol: float = 0.0, adj: list | None = None,
-                 frontier: np.ndarray | None = None,
-                 max_diag: float = 0.0, min_width: float = 0.0) -> list:
+                 frontier: np.ndarray | None = None) -> list:
     # Per-cell crossing flags for the four cell edges (cells span i,j in
     # 0..H-2, 0..W-2).
     top = hbd[:, :-1, :] == depth                       # (N,H-1,W-1)
@@ -531,9 +466,6 @@ def _trace_depth(depth: int, hbd, vbd, hmid, vmid, ctr, anc, iterations: int,
 
     if weld_tol > 0.0:
         edges, pt_of = _weld_seam_endpoints(edges, pt_of, key_face, weld_tol, adj)
-
-    if min_width > 0.0 and max_diag > 0.0:
-        edges = _collapse_tiny_loops(edges, pt_of, max_diag, min_width)
 
     segs: list = []
     for chain in _chain_edges(edges):

@@ -210,28 +210,6 @@ def test_texel_owner_polygon_assigns_overhang_to_neighbour():
     assert (owner[0, :, 2:] == 1).all()                # over-hang → neighbour
 
 
-def test_collapse_tiny_loops_drops_thin_lens_keeps_round():
-    from realmgen.refine.borders import _collapse_tiny_loops, position_key
-
-    def loop(corners):
-        pts = [c / np.linalg.norm(c) for c in corners]
-        keys = [position_key(p) for p in pts]
-        pt_of = {k: p for k, p in zip(keys, pts)}
-        edges = {tuple(sorted((keys[i], keys[(i + 1) % len(keys)])))
-                 for i in range(len(keys))}
-        return edges, pt_of
-
-    thin = [np.array(v) for v in ([-0.30, -0.02, 1], [0.30, -0.02, 1],
-                                  [0.30, 0.02, 1], [-0.30, 0.02, 1])]
-    round_ = [np.array(v) for v in ([-0.12, -0.12, 1], [0.12, -0.12, 1],
-                                    [0.12, 0.12, 1], [-0.12, 0.12, 1])]
-    e_thin, p_thin = loop(thin)
-    e_round, p_round = loop(round_)
-    # A thin lens (minor extent ≈ 0.04) collapses; a round loop (≈ 0.24) survives.
-    assert _collapse_tiny_loops(e_thin, p_thin, max_diag=1.0, min_width=0.1) == set()
-    assert _collapse_tiny_loops(e_round, p_round, max_diag=1.0, min_width=0.1) == e_round
-
-
 def test_trace_label_borders_dedoubles_overlap():
     # Both faces' over-hangs carry the same boundary. Without centroids each face
     # draws it → a doubled line. Voronoi ownership makes only the lower-id face-cell
