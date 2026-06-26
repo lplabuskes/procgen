@@ -31,24 +31,23 @@ from __future__ import annotations
 
 import argparse
 import datetime
-import json
-import random
 from pathlib import Path
 
 import numpy as np
 
 from core.pipeline import BuildContext
-from core.world import World
 from realmgen.builder import RealmParams, RealmPipeline
 from realmgen.population.calibration import KM2_PER_STERADIAN
-from worldgen import GlobeParams, GlobePipeline, load_globe, save_globe
 from worldgen.cost.channels import IS_WATER
 from worldgen.resources.channels import FERTILITY_MEAN
+from _common import (
+    CACHE_DIR, load_history, save_history, add_seed_args, resolve_seeds,
+    avg, get_physical_world,
+)
 
 RESULTS_DIR = Path(__file__).parent / "results"
 JSON_PATH = RESULTS_DIR / "population_absolute_results.json"
 MD_PATH = RESULTS_DIR / "population_absolute_results.md"
-CACHE_DIR = Path(__file__).parent.parent / "saved_worlds"
 
 # Vetted Earth-like seeds (land fraction ~29%, continent-scale landmasses) —
 # same set as measure_rivers.py.
@@ -64,26 +63,12 @@ MEDIEVAL_REF = {
 # ── Physical-world caching ────────────────────────────────────────────────────
 
 
-def _get_physical_world(seed: int, rebuild: bool) -> World:
-    path = CACHE_DIR / f"world_{seed}.npz"
-    if not (path.exists() and not rebuild):
-        params = GlobeParams()
-        params.seed = seed
-        world = World(params.mesh, seed=params.seed)
-        gp = GlobePipeline(params)
-        gp.build(BuildContext(world=world))
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        save_globe(gp, path)
-    _, world = load_globe(path)
-    return world
-
-
 # ── Measurement ───────────────────────────────────────────────────────────────
 
 
 def measure_seed(seed: int, rebuild: bool) -> dict:
     """Run the realm stage on the (cached) physical world; return absolute metrics."""
-    world = _get_physical_world(seed, rebuild)
+    world = get_physical_world(seed, rebuild)
     ctx = BuildContext(world=world, seed=seed)
     mesh = ctx.mesh
 
@@ -211,24 +196,6 @@ def _params_summary(rp: RealmParams) -> str:
     )
 
 
-def _avg(rows: list[dict], key: str) -> float:
-    vals = [r[key] for r in rows if isinstance(r.get(key), (int, float)) and r[key] == r[key]]
-    return sum(vals) / len(vals) if vals else float("nan")
-
-
-def _load_history() -> list:
-    if JSON_PATH.exists():
-        with JSON_PATH.open() as f:
-            return json.load(f)
-    return []
-
-
-def _save_history(history: list) -> None:
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    with JSON_PATH.open("w") as f:
-        json.dump(history, f, indent=2)
-
-
 def _update_markdown(history: list) -> None:
     lines = [
         "# Population — Absolute Grounding Tracking",
@@ -252,14 +219,14 @@ def _update_markdown(history: list) -> None:
         date = run["timestamp"][:10]
         lines.append(
             f"| {date} | {seeds_str} "
-            f"| {_avg(rows, 'n_cities'):.0f} "
-            f"| {_avg(rows, 'world_total_M'):.0f} "
-            f"| {_avg(rows, 'rural_total_M'):.0f} "
-            f"| {_avg(rows, 'urban_total_M'):.1f} "
-            f"| {_avg(rows, 'urban_fraction'):.3f} "
-            f"| {_fmt_people(_avg(rows, 'top_city'))} "
-            f"| {_avg(rows, 'n_top_band'):.0f} "
-            f"| {_avg(rows, 'trade_fed_top10'):.1f} "
+            f"| {avg(rows, 'n_cities'):.0f} "
+            f"| {avg(rows, 'world_total_M'):.0f} "
+            f"| {avg(rows, 'rural_total_M'):.0f} "
+            f"| {avg(rows, 'urban_total_M'):.1f} "
+            f"| {avg(rows, 'urban_fraction'):.3f} "
+            f"| {_fmt_people(avg(rows, 'top_city'))} "
+            f"| {avg(rows, 'n_top_band'):.0f} "
+            f"| {avg(rows, 'trade_fed_top10'):.1f} "
             f"| {run.get('params_summary', '—')} |"
         )
 
@@ -281,7 +248,6 @@ def _update_markdown(history: list) -> None:
                 f"| {r['trade_fed_total']} | {r['max_trade_share_top10']:.2f} |"
             )
 
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     MD_PATH.write_text("\n".join(lines) + "\n")
 
 
@@ -293,21 +259,14 @@ def main() -> None:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("seeds", nargs="*", type=int,
-                        help=f"Explicit seed values (default: {DEFAULT_SEEDS})")
-    parser.add_argument("--random", metavar="N", type=int,
-                        help="Use N random seeds instead of explicit ones")
+    add_seed_args(parser)
     parser.add_argument("--detail", action="store_true",
                         help="Print the top-10 city decomposition per seed")
     parser.add_argument("--rebuild-cache", action="store_true",
                         help="Force-rebuild the cached physical worlds")
     args = parser.parse_args()
 
-    seeds = (
-        [random.randint(0, 2**31 - 1) for _ in range(args.random)]
-        if args.random
-        else (args.seeds or DEFAULT_SEEDS)
-    )
+    seeds = resolve_seeds(args, DEFAULT_SEEDS)
 
     print(f"\nAbsolute population grounding — {len(seeds)} seed(s)\n")
 
@@ -333,9 +292,9 @@ def main() -> None:
         "params_summary": _params_summary(RealmParams()),
         "results":        rows,
     }
-    history = _load_history()
+    history = load_history(JSON_PATH)
     history.append(run_entry)
-    _save_history(history)
+    save_history(history, JSON_PATH)
     _update_markdown(history)
 
     def rel(p):

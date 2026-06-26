@@ -14,8 +14,8 @@ how much of a hard per-face edge remains after the IDW smoothing step.
 from __future__ import annotations
 
 import argparse
-import random
 from worldgen.climate.builder import ClimateBuilder, ClimateParams
+from _common import add_seed_args, resolve_seeds
 from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams
 from core.pipeline import BuildContext
 from core.world import World
@@ -93,21 +93,10 @@ def main() -> None:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument(
-        "seeds", nargs="*", type=int,
-        help="Explicit seed values (default: 42 137 999)",
-    )
-    parser.add_argument(
-        "--random", metavar="N", type=int,
-        help="Use N random seeds instead of explicit ones",
-    )
+    add_seed_args(parser)
     args = parser.parse_args()
 
-    seeds = (
-        [random.randint(0, 2**31 - 1) for _ in range(args.random)]
-        if args.random
-        else (args.seeds or [42, 137, 999])
-    )
+    seeds = resolve_seeds(args, [42, 137, 999])
 
     print("\nClimate boundary seam statistics (mean across 4 seasons per pair)\n")
 

@@ -29,6 +29,17 @@ python3 -m pytest                   # all configured test paths (see pyproject.t
 Each module and sub-module has a `test/` directory with its own tests, all wired into the `pytest` testpaths in `pyproject.toml`.
 
 
+## Script Utilities
+
+Shared helpers for all `measure_*.py` scripts live in `scripts/_common.py`:
+
+- `load_history(path)` / `save_history(history, path)` — JSON append-log read/write
+- `add_seed_args(parser)` / `resolve_seeds(args, defaults)` — standard `seeds` + `--random N` CLI args
+- `get_physical_world(seed, rebuild, cache_dir=CACHE_DIR)` — build-or-load the cached physical world (saves to `saved_worlds/`)
+- `avg(rows, key)` — NaN-safe mean over a list of result dicts
+- `CACHE_DIR` — default world cache path (`saved_worlds/`)
+
+
 ## Diagnostic Scripts
 
 ```bash

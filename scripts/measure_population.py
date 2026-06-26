@@ -40,24 +40,22 @@ from __future__ import annotations
 
 import argparse
 import datetime
-import json
-import random
 from pathlib import Path
 
 import numpy as np
 
 from core.pipeline import BuildContext
-from core.world import World
 from realmgen.builder import RealmParams, RealmPipeline
 from realmgen.placement.types import population_display_tier
-from worldgen import GlobeParams, GlobePipeline, load_globe, save_globe
+from _common import (
+    CACHE_DIR, load_history, save_history, add_seed_args, resolve_seeds,
+    avg, get_physical_world,
+)
 
 
 RESULTS_DIR = Path(__file__).parent / "results"
 JSON_PATH = RESULTS_DIR / "population_results.json"
 MD_PATH = RESULTS_DIR / "population_results.md"
-# Cached physical worlds live in the gitignored saved_worlds/ dir.
-CACHE_DIR = Path(__file__).parent.parent / "saved_worlds"
 
 
 # Rough shape anchors for a high-medieval European city/region system. These are
@@ -136,31 +134,9 @@ def _distribution_metrics(populations: np.ndarray) -> dict:
 # ── Physical-world caching ────────────────────────────────────────────────────
 
 
-def _get_physical_world(seed: int, rebuild: bool) -> World:
-    """Load the cached physical world for ``seed`` (building + caching on miss).
-
-    Always returns the *round-tripped* (saved → loaded) world so every seed runs
-    the realm stage under identical conditions and the serialize/load path is
-    exercised on each call.
-    """
-    path = CACHE_DIR / f"world_{seed}.npz"
-    if not (path.exists() and not rebuild):
-        params = GlobeParams()
-        params.seed = seed
-        world = World(params.mesh, seed=params.seed)
-        ctx = BuildContext(world=world)
-        gp = GlobePipeline(params)
-        gp.build(ctx)
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        save_globe(gp, path)
-
-    _, world = load_globe(path)
-    return world
-
-
 def measure_seed(seed: int, rebuild: bool) -> dict:
     """Run the realm stage on the (cached) physical world; return shape metrics."""
-    world = _get_physical_world(seed, rebuild)
+    world = get_physical_world(seed, rebuild)
     ctx = BuildContext(world=world, seed=seed)
     realm = RealmPipeline(RealmParams())
     realm.build(ctx)
@@ -222,19 +198,6 @@ def print_detail(rows: list[dict]) -> None:
 # ── JSON history + markdown ──────────────────────────────────────────────────────
 
 
-def _load_history() -> list:
-    if JSON_PATH.exists():
-        with JSON_PATH.open() as f:
-            return json.load(f)
-    return []
-
-
-def _save_history(history: list) -> None:
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    with JSON_PATH.open("w") as f:
-        json.dump(history, f, indent=2)
-
-
 def _params_summary(rp: RealmParams) -> str:
     pp = rp.population
     sd = rp.seeder
@@ -248,11 +211,6 @@ def _params_summary(rp: RealmParams) -> str:
         f"hinter_infl={pp.hinterland_influence_scale:.1f} "
         f"hinter_reach={pp.hinterland_reach_scale:.0f}"
     )
-
-
-def _avg(rows: list[dict], key: str) -> float:
-    vals = [r[key] for r in rows if isinstance(r.get(key), (int, float)) and r[key] == r[key]]
-    return sum(vals) / len(vals) if vals else float("nan")
 
 
 def _avg_tiers(rows: list[dict]) -> list[float]:
@@ -302,12 +260,12 @@ def _update_markdown(history: list) -> None:
         tier_str = " / ".join(f"{t:.0f}" for t in tiers)
         lines.append(
             f"| {date} | {seeds_str} "
-            f"| {_avg(rows, 'n_settlements'):.0f} "
-            f"| {_avg(rows, 'zipf_slope'):.2f} "
-            f"| {_avg(rows, 'zipf_r2'):.2f} "
-            f"| {_avg(rows, 'primacy_p1_p2'):.2f} "
-            f"| {_avg(rows, 'top4_share'):.2f} "
-            f"| {_avg(rows, 'gini'):.2f} "
+            f"| {avg(rows, 'n_settlements'):.0f} "
+            f"| {avg(rows, 'zipf_slope'):.2f} "
+            f"| {avg(rows, 'zipf_r2'):.2f} "
+            f"| {avg(rows, 'primacy_p1_p2'):.2f} "
+            f"| {avg(rows, 'top4_share'):.2f} "
+            f"| {avg(rows, 'gini'):.2f} "
             f"| {tier_str} "
             f"| {run.get('params_summary', '—')} |"
         )
@@ -330,7 +288,6 @@ def _update_markdown(history: list) -> None:
                 f"| {r['gini']:.2f} | {tier_str} |"
             )
 
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     MD_PATH.write_text("\n".join(lines) + "\n")
 
 
@@ -342,21 +299,14 @@ def main() -> None:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("seeds", nargs="*", type=int,
-                        help="Explicit seed values (default: 42 137 999)")
-    parser.add_argument("--random", metavar="N", type=int,
-                        help="Use N random seeds instead of explicit ones")
+    add_seed_args(parser)
     parser.add_argument("--detail", action="store_true",
                         help="Print the top settlement populations per seed")
     parser.add_argument("--rebuild-cache", action="store_true",
                         help="Force-rebuild the cached physical worlds")
     args = parser.parse_args()
 
-    seeds = (
-        [random.randint(0, 2**31 - 1) for _ in range(args.random)]
-        if args.random
-        else (args.seeds or [42, 137, 999])
-    )
+    seeds = resolve_seeds(args, [42, 137, 999])
 
     print(f"\nPopulation distribution shape — {len(seeds)} seed(s)\n")
 
@@ -384,9 +334,9 @@ def main() -> None:
         "params_summary": _params_summary(RealmParams()),
         "results":        rows,
     }
-    history = _load_history()
+    history = load_history(JSON_PATH)
     history.append(run_entry)
-    _save_history(history)
+    save_history(history, JSON_PATH)
     _update_markdown(history)
 
     def rel(p):

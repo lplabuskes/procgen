@@ -19,6 +19,6 @@ testpaths = ["core", "viz", "worldgen", "realmgen"]
 
 
 [tool.pyright]
-extraPaths = ["worldgen"]
+extraPaths = ["worldgen", "scripts"]
 venvPath = "."
 venv = ".venv"

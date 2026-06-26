@@ -32,8 +32,6 @@ from __future__ import annotations
 
 import argparse
 import datetime
-import json
-import random
 from pathlib import Path
 
 import numpy as np
@@ -45,6 +43,7 @@ from worldgen.climate.builder import ClimateBuilder
 from worldgen.geology.channels import OCEAN_MASK
 from worldgen.geology.elevation_builder import ElevationBuilder
 from worldgen.hydrology.builder import HydrologyBuilder
+from _common import load_history, save_history, add_seed_args, resolve_seeds, avg
 
 
 RESULTS_DIR = Path(__file__).parent / "results"
@@ -258,19 +257,6 @@ def print_detail(rows: list[dict]) -> None:
 # ── JSON history + markdown ──────────────────────────────────────────────────
 
 
-def _load_history() -> list:
-    if JSON_PATH.exists():
-        with JSON_PATH.open() as f:
-            return json.load(f)
-    return []
-
-
-def _save_history(history: list) -> None:
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    with JSON_PATH.open("w") as f:
-        json.dump(history, f, indent=2)
-
-
 def _params_summary(gp: GlobeParams) -> str:
     hp = gp.hydrology
     return (
@@ -278,11 +264,6 @@ def _params_summary(gp: GlobeParams) -> str:
         f"min_lake={hp.min_lake_pixels} "
         f"ico_depth={gp.mesh.icosphere_depth}"
     )
-
-
-def _avg(rows: list[dict], key: str) -> float:
-    vals = [r[key] for r in rows if isinstance(r.get(key), (int, float)) and r[key] == r[key]]
-    return sum(vals) / len(vals) if vals else float("nan")
 
 
 def _avg_threshold(rows: list[dict], t: int) -> float:
@@ -337,13 +318,13 @@ def _update_markdown(history: list) -> None:
         thr = " | ".join(f"{_avg_threshold(rows, t):.0f}" for t in LENGTH_THRESHOLDS)
         lines.append(
             f"| {date} | {seeds_str} "
-            f"| {_avg(rows, 'n_rivers'):.0f} "
-            f"| {_avg(rows, 'longest_km'):.0f} "
-            f"| {_avg(rows, 'p95_km'):.0f} "
-            f"| {_avg(rows, 'median_km'):.0f} "
-            f"| {_avg(rows, 'mean_km'):.0f} "
+            f"| {avg(rows, 'n_rivers'):.0f} "
+            f"| {avg(rows, 'longest_km'):.0f} "
+            f"| {avg(rows, 'p95_km'):.0f} "
+            f"| {avg(rows, 'median_km'):.0f} "
+            f"| {avg(rows, 'mean_km'):.0f} "
             f"| {thr} "
-            f"| {_avg(rows, 'pct_reaches_ocean'):.0f} "
+            f"| {avg(rows, 'pct_reaches_ocean'):.0f} "
             f"| {run.get('params_summary', '—')} |"
         )
 
@@ -371,7 +352,6 @@ def _update_markdown(history: list) -> None:
                 f"| {thr} | {r['pct_reaches_ocean']:.0f} |"
             )
 
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     MD_PATH.write_text("\n".join(lines) + "\n")
 
 
@@ -383,21 +363,14 @@ def main() -> None:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("seeds", nargs="*", type=int,
-                        help="Explicit seed values (default: 42 137 999)")
-    parser.add_argument("--random", metavar="N", type=int,
-                        help="Use N random seeds instead of explicit ones")
+    add_seed_args(parser)
     parser.add_argument("--detail", action="store_true",
                         help="Print per-seed length histogram and longest rivers")
     args = parser.parse_args()
 
-    seeds = (
-        [random.randint(0, 2**31 - 1) for _ in range(args.random)]
-        if args.random
-        # Default tuning set: chosen for Earth-like land fraction (~29%) and a
-        # continent-scale landmass, so river length isn't capped by geography.
-        else (args.seeds or [4, 31, 35])
-    )
+    # Default tuning set: chosen for Earth-like land fraction (~29%) and a
+    # continent-scale landmass, so river length isn't capped by geography.
+    seeds = resolve_seeds(args, [4, 31, 35])
 
     print(f"\nRiver length distribution — {len(seeds)} seed(s)\n")
 
@@ -422,9 +395,9 @@ def main() -> None:
         "params_summary": _params_summary(GlobeParams()),
         "results": rows,
     }
-    history = _load_history()
+    history = load_history(JSON_PATH)
     history.append(run_entry)
-    _save_history(history)
+    save_history(history, JSON_PATH)
     _update_markdown(history)
 
     def rel(p):

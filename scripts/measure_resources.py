@@ -26,8 +26,6 @@ from __future__ import annotations
 
 import argparse
 import datetime
-import json
-import random
 from pathlib import Path
 
 import numpy as np
@@ -36,6 +34,7 @@ from worldgen.climate.classification import BIOME_NAMES, N_BIOMES
 from core.pipeline import BuildContext
 from core.world import World
 from worldgen import GlobePipeline, GlobeParams
+from _common import load_history, save_history, add_seed_args, resolve_seeds
 
 
 RESULTS_DIR = Path(__file__).parent / "results"
@@ -167,19 +166,6 @@ def print_detail(rows: list[dict]) -> None:
             )
 
 
-def _load_history() -> list:
-    if JSON_PATH.exists():
-        with JSON_PATH.open() as f:
-            return json.load(f)
-    return []
-
-
-def _save_history(history: list) -> None:
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    with JSON_PATH.open("w") as f:
-        json.dump(history, f, indent=2)
-
-
 def _params_summary(gp: GlobeParams) -> str:
     fp = gp.resources.fertility
     forest = gp.resources.forest_density
@@ -279,7 +265,6 @@ def _update_markdown(history: list) -> None:
                     f"| {vals['forest_mean']:.3f} |"
                 )
 
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     MD_PATH.write_text("\n".join(lines) + "\n")
 
 
@@ -288,19 +273,12 @@ def main() -> None:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("seeds", nargs="*", type=int,
-                        help="Explicit seed values (default: 42 137 999)")
-    parser.add_argument("--random", metavar="N", type=int,
-                        help="Use N random seeds instead of explicit ones")
+    add_seed_args(parser)
     parser.add_argument("--detail", action="store_true",
                         help="Print full per-biome breakdown per seed")
     args = parser.parse_args()
 
-    seeds = (
-        [random.randint(0, 2**31 - 1) for _ in range(args.random)]
-        if args.random
-        else (args.seeds or [42, 137, 999])
-    )
+    seeds = resolve_seeds(args, [42, 137, 999])
 
     print(f"\nFertility & forest density — {len(seeds)} seed(s)\n")
 
@@ -326,9 +304,9 @@ def main() -> None:
         "params_summary": _params_summary(gp),
         "results":        rows,
     }
-    history = _load_history()
+    history = load_history(JSON_PATH)
     history.append(run_entry)
-    _save_history(history)
+    save_history(history, JSON_PATH)
     _update_markdown(history)
 
     def rel(p): return p.relative_to(Path(__file__).parent.parent)

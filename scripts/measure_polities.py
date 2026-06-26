@@ -33,37 +33,17 @@ Texture targets (qualitative, from docs/plans/polity_generation_brief.md):
 from __future__ import annotations
 
 import argparse
-import random
-from pathlib import Path
-
 import numpy as np
 
 from core.pipeline import BuildContext
-from core.world import World
 from realmgen.builder import RealmParams, RealmPipeline
-from worldgen import GlobeParams, GlobePipeline, load_globe, save_globe
+from _common import get_physical_world, add_seed_args, resolve_seeds
 
-CACHE_DIR = Path(__file__).parent.parent / "saved_worlds"
 DEFAULT_SEEDS = [4, 31, 35]
 
 
-def _get_physical_world(seed: int, rebuild: bool) -> World:
-    path = CACHE_DIR / f"world_{seed}.npz"
-    if not (path.exists() and not rebuild):
-        params = GlobeParams()
-        params.seed = seed
-        world = World(params.mesh, seed=params.seed)
-        gp = GlobePipeline(params)
-        gp.build(BuildContext(world=world))
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        save_globe(gp, path)
-    _, world = load_globe(path)
-    world.seed = seed  # round-trip drops it; restore for deterministic scalars
-    return world
-
-
 def measure_seed(seed: int, rebuild: bool, detail: bool) -> None:
-    world = _get_physical_world(seed, rebuild)
+    world = get_physical_world(seed, rebuild)
     realm = RealmPipeline(RealmParams())
     realm.build(BuildContext(world=world, seed=seed))
     ps = realm.polity_stage
@@ -116,18 +96,12 @@ def measure_seed(seed: int, rebuild: bool, detail: bool) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("seeds", nargs="*", type=int)
-    ap.add_argument("--random", type=int, metavar="N", help="use N random seeds")
+    add_seed_args(ap)
     ap.add_argument("--detail", action="store_true", help="per-sovereign dump")
     ap.add_argument("--rebuild-cache", action="store_true", help="force rebuild worlds")
     args = ap.parse_args()
 
-    if args.random:
-        seeds = [random.randint(0, 2**31 - 1) for _ in range(args.random)]
-    elif args.seeds:
-        seeds = args.seeds
-    else:
-        seeds = DEFAULT_SEEDS
+    seeds = resolve_seeds(args, DEFAULT_SEEDS)
 
     for seed in seeds:
         measure_seed(seed, args.rebuild_cache, args.detail)

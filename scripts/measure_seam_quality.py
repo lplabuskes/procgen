@@ -26,8 +26,8 @@ reporting summary statistics over all ~350 k matched pairs.
 from __future__ import annotations
 
 import argparse
-import random
 import numpy as np
+from _common import add_seed_args, resolve_seeds
 
 from worldgen.geology.elevation import (
     compute_elevation_textures,
@@ -139,26 +139,14 @@ def main() -> None:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument(
-        "seeds", nargs="*", type=int,
-        help="Explicit seed values (default: 42 137 999)",
-    )
-    parser.add_argument(
-        "--random", metavar="N", type=int,
-        help="Use N random seeds instead of explicit ones",
-    )
+    add_seed_args(parser)
     parser.add_argument(
         "--pre-noise", action="store_true",
         help="Measure base textures before noise is added",
     )
     args = parser.parse_args()
 
-    if args.random:
-        seeds = [random.randint(0, 2**31 - 1) for _ in range(args.random)]
-    elif args.seeds:
-        seeds = args.seeds
-    else:
-        seeds = [42, 137, 999]
+    seeds = resolve_seeds(args, [42, 137, 999])
 
     label = "base (pre-noise)" if args.pre_noise else "final (post-noise)"
     print(f"\nBoundary elevation jump statistics — {label}\n")
