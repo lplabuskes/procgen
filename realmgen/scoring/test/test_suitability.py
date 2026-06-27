@@ -12,8 +12,6 @@ from typing import List
 import numpy as np
 import pytest
 
-from core.pipeline import BuildContext
-from core.world import World
 from realmgen.scoring.suitability import (
     _positions_to_face_ids,
     combine_suitability,
@@ -22,13 +20,11 @@ from realmgen.scoring.suitability import (
     compute_ruggedness_penalty,
     compute_water_proximity,
 )
-from realmgen.builder import RealmPipeline
 from realmgen.scoring.builder import (
     ClimateHabitabilityParams,
     SuitabilityWeightParams,
     WaterProximityParams,
 )
-from worldgen import GlobePipeline, GlobeParams
 from worldgen.geology.display import is_water_meta
 
 
@@ -288,46 +284,29 @@ class TestCombineSuitability:
 
 
 class TestRealmPipeline:
-    def _small_globe(self):
-        p = GlobeParams()
-        p.seed = 7
-        ctx = BuildContext(world=World(p.mesh, seed=p.seed))
-        GlobePipeline(p).build(ctx)
-        return ctx.world
-
-    def _run_realm(self, globe) -> "tuple[RealmPipeline, np.ndarray | None]":
-        realm = RealmPipeline()
-        realm.build(BuildContext(world=globe))
-        return realm, realm.suitability
-
-    def test_build_output_shape_and_range(self):
-        globe = self._small_globe()
-        n = len(globe.mesh.faces)
-        _, suit = self._run_realm(globe)
+    def test_build_output_shape_and_range(self, scoring_globe, scoring_realm):
+        n = len(scoring_globe.mesh.faces)
+        suit = scoring_realm.suitability
         assert suit is not None
         assert suit.shape == (n,)
         assert suit.min() >= 0.0
         assert suit.max() <= 1.0
 
-    def test_suitability_metadata_written(self):
-        globe = self._small_globe()
-        self._run_realm(globe)
-        assert "suitability" in globe.mesh.face_metadata[0]
+    def test_suitability_metadata_written(self, scoring_globe, scoring_realm):
+        assert "suitability" in scoring_globe.mesh.face_metadata[0]
 
-    def test_water_faces_score_zero(self):
-        globe = self._small_globe()
-        _, suit = self._run_realm(globe)
+    def test_water_faces_score_zero(self, scoring_globe, scoring_realm):
+        suit = scoring_realm.suitability
         assert suit is not None
-        mesh = globe.mesh
+        mesh = scoring_globe.mesh
         for i, m in enumerate(mesh.face_metadata):
             if is_water_meta(m):
                 assert suit[i] == 0.0, f"face {i} is water but suitability = {suit[i]}"
 
-    def test_land_face_suitability_nonzero_in_habitable_world(self):
-        globe = self._small_globe()
-        _, suit = self._run_realm(globe)
+    def test_land_face_suitability_nonzero_in_habitable_world(self, scoring_globe, scoring_realm):
+        suit = scoring_realm.suitability
         assert suit is not None
-        mesh = globe.mesh
+        mesh = scoring_globe.mesh
         land_suit = [suit[i] for i, m in enumerate(mesh.face_metadata)
                      if not is_water_meta(m)]
         assert len(land_suit) > 0

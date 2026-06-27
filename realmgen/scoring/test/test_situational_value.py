@@ -7,8 +7,6 @@ from typing import List
 import numpy as np
 import pytest
 
-from core.pipeline import BuildContext
-from core.world import World
 from realmgen.scoring.situational_value import (
     combine_situational_value,
     compute_harbor_quality,
@@ -17,13 +15,10 @@ from realmgen.scoring.situational_value import (
     compute_river_confluences,
     compute_strait_adjacency,
 )
-from realmgen.builder import RealmPipeline
 from realmgen.scoring.builder import (
     MountainPassParams,
     SituationalValueWeightParams,
 )
-from worldgen import GlobePipeline, GlobeParams
-
 
 def _norm(v) -> np.ndarray:
     v = np.asarray(v, dtype=np.float64)
@@ -335,38 +330,20 @@ class TestCombineSituationalValue:
 
 
 class TestRealmPipelineSituational:
-    def _small_globe(self):
-        p = GlobeParams()
-        p.seed = 7
-        ctx = BuildContext(world=World(p.mesh, seed=p.seed))
-        GlobePipeline(p).build(ctx)
-        return ctx.world
-
-    def _run_realm(self, globe) -> RealmPipeline:
-        realm = RealmPipeline()
-        realm.build(BuildContext(world=globe))
-        return realm
-
-    def test_situational_value_shape_and_range(self):
-        globe = self._small_globe()
-        realm = self._run_realm(globe)
-        sv = realm.situational_value
-        n = len(globe.mesh.faces)
+    def test_situational_value_shape_and_range(self, scoring_globe, scoring_realm):
+        sv = scoring_realm.situational_value
+        n = len(scoring_globe.mesh.faces)
         assert sv is not None
         assert sv.shape == (n,)
         assert sv.min() >= 0.0
         assert sv.max() <= 1.0
 
-    def test_situational_value_metadata_written(self):
-        globe = self._small_globe()
-        self._run_realm(globe)
-        assert "situational_value" in globe.mesh.face_metadata[0]
+    def test_situational_value_metadata_written(self, scoring_globe, scoring_realm):
+        assert "situational_value" in scoring_globe.mesh.face_metadata[0]
 
-    def test_water_faces_score_zero(self):
-        globe = self._small_globe()
-        realm = self._run_realm(globe)
-        sv = realm.situational_value
+    def test_water_faces_score_zero(self, scoring_globe, scoring_realm):
+        sv = scoring_realm.situational_value
         assert sv is not None
-        for i, m in enumerate(globe.mesh.face_metadata):
+        for i, m in enumerate(scoring_globe.mesh.face_metadata):
             if m.get("is_water", m.get("is_ocean", False)):
                 assert sv[i] == 0.0, f"face {i} is water but situational_value = {sv[i]}"
