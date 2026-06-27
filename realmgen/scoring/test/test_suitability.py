@@ -29,6 +29,7 @@ from realmgen.scoring.builder import (
     WaterProximityParams,
 )
 from worldgen import GlobePipeline, GlobeParams
+from worldgen.geology.display import is_water_meta
 
 
 def _norm(v) -> np.ndarray:
@@ -319,7 +320,7 @@ class TestRealmPipeline:
         assert suit is not None
         mesh = globe.mesh
         for i, m in enumerate(mesh.face_metadata):
-            if m.get("is_water", m.get("is_ocean", False)):
+            if is_water_meta(m):
                 assert suit[i] == 0.0, f"face {i} is water but suitability = {suit[i]}"
 
     def test_land_face_suitability_nonzero_in_habitable_world(self):
@@ -328,6 +329,6 @@ class TestRealmPipeline:
         assert suit is not None
         mesh = globe.mesh
         land_suit = [suit[i] for i, m in enumerate(mesh.face_metadata)
-                     if not m.get("is_water", m.get("is_ocean", False))]
+                     if not is_water_meta(m)]
         assert len(land_suit) > 0
         assert max(land_suit) > 0.1

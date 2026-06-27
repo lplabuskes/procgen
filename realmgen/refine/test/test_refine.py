@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from realmgen.placement.types import Settlement
 from realmgen.polity.types import Polity
+from realmgen.test.conftest import _settlement
 from realmgen.refine.borders import (
     _chaikin,
     _chain_edges,
@@ -46,9 +46,7 @@ class _StubMesh:
         return pos
 
 
-def _settlement(face_id=0):
-    return Settlement(face_id=face_id, position=np.array([10.0, 10.0, 10.0]),
-                      tier=0, score=1.0, population=1000.0)
+_REFINE_POS = np.array([10.0, 10.0, 10.0])
 
 
 # ── _neighbor_any ────────────────────────────────────────────────────────────
@@ -70,7 +68,7 @@ def test_snap_to_ocean_coast():
     mesh = _StubMesh(centroid=[1.0, 1.5, 0.0])
     ocean = np.zeros((1, 4, 4, 1), dtype=np.float64)
     ocean[0, :, 2:, 0] = 1.0
-    s = _settlement()
+    s = _settlement(pop=1000.0, position=_REFINE_POS)
     moved = refine_settlement_positions(
         [s], mesh=mesh, ocean_tex=ocean, lake_tex=None,
         fertility=np.array([1.0]), rivers=None,
@@ -86,7 +84,7 @@ def test_ocean_preferred_over_lake():
     ocean[0, :, 3, 0] = 1.0              # ocean on col 3 → coast col 2
     lake = np.zeros((1, 4, 4, 1), dtype=np.float64)
     lake[0, :, 0, 0] = 1.0               # lake on col 0 → coast col 1
-    s = _settlement()
+    s = _settlement(pop=1000.0, position=_REFINE_POS)
     refine_settlement_positions(
         [s], mesh=mesh, ocean_tex=ocean, lake_tex=lake,
         fertility=np.array([1.0]), rivers=None,
@@ -99,7 +97,7 @@ def test_snap_to_river_when_no_coast():
     ocean = np.zeros((1, 4, 4, 1), dtype=np.float64)  # all land
     river_pts = np.array([[0.0, 0.0, 0.0]], dtype=np.float64)
     rivers = [(river_pts, np.array([1.0]), None)]
-    s = _settlement()
+    s = _settlement(pop=1000.0, position=_REFINE_POS)
     refine_settlement_positions(
         [s], mesh=mesh, ocean_tex=ocean, lake_tex=None,
         fertility=np.array([1.0]), rivers=rivers,

@@ -8,7 +8,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from realmgen.placement.types import Settlement
+from realmgen.test.conftest import _settlement
 from realmgen.trade.network import (
     TradeResult,
     build_hybrid_cost_graph,
@@ -56,12 +56,6 @@ def _inf_edge_costs(mesh: _Mesh) -> list[np.ndarray]:
         np.full(len(nbrs), np.inf, dtype=np.float64)
         for nbrs in mesh.face_adjacency
     ]
-
-
-def _settlement(face_id: int, tier: int = 0) -> Settlement:
-    centroids = np.zeros((face_id + 1, 3))
-    centroids[face_id] = [1, 0, 0]
-    return Settlement(face_id=face_id, position=np.array([1.0, 0.0, 0.0]), tier=tier, score=1.0)
 
 
 # ── build_hybrid_cost_graph ───────────────────────────────────────────────────

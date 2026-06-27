@@ -35,7 +35,7 @@ from core.world import World
 from worldgen.climate.channels import BIOME, TEMPERATURE
 from worldgen.cost.channels import COST_SURFACES, IS_STRAIT, IS_WATER
 from worldgen.geology.channels import ELEVATION, IS_OCEAN
-from worldgen.geology.display import LAND_COLOR, OCEAN_COLOR
+from worldgen.geology.display import LAND_COLOR, OCEAN_COLOR, is_water_meta
 from worldgen.hydrology.channels import LAKE_MASK, RIVER_OBJECTS
 
 
@@ -251,7 +251,7 @@ class CostBuilder(Stage):
         # Normalize against land faces only (water carries a meaningless cost value).
         # Fall back to is_ocean for worlds saved before the cost stage wrote is_water.
         is_water_arr = np.array(
-            [bool(m.get("is_water", m.get("is_ocean", False))) for m in mesh.face_metadata],
+            [is_water_meta(m) for m in mesh.face_metadata],
             dtype=bool,
         )
         land_ref = (
@@ -260,7 +260,7 @@ class CostBuilder(Stage):
         land_ref = max(land_ref, 1e-6)
 
         def _land_cost_color(meta: dict, _ref=land_ref) -> tuple:
-            if meta.get("is_water", meta.get("is_ocean", False)):
+            if is_water_meta(meta):
                 return OCEAN_COLOR
             c = min(max(float(meta.get("land_base_cost", 0.0)) / _ref, 0.0), 1.0)
             return (0.15 + 0.80 * c, 0.75 - 0.55 * c, 0.20, 1.0)
@@ -279,9 +279,7 @@ class CostBuilder(Stage):
         )
 
         def _sea_cost_color(meta: dict, _ref=sea_ref) -> tuple:
-            sailable = meta.get("is_water", meta.get("is_ocean", False)) or meta.get(
-                "is_navigable_river", False
-            )
+            sailable = is_water_meta(meta) or meta.get("is_navigable_river", False)
             if not sailable:
                 return LAND_COLOR
             if meta.get("is_strait", False):

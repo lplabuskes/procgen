@@ -28,7 +28,6 @@ from realmgen.scoring.suitability import (
     compute_ruggedness_penalty,
     compute_water_proximity,
 )
-from viz.color_stops import interp_stops_scalar
 from worldgen.climate.channels import (
     DISTANCE_TO_COAST,
     PRECIPITATION_ANNUAL,
@@ -37,7 +36,7 @@ from worldgen.climate.channels import (
 )
 from worldgen.cost.channels import COST_SURFACES, IS_STRAIT, IS_WATER
 from worldgen.geology.channels import ELEVATION, IS_OCEAN
-from worldgen.geology.display import OCEAN_COLOR
+from worldgen.geology.display import is_water_meta, water_gradient_scheme
 from worldgen.hydrology.channels import LAKE_MASK, RIVERS
 from worldgen.resources.channels import FERTILITY_MEAN, MINERALS, RARE_BIO
 from worldgen.resources.terrain import face_elevation_range
@@ -150,18 +149,8 @@ _SITUATIONAL_STOPS = [
 ]
 
 
-def _suitability_color(meta: dict) -> tuple:
-    if meta.get("is_water", meta.get("is_ocean", False)):
-        return OCEAN_COLOR
-    s = min(max(float(meta.get("suitability", 0.0)), 0.0), 1.0)
-    return interp_stops_scalar(s, _SUITABILITY_STOPS)
-
-
-def _situational_color(meta: dict) -> tuple:
-    if meta.get("is_water", meta.get("is_ocean", False)):
-        return OCEAN_COLOR
-    s = min(max(float(meta.get("situational_value", 0.0)), 0.0), 1.0)
-    return interp_stops_scalar(s, _SITUATIONAL_STOPS)
+_suitability_color = water_gradient_scheme("suitability", _SUITABILITY_STOPS)
+_situational_color = water_gradient_scheme("situational_value", _SITUATIONAL_STOPS)
 
 
 # ── ScoringStage ──────────────────────────────────────────────────────────────
@@ -307,7 +296,7 @@ class ScoringStage(Stage):
 
         def _suitability_hover(face: int, _uv, w) -> list:
             meta = w.mesh.face_metadata[face]
-            if meta.get("is_water", meta.get("is_ocean", False)):
+            if is_water_meta(meta):
                 return []
             suit = meta.get("suitability")
             return [f"Suit: {float(suit):.2f}"] if suit is not None else []

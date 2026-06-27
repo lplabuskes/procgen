@@ -37,7 +37,7 @@ from realmgen.persistence import pack_settlements, unpack_settlements
 from realmgen.trade.network import RARE_BIO_TYPE_OFFSET, TradeResult, compute_trade_network
 from viz.color_stops import interp_stops_scalar
 from worldgen.cost.channels import COST_SURFACES, IS_WATER
-from worldgen.geology.display import OCEAN_COLOR
+from worldgen.geology.display import OCEAN_COLOR, is_water_meta
 from worldgen.resources.channels import FERTILITY_MEAN, MINERALS, RARE_BIO
 
 
@@ -112,7 +112,7 @@ def _make_hinterland_color(settlements: "list[Settlement]"):
     ]
 
     def fn(meta: dict) -> tuple:
-        if meta.get("is_water", meta.get("is_ocean", False)):
+        if is_water_meta(meta):
             return OCEAN_COLOR
         hid = meta.get("hinterland_id", -1)
         if hid is None or int(hid) < 0 or int(hid) >= len(display_tiers):
@@ -135,7 +135,7 @@ def _make_rural_pop_color(rural_population: np.ndarray):
     max_pop = float(np.max(rural_population)) if np.size(rural_population) else 0.0
 
     def fn(meta: dict) -> tuple:
-        if meta.get("is_water", meta.get("is_ocean", False)):
+        if is_water_meta(meta):
             return OCEAN_COLOR
         r = float(meta.get("rural_population", 0.0))
         s = min(r / max_pop, 1.0) ** 0.5 if max_pop > 0 else 0.0
@@ -145,7 +145,7 @@ def _make_rural_pop_color(rural_population: np.ndarray):
 
 
 def _trade_flow_color(meta: dict, _max_flow: list) -> tuple:
-    if meta.get("is_water", meta.get("is_ocean", False)):
+    if is_water_meta(meta):
         return OCEAN_COLOR
     f = float(meta.get("trade_flow", 0.0))
     mx = _max_flow[0]

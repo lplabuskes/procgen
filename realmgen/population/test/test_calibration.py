@@ -8,7 +8,6 @@ import numpy as np
 import pytest
 from scipy.sparse import csr_matrix
 
-from realmgen.placement.types import Settlement
 from realmgen.population.calibration import (
     KM2_PER_STERADIAN,
     apply_population_to_settlements,
@@ -20,6 +19,8 @@ from realmgen.population.calibration import (
     compute_urban_population,
     cull_settlements,
 )
+from realmgen.polity.test.conftest import _line_graph
+from realmgen.test.conftest import _settlement
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -37,24 +38,6 @@ def _uniform_graph(n: int, cost: float = 1.0) -> csr_matrix:
     if data:
         return csr_matrix((data, (rows, cols)), shape=(n, n), dtype=np.float64)
     return csr_matrix((n, n), dtype=np.float64)
-
-
-def _line_graph(n: int, cost: float = 1.0) -> csr_matrix:
-    """Linear graph 0—1—2—…—(n-1) with uniform symmetric cost."""
-    rows, cols, data = [], [], []
-    for i in range(n - 1):
-        rows += [i, i + 1]
-        cols += [i + 1, i]
-        data += [cost, cost]
-    if data:
-        return csr_matrix((data, (rows, cols)), shape=(n, n), dtype=np.float64)
-    return csr_matrix((n, n), dtype=np.float64)
-
-
-def _settlement(face_id: int, tier: int = 0, pop: float = 0.0) -> Settlement:
-    pos = np.zeros(3, dtype=np.float64)
-    pos[0] = 1.0
-    return Settlement(face_id=face_id, position=pos, tier=tier, score=0.5, population=pop)
 
 
 # ── compute_hinterland_shares ───────────────────────────────────────────────────

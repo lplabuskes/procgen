@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from viz.color_stops import gradient_texture, categorical_texture, interp_stops_scalar
+from viz.color_stops import gradient_texture, categorical_texture, interp_stops_scalar, palette_legend_entries
 from worldgen.geology.display import apply_water_masks, is_ocean_face, ocean_gradient_scheme, ocean_categorical_scheme
 from worldgen.resources.crops import CROP_NAMES, N_CROPS
 from worldgen.resources.minerals import MINERAL_NAMES, MINERAL_PALETTE
@@ -79,15 +79,15 @@ crop_color = ocean_categorical_scheme("dominant_crop", _CROP_PALETTE, N_CROPS)
 
 
 def crop_legend_entries() -> list[tuple[str, tuple]]:
-    return [(name, tuple(_CROP_PALETTE[i].tolist())) for i, name in enumerate(CROP_NAMES)]
+    return palette_legend_entries(CROP_NAMES, _CROP_PALETTE)
 
 
 def mineral_legend_entries() -> list[tuple[str, tuple]]:
-    return [(name, tuple(MINERAL_PALETTE[i].tolist())) for i, name in enumerate(MINERAL_NAMES)]
+    return palette_legend_entries(MINERAL_NAMES, MINERAL_PALETTE)
 
 
 def rare_bio_legend_entries() -> list[tuple[str, tuple]]:
-    return [(name, tuple(RARE_BIO_PALETTE[i].tolist())) for i, name in enumerate(RARE_BIO_NAMES)]
+    return palette_legend_entries(RARE_BIO_NAMES, RARE_BIO_PALETTE)
 
 
 def build_fertility_display_texture(

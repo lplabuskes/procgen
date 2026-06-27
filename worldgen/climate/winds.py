@@ -1,9 +1,11 @@
 """Zonal Hadley/Ferrel/Polar surface winds with seasonal ITCZ shift."""
 from __future__ import annotations
 
-from typing import Sequence, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+from worldgen.climate._gradient import _tangent_frames, _tangent_gradient
 
 if TYPE_CHECKING:
     from worldgen.climate.builder import WindParams
@@ -11,19 +13,6 @@ if TYPE_CHECKING:
 
 SEASON_PHASES = np.array([0.0, np.pi / 2, np.pi, 3 * np.pi / 2], dtype=np.float64)
 EARTH_RADIUS_KM = 6371.0
-
-
-def _tangent_frames(face_centroids: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Per-face east/north unit vectors. At the poles falls back to a fixed frame."""
-    z_hat = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-    east = np.cross(z_hat, face_centroids)                 # (N, 3)
-    east_norm = np.linalg.norm(east, axis=1, keepdims=True)
-    polar = east_norm[:, 0] < 1e-6
-    fallback = np.array([1.0, 0.0, 0.0], dtype=np.float64)
-    east = np.where(polar[:, None], fallback, east / np.maximum(east_norm, 1e-12))
-    north = np.cross(face_centroids, east)                 # (N, 3)
-    north /= np.maximum(np.linalg.norm(north, axis=1, keepdims=True), 1e-12)
-    return east, north
 
 
 def zonal_winds(face_centroids: np.ndarray,
@@ -110,44 +99,15 @@ def pressure_winds(face_centroids: np.ndarray,
     if pressure_wind_scale <= 0.0:
         return np.zeros((n_faces, n_seasons, 3), dtype=np.float32)
 
-    east, north = _tangent_frames(face_centroids.astype(np.float64))
+    centroids = face_centroids.astype(np.float64)
+    east, north = _tangent_frames(centroids)
 
     anomaly = (
         temperature_face.astype(np.float64)
         - temperature_face.astype(np.float64).mean(axis=1, keepdims=True)
     )                                                                   # (N, K) °C
 
-    # Flatten adjacency into (src, dst) edge arrays.
-    src_list: list[int] = []
-    dst_list: list[int] = []
-    for i, neighbours in enumerate(face_adjacency):
-        for j in neighbours:
-            src_list.append(i)
-            dst_list.append(int(j))
-    if not src_list:
-        return np.zeros((n_faces, n_seasons, 3), dtype=np.float32)
-    src = np.asarray(src_list, dtype=np.int64)
-    dst = np.asarray(dst_list, dtype=np.int64)
-
-    # Tangent-plane displacement of each neighbour from its src face, in km.
-    rel = face_centroids[dst].astype(np.float64) - face_centroids[src].astype(np.float64)
-    u_e = np.sum(rel * east[src], axis=1) * earth_radius_km             # (E,) km
-    v_e = np.sum(rel * north[src], axis=1) * earth_radius_km
-    r = np.stack([u_e, v_e], axis=1)                                    # (E, 2)
-
-    # Per-face normal-equations matrix M[i] = Σ_e outer(r_e, r_e).
-    M = np.zeros((n_faces, 2, 2), dtype=np.float64)
-    np.add.at(M, src, r[:, :, None] * r[:, None, :])
-
-    # Per-face RHS b[i, :, k] = Σ_e r_e * (a[dst,k] − a[src,k]).
-    da = anomaly[dst, :] - anomaly[src, :]                              # (E, K)
-    b = np.zeros((n_faces, 2, n_seasons), dtype=np.float64)
-    np.add.at(b, src, r[:, :, None] * da[:, None, :])
-
-    # pinv (rather than solve) tolerates degenerate neighbourhoods — isolated
-    # faces or collinear neighbours yield rank-deficient M; pinv returns the
-    # minimum-norm gradient (zero when there's no signal to fit).
-    grad_a = np.linalg.pinv(M) @ b                                      # (N, 2, K) °C/km
+    grad_a = _tangent_gradient(centroids, face_adjacency, anomaly, earth_radius_km)  # (N, 2, K) °C/km
 
     # Wind = K · ∇(T_anomaly): blows toward warm anomaly (low pressure).
     wind_u = pressure_wind_scale * grad_a[:, 0, :]                      # (N, K)

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from viz.color_stops import interp_stops, categorical_texture
+from viz.color_stops import interp_stops, interp_stops_scalar, categorical_texture, palette_legend_entries
 from worldgen.geology.display import (
     OCEAN_COLOR,
     apply_water_masks,
@@ -76,7 +76,7 @@ def precipitation_color(meta: dict) -> tuple:
     if is_ocean_face(meta):
         return OCEAN_COLOR
     p = max(float(meta.get("precipitation_annual", 0.0)), 1.0)
-    return tuple(interp_stops(np.array(np.log10(p), dtype=np.float32), _LOG_PRECIP_STOPS).tolist())
+    return interp_stops_scalar(np.log10(p), _LOG_PRECIP_STOPS)
 
 
 def temperature_legend_entries() -> list[tuple[str, tuple]]:
@@ -97,7 +97,7 @@ def precipitation_legend_entries() -> list[tuple[str, tuple]]:
 def biome_legend_entries() -> list[tuple[str, tuple]]:
     """(name, rgba) pairs for all biomes in index order."""
     from worldgen.climate.classification import BIOME_NAMES
-    return [(name, tuple(BIOME_PALETTE[i].tolist())) for i, name in enumerate(BIOME_NAMES)]
+    return palette_legend_entries(BIOME_NAMES, BIOME_PALETTE)
 
 
 def build_temperature_display_texture(temperature_tex: np.ndarray,

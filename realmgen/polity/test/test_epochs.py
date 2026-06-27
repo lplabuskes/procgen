@@ -8,7 +8,6 @@ from __future__ import annotations
 from typing import List, Optional
 
 import numpy as np
-from scipy.sparse import csr_matrix
 
 from realmgen.polity.builder import PolityParams
 from realmgen.polity.epochs import (
@@ -20,6 +19,7 @@ from realmgen.polity.epochs import (
     select_fragmentations,
 )
 from realmgen.polity.forest import ForestBuilder, _Ctx
+from realmgen.polity.test.conftest import _line_graph
 from realmgen.polity.types import Polity
 
 
@@ -152,15 +152,6 @@ class TestSelectFragmentations:
             [], np.full(4, -1, dtype=np.int32), np.zeros(4),
             base_seed=0, epoch=0, shock_scale=0.4, size_reference=400.0,
         ) == []
-
-
-def _line_graph(n: int, cost: float = 1.0) -> csr_matrix:
-    rows, cols, data = [], [], []
-    for i in range(n - 1):
-        rows += [i, i + 1]
-        cols += [i + 1, i]
-        data += [cost, cost]
-    return csr_matrix((data, (rows, cols)), shape=(n, n), dtype=np.float64)
 
 
 def _line_ctx(n: int = 6) -> _Ctx:

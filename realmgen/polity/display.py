@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, List
 
 from realmgen.polity.types import ControlClass, POLITY_COLORS, UNCLAIMED_COLOR
 from viz.color_stops import interp_stops_scalar
-from worldgen.geology.display import OCEAN_COLOR
+from worldgen.geology.display import OCEAN_COLOR, is_water_meta as _is_water
 
 if TYPE_CHECKING:
     from realmgen.polity.types import Polity
@@ -29,10 +29,6 @@ _CONTROL_COLORS = {
     int(ControlClass.VASSAL): (0.85, 0.65, 0.25, 1.0),       # amber — vassal seat
     int(ControlClass.INDEPENDENT): (0.84, 0.37, 0.34, 1.0),  # red — independent
 }
-
-
-def _is_water(meta: dict) -> bool:
-    return meta.get("is_water", meta.get("is_ocean", False))
 
 
 def make_polity_tree_color(polities: List["Polity"]):

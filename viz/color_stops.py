@@ -45,7 +45,7 @@ def gradient_scheme(meta_key: str, stops: list, default: float = 0.0):
     """Return a scheme function that reads meta[meta_key] as float and interpolates through stops."""
     def fn(meta: dict) -> tuple:
         v = float(meta.get(meta_key, default))
-        return tuple(interp_stops(np.array(v, dtype=np.float32), stops).tolist())
+        return interp_stops_scalar(v, stops)
     return fn
 
 
@@ -66,3 +66,8 @@ def categorical_texture(idx_tex: np.ndarray, palette: np.ndarray, n: int) -> np.
     """(N, H, W, 1) int index texture → (N, H, W, 4) RGBA via palette lookup."""
     idx = np.clip(idx_tex[..., 0].astype(np.int32), 0, n - 1)
     return palette[idx].copy()
+
+
+def palette_legend_entries(names: list[str], palette: np.ndarray) -> list[tuple[str, tuple]]:
+    """(name, rgba) pairs for a categorical palette in index order."""
+    return [(name, tuple(palette[i].tolist())) for i, name in enumerate(names)]

@@ -188,6 +188,84 @@ class MapWidget(QWidget):
         """Shift longitudes into the frame where self._antimeridian maps to ±π."""
         return ((lon - self._antimeridian) % (2.0 * np.pi)) - np.pi
 
+    def _ecef_to_screen(
+        self,
+        positions: np.ndarray,
+        W: float, H: float,
+        cx: float, cy: float,
+        scale_x: float, scale_y: float,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Project (N, 3) ECEF unit-sphere positions to screen pixel coordinates."""
+        lon = self._shift_lon(np.arctan2(positions[:, 1], positions[:, 0]))
+        lat = np.arcsin(np.clip(positions[:, 2], -1.0, 1.0))
+        proj = self._projection.project_lonlat(np.column_stack([lon, lat]))
+        sx = (proj[:, 0] - cx) * scale_x + W * 0.5
+        sy = -(proj[:, 1] - cy) * scale_y + H * 0.5
+        return sx, sy
+
+    def _draw_point_overlay(
+        self,
+        painter: QPainter,
+        W: float, H: float,
+        cx: float, cy: float,
+        scale_x: float, scale_y: float,
+        feature_name: str,
+        pen_color: QColor,
+        brush_color: QColor,
+        base_r: float,
+    ) -> None:
+        """Draw a uniformly-styled ellipse at each position in a point feature."""
+        positions = self._globe.get_feature(feature_name)  # type: ignore[union-attr]
+        if positions is None or len(positions) == 0:
+            return
+        sx, sy = self._ecef_to_screen(positions, W, H, cx, cy, scale_x, scale_y)
+        painter.save()
+        painter.setPen(QPen(pen_color, 1.5))
+        painter.setBrush(QBrush(brush_color))
+        for i in range(len(positions)):
+            painter.drawEllipse(QPointF(float(sx[i]), float(sy[i])), base_r, base_r)
+        painter.restore()
+
+    def _draw_resource_overlay(
+        self,
+        painter: QPainter,
+        W: float, H: float,
+        cx: float, cy: float,
+        scale_x: float, scale_y: float,
+        feature_name: str,
+        palette: np.ndarray,
+        n_kinds: int,
+        base_r: float,
+        draw_shape: Callable[[QPainter, float, float, float], None],
+    ) -> None:
+        """Draw a palette-per-kind resource overlay using a caller-supplied shape function."""
+        feature = self._globe.get_feature(feature_name)  # type: ignore[union-attr]
+        if feature is None:
+            return
+        positions, kinds, abundances = feature
+        if len(positions) == 0:
+            return
+        sx, sy = self._ecef_to_screen(positions, W, H, cx, cy, scale_x, scale_y)
+        painter.save()
+        kinds_i = np.clip(kinds.astype(np.int32), 0, n_kinds - 1)
+        for k in range(n_kinds):
+            mask = kinds_i == k
+            if not mask.any():
+                continue
+            rgba = palette[k]
+            r_fill = int(rgba[0] * 255)
+            g_fill = int(rgba[1] * 255)
+            b_fill = int(rgba[2] * 255)
+            painter.setPen(QPen(QColor(max(0, r_fill - 60), max(0, g_fill - 60), max(0, b_fill - 60), 220), 1.0))
+            painter.setBrush(QBrush(QColor(r_fill, g_fill, b_fill, 210)))
+            k_abund = abundances[mask]
+            k_sx = sx[mask]
+            k_sy = sy[mask]
+            for i in range(len(k_sx)):
+                r = base_r * (0.7 + 0.6 * float(k_abund[i]))
+                draw_shape(painter, float(k_sx[i]), float(k_sy[i]), r)
+        painter.restore()
+
     def set_mesh(self, mesh: PolygonMesh) -> None:
         self._mesh = mesh
         self._antimeridian = find_ideal_antimeridian(mesh)
@@ -594,21 +672,11 @@ class MapWidget(QWidget):
         cx: float, cy: float,
         scale_x: float, scale_y: float,
     ) -> None:
-        positions = self._globe.get_feature("deltas")  # type: ignore[union-attr]
-        if positions is None or len(positions) == 0:
-            return
-        lon = self._shift_lon(np.arctan2(positions[:, 1], positions[:, 0]))
-        lat = np.arcsin(np.clip(positions[:, 2], -1.0, 1.0))
-        proj = self._projection.project_lonlat(np.column_stack([lon, lat]))
-        sx = (proj[:, 0] - cx) * scale_x + W * 0.5
-        sy = -(proj[:, 1] - cy) * scale_y + H * 0.5
-        r = max(3.0, 5.0 * self._zoom ** 0.3)
-        painter.save()
-        painter.setPen(QPen(QColor(0, 100, 0, 220), 1.5))
-        painter.setBrush(QBrush(QColor(0, 200, 80, 200)))
-        for i in range(len(positions)):
-            painter.drawEllipse(QPointF(float(sx[i]), float(sy[i])), r, r)
-        painter.restore()
+        self._draw_point_overlay(
+            painter, W, H, cx, cy, scale_x, scale_y,
+            "deltas", QColor(0, 100, 0, 220), QColor(0, 200, 80, 200),
+            max(3.0, 5.0 * self._zoom ** 0.3),
+        )
 
     def _draw_volcanoes_overlay(
         self,
@@ -617,21 +685,11 @@ class MapWidget(QWidget):
         cx: float, cy: float,
         scale_x: float, scale_y: float,
     ) -> None:
-        positions = self._globe.get_feature("volcanoes")  # type: ignore[union-attr]
-        if positions is None or len(positions) == 0:
-            return
-        lon = self._shift_lon(np.arctan2(positions[:, 1], positions[:, 0]))
-        lat = np.arcsin(np.clip(positions[:, 2], -1.0, 1.0))
-        proj = self._projection.project_lonlat(np.column_stack([lon, lat]))
-        sx = (proj[:, 0] - cx) * scale_x + W * 0.5
-        sy = -(proj[:, 1] - cy) * scale_y + H * 0.5
-        r = max(2.5, 4.0 * self._zoom ** 0.3)
-        painter.save()
-        painter.setPen(QPen(QColor(160, 30, 0, 220), 1.5))
-        painter.setBrush(QBrush(QColor(255, 80, 0, 200)))
-        for i in range(len(positions)):
-            painter.drawEllipse(QPointF(float(sx[i]), float(sy[i])), r, r)
-        painter.restore()
+        self._draw_point_overlay(
+            painter, W, H, cx, cy, scale_x, scale_y,
+            "volcanoes", QColor(160, 30, 0, 220), QColor(255, 80, 0, 200),
+            max(2.5, 4.0 * self._zoom ** 0.3),
+        )
 
     def _draw_minerals_overlay(
         self,
@@ -641,42 +699,15 @@ class MapWidget(QWidget):
         scale_x: float, scale_y: float,
     ) -> None:
         from worldgen.resources.minerals import MINERAL_PALETTE, N_MINERALS
-        feature = self._globe.get_feature("minerals")  # type: ignore[union-attr]
-        if feature is None:
-            return
-        positions, kinds, abundances = feature
-        if len(positions) == 0:
-            return
-        lon = self._shift_lon(np.arctan2(positions[:, 1], positions[:, 0]))
-        lat = np.arcsin(np.clip(positions[:, 2], -1.0, 1.0))
-        proj = self._projection.project_lonlat(np.column_stack([lon, lat]))
-        sx = (proj[:, 0] - cx) * scale_x + W * 0.5
-        sy = -(proj[:, 1] - cy) * scale_y + H * 0.5
-        base_r = max(2.0, 3.5 * self._zoom ** 0.3)
-        painter.save()
-        kinds_i = np.clip(kinds.astype(np.int32), 0, N_MINERALS - 1)
-        for k in range(N_MINERALS):
-            mask = kinds_i == k
-            if not mask.any():
-                continue
-            rgba = MINERAL_PALETTE[k]
-            r_fill = int(rgba[0] * 255)
-            g_fill = int(rgba[1] * 255)
-            b_fill = int(rgba[2] * 255)
-            r_pen = max(0, r_fill - 60)
-            g_pen = max(0, g_fill - 60)
-            b_pen = max(0, b_fill - 60)
-            painter.setPen(QPen(QColor(r_pen, g_pen, b_pen, 220), 1.0))
-            painter.setBrush(QBrush(QColor(r_fill, g_fill, b_fill, 210)))
-            k_abund = abundances[mask]
-            k_sx = sx[mask]
-            k_sy = sy[mask]
-            for i in range(len(k_sx)):
-                r = base_r * (0.7 + 0.6 * float(k_abund[i]))
-                painter.drawRect(
-                    QRectF(float(k_sx[i]) - r, float(k_sy[i]) - r, 2 * r, 2 * r)
-                )
-        painter.restore()
+
+        def _square(p: QPainter, x: float, y: float, r: float) -> None:
+            p.drawRect(QRectF(x - r, y - r, 2 * r, 2 * r))
+
+        self._draw_resource_overlay(
+            painter, W, H, cx, cy, scale_x, scale_y,
+            "minerals", MINERAL_PALETTE, N_MINERALS,
+            max(2.0, 3.5 * self._zoom ** 0.3), _square,
+        )
 
     def _draw_rare_bio_overlay(
         self,
@@ -686,48 +717,18 @@ class MapWidget(QWidget):
         scale_x: float, scale_y: float,
     ) -> None:
         from worldgen.resources.rare_bio import N_RARE_BIO, RARE_BIO_PALETTE
-        feature = self._globe.get_feature("rare_bio")  # type: ignore[union-attr]
-        if feature is None:
-            return
-        positions, kinds, abundances = feature
-        if len(positions) == 0:
-            return
-        lon = self._shift_lon(np.arctan2(positions[:, 1], positions[:, 0]))
-        lat = np.arcsin(np.clip(positions[:, 2], -1.0, 1.0))
-        proj = self._projection.project_lonlat(np.column_stack([lon, lat]))
-        sx = (proj[:, 0] - cx) * scale_x + W * 0.5
-        sy = -(proj[:, 1] - cy) * scale_y + H * 0.5
-        base_r = max(2.5, 4.0 * self._zoom ** 0.3)
-        painter.save()
-        kinds_i = np.clip(kinds.astype(np.int32), 0, N_RARE_BIO - 1)
-        for k in range(N_RARE_BIO):
-            mask = kinds_i == k
-            if not mask.any():
-                continue
-            rgba = RARE_BIO_PALETTE[k]
-            r_fill = int(rgba[0] * 255)
-            g_fill = int(rgba[1] * 255)
-            b_fill = int(rgba[2] * 255)
-            r_pen = max(0, r_fill - 60)
-            g_pen = max(0, g_fill - 60)
-            b_pen = max(0, b_fill - 60)
-            painter.setPen(QPen(QColor(r_pen, g_pen, b_pen, 220), 1.0))
-            painter.setBrush(QBrush(QColor(r_fill, g_fill, b_fill, 210)))
-            k_abund = abundances[mask]
-            k_sx = sx[mask]
-            k_sy = sy[mask]
-            for i in range(len(k_sx)):
-                r = base_r * (0.7 + 0.6 * float(k_abund[i]))
-                # Draw as diamond (rotated square) to distinguish from mineral squares.
-                cx_i, cy_i = float(k_sx[i]), float(k_sy[i])
-                diamond = QPolygonF([
-                    QPointF(cx_i, cy_i - r),
-                    QPointF(cx_i + r, cy_i),
-                    QPointF(cx_i, cy_i + r),
-                    QPointF(cx_i - r, cy_i),
-                ])
-                painter.drawPolygon(diamond)
-        painter.restore()
+
+        def _diamond(p: QPainter, x: float, y: float, r: float) -> None:
+            p.drawPolygon(QPolygonF([
+                QPointF(x, y - r), QPointF(x + r, y),
+                QPointF(x, y + r), QPointF(x - r, y),
+            ]))
+
+        self._draw_resource_overlay(
+            painter, W, H, cx, cy, scale_x, scale_y,
+            "rare_bio", RARE_BIO_PALETTE, N_RARE_BIO,
+            max(2.5, 4.0 * self._zoom ** 0.3), _diamond,
+        )
 
     def _draw_danger_sources_overlay(
         self,
@@ -743,11 +744,7 @@ class MapWidget(QWidget):
         positions, kinds = feature
         if len(positions) == 0:
             return
-        lon = self._shift_lon(np.arctan2(positions[:, 1], positions[:, 0]))
-        lat = np.arcsin(np.clip(positions[:, 2], -1.0, 1.0))
-        proj = self._projection.project_lonlat(np.column_stack([lon, lat]))
-        sx = (proj[:, 0] - cx) * scale_x + W * 0.5
-        sy = -(proj[:, 1] - cy) * scale_y + H * 0.5
+        sx, sy = self._ecef_to_screen(positions, W, H, cx, cy, scale_x, scale_y)
         r = max(3.0, 5.0 * self._zoom ** 0.3)
         painter.save()
         n_colors = len(SOURCE_COLORS)
@@ -861,11 +858,7 @@ class MapWidget(QWidget):
         tiers = np.array(
             [population_display_tier(float(p), max_pop) for p in pops], dtype=np.int32
         )
-        lon = self._shift_lon(np.arctan2(positions[:, 1], positions[:, 0]))
-        lat = np.arcsin(np.clip(positions[:, 2], -1.0, 1.0))
-        proj = self._projection.project_lonlat(np.column_stack([lon, lat]))
-        sx = (proj[:, 0] - cx) * scale_x + W * 0.5
-        sy = -(proj[:, 1] - cy) * scale_y + H * 0.5
+        sx, sy = self._ecef_to_screen(positions, W, H, cx, cy, scale_x, scale_y)
         zoom_scale = max(1.0, self._zoom ** 0.3)
         # Population-scaled radii: sqrt(pop / max_pop) in [0.6, 1.0] relative
         # to the tier base radius so the shape of the distribution is visible.

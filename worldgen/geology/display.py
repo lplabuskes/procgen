@@ -44,6 +44,11 @@ def is_ocean_face(meta: dict) -> bool:
     return float(meta.get("elevation", 0.0)) < 0.0
 
 
+def is_water_meta(meta: dict) -> bool:
+    """True if this face is water (ocean or lake). Falls back to is_ocean for pre-cost worlds."""
+    return bool(meta.get("is_water", meta.get("is_ocean", False)))
+
+
 def apply_water_masks(
     rgba: np.ndarray,
     *,
@@ -68,6 +73,17 @@ def ocean_gradient_scheme(meta_key: str, stops: list, default: float = 0.0):
 
     def fn(meta: dict) -> tuple:
         if is_ocean_face(meta):
+            return OCEAN_COLOR
+        return base(meta)
+    return fn
+
+
+def water_gradient_scheme(meta_key: str, stops: list, default: float = 0.0):
+    """Return a gradient scheme function that paints all water faces (ocean + lake) with OCEAN_COLOR."""
+    base = gradient_scheme(meta_key, stops, default)
+
+    def fn(meta: dict) -> tuple:
+        if is_water_meta(meta):
             return OCEAN_COLOR
         return base(meta)
     return fn
