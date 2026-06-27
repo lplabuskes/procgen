@@ -52,6 +52,7 @@ python3 scripts/measure_population_absolute.py [seeds…|--random N|--detail|--r
 python3 scripts/measure_rivers.py         [seeds…|--random N|--detail]
 python3 scripts/measure_polities.py       [seeds…|--random N|--detail|--rebuild-cache]
 python3 scripts/profile_pipeline.py       [seeds…|--repeat N|--top N|--cprofile [--module M]]
+python3 scripts/debug_borders.py          [seed|--face F|--lat/--lon|--radius D|--depth N|--show-overhang|--seams|--vertices]
 ```
 
 - `measure_seam_quality.py` — mean/median/RMS/max elevation jump (km) across ~350k matched boundary pixel pairs per seed.
@@ -63,6 +64,7 @@ python3 scripts/profile_pipeline.py       [seeds…|--repeat N|--top N|--cprofil
 - `measure_rivers.py` — river source-to-mouth length distribution (longest, percentiles, count over 1/2/3/4k km, % reaching ocean) vs Earth's great rivers. Runs elevation + climate + hydrology. Results appended to `scripts/results/rivers_results.json`. Default seeds (4, 31, 35) are chosen for Earth-like land fraction (~29%) and a continent-scale largest landmass.
 - `measure_polities.py` — polity-forest structure: sovereign/vassal counts, largest-domain face fraction (consolidation), max tree depth, and `corr(infrastructure, vassal_fraction)` (should be negative — high-infra realms hold directly, low-infra ones fragment). Caches the physical world; re-runs only the realm stage. Default seeds 4/31/35.
 - `profile_pipeline.py` — per-phase wall-clock breakdown of the full globe pipeline. Use `--cprofile` for function-level drill-down.
+- `debug_borders.py` — visual border-drawing troubleshooter. Renders a zoomed, faithful raster of one region: the texel polity fill as actual corner-quads (tiles at any orientation) with the traced border polylines overlaid, recomputed live from `fill.py`/`borders.py`. Draws **only visible (in-`face_texture_in_polygon`) texels** by default — the renderer clips the ~40% over-hang, so a border that looks wrong against the full grid may be right against the visible one; `--show-overhang` reveals those invisible texels (faded, red-edged). `--seams`/`--vertices` overlay hexagon seams and border vertices to inspect welding/de-doubling. Auto-picks a border-rich centre; `--face`/`--lat`/`--lon`/`--radius` aim it. Writes `scripts/results/borders_<seed>.png`.
 
 
 ## Architecture

@@ -13,9 +13,13 @@ so a coastal "water" face can still hold a large minority of genuine land texels
 Those texels are reassigned to whichever claimed-land neighbour wins the weighted
 Voronoi, instead of being painted ocean.
 
-Labels along shared mesh edges are reconciled across faces (via
-``mesh.boundary_pixel_pairs``) so coincident edge texels agree — this is what lets
-the border tracer (``borders.py``) draw continuous lines across face seams.
+``compute_texel_labels`` can optionally reconcile coincident edge texels across
+shared mesh edges (``reconcile_edges``), but the refine pipeline now leaves it
+**off**: forcing edge texels to agree both hides the cross-seam disagreement the
+border tracer needs to find borders running *along* a seam, and paints a one-texel
+neighbour fringe across the seam in the fill. ``borders.py`` instead traces those
+seam-parallel borders directly from the raw per-face labels (see
+``_seam_border_edges``).
 
 ``build_polity_fill_texture`` colourises the labels into the ``(N, H, W, 4)`` RGBA
 "Polities" fill texture; ``borders.py`` traces the texel region boundaries into

@@ -24,7 +24,12 @@ and stop short of the texel coastline.  This module traces them from the same
    and coastal terminations).  Where a border crosses a seam the two faces' pieces
    meet ~1 texel apart and are joined into continuous lines by welding their
    terminations (``_weld_seam_endpoints``) across mesh-adjacent faces.
-4. The chained polylines are Chaikin-smoothed to round off the texel staircase.
+4. A border running *parallel to* a seam (one face wholly one polity, the
+   neighbour wholly another) is invisible to the per-face cell tracer — the two
+   sides live in different faces' grids and each face's own texels are uniform.
+   ``_seam_border_edges`` recovers it directly from the matched cross-seam texel
+   pairs (``mesh.boundary_pixel_pairs``), the only place such a border is produced.
+5. The chained polylines are Chaikin-smoothed to round off the texel staircase.
 """
 from __future__ import annotations
 
@@ -163,6 +168,64 @@ def _edge_border_depth(la: np.ndarray, lb: np.ndarray,
     return out.reshape(shape)
 
 
+# ── seam-parallel borders ──────────────────────────────────────────────────────
+
+
+def _seam_border_edges(seam_pairs, labels: np.ndarray, P: np.ndarray,
+                       lut: np.ndarray, depth: int, spacing: float,
+                       gap_factor: float = 1.8) -> list:
+    """Border segments running *along* mesh seams at ``depth``.
+
+    The per-face cell tracer only links texels **within one face's square grid**, so
+    a border that runs *parallel to* a shared hexagon edge — where one face is wholly
+    one polity and the neighbour wholly another — is invisible to it: the two sides
+    live in different faces' grids and each face's own texels are uniform. That is the
+    root of the "seam-parallel" gaps (a whole stretch missing) and the lens loops the
+    welder spins out of the few fragments that survive.
+
+    Here we recover it directly from ``mesh.boundary_pixel_pairs``: for each matched
+    cross-seam texel pair whose two labels put a depth-``depth`` border between the
+    faces, drop a vertex on the seam (the pair midpoint, since paired edge texels are
+    ~coincident) and connect consecutive such vertices along each seam into a polyline.
+    Pairs are grouped per shared edge and ordered along the seam's principal axis;
+    a hop longer than ~1.8 texels (the border leaving and re-touching the seam) is
+    left unbridged so disjoint stretches stay separate. Endpoints are tagged with the
+    lower-id seam face so the existing weld can join sibling seam chains at the shared
+    corner vertices where several seams meet.
+    """
+    fa, fb, ra, ca, rb, cb = seam_pairs
+    if len(fa) == 0:
+        return []
+    la = labels[fa, ra, ca]
+    lb = labels[fb, rb, cb]
+    bd = _edge_border_depth(la, lb, lut)          # shallowest diverging depth (-1 = none)
+    sel = np.where(bd == depth)[0]
+    if sel.size < 2:
+        return []
+    fa_s, fb_s = fa[sel].astype(np.int64), fb[sel].astype(np.int64)
+    mid = 0.5 * (P[fa_s, ra[sel], ca[sel]] + P[fb_s, rb[sel], cb[sel]])
+    lo = np.minimum(fa_s, fb_s)
+    hi = np.maximum(fa_s, fb_s)
+    seam_id = lo * labels.shape[0] + hi           # unique per shared edge
+    thr = gap_factor * spacing
+
+    out: list = []
+    for sid in np.unique(seam_id):
+        m = np.where(seam_id == sid)[0]
+        if m.size < 2:
+            continue
+        pts = mid[m]
+        ff = int(lo[m[0]])
+        # Order along the seam by projection onto the points' principal axis.
+        d = pts - pts.mean(axis=0)
+        _, _, vt = np.linalg.svd(d, full_matrices=False)
+        ps = pts[np.argsort(d @ vt[0])]
+        for i in range(len(ps) - 1):
+            if np.linalg.norm(ps[i + 1] - ps[i]) <= thr:
+                out.append((ps[i], ps[i + 1], ff))
+    return out
+
+
 # ── tracing ───────────────────────────────────────────────────────────────────
 
 
@@ -211,7 +274,9 @@ def trace_label_borders(positions: np.ndarray, labels: np.ndarray,
                         weld_factor: float = 2.5,
                         adj: list | None = None,
                         centroids: np.ndarray | None = None,
-                        in_poly: np.ndarray | None = None) -> dict:
+                        in_poly: np.ndarray | None = None,
+                        seam_pairs: tuple | None = None,
+                        seam_gap_factor: float = 1.8) -> dict:
     """Return ``{depth: (M, 6)}`` smoothed border segments from a texel label grid.
 
     ``positions`` is ``(N, H, W, 3)`` unit-sphere texel positions; ``labels`` is
@@ -233,12 +298,15 @@ def trace_label_borders(positions: np.ndarray, labels: np.ndarray,
     draw a short doubled stretch; ``centroids`` resolve the over-hang.  The remaining
     ~1-texel seam crossings are joined by the weld.
 
-    A residual artifact survives: where the per-face fill Voronoi disagrees by a
-    texel across a seam, a border is drawn as two near-parallel copies (a thin
-    ``lens``, ≤ ~2 texels). These are left in place — they read as a faint doubling
-    on the line, far less disruptive than the visible gaps that collapsing them used
-    to punch into the through-border. The real cure is cross-seam-consistent fill
-    labels in ``fill.py``.
+    Borders that run *along* a seam are recovered by ``_seam_border_edges`` from the
+    cross-seam texel pairs (``seam_pairs``); this needs the **un-reconciled** labels
+    (the refine pipeline passes ``reconcile_edges=False``) so the per-face label
+    disagreement at the seam is still visible. A residual artifact survives: where the
+    warp wiggles the texel boundary back and forth across a seam, the seam-parallel
+    line and a short intra-face fragment of the same border are both drawn (a thin
+    ``lens``, ≤ ~2 texels). These are left in place — they read as a faint doubling on
+    the line, far less disruptive than the gaps and isolated loops that the missing
+    seam-parallel borders used to produce.
     """
     if not polities:
         return {}
@@ -288,8 +356,12 @@ def trace_label_borders(positions: np.ndarray, labels: np.ndarray,
     for depth in range(max_depth + 1):
         anc_d = labels.copy()
         anc_d[claimed] = lut[depth, labels[claimed]]
+        seam_edges = (_seam_border_edges(seam_pairs, labels, P, lut, depth, spacing,
+                                         gap_factor=seam_gap_factor)
+                      if seam_pairs is not None else None)
         segs = _trace_depth(depth, hbd, vbd, hmid, vmid, ctr, anc_d, iterations,
-                            weld_tol=weld_tol, adj=adj, frontier=frontier)
+                            weld_tol=weld_tol, adj=adj, frontier=frontier,
+                            seam_edges=seam_edges)
         if segs:
             out[depth] = np.asarray(segs, dtype=np.float32)
     return out
@@ -398,7 +470,8 @@ def _weld_seam_endpoints(edges: set, pt_of: dict, key_face: dict,
 
 def _trace_depth(depth: int, hbd, vbd, hmid, vmid, ctr, anc, iterations: int,
                  weld_tol: float = 0.0, adj: list | None = None,
-                 frontier: np.ndarray | None = None) -> list:
+                 frontier: np.ndarray | None = None,
+                 seam_edges: list | None = None) -> list:
     # Per-cell crossing flags for the four cell edges (cells span i,j in
     # 0..H-2, 0..W-2).
     top = hbd[:, :-1, :] == depth                       # (N,H-1,W-1)
@@ -464,6 +537,14 @@ def _trace_depth(depth: int, hbd, vbd, hmid, vmid, ctr, anc, iterations: int,
             for m in mids:
                 add(m, c)
 
+    # Seam-parallel border segments (along shared edges, invisible to the per-face
+    # cell tracer). Tag endpoints as frontier so the weld joins sibling seam chains
+    # at the shared corner vertices where several seams meet.
+    if seam_edges:
+        for p, q, ff in seam_edges:
+            _mark_f = ff
+            add(p, q)
+
     if weld_tol > 0.0:
         edges, pt_of = _weld_seam_endpoints(edges, pt_of, key_face, weld_tol, adj)
 
@@ -496,5 +577,9 @@ def smooth_polity_borders(mesh, polities: List, labels: np.ndarray,
     centroids = getattr(mesh, "face_centroids", None)
     in_poly = (mesh.face_texture_in_polygon(H, W)
                if hasattr(mesh, "face_texture_in_polygon") else None)
+    seam_pairs = (mesh.boundary_pixel_pairs(W)
+                  if H == W and hasattr(mesh, "boundary_pixel_pairs") else None)
     return trace_label_borders(positions, labels, polities, iterations=iterations,
-                               adj=adj, centroids=centroids, in_poly=in_poly)
+                               adj=adj, centroids=centroids, in_poly=in_poly,
+                               seam_pairs=seam_pairs, weld_factor=3.0,
+                               seam_gap_factor=2.5)

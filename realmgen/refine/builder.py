@@ -100,6 +100,11 @@ class RefineStage(Stage):
                 if polities and authority is not None:
                     # Single texel classification feeds both the fill and the borders,
                     # so the lines fall exactly on the fill's region edges.
+                    # reconcile_edges=False: the cross-seam border tracer needs the
+                    # raw per-face label disagreement at shared edges to find borders
+                    # running *along* a seam. Reconciling would force those texels to
+                    # agree (hiding the border) and paints a one-texel neighbour fringe
+                    # across the seam in the fill; seam tracing supersedes it.
                     labels = compute_texel_labels(
                         mesh, pof, is_water, authority, ocean_tex, lake_tex,
                         control_floor=float(p.border_control_floor),
@@ -107,6 +112,7 @@ class RefineStage(Stage):
                         warp_frequency=float(p.boundary_warp_frequency),
                         warp_octaves=int(p.boundary_warp_octaves),
                         warp_seed=int(world.seed or 0),
+                        reconcile_edges=False,
                     )
                     world.add_feature("polity_borders", smooth_polity_borders(
                         mesh, polities, labels,
