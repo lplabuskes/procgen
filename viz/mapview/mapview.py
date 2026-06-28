@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from viz.mapview.antimeridian import find_ideal_antimeridian
+from core.antimeridian import find_ideal_antimeridian
 from viz.mapview.projections import ALL_PROJECTIONS, RobinsonProjection, Projection
 
 if TYPE_CHECKING:
@@ -266,9 +266,9 @@ class MapWidget(QWidget):
                 draw_shape(painter, float(k_sx[i]), float(k_sy[i]), r)
         painter.restore()
 
-    def set_mesh(self, mesh: PolygonMesh) -> None:
+    def set_mesh(self, mesh: PolygonMesh, antimeridian: Optional[float] = None) -> None:
         self._mesh = mesh
-        self._antimeridian = find_ideal_antimeridian(mesh)
+        self._antimeridian = antimeridian if antimeridian is not None else find_ideal_antimeridian(mesh)
         self._rebuild_faces()
         self._rebuild_textures()
         self._rebuild_colors()
@@ -277,7 +277,7 @@ class MapWidget(QWidget):
 
     def set_globe(self, globe: "World") -> None:
         self._globe = globe
-        self.set_mesh(globe.mesh)
+        self.set_mesh(globe.mesh, antimeridian=globe.antimeridian)
 
     def set_overlay_visible(self, name: str, visible: bool) -> None:
         self._overlay_visible[name] = visible

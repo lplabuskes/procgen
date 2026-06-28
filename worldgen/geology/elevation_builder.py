@@ -6,6 +6,7 @@ from typing import List, Mapping, Optional, Protocol, TypeGuard
 
 import numpy as np
 
+from core.antimeridian import find_ideal_antimeridian
 from core.display import DisplayRegistry
 from core.params import field, param_field as _f, paramclass
 from core.pipeline import BuildContext, Stage
@@ -283,6 +284,7 @@ class ElevationBuilder(Stage):
         OCEAN_MASK.write(dual, ocean_mask)
         is_ocean_per_face = ocean_mask[:, :, :, 0].mean(axis=(1, 2)) > 0.5
         IS_OCEAN.write(dual, is_ocean_per_face)
+        ctx.world.antimeridian = find_ideal_antimeridian(dual)
 
         self.mesh = dual
         self.plate_ids = plate_ids
@@ -379,3 +381,4 @@ class ElevationBuilder(Stage):
         if "eb_volcano_positions" in arrays:
             self.volcano_positions = arrays["eb_volcano_positions"]
             ctx.world.add_feature("volcanoes", self.volcano_positions)
+        ctx.world.antimeridian = find_ideal_antimeridian(ctx.mesh)

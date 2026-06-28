@@ -11,6 +11,7 @@ already-built mesh (e.g. when loading a saved world).
 """
 from __future__ import annotations
 
+import math
 from typing import Any, Callable, Dict, Iterator, Optional, TYPE_CHECKING
 
 from core import mesh_cache
@@ -40,6 +41,8 @@ class World:
         # (e.g. polity scalars) — same seed ⇒ same world ⇒ same generation.
         self.seed: Optional[int] = seed
         self._features: Dict[str, Any] = {}
+        # Set by ElevationBuilder after ocean data is available.
+        self.antimeridian: float = math.pi
 
     @classmethod
     def from_mesh(cls, mesh: "PolygonMesh") -> "World":
@@ -48,6 +51,7 @@ class World:
         self.mesh = mesh
         self.seed = None
         self._features = {}
+        self.antimeridian = math.pi
         return self
 
     def add_feature(self, name: str, data: Any) -> None:
