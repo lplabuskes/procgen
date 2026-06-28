@@ -457,17 +457,23 @@ class PolygonMesh:
         """Return a bool ``(N, H, W)`` mask: which texels fall *inside* each face's
         rendered polygon (vs. the square texture's over-hanging corners).
 
-        A texel is inside iff it lies within one of the face's fan triangles (all
-        barycentric coords >= -eps).  This is the exact clip the renderer applies,
-        so it identifies the texels a face actually owns — the rest belong to a
-        neighbour and must not be classified or traced as this face's own.
+        A texel is inside iff its center or any of its four corners lies within one
+        of the face's fan triangles (all barycentric coords >= -eps).  This errs on
+        the side of inclusion for texels that straddle the polygon boundary.
         """
         u_coords = np.linspace(0.0, 1.0, w, dtype=np.float64)
         v_coords = np.linspace(0.0, 1.0, h, dtype=np.float64)
         uu, vv = np.meshgrid(u_coords, v_coords)
         pixel_uv = np.stack([uu.ravel(), vv.ravel()], axis=1)  # (h*w, 2)
 
+        du = 0.5 / (w - 1) if w > 1 else 0.0
+        dv = 0.5 / (h - 1) if h > 1 else 0.0
+        offsets = np.array([[0.0, 0.0], [-du, -dv], [du, -dv], [-du, dv], [du, dv]])
+        # (5*h*w, 2): center then 4 corners, all pixels stacked
+        sample_uvs = (pixel_uv[None, :, :] + offsets[:, None, :]).reshape(-1, 2)
+
         n_faces = len(self.faces)
+        n_pix = h * w
         mask = np.zeros((n_faces, h, w), dtype=bool)
 
         for face_idx in range(n_faces):
@@ -479,7 +485,7 @@ class PolygonMesh:
             det = e1_uv[:, 0] * e2_uv[:, 1] - e1_uv[:, 1] * e2_uv[:, 0]
             det = np.where(np.abs(det) < 1e-12, 1.0, det)
 
-            pv = pixel_uv - v0_uv  # (n_pix, 2)
+            pv = sample_uvs - v0_uv  # (5*n_pix, 2)
             pv_cross_e2 = (pv[:, 0:1] * e2_uv[None, :, 1]
                            - pv[:, 1:2] * e2_uv[None, :, 0])
             e1_cross_pv = (e1_uv[None, :, 0] * pv[:, 1:2]
@@ -487,9 +493,10 @@ class PolygonMesh:
             beta = pv_cross_e2 / det[None, :]
             gamma = e1_cross_pv / det[None, :]
             alpha = 1.0 - beta - gamma
-            min_bary = np.minimum(alpha, np.minimum(beta, gamma))  # (n_pix, n_tris)
-            inside = (min_bary.max(axis=1) >= -eps)
-            mask[face_idx] = inside.reshape(h, w)
+            min_bary = np.minimum(alpha, np.minimum(beta, gamma))  # (5*n_pix, n_tris)
+            inside = (min_bary.max(axis=1) >= -eps)  # (5*n_pix,)
+            inside_any = inside.reshape(5, n_pix).any(axis=0)
+            mask[face_idx] = inside_any.reshape(h, w)
 
         return mask
 
