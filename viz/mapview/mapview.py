@@ -184,6 +184,11 @@ class MapWidget(QWidget):
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         self.setMouseTracking(True)
 
+        self._region_mode: bool = False
+        self._hover_region: Optional[int] = None
+        self._region_face_cells: Optional[np.ndarray] = None
+        self._region_border_polylines: list[np.ndarray] = []  # each (N, 3) ECEF
+
     def _shift_lon(self, lon: np.ndarray) -> np.ndarray:
         """Shift longitudes into the frame where self._antimeridian maps to ±π."""
         return ((lon - self._antimeridian) % (2.0 * np.pi)) - np.pi
@@ -273,6 +278,10 @@ class MapWidget(QWidget):
         self._rebuild_textures()
         self._rebuild_colors()
         self._reproject()
+        self._region_face_cells = None
+        self._region_border_polylines = []
+        if self._region_mode:
+            self._rebuild_region_cells()
         self.update()
 
     def set_globe(self, globe: "World") -> None:
@@ -493,6 +502,9 @@ class MapWidget(QWidget):
                 and self._globe is not None
                 and self._globe.has_feature("polity_borders")):
             self._draw_polity_borders_overlay(painter, W, H, cx, cy, scale_x, scale_y)
+
+        if self._region_mode:
+            self._draw_region_overlay(painter, W, H, cx, cy, scale_x, scale_y)
 
         self._draw_legend(painter, W, H)
 
@@ -1100,6 +1112,174 @@ class MapWidget(QWidget):
             ty = int(cy + (fm.ascent() - fm.descent()) // 2)
             painter.drawText(x0 + pad + swatch + swatch_gap, ty, label)
 
+    def set_region_mode(self, enabled: bool) -> None:
+        self._region_mode = enabled
+        if enabled and self._region_face_cells is None and self._mesh is not None:
+            self._rebuild_region_cells()
+        if not enabled:
+            self._hover_region = None
+        self.update()
+
+    def _rebuild_region_cells(self) -> None:
+        if self._mesh is None:
+            return
+        centroids = self._mesh.face_centroids.astype(np.float64)  # (N, 3)
+        x, y, z = centroids[:, 0], centroids[:, 1], centroids[:, 2]
+
+        # Rotate around Z so a cube face boundary aligns with the antimeridian.
+        # Cube edges between the 4 equatorial faces land at 45° + k·90° in the
+        # rotated frame, so rotating by (ant - π/4) places one edge at ant_lon.
+        rot = self._antimeridian - np.pi / 4.0
+        cos_r, sin_r = np.cos(rot), np.sin(rot)
+        xr = x * cos_r + y * sin_r
+        yr = -x * sin_r + y * cos_r
+
+        n = 3
+        ax, ay, az = np.abs(xr), np.abs(yr), np.abs(z)
+        dom_x = (ax >= ay) & (ax >= az)
+        dom_y = (~dom_x) & (ay >= az)
+        dom_z = ~dom_x & ~dom_y
+
+        cell_face = np.empty(len(x), dtype=np.int32)
+        cell_face[dom_x] = np.where(xr[dom_x] > 0, 0, 1)
+        cell_face[dom_y] = np.where(yr[dom_y] > 0, 2, 3)
+        cell_face[dom_z] = np.where(z[dom_z] > 0, 4, 5)
+
+        m = np.maximum(ax, np.maximum(ay, az))
+        u_c = np.where(dom_x, yr / m, np.where(dom_y, xr / m, xr / m))
+        v_c = np.where(dom_x, z / m, np.where(dom_y, z / m, yr / m))
+
+        # Equal-area CDF stretch: F(t) = (3/π)·(arcsin(t/√(2(1+t²))) + π/6)
+        pu = (3.0 / np.pi) * (np.arcsin(u_c / np.sqrt(2.0 * (1.0 + u_c ** 2))) + np.pi / 6.0)
+        pv = (3.0 / np.pi) * (np.arcsin(v_c / np.sqrt(2.0 * (1.0 + v_c ** 2))) + np.pi / 6.0)
+
+        ci = np.clip(pu * n, 0.0, n - 1e-9).astype(np.int32)
+        cj = np.clip(pv * n, 0.0, n - 1e-9).astype(np.int32)
+        self._region_face_cells = cell_face * (n * n) + ci * n + cj
+
+        # Build mathematical border curves from the cubed-sphere parameterization.
+        # For each face and each cell-boundary value of pu/pv, generate a dense polyline
+        # of ECEF points; no mesh geometry involved.
+        _N = 100  # samples per polyline
+
+        def _ea_inv(p: np.ndarray) -> np.ndarray:
+            """Inverse equal-area CDF: p ∈ [0,1] → gnomonic u ∈ [-1, 1]."""
+            theta = p * (np.pi / 3.0) - np.pi / 6.0
+            s = np.sin(theta)
+            c2 = np.maximum(np.cos(2.0 * theta), 1e-10)
+            return np.sqrt(2.0) * s / np.sqrt(c2)
+
+        def _face_to_ecef(face: int, ug: np.ndarray, vg: np.ndarray) -> np.ndarray:
+            """Map gnomonic face coords to ECEF unit-sphere (N, 3) array."""
+            d = np.sqrt(1.0 + ug ** 2 + vg ** 2)
+            if face == 0:   xr, yr, zr = 1.0 / d, ug / d, vg / d
+            elif face == 1: xr, yr, zr = -1.0 / d, ug / d, vg / d
+            elif face == 2: xr, yr, zr = ug / d, 1.0 / d, vg / d
+            elif face == 3: xr, yr, zr = ug / d, -1.0 / d, vg / d
+            elif face == 4: xr, yr, zr = ug / d, vg / d, 1.0 / d
+            else:           xr, yr, zr = ug / d, vg / d, -1.0 / d
+            # Inverse-rotate from cube frame back to original ECEF
+            px = xr * cos_r - yr * sin_r
+            py = xr * sin_r + yr * cos_r
+            return np.column_stack([px, py, zr])
+
+        p_grid = np.linspace(0.0, 1.0, n + 1)   # [0, 1/n, 2/n, ..., 1]
+        u_grid = _ea_inv(p_grid)                  # gnomonic values at each cell boundary
+        param = np.linspace(-1.0, 1.0, _N)        # polyline free parameter
+
+        polys: list[np.ndarray] = []
+        for face in range(6):
+            for u0 in u_grid:
+                polys.append(_face_to_ecef(face, np.full(_N, u0), param))  # constant pu
+            for v0 in u_grid:
+                polys.append(_face_to_ecef(face, param, np.full(_N, v0)))  # constant pv
+
+        self._region_border_polylines = polys
+
+    def _region_at_screen(self, mx: float, my: float) -> Optional[int]:
+        """Return the region cell index at screen position, or None if off-map."""
+        W, H = float(self.width()), float(self.height())
+        scale_x = self._zoom * 0.5 * W
+        scale_y = self._zoom * 0.5 * H
+        cx, cy = self._center[0], self._center[1]
+        mu = (mx - W * 0.5) / scale_x + cx
+        mv = -(my - H * 0.5) / scale_y + cy
+        lonlat = self._projection.unproject_lonlat(np.array([[mu, mv]], dtype=np.float64))
+        if np.any(np.isnan(lonlat)):
+            return None
+        shifted_lon = float(lonlat[0, 0])
+        lat = float(lonlat[0, 1])
+        # _shift_lon places the antimeridian at ±π and the map center at lon = ant + π,
+        # so lon = shifted_lon + ant + π.  Subtracting rot = ant - π/4 to enter the
+        # cube frame: lon_cube = lon - rot = shifted_lon + ant + π - (ant - π/4) = shifted_lon + 5π/4.
+        lon_rot = shifted_lon + np.pi + np.pi / 4.0
+        cos_lat = np.cos(lat)
+        xr = cos_lat * np.cos(lon_rot)
+        yr = cos_lat * np.sin(lon_rot)
+        zr = np.sin(lat)
+        n = 3
+        ax, ay, az = abs(xr), abs(yr), abs(zr)
+        if ax >= ay and ax >= az:
+            face = 0 if xr > 0.0 else 1
+            m = ax
+            u_g, v_g = yr / m, zr / m
+        elif ay >= az:
+            face = 2 if yr > 0.0 else 3
+            m = ay
+            u_g, v_g = xr / m, zr / m
+        else:
+            face = 4 if zr > 0.0 else 5
+            m = az
+            u_g, v_g = xr / m, yr / m
+        pu = (3.0 / np.pi) * (np.arcsin(u_g / np.sqrt(2.0 * (1.0 + u_g ** 2))) + np.pi / 6.0)
+        pv = (3.0 / np.pi) * (np.arcsin(v_g / np.sqrt(2.0 * (1.0 + v_g ** 2))) + np.pi / 6.0)
+        ci = int(np.clip(pu * n, 0.0, n - 1e-9))
+        cj = int(np.clip(pv * n, 0.0, n - 1e-9))
+        return face * n * n + ci * n + cj
+
+    def _draw_region_overlay(
+        self,
+        painter: QPainter,
+        W: float, H: float,
+        cx: float, cy: float,
+        scale_x: float, scale_y: float,
+    ) -> None:
+        if self._region_face_cells is None or self._mesh is None:
+            return
+
+        # Blue tint over all mesh polygons in the hovered region.
+        if self._hover_region is not None:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(QColor(80, 140, 255, 80)))
+            for idx, poly_proj in enumerate(self._proj_faces):
+                if int(self._region_face_cells[self._face_src[idx]]) == self._hover_region:
+                    px = (poly_proj[:, 0] - cx) * scale_x + W * 0.5
+                    py = -(poly_proj[:, 1] - cy) * scale_y + H * 0.5
+                    painter.drawPolygon(
+                        QPolygonF([QPointF(float(xx), float(yy)) for xx, yy in zip(px, py)])
+                    )
+
+        # Mathematically-defined border polylines (ECEF points, projected each frame).
+        if not self._region_border_polylines:
+            return
+        pen = QPen(QColor(0, 0, 0, 200))
+        pen.setWidthF(1.5)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for seg in self._region_border_polylines:
+            lon = self._shift_lon(np.arctan2(seg[:, 1], seg[:, 0]))
+            lat = np.arcsin(np.clip(seg[:, 2], -1.0, 1.0))
+            proj = self._projection.project_lonlat(np.column_stack([lon, lat]))
+            sx = (proj[:, 0] - cx) * scale_x + W * 0.5
+            sy = -(proj[:, 1] - cy) * scale_y + H * 0.5
+            for j in range(len(sx) - 1):
+                if abs(lon[j + 1] - lon[j]) > np.pi:
+                    continue
+                painter.drawLine(
+                    QPointF(float(sx[j]), float(sy[j])),
+                    QPointF(float(sx[j + 1]), float(sy[j + 1])),
+                )
+
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_start = (float(event.position().x()), float(event.position().y()))
@@ -1155,10 +1335,18 @@ class MapWidget(QWidget):
         if self._hover_callback is not None:
             face_src, uv = self._hit_face(mx, my)
             self._hover_callback(face_src, uv)
+        if self._region_mode:
+            new_region = self._region_at_screen(mx, my)
+            if new_region != self._hover_region:
+                self._hover_region = new_region
+                self.update()
 
     def leaveEvent(self, event) -> None:
         if self._hover_callback is not None:
             self._hover_callback(None, None)
+        if self._region_mode and self._hover_region is not None:
+            self._hover_region = None
+            self.update()
 
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -1252,6 +1440,11 @@ class MapWindow(QMainWindow):
         self._overlay_actions: dict[str, QAction] = {}
         toolbar_layout.addWidget(self._overlays_btn)
 
+        self._region_btn = QPushButton("Regions")
+        self._region_btn.setCheckable(True)
+        self._region_btn.setChecked(False)
+        toolbar_layout.addWidget(self._region_btn)
+
         toolbar_layout.addStretch()
 
         zoom_out_btn = QPushButton("−")
@@ -1286,6 +1479,7 @@ class MapWindow(QMainWindow):
 
         self._map = MapWidget()
         self._color_combo.currentTextChanged.connect(self._map.set_color_scheme)
+        self._region_btn.toggled.connect(self._map.set_region_mode)
 
         layout.addWidget(toolbar)
         layout.addWidget(self._map, stretch=1)
