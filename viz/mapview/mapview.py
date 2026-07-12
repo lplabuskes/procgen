@@ -13,12 +13,15 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QPushButton,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from core.antimeridian import find_ideal_antimeridian
+from region.geometry import RegionGeometry, cell_border_polylines, ecef_to_cell
 from viz.mapview.projections import ALL_PROJECTIONS, RobinsonProjection, Projection
+from viz.mapview.regionview import RegionView
 
 if TYPE_CHECKING:
     from core.mesh import PolygonMesh
@@ -175,6 +178,7 @@ class MapWidget(QWidget):
         self._legends: dict[str, tuple[str, list]] = {}  # scheme → (kind, entries)
 
         self._hover_callback: Optional[Callable[[Optional[int], Optional[np.ndarray]], None]] = None
+        self._region_click_callback: Optional[Callable[[int], None]] = None
 
         self._zoom: float = 1.0
         self._center: np.ndarray = np.zeros(2, dtype=np.float64)
@@ -1124,77 +1128,8 @@ class MapWidget(QWidget):
         if self._mesh is None:
             return
         centroids = self._mesh.face_centroids.astype(np.float64)  # (N, 3)
-        x, y, z = centroids[:, 0], centroids[:, 1], centroids[:, 2]
-
-        # Rotate around Z so a cube face boundary aligns with the antimeridian.
-        # Cube edges between the 4 equatorial faces land at 45° + k·90° in the
-        # rotated frame, so rotating by (ant - π/4) places one edge at ant_lon.
-        rot = self._antimeridian - np.pi / 4.0
-        cos_r, sin_r = np.cos(rot), np.sin(rot)
-        xr = x * cos_r + y * sin_r
-        yr = -x * sin_r + y * cos_r
-
-        n = 3
-        ax, ay, az = np.abs(xr), np.abs(yr), np.abs(z)
-        dom_x = (ax >= ay) & (ax >= az)
-        dom_y = (~dom_x) & (ay >= az)
-        dom_z = ~dom_x & ~dom_y
-
-        cell_face = np.empty(len(x), dtype=np.int32)
-        cell_face[dom_x] = np.where(xr[dom_x] > 0, 0, 1)
-        cell_face[dom_y] = np.where(yr[dom_y] > 0, 2, 3)
-        cell_face[dom_z] = np.where(z[dom_z] > 0, 4, 5)
-
-        m = np.maximum(ax, np.maximum(ay, az))
-        u_c = np.where(dom_x, yr / m, np.where(dom_y, xr / m, xr / m))
-        v_c = np.where(dom_x, z / m, np.where(dom_y, z / m, yr / m))
-
-        # Equal-area CDF stretch: F(t) = (3/π)·(arcsin(t/√(2(1+t²))) + π/6)
-        pu = (3.0 / np.pi) * (np.arcsin(u_c / np.sqrt(2.0 * (1.0 + u_c ** 2))) + np.pi / 6.0)
-        pv = (3.0 / np.pi) * (np.arcsin(v_c / np.sqrt(2.0 * (1.0 + v_c ** 2))) + np.pi / 6.0)
-
-        ci = np.clip(pu * n, 0.0, n - 1e-9).astype(np.int32)
-        cj = np.clip(pv * n, 0.0, n - 1e-9).astype(np.int32)
-        self._region_face_cells = cell_face * (n * n) + ci * n + cj
-
-        # Build mathematical border curves from the cubed-sphere parameterization.
-        # For each face and each cell-boundary value of pu/pv, generate a dense polyline
-        # of ECEF points; no mesh geometry involved.
-        _N = 100  # samples per polyline
-
-        def _ea_inv(p: np.ndarray) -> np.ndarray:
-            """Inverse equal-area CDF: p ∈ [0,1] → gnomonic u ∈ [-1, 1]."""
-            theta = p * (np.pi / 3.0) - np.pi / 6.0
-            s = np.sin(theta)
-            c2 = np.maximum(np.cos(2.0 * theta), 1e-10)
-            return np.sqrt(2.0) * s / np.sqrt(c2)
-
-        def _face_to_ecef(face: int, ug: np.ndarray, vg: np.ndarray) -> np.ndarray:
-            """Map gnomonic face coords to ECEF unit-sphere (N, 3) array."""
-            d = np.sqrt(1.0 + ug ** 2 + vg ** 2)
-            if face == 0:   xr, yr, zr = 1.0 / d, ug / d, vg / d
-            elif face == 1: xr, yr, zr = -1.0 / d, ug / d, vg / d
-            elif face == 2: xr, yr, zr = ug / d, 1.0 / d, vg / d
-            elif face == 3: xr, yr, zr = ug / d, -1.0 / d, vg / d
-            elif face == 4: xr, yr, zr = ug / d, vg / d, 1.0 / d
-            else:           xr, yr, zr = ug / d, vg / d, -1.0 / d
-            # Inverse-rotate from cube frame back to original ECEF
-            px = xr * cos_r - yr * sin_r
-            py = xr * sin_r + yr * cos_r
-            return np.column_stack([px, py, zr])
-
-        p_grid = np.linspace(0.0, 1.0, n + 1)   # [0, 1/n, 2/n, ..., 1]
-        u_grid = _ea_inv(p_grid)                  # gnomonic values at each cell boundary
-        param = np.linspace(-1.0, 1.0, _N)        # polyline free parameter
-
-        polys: list[np.ndarray] = []
-        for face in range(6):
-            for u0 in u_grid:
-                polys.append(_face_to_ecef(face, np.full(_N, u0), param))  # constant pu
-            for v0 in u_grid:
-                polys.append(_face_to_ecef(face, param, np.full(_N, v0)))  # constant pv
-
-        self._region_border_polylines = polys
+        self._region_face_cells = ecef_to_cell(centroids, self._antimeridian)
+        self._region_border_polylines = cell_border_polylines(self._antimeridian)
 
     def _region_at_screen(self, mx: float, my: float) -> Optional[int]:
         """Return the region cell index at screen position, or None if off-map."""
@@ -1210,32 +1145,11 @@ class MapWidget(QWidget):
         shifted_lon = float(lonlat[0, 0])
         lat = float(lonlat[0, 1])
         # _shift_lon places the antimeridian at ±π and the map center at lon = ant + π,
-        # so lon = shifted_lon + ant + π.  Subtracting rot = ant - π/4 to enter the
-        # cube frame: lon_cube = lon - rot = shifted_lon + ant + π - (ant - π/4) = shifted_lon + 5π/4.
-        lon_rot = shifted_lon + np.pi + np.pi / 4.0
+        # so the original ECEF longitude is lon = shifted_lon + ant + π.
+        lon = shifted_lon + self._antimeridian + np.pi
         cos_lat = np.cos(lat)
-        xr = cos_lat * np.cos(lon_rot)
-        yr = cos_lat * np.sin(lon_rot)
-        zr = np.sin(lat)
-        n = 3
-        ax, ay, az = abs(xr), abs(yr), abs(zr)
-        if ax >= ay and ax >= az:
-            face = 0 if xr > 0.0 else 1
-            m = ax
-            u_g, v_g = yr / m, zr / m
-        elif ay >= az:
-            face = 2 if yr > 0.0 else 3
-            m = ay
-            u_g, v_g = xr / m, zr / m
-        else:
-            face = 4 if zr > 0.0 else 5
-            m = az
-            u_g, v_g = xr / m, yr / m
-        pu = (3.0 / np.pi) * (np.arcsin(u_g / np.sqrt(2.0 * (1.0 + u_g ** 2))) + np.pi / 6.0)
-        pv = (3.0 / np.pi) * (np.arcsin(v_g / np.sqrt(2.0 * (1.0 + v_g ** 2))) + np.pi / 6.0)
-        ci = int(np.clip(pu * n, 0.0, n - 1e-9))
-        cj = int(np.clip(pv * n, 0.0, n - 1e-9))
-        return face * n * n + ci * n + cj
+        ecef = np.array([[cos_lat * np.cos(lon), cos_lat * np.sin(lon), np.sin(lat)]])
+        return int(ecef_to_cell(ecef, self._antimeridian)[0])
 
     def _draw_region_overlay(
         self,
@@ -1290,6 +1204,10 @@ class MapWidget(QWidget):
         self, cb: Optional[Callable[[Optional[int], Optional[np.ndarray]], None]]
     ) -> None:
         self._hover_callback = cb
+
+    def set_region_click_callback(self, cb: Optional[Callable[[int], None]]) -> None:
+        """Callback invoked with a region cell index when one is clicked in region mode."""
+        self._region_click_callback = cb
 
     def _hit_face(self, mx: float, my: float) -> tuple[Optional[int], Optional[np.ndarray]]:
         """Return (face_src, face_uv) for the face under screen point (mx, my)."""
@@ -1350,6 +1268,19 @@ class MapWidget(QWidget):
 
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
+            pos = event.position()
+            mx, my = float(pos.x()), float(pos.y())
+            # A negligible-movement press-release in region mode is a click, not a drag.
+            if (
+                self._region_mode
+                and self._region_click_callback is not None
+                and self._drag_start is not None
+                and abs(mx - self._drag_start[0]) < 4.0
+                and abs(my - self._drag_start[1]) < 4.0
+            ):
+                region = self._region_at_screen(mx, my)
+                if region is not None:
+                    self._region_click_callback(region)
             self._drag_start = None
             self.setCursor(Qt.CursorShape.OpenHandCursor)
 
@@ -1445,6 +1376,10 @@ class MapWindow(QMainWindow):
         self._region_btn.setChecked(False)
         toolbar_layout.addWidget(self._region_btn)
 
+        self._back_btn = QPushButton("← World Map")
+        self._back_btn.setVisible(False)
+        toolbar_layout.addWidget(self._back_btn)
+
         toolbar_layout.addStretch()
 
         zoom_out_btn = QPushButton("−")
@@ -1478,11 +1413,18 @@ class MapWindow(QMainWindow):
         bottom_layout.addWidget(self._rerun_btn)
 
         self._map = MapWidget()
+        self._region_view = RegionView()
         self._color_combo.currentTextChanged.connect(self._map.set_color_scheme)
         self._region_btn.toggled.connect(self._map.set_region_mode)
+        self._map.set_region_click_callback(self._enter_region)
+        self._back_btn.clicked.connect(self._exit_region)
+
+        self._stack = QStackedWidget()
+        self._stack.addWidget(self._map)          # index 0: world map
+        self._stack.addWidget(self._region_view)  # index 1: zoomed region
 
         layout.addWidget(toolbar)
-        layout.addWidget(self._map, stretch=1)
+        layout.addWidget(self._stack, stretch=1)
         layout.addWidget(bottom_toolbar)
         self.setCentralWidget(central)
 
@@ -1494,6 +1436,20 @@ class MapWindow(QMainWindow):
 
     def set_globe(self, globe: "World") -> None:
         self._map.set_globe(globe)
+
+    def _enter_region(self, region_id: int) -> None:
+        """Switch from the world map to the zoomed-in view of a clicked region."""
+        geometry = RegionGeometry(region_id, self._map._antimeridian)
+        self._region_view.set_region(geometry)
+        self._stack.setCurrentWidget(self._region_view)
+        self._region_btn.setVisible(False)
+        self._back_btn.setVisible(True)
+
+    def _exit_region(self) -> None:
+        """Return from the zoomed-in region view to the world map."""
+        self._stack.setCurrentWidget(self._map)
+        self._back_btn.setVisible(False)
+        self._region_btn.setVisible(True)
 
     def set_status(self, text: str) -> None:
         self._status_label.setText(text)

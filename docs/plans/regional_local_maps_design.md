@@ -1,5 +1,16 @@
 # Regional & Local Maps — Design Document
 
+> **Implementation status (evolving):** The polytope choice below assumed a
+> geodesic icosphere at depth 3. The implementation instead uses an **equal-area
+> cubed-sphere** subdivision — `N_SUBDIV=3` cells per cube-face axis → **54
+> regions** — because it gives near-equal-area cells that map cleanly to a flat
+> `[0,1]²` local frame (ideal for a hex grid and for upsampling). The geometry
+> lives in the Qt-free `region/` package (`region/geometry.py`): `ecef_to_cell`
+> (sphere → region id), `cell_border_polylines` (overlay curves), and
+> `RegionGeometry` (per-region local `(s,t)` ↔ sphere maps: `local_to_ecef`,
+> `local_to_lonlat`, `sample_grid`). The map viewer's region overlay and the
+> zoomed-in `RegionView` (`viz/mapview/regionview.py`) both build on it.
+
 ## Purpose & Scope
 
 The procedural world generator currently produces a single global view at icosphere depth 5 (10,242 hexagon + pentagon faces, ~50,000 km² per face). This design adds two additional zoom levels that maintain consistency with the global map while providing higher detail for localized exploration:
