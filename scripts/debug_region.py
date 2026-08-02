@@ -109,7 +109,7 @@ def main() -> None:
 
     coarse_params = RegionUpsampleParams(**vars(params))
     coarse_params.relief_factor = 0.0
-    coarse_params.precip_relative_amplitude = 0.0
+    coarse_params.orographic_gain = 0.0
 
     refined = build_region_fields(world, region_id, params)
     coarse = build_region_fields(world, region_id, coarse_params)

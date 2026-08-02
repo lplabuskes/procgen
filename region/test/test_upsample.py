@@ -4,6 +4,7 @@ import pytest
 
 from region.upsample import (
     RegionUpsampleParams,
+    _box_filter,
     build_region_fields,
     conservation_report,
     global_slope,
@@ -61,7 +62,7 @@ def test_detail_is_actually_added(fields, synthetic_globe):
 
 def test_no_detail_when_relief_is_disabled(synthetic_globe):
     flat = build_region_fields(
-        synthetic_globe, REGION_ID, _params(relief_factor=0.0, precip_relative_amplitude=0.0)
+        synthetic_globe, REGION_ID, _params(relief_factor=0.0, orographic_gain=0.0)
     )
     bumpy = build_region_fields(synthetic_globe, REGION_ID, _params())
     assert flat.textures["elevation"].std() < bumpy.textures["elevation"].std()
@@ -102,6 +103,49 @@ def test_biome_indices_are_valid(fields):
     assert biome.min() >= 0 and biome.max() < N_BIOMES
 
 
+def _biome_edge_fraction(fields) -> float:
+    """Fraction of interior texels adjacent to a biome change — boundary raggedness."""
+    b = fields.textures["biome"][..., 0].astype(np.int16)
+    c = b[:, 1:-1, 1:-1]
+    differs = (
+        (c != b[:, :-2, 1:-1]) | (c != b[:, 2:, 1:-1])
+        | (c != b[:, 1:-1, :-2]) | (c != b[:, 1:-1, 2:])
+    )
+    core = fields.in_hex[:, 1:-1, 1:-1]
+    return float(differs[core].mean())
+
+
+def test_biome_smoothing_cleans_the_boundaries(synthetic_globe):
+    """Without it the refined climate frays every biome edge into a dithered band.
+
+    The classifier is a hard threshold and the refined temperature swings ~1 °C
+    texel-to-texel, so near a cut neighbouring texels land on opposite sides.
+    """
+    rough = build_region_fields(synthetic_globe, REGION_ID, _params(biome_smoothing=0))
+    smooth = build_region_fields(synthetic_globe, REGION_ID, _params())
+    assert _biome_edge_fraction(smooth) < _biome_edge_fraction(rough)
+
+
+def test_biome_smoothing_leaves_the_climate_layers_sharp(synthetic_globe):
+    """Only the classifier reads the average — the displayed fields are untouched."""
+    rough = build_region_fields(synthetic_globe, REGION_ID, _params(biome_smoothing=0))
+    smooth = build_region_fields(synthetic_globe, REGION_ID, _params())
+    for key in ("temperature", "precipitation"):
+        assert np.array_equal(rough.textures[key], smooth.textures[key])
+
+
+def test_box_filter_preserves_the_mean_and_is_identity_when_disabled():
+    rng = np.random.default_rng(0)
+    tex = rng.normal(size=(3, 9, 9, 2))
+    assert _box_filter(tex, 1) is tex
+    assert _box_filter(tex, 0) is tex
+    blurred = _box_filter(tex, 3)
+    assert blurred.shape == tex.shape
+    assert blurred.std() < tex.std()
+    # Edge replication biases the mean only slightly; the interior is exact.
+    assert np.allclose(blurred[:, 3:-3, 3:-3].mean(), tex[:, 3:-3, 3:-3].mean(), atol=0.2)
+
+
 def test_generation_is_deterministic(synthetic_globe):
     a = build_region_fields(synthetic_globe, REGION_ID, _params())
     b = build_region_fields(synthetic_globe, REGION_ID, _params())
@@ -132,6 +176,34 @@ def test_temperature_follows_the_refined_relief(synthetic_globe):
             correlations.append(np.corrcoef(elev[sel], temp[sel])[0, 1])
     assert len(correlations) > 5
     assert np.mean(correlations) < -0.5
+
+
+def test_precipitation_follows_the_refined_relief(synthetic_globe):
+    """Orographic, not random: high texels inside a global texel are the wet ones.
+
+    This is what keeps the biome map from speckling — an independent noise stream
+    in precipitation would scatter texels across the classifier's thresholds.
+    """
+    fields = build_region_fields(synthetic_globe, REGION_ID, _params())
+    elev = fields.textures["elevation"].reshape(-1)
+    precip = fields.textures["precipitation"].reshape(-1, 4).sum(axis=1)
+    anchors = fields.anchors.reshape(-1)
+    inside = fields.in_hex.reshape(-1)
+    correlations = []
+    for anchor in np.unique(anchors[inside])[:100]:
+        sel = inside & (anchors == anchor)
+        if sel.sum() > 8 and elev[sel].std() > 1e-4 and precip[sel].std() > 1e-6:
+            correlations.append(np.corrcoef(elev[sel], precip[sel])[0, 1])
+    assert len(correlations) > 5
+    assert np.mean(correlations) > 0.9
+
+
+def test_precipitation_detail_can_be_disabled(synthetic_globe):
+    """orographic_gain=0 leaves precipitation as the smooth coarse field."""
+    fields = build_region_fields(synthetic_globe, REGION_ID, _params(orographic_gain=0.0))
+    bumpy = build_region_fields(synthetic_globe, REGION_ID, _params())
+    assert fields.textures["precipitation"].std() < bumpy.textures["precipitation"].std()
+    assert conservation_report(fields, synthetic_globe)["precipitation"]["max"] < 1e-1
 
 
 def test_no_detail_band_when_region_is_not_finer(synthetic_globe):

@@ -442,7 +442,7 @@ World save/load in `main.py` (`save_world` / `load_world`) already iterate over 
 ### Phase 2: Elevation & Climate Detail Generation
 
 - [x] Implement elevation detail generation (band-limited fBm, slope-proportional, aggregate-conserving)
-- [x] Implement climate detail generation (lapse rate off the refined relief; multiplicative precipitation detail; biome reclassified)
+- [x] Implement climate detail generation — elevation is the only noise source; temperature follows it by lapse rate and precipitation by an orographic response, and biome is reclassified from an area-average of the two (an independent noise stream in either input frays the classifier's boundaries)
 - [x] Test: `region/test/test_upsample.py` pins the conservation invariant; `scripts/debug_region.py` is the visual check
 
 ### Phase 3: Hydrology & Resources

@@ -12,16 +12,25 @@ Step 3 is what makes the result legal: downsampling a region by averaging
 recovers the global map bit-for-bit (see :func:`conservation_report`).  It is a
 per-anchor constant nudge, so it costs the detail nothing visually.
 
+**Elevation is the only field with a noise stream of its own.**  Every other
+field is a physical consequence of the refined relief, or is copied verbatim.
+That is deliberate: ``biome`` is a threshold classifier over temperature and
+precipitation, so an *independent* noise stream in either input makes neighbouring
+texels land on opposite sides of a cut at random — the boundary dissolves into
+speckle.  Driving both from the same relief instead makes biome boundaries follow
+ridges and valleys, which is both prettier and closer to the truth.
+
 Field-by-field:
 
 - **Elevation** — slope-proportional fBm.  Amplitude follows the local gradient
   of the coarse field (flat plains stay flat, mountains get rugged), with a floor
   so nowhere is glassy.  Conserved additively.
-- **Temperature** — no independent noise: the refined elevation drives a lapse-rate
+- **Temperature** — no noise: the refined elevation drives a lapse-rate
   correction, which is exactly the physical signal a finer grid should reveal.
   Conserved additively.
-- **Precipitation** — multiplicative slope-proportional detail (rugged ground
-  varies more), conserved multiplicatively so values stay positive.
+- **Precipitation** — no noise: an orographic response to the refined relief
+  (high ground catches more rain), applied multiplicatively and conserved
+  multiplicatively so values stay positive.
 - **Biome** — reclassified per regional texel from the refined climate, using the
   same classifier the global stage uses.
 - **Ocean / lake masks** — taken from the anchor texel verbatim.  The coastline is
@@ -52,9 +61,8 @@ if TYPE_CHECKING:
 
 EARTH_RADIUS_KM = 6371.0
 
-# Distinct noise streams so elevation and precipitation detail are uncorrelated.
+# Elevation is the only field with a noise stream; see the module docstring.
 _SEED_SALT_ELEVATION = 0x9E37
-_SEED_SALT_PRECIPITATION = 0x51ED
 
 
 @paramclass
@@ -75,10 +83,19 @@ class RegionUpsampleParams:
     )
     slope_floor: float = _f(0.10, label="Flat-ground detail floor", min=0.0, max=1.0)
     max_relief_km: float = _f(1.0, label="Max detail relief (km)", min=0.0, max=5.0)
-    precip_relative_amplitude: float = _f(
-        0.25, label="Precipitation detail (fraction)", min=0.0, max=0.9
+    # Precipitation has no noise of its own — it responds to the refined relief.
+    # 0.5/km means a 400 m sub-grid ridge catches ~20% more rain than the global
+    # texel it sits in, and the matching hollow ~20% less.  0 disables it.
+    orographic_gain: float = _f(
+        0.5, label="Orographic precip gain (/km)", min=0.0, max=3.0, step=0.05
     )
     lapse_rate_c_per_km: float = _f(6.5, label="Lapse rate (°C/km)", min=0.0, max=15.0)
+    # Biome is a hard threshold classifier, and the refined temperature swings
+    # ~1 °C between neighbouring texels — enough to fray every boundary into a
+    # dithered band.  A biome is a property of a neighbourhood rather than of one
+    # texel, so the classifier reads an area average; the temperature and
+    # precipitation layers themselves stay sharp.  0 or 1 disables it.
+    biome_smoothing: int = _f(5, label="Biome climate averaging (texels)", min=0, max=15)
     octaves: int = _f(4, label="Detail octaves (max)", min=0, max=8)
     lacunarity: float = _f(2.0, label="Detail lacunarity", min=1.1, max=4.0)
     persistence: float = _f(0.5, label="Detail persistence", min=0.1, max=0.95)
@@ -157,6 +174,25 @@ def global_slope(mesh: "PolygonMesh", elevation_tex: np.ndarray) -> np.ndarray:
     dv_km = np.maximum(v_ranges / max(h - 1, 1), 1e-9)[:, None, None]
     slope = np.hypot(d_u / du_km, d_v / dv_km)
     return slope[..., None].astype(np.float64)
+
+
+def _box_filter(texture: np.ndarray, size: int) -> np.ndarray:
+    """``size``×``size`` mean over each hex texture of an ``(M, T, T, C)`` array.
+
+    Edges replicate.  That is fine even at the hexagon's rim: the texture
+    over-hangs its hexagon, so the visible border averages over real neighbouring
+    data, and only the invisible corners see the replicated edge.
+    """
+    if size <= 1:
+        return texture
+    r = size // 2
+    padded = np.pad(texture, ((0, 0), (r, r), (r, r), (0, 0)), mode="edge")
+    _, h, w, _ = texture.shape
+    total = np.zeros(texture.shape, dtype=np.float64)
+    for i in range(size):
+        for j in range(size):
+            total += padded[:, i:i + h, j:j + w, :]
+    return (total / float(size * size)).astype(texture.dtype)
 
 
 def _effective_slope(slope: np.ndarray, params: RegionUpsampleParams) -> np.ndarray:
@@ -265,6 +301,10 @@ def build_region_fields(
     )
     textures["elevation"] = elevation.reshape(m, tex_size, tex_size, 1).astype(np.float32)
 
+    # The sub-grid relief, in km: the one signal every derived field reads from.
+    # ~Zero-mean inside each anchor group, so it perturbs without biasing.
+    relief_anomaly = elevation[:, 0] - elev_coarse[:, 0]
+
     # ── masks (verbatim from the anchor — the coastline is a global fact) ────
     for key in ("ocean_mask", "lake_mask"):
         if key in mesh.face_textures:
@@ -289,15 +329,15 @@ def build_region_fields(
             m, tex_size, tex_size, temp_tex.shape[3]
         ).astype(np.float32)
 
-    # ── precipitation: multiplicative detail ─────────────────────────────────
+    # ── precipitation: orographic response to the refined relief ─────────────
+    # Deliberately *not* an independent noise stream: precipitation feeds a
+    # threshold classifier (biome), and uncorrelated noise there turns every
+    # near-threshold area into speckle.  Sharing the relief instead puts the
+    # moisture bands on the contours.
     if "precipitation" in mesh.face_textures:
         precip_tex = np.asarray(mesh.face_textures["precipitation"], dtype=np.float64)
         p_coarse = sampler.sample(precip_tex, faces, u, v)                  # (P, K)
-        p_noise = _normalized_fbm(flat_pos, seed ^ _SEED_SALT_PRECIPITATION, freqs, amps)
-        rel = float(params.precip_relative_amplitude) * (
-            eff_slope / max(float(params.slope_reference), 1e-9)
-        )
-        wobble = np.clip(p_noise * rel, -0.9, 0.9)
+        wobble = np.clip(float(params.orographic_gain) * relief_anomaly, -0.9, 0.9)
         precipitation = p_coarse * (1.0 + wobble)[:, None]
         precipitation = conserve_multiplicative(
             precipitation, anchors, sampler.anchor_values(precip_tex, anchors),
@@ -307,11 +347,14 @@ def build_region_fields(
             m, tex_size, tex_size, precip_tex.shape[3]
         ).astype(np.float32)
 
-    # ── biome: reclassify from the refined climate ───────────────────────────
+    # ── biome: reclassify from the area-averaged refined climate ─────────────
     if "temperature" in textures and "precipitation" in textures:
         from worldgen.climate.classification import classify_textures
+        k = int(params.biome_smoothing)
         textures["biome"] = classify_textures(
-            textures["temperature"], textures["precipitation"], np.zeros(m)
+            _box_filter(textures["temperature"], k),
+            _box_filter(textures["precipitation"], k),
+            np.zeros(m),
         )
 
     region_area_km2 = 4.0 * np.pi * EARTH_RADIUS_KM ** 2 / N_REGIONS
