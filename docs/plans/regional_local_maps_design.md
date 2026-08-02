@@ -10,6 +10,14 @@
 > `RegionGeometry` (per-region local `(s,t)` ↔ sphere maps: `local_to_ecef`,
 > `local_to_lonlat`, `sample_grid`). The map viewer's region overlay and the
 > zoomed-in `RegionView` (`viz/mapview/regionview.py`) both build on it.
+>
+> A region is **not** meshed at depth 6/7 as sketched below. Its local square is
+> tiled with hexagons (`region/grid.py`), each carrying a square texture that
+> over-hangs it — the globe's face model one level down, and the footprint for a
+> future local map. `region/upsample.py` fills those textures with elevation,
+> climate and biome by the upsample + zero-mean-perturbation recipe in this
+> document, enforced exactly (`conservation_report`). Hydrology, resources, cost
+> and realmgen inside a region are still to do. Reference: [docs/region.md](../region.md).
 
 ## Purpose & Scope
 
@@ -427,15 +435,15 @@ World save/load in `main.py` (`save_world` / `load_world`) already iterate over 
 
 ### Phase 1: Region Mesh & Boundary Sampling
 
-- [ ] Create region mesh (icosphere depth 6, clipped to region boundary)
-- [ ] Implement boundary interpolation (sample global elevation, climate, hydrology at region edge)
-- [ ] Test: generate one region, verify elevation/climate are continuous at boundaries
+- [x] Create the region's working surface — a hex grid with per-hex textures (`region/grid.py`), not a clipped icosphere
+- [x] Implement global-field sampling (`region/sampling.py`: nearest-face location, bilinear read, anchor assignment)
+- [x] Test: `region/test/test_grid.py`, `region/test/test_sampling.py`
 
 ### Phase 2: Elevation & Climate Detail Generation
 
-- [ ] Implement elevation detail generation (simplex noise at local resolution, boundary-constrained)
-- [ ] Implement climate detail generation (temperature/precipitation, lapse rate, boundary-constrained)
-- [ ] Test: verify elevation is smooth across boundaries, climate is plausible
+- [x] Implement elevation detail generation (band-limited fBm, slope-proportional, aggregate-conserving)
+- [x] Implement climate detail generation (lapse rate off the refined relief; multiplicative precipitation detail; biome reclassified)
+- [x] Test: `region/test/test_upsample.py` pins the conservation invariant; `scripts/debug_region.py` is the visual check
 
 ### Phase 3: Hydrology & Resources
 
@@ -451,9 +459,9 @@ World save/load in `main.py` (`save_world` / `load_world`) already iterate over 
 
 ### Phase 5: UX Integration
 
-- [ ] Add region boundary overlay to global map
-- [ ] Add "select region" interaction (click region → generate on demand)
-- [ ] Add region map display (same viewer as global, but scoped to region mesh)
+- [x] Add region boundary overlay to global map
+- [x] Add "select region" interaction (click region → generate on demand)
+- [x] Add region map display (`RegionView` + a Layer combo: Terrain / Elevation / Temperature / Precipitation)
 - [ ] Add zoom-to-local interaction within region maps
 - [ ] Test: selection flow, generation background task, cache loading
 

@@ -133,7 +133,7 @@ def elevation_legend_entries(n: int = 5) -> list[tuple[str, tuple]]:
     return entries
 
 
-def _elevation_color_vec(elevs: np.ndarray, ocean_mask: np.ndarray | None = None) -> np.ndarray:
+def elevation_rgba(elevs: np.ndarray, ocean_mask: np.ndarray | None = None) -> np.ndarray:
     """Vectorized elevation coloring with separate ocean and land scales.
 
     Args:
@@ -160,5 +160,5 @@ def build_elevation_display_texture(mesh) -> np.ndarray:
     ocean_mask = None
     if "ocean_mask" in mesh.face_textures:
         ocean_mask = mesh.face_textures["ocean_mask"][:, :, :, 0] > 0  # (N, H, W) bool
-    rgba = _elevation_color_vec(elev_tex[:, :, :, 0], ocean_mask=ocean_mask)  # (N, H, W, 4)
+    rgba = elevation_rgba(elev_tex[:, :, :, 0], ocean_mask=ocean_mask)  # (N, H, W, 4)
     return apply_water_masks(rgba, lake_mask_tex=mesh.face_textures.get("lake_mask"))

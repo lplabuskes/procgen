@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QBrush, QColor, QImage, QLinearGradient, QPainter, QPen, QPolygonF, QTransform
 from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QHBoxLayout,
     QLabel,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.antimeridian import find_ideal_antimeridian
+from region.display import REGION_LAYERS
 from region.geometry import RegionGeometry, cell_border_polylines, ecef_to_cell
 from viz.mapview.projections import ALL_PROJECTIONS, RobinsonProjection, Projection
 from viz.mapview.regionview import RegionView
@@ -291,6 +293,14 @@ class MapWidget(QWidget):
     def set_globe(self, globe: "World") -> None:
         self._globe = globe
         self.set_mesh(globe.mesh, antimeridian=globe.antimeridian)
+
+    @property
+    def globe(self) -> Optional["World"]:
+        return self._globe
+
+    @property
+    def antimeridian(self) -> float:
+        return self._antimeridian
 
     def set_overlay_visible(self, name: str, visible: bool) -> None:
         self._overlay_visible[name] = visible
@@ -1380,6 +1390,15 @@ class MapWindow(QMainWindow):
         self._back_btn.setVisible(False)
         toolbar_layout.addWidget(self._back_btn)
 
+        self._layer_label = QLabel("Layer:")
+        self._layer_combo = QComboBox()
+        for layer in REGION_LAYERS:
+            self._layer_combo.addItem(layer)
+        self._layer_label.setVisible(False)
+        self._layer_combo.setVisible(False)
+        toolbar_layout.addWidget(self._layer_label)
+        toolbar_layout.addWidget(self._layer_combo)
+
         toolbar_layout.addStretch()
 
         zoom_out_btn = QPushButton("−")
@@ -1399,6 +1418,7 @@ class MapWindow(QMainWindow):
         bottom_toolbar = QWidget()
         bottom_layout = QHBoxLayout(bottom_toolbar)
         bottom_layout.setContentsMargins(0, 0, 0, 0)
+        self._prev_status = ""
         self._status_label = QLabel("")
         self._status_label.setStyleSheet("color: #aaaaaa; font-size: 11px;")
         bottom_layout.addWidget(self._status_label)
@@ -1415,6 +1435,7 @@ class MapWindow(QMainWindow):
         self._map = MapWidget()
         self._region_view = RegionView()
         self._color_combo.currentTextChanged.connect(self._map.set_color_scheme)
+        self._layer_combo.currentTextChanged.connect(self._region_view.set_layer)
         self._region_btn.toggled.connect(self._map.set_region_mode)
         self._map.set_region_click_callback(self._enter_region)
         self._back_btn.clicked.connect(self._exit_region)
@@ -1435,21 +1456,43 @@ class MapWindow(QMainWindow):
         self._map.set_mesh(mesh)
 
     def set_globe(self, globe: "World") -> None:
+        # A re-run replaces the world under our feet; any region on screen is now
+        # stale, so drop back to the world map rather than show old detail.
+        if self._stack.currentWidget() is self._region_view:
+            self._exit_region()
         self._map.set_globe(globe)
 
     def _enter_region(self, region_id: int) -> None:
-        """Switch from the world map to the zoomed-in view of a clicked region."""
-        geometry = RegionGeometry(region_id, self._map._antimeridian)
-        self._region_view.set_region(geometry)
+        """Switch from the world map to the zoomed-in view of a clicked region.
+
+        Refinement runs synchronously — it is a few hundred thousand samples, well
+        under a second — behind a busy cursor.
+        """
+        geometry = RegionGeometry(region_id, self._map.antimeridian)
+        prev_status = self._status_label.text()
+        self.set_status(f"Refining region {region_id}…")
+        QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
+        try:
+            self._region_view.set_region(geometry, self._map.globe)
+        finally:
+            QApplication.restoreOverrideCursor()
+        self._prev_status = prev_status
+        self.set_status(self._region_view.status_text())
         self._stack.setCurrentWidget(self._region_view)
         self._region_btn.setVisible(False)
         self._back_btn.setVisible(True)
+        has_layers = self._region_view.fields is not None
+        self._layer_label.setVisible(has_layers)
+        self._layer_combo.setVisible(has_layers)
 
     def _exit_region(self) -> None:
         """Return from the zoomed-in region view to the world map."""
         self._stack.setCurrentWidget(self._map)
         self._back_btn.setVisible(False)
         self._region_btn.setVisible(True)
+        self._layer_label.setVisible(False)
+        self._layer_combo.setVisible(False)
+        self.set_status(self._prev_status)
 
     def set_status(self, text: str) -> None:
         self._status_label.setText(text)
