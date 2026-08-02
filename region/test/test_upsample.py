@@ -7,15 +7,17 @@ from region.upsample import (
     _box_filter,
     build_region_fields,
     conservation_report,
+    flood_to_level,
     global_slope,
 )
 
-REGION_ID = 20
+REGION_ID = 40   # the region conftest carves its lake into: coast *and* a lake
+BIOME_REGION = 20  # region 40's synthetic climate is all one biome; this one is not
 TEX_SIZE = 16
 
 
 def _params(**overrides) -> RegionUpsampleParams:
-    base = dict(n_cols=6, tex_size=TEX_SIZE)
+    base: dict = dict(n_cols=6, tex_size=TEX_SIZE)
     base.update(overrides)
     return RegionUpsampleParams(**base)
 
@@ -89,11 +91,121 @@ def test_detail_follows_slope(synthetic_globe):
     assert detail[steep].mean() > detail[gentle].mean()
 
 
-def test_masks_come_verbatim_from_the_anchor(fields, synthetic_globe):
-    """The coastline is a global fact — regional texels copy it exactly."""
-    ocean = synthetic_globe.mesh.face_textures["ocean_mask"].reshape(-1, 1)
-    expected = ocean[fields.anchors.reshape(-1), 0]
-    assert np.array_equal(fields.textures["ocean_mask"].reshape(-1), expected)
+def _anchor_mask(fields, globe, key) -> np.ndarray:
+    """The global mask, read at each regional texel's anchor — the unrefined answer."""
+    tex = np.asarray(globe.mesh.face_textures[key]).reshape(-1, 1)
+    return tex[fields.anchors.reshape(-1), 0] > 0.5
+
+
+def test_masks_are_verbatim_when_refinement_is_off(synthetic_globe):
+    """``refine_water_masks=False`` restores the blocky global coastline."""
+    fields = build_region_fields(
+        synthetic_globe, REGION_ID, _params(refine_water_masks=False)
+    )
+    for key in ("ocean_mask", "lake_mask"):
+        assert np.array_equal(
+            fields.textures[key].reshape(-1) > 0.5, _anchor_mask(fields, synthetic_globe, key)
+        )
+
+
+def test_the_ocean_ends_at_sea_level_on_the_refined_relief(fields):
+    """Water may only stand where the *refined* ground is below its surface."""
+    from region.upsample import SEA_LEVEL_KM
+    elev = fields.textures["elevation"].reshape(-1)
+    ocean = fields.textures["ocean_mask"].reshape(-1) > 0.5
+    assert np.all(elev[ocean] <= SEA_LEVEL_KM)
+
+
+def test_the_coastline_moves_both_ways(fields, synthetic_globe):
+    """Sub-grid rises dry out global ocean texels; sub-grid hollows flood land ones."""
+    anchor = _anchor_mask(fields, synthetic_globe, "ocean_mask")
+    ocean = fields.textures["ocean_mask"].reshape(-1) > 0.5
+    assert (anchor & ~ocean).sum() > 0        # islands and spits
+    assert (~anchor & ocean).sum() > 0        # bays and inlets
+    # …but the shore only *moves*, it does not migrate: the two maps still agree
+    # almost everywhere.
+    assert (anchor != ocean).mean() < 0.05
+
+
+def test_water_does_not_advance_when_the_spread_is_zero(synthetic_globe):
+    """Zero spread still dries islands, but nothing the globe called land floods."""
+    fields = build_region_fields(synthetic_globe, REGION_ID, _params(water_spread_texels=0))
+    for key in ("ocean_mask", "lake_mask"):
+        water = fields.textures[key].reshape(-1) > 0.5
+        assert np.all(_anchor_mask(fields, synthetic_globe, key)[water])
+
+
+def test_the_lake_keeps_its_global_surface(fields, synthetic_globe):
+    """A lake's fill level is a global fact; only its shoreline is refined."""
+    lake = fields.textures["lake_mask"].reshape(-1) > 0.5
+    anchor = _anchor_mask(fields, synthetic_globe, "lake_mask")
+    assert anchor.sum() > 50 and lake.sum() > 50
+    surface = np.asarray(synthetic_globe.mesh.face_textures["filled_height"]).reshape(-1)[
+        np.asarray(synthetic_globe.mesh.face_textures["lake_mask"]).reshape(-1) > 0.5
+    ].max()
+    assert np.all(fields.textures["elevation"].reshape(-1)[lake] <= surface)
+    assert (lake != anchor).sum() > 0                     # the shore did move
+    assert 0.5 < lake.sum() / anchor.sum() < 2.0          # but the lake is still the lake
+
+
+def test_lakes_fall_back_to_the_anchor_without_a_fill_height(synthetic_globe):
+    """A world with no hydrology stage has no lake surface to flood to."""
+    import copy
+    bare = copy.copy(synthetic_globe)
+    bare.mesh = copy.copy(synthetic_globe.mesh)
+    bare.mesh.face_textures = {
+        k: v for k, v in synthetic_globe.mesh.face_textures.items() if k != "filled_height"
+    }
+    fields = build_region_fields(bare, REGION_ID, _params())
+    assert np.array_equal(
+        fields.textures["lake_mask"].reshape(-1) > 0.5, _anchor_mask(fields, bare, "lake_mask")
+    )
+
+
+def test_shallow_water_damping_only_touches_submerged_ground():
+    from region.upsample import _shallow_water_damping
+    params = _params(water_relief_depth_km=0.1)
+    depth = np.array([np.inf, 1.0, 0.1, 0.05, 0.0, -0.2])   # inf = dry land
+    damping = _shallow_water_damping(depth, params)
+    assert damping.tolist() == [1.0, 1.0, 1.0, 0.5, 0.0, 0.0]
+    # Disabled, every texel gets the full amplitude again.
+    assert np.all(_shallow_water_damping(depth, _params(water_relief_depth_km=0.0)) == 1.0)
+
+
+def test_shallow_lake_beds_do_not_dither(synthetic_globe):
+    """The whole point of the fade: a lake keeps its body, not just its outline.
+
+    Undamped noise re-emerges through the shallow margins of a lake and the mask,
+    being a threshold on the refined elevation, breaks the water into speckle.
+    """
+    def dried(**overrides) -> float:
+        f = build_region_fields(synthetic_globe, REGION_ID, _params(**overrides))
+        anchor = _anchor_mask(f, synthetic_globe, "lake_mask")
+        return float((anchor & ~(f.textures["lake_mask"].reshape(-1) > 0.5)).mean())
+
+    assert dried() < dried(water_relief_depth_km=0.0)
+
+
+def test_ocean_and_lake_never_overlap(fields):
+    ocean = fields.textures["ocean_mask"] > 0.5
+    lake = fields.textures["lake_mask"] > 0.5
+    assert not np.any(ocean & lake)
+
+
+def test_flood_to_level_stops_at_a_ridge():
+    """Water crosses low ground but not a bar above its surface, and only so far."""
+    elevation = np.array([[[-1.0, -0.5, 0.4, -0.2, -0.3, -0.4]]])   # (1, 1, 6)
+    seed = np.array([[[True, False, False, False, False, False]]])
+    level = np.zeros_like(elevation)
+    filled = flood_to_level(elevation, seed, level, iterations=10)
+    assert filled.tolist() == [[[True, True, False, False, False, False]]]
+    # Lower the bar and the water runs the length of the valley…
+    elevation[0, 0, 2] = -0.1
+    assert flood_to_level(elevation, seed, level, 10).all()
+    # …but no further than `iterations` texels per pass.
+    assert flood_to_level(elevation, seed, level, 2).tolist() == [
+        [[True, True, True, False, False, False]]
+    ]
 
 
 def test_biome_indices_are_valid(fields):
@@ -121,8 +233,8 @@ def test_biome_smoothing_cleans_the_boundaries(synthetic_globe):
     The classifier is a hard threshold and the refined temperature swings ~1 °C
     texel-to-texel, so near a cut neighbouring texels land on opposite sides.
     """
-    rough = build_region_fields(synthetic_globe, REGION_ID, _params(biome_smoothing=0))
-    smooth = build_region_fields(synthetic_globe, REGION_ID, _params())
+    rough = build_region_fields(synthetic_globe, BIOME_REGION, _params(biome_smoothing=0))
+    smooth = build_region_fields(synthetic_globe, BIOME_REGION, _params())
     assert _biome_edge_fraction(smooth) < _biome_edge_fraction(rough)
 
 

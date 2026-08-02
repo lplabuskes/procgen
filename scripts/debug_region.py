@@ -81,6 +81,28 @@ def draw_region(ax, fields: RegionFields, layer: str, title: str) -> None:  # ty
     ax.set_title(title, fontsize=10)
 
 
+def report_shoreline(fields: RegionFields, world) -> None:  # type: ignore[no-untyped-def]
+    """How far the refined water masks moved off the global ones.
+
+    The water *surface* is taken from the globe, so the only thing that may
+    change is the shape of the shore.  A large number here means the refined
+    relief is fighting the global masks — a few percent is the expected
+    sub-texel wiggle.
+    """
+    anchors = fields.anchors.reshape(-1)
+    for key in ("ocean_mask", "lake_mask"):
+        if key not in fields.textures or key not in world.mesh.face_textures:
+            continue
+        refined = fields.textures[key].reshape(-1) > 0.5
+        coarse = np.asarray(world.mesh.face_textures[key]).reshape(-1)[anchors] > 0.5
+        inside = fields.in_hex.reshape(-1)
+        gained = (refined & ~coarse)[inside].mean()
+        lost = (~refined & coarse)[inside].mean()
+        print(f"  {key}: {refined[inside].mean():>6.2%} of the region "
+              f"(global {coarse[inside].mean():.2%}) · "
+              f"flooded {gained:.2%}, dried {lost:.2%}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -107,9 +129,13 @@ def main() -> None:
     if args.relief is not None:
         params.relief_factor = args.relief
 
+    # The honest "no refinement" baseline: no added relief, and the water masks
+    # copied from the anchor texel, so the left panel shows the global coastline
+    # at its native blockiness.
     coarse_params = RegionUpsampleParams(**vars(params))
     coarse_params.relief_factor = 0.0
     coarse_params.orographic_gain = 0.0
+    coarse_params.refine_water_masks = False
 
     refined = build_region_fields(world, region_id, params)
     coarse = build_region_fields(world, region_id, coarse_params)
@@ -123,6 +149,7 @@ def main() -> None:
           f"(~{refined.texel_area_km2:.1f} km²/texel, {refined.detail_octaves} detail octaves)")
     print(f"  added relief: std {delta.std() * 1000:.0f} m "
           f"(land {delta[land_mask].std() * 1000:.0f} m), max {np.abs(delta).max() * 1000:.0f} m")
+    report_shoreline(refined, world)
     print("  conservation residual per global texel (downsample must recover the globe):")
     for name, stats in conservation_report(refined, world).items():
         print(f"    {name:<14} max {stats['max']:.3e}  mean {stats['mean']:.3e}  "

@@ -24,7 +24,8 @@ Field-by-field:
 
 - **Elevation** — slope-proportional fBm.  Amplitude follows the local gradient
   of the coarse field (flat plains stay flat, mountains get rugged), with a floor
-  so nowhere is glassy.  Conserved additively.
+  so nowhere is glassy, and fades out under shallow water so a lake bed cannot
+  poke back through its own surface.  Conserved additively.
 - **Temperature** — no noise: the refined elevation drives a lapse-rate
   correction, which is exactly the physical signal a finer grid should reveal.
   Conserved additively.
@@ -33,9 +34,13 @@ Field-by-field:
   multiplicatively so values stay positive.
 - **Biome** — reclassified per regional texel from the refined climate, using the
   same classifier the global stage uses.
-- **Ocean / lake masks** — taken from the anchor texel verbatim.  The coastline is
-  defined at global resolution; refining it would move the shoreline and break
-  continuity with the world map.
+- **Ocean / lake masks** — re-flooded against the refined relief.  A water body's
+  *surface* is a global fact (the ocean sits at sea level, a lake at the fill
+  level Priority-Flood gave it), so the level is taken verbatim from the globe and
+  only the shoreline moves: a regional texel is water when the refined elevation
+  lies below the surface of a water body it is connected to.  This is the same
+  level-constrained flood fill ``compute_ocean_mask_texture`` runs on the global
+  grid, seeded from the global mask instead of from deep-ocean faces.
 
 The detail band is honest about resolution: octaves start at the global grid's
 Nyquist and stop at the regional grid's, so a region no finer than the globe
@@ -60,6 +65,10 @@ if TYPE_CHECKING:
     from core.world import World
 
 EARTH_RADIUS_KM = 6371.0
+
+# The elevation the global stages call the shore (worldgen.geology.elevation and
+# worldgen.hydrology.builder both hard-code it).
+SEA_LEVEL_KM = 0.0
 
 # Elevation is the only field with a noise stream; see the module docstring.
 _SEED_SALT_ELEVATION = 0x9E37
@@ -90,6 +99,20 @@ class RegionUpsampleParams:
         0.5, label="Orographic precip gain (/km)", min=0.0, max=3.0, step=0.05
     )
     lapse_rate_c_per_km: float = _f(6.5, label="Lapse rate (°C/km)", min=0.0, max=15.0)
+    # Sub-grid relief fades out under water as the depth runs out, so a shallow
+    # lake bed cannot poke back through its own surface.  0.1 km clears the real
+    # lake-depth distribution (median ~40 m); 0 disables the fade.
+    water_relief_depth_km: float = _f(
+        0.1, label="Underwater detail fade (km)", min=0.0, max=2.0, step=0.05
+    )
+    # Water surfaces are global facts; only the shoreline is refined.  Off, the
+    # masks are copied from the anchor texel and the coast stays blocky.
+    refine_water_masks: bool = _f(True, label="Refine shoreline", min=0, max=1)
+    # How far water may advance into a texel the globe called land, in regional
+    # texels.  The refined shoreline should stay inside the global texels the
+    # coast already runs through, so this wants to be about one global texel —
+    # ~4 regional texels at the default resolutions.
+    water_spread_texels: int = _f(4, label="Shoreline spread (texels)", min=0, max=16)
     # Biome is a hard threshold classifier, and the refined temperature swings
     # ~1 °C between neighbouring texels — enough to fray every boundary into a
     # dithered band.  A biome is a property of a neighbourhood rather than of one
@@ -203,6 +226,80 @@ def _effective_slope(slope: np.ndarray, params: RegionUpsampleParams) -> np.ndar
     return ref * (floor + (1.0 - floor) * norm)
 
 
+def _shallow_water_damping(depth: np.ndarray, params: RegionUpsampleParams) -> np.ndarray:
+    """Fade the detail out as the water above the ground shallows (1 = full detail).
+
+    Without this, refining the masks turns every shallow lake into confetti.  A
+    lake bed sits within a few tens of metres of its own surface (median depth on
+    a real world is ~40 m, against ~15–30 m of sub-grid relief), so zero-mean
+    noise pokes half of it back into the air and the mask, being a threshold on
+    the refined elevation, dithers across the whole water body rather than only
+    along its shore.
+
+    Scaling the amplitude by the depth keeps the bump strictly smaller than the
+    water it sits under, so shallow water stays water and only the *edge* — where
+    the depth genuinely runs out — moves.  It costs nothing visible: submerged
+    relief is painted over by the water anyway.  The deep ocean (median 3.4 km) is
+    far past the fade and keeps its full detail.
+    """
+    scale = float(params.water_relief_depth_km)
+    if scale <= 0.0:
+        return np.ones_like(depth)
+    return np.clip(depth / scale, 0.0, 1.0)
+
+
+# ── water masks ──────────────────────────────────────────────────────────────
+
+
+def _neighbour_min(values: np.ndarray) -> np.ndarray:
+    """Per-texel minimum over the 4 neighbours of an ``(M, T, T)`` array (edge replicates)."""
+    padded = np.pad(values, ((0, 0), (1, 1), (1, 1)), mode="edge")
+    return np.minimum(
+        np.minimum(padded[:, :-2, 1:-1], padded[:, 2:, 1:-1]),
+        np.minimum(padded[:, 1:-1, :-2], padded[:, 1:-1, 2:]),
+    )
+
+
+def flood_to_level(
+    elevation: np.ndarray,
+    seed: np.ndarray,
+    level: np.ndarray,
+    iterations: int,
+    blocked: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Grow water from ``seed`` texels into neighbours that lie below its surface.
+
+    All arrays are ``(M, T, T)`` over the region's hex textures.  ``seed`` marks
+    the texels the *global* mask calls water and ``level`` carries that water
+    body's surface elevation (km); a seed texel is water only if the refined
+    ``elevation`` is still below its own surface, which is what lets a sub-grid
+    rise inside a global water texel emerge as an island.
+
+    Growth is a level-constrained flood — the same rule
+    ``worldgen.geology.elevation.compute_ocean_mask_texture`` uses one level up —
+    so water spreads through low ground but stops at any ridge above the surface,
+    rather than teleporting over it the way a plain dilation would.  ``iterations``
+    caps how far it can travel; ``blocked`` texels are never taken (they belong to
+    another water body).
+
+    Each hex texture is flooded on its own.  The textures over-hang their
+    hexagons, so the visible area is grown from real neighbouring data as long as
+    ``iterations`` stays well inside the over-hang.
+    """
+    elev = np.asarray(elevation, dtype=np.float64)
+    water = np.asarray(seed, dtype=bool) & (elev <= level)
+    water_level = np.where(seed, level, np.inf)
+    forbidden = np.zeros_like(water) if blocked is None else np.asarray(blocked, dtype=bool)
+    for _ in range(max(int(iterations), 0)):
+        nbr = _neighbour_min(np.where(water, water_level, np.inf))
+        grow = ~water & ~forbidden & np.isfinite(nbr) & (elev <= nbr)
+        if not grow.any():
+            break
+        water_level = np.where(grow, np.minimum(water_level, nbr), water_level)
+        water |= grow
+    return water
+
+
 # ── conservation ─────────────────────────────────────────────────────────────
 
 
@@ -238,6 +335,110 @@ def conserve_multiplicative(
 
 
 # ── the pipeline ─────────────────────────────────────────────────────────────
+
+
+@dataclass
+class _AnchorWater:
+    """What the globe says about the water at each regional texel's anchor.
+
+    ``surface`` is the water-surface elevation (km) — sea level under the ocean,
+    the Priority-Flood fill height under a lake — and ``+inf`` where there is no
+    water, or where a lake's level is unknown because the world has no hydrology.
+    All arrays are flat ``(P,)`` over the region's texels.
+    """
+
+    ocean: np.ndarray
+    lake: np.ndarray
+    surface: np.ndarray
+    # Which of the globe's textures actually existed — a region must not invent a
+    # mask the world map does not have.
+    has_ocean: bool
+    has_lake: bool
+    has_lake_levels: bool
+
+    def depth(self, elevation: np.ndarray) -> np.ndarray:
+        """How deep the water stands over ``elevation`` (km).
+
+        ``+inf`` on dry ground (no surface above it) and negative where ground
+        already pokes out of a water texel, so callers can treat "deep" and "not
+        underwater at all" the same way.
+        """
+        return self.surface - elevation
+
+
+def _anchor_water(
+    mesh: "PolygonMesh", sampler: GlobalSampler, anchors: np.ndarray
+) -> _AnchorWater:
+    """Read the global water masks and their surface elevations at every anchor."""
+    n = len(anchors)
+    zeros = np.zeros(n, dtype=bool)
+
+    def _mask(key: str) -> np.ndarray:
+        if key not in mesh.face_textures:
+            return zeros
+        return sampler.anchor_values(mesh.face_textures[key], anchors)[:, 0] > 0.5
+
+    ocean, lake = _mask("ocean_mask"), _mask("lake_mask")
+    surface = np.full(n, np.inf)
+    surface[ocean] = SEA_LEVEL_KM
+    filled = mesh.face_textures.get("filled_height")
+    if filled is not None:
+        levels = sampler.anchor_values(filled, anchors)[:, 0]
+        surface[lake] = levels[lake]
+    return _AnchorWater(
+        ocean=ocean,
+        lake=lake,
+        surface=surface,
+        has_ocean="ocean_mask" in mesh.face_textures,
+        has_lake="lake_mask" in mesh.face_textures,
+        has_lake_levels=filled is not None,
+    )
+
+
+def _refine_water_masks(
+    water: _AnchorWater,
+    elevation: np.ndarray,
+    params: RegionUpsampleParams,
+) -> dict[str, np.ndarray]:
+    """Re-flood ``ocean_mask``/``lake_mask`` against the ``(M, T, T)`` refined relief.
+
+    Each water body keeps the surface elevation the globe gave it — sea level for
+    the ocean, the Priority-Flood fill height for a lake — so the two tiers agree
+    on *where the water is*, and disagree only on the sub-texel shape of the
+    shore.  Ocean and lake are flooded separately and neither may take the
+    other's texels, which keeps a coastal lake sitting below sea level from being
+    swallowed by the sea it is walled off from on the world map.
+
+    A lake's surface lives in the ``filled_height`` texture the hydrology stage
+    writes; without it (a world built with elevation only) lakes fall back to the
+    anchor mask verbatim.
+    """
+    shape = elevation.shape
+    masks: dict[str, np.ndarray] = {}
+    refine = bool(params.refine_water_masks)
+    spread = int(params.water_spread_texels)
+    ocean_seed = water.ocean.reshape(shape)
+    lake_seed = water.lake.reshape(shape)
+
+    ocean = ocean_seed
+    if refine and water.has_ocean:
+        ocean = flood_to_level(
+            elevation, ocean_seed, np.full(shape, SEA_LEVEL_KM), spread, blocked=lake_seed
+        )
+    if water.has_ocean:
+        masks["ocean_mask"] = ocean[..., None].astype(np.float32)
+
+    if water.has_lake:
+        if refine and water.has_lake_levels:
+            lake = flood_to_level(
+                elevation, lake_seed, water.surface.reshape(shape), spread, blocked=ocean_seed
+            )
+            lake &= ~ocean
+        else:
+            lake = lake_seed
+        masks["lake_mask"] = lake[..., None].astype(np.float32)
+
+    return masks
 
 
 def build_region_fields(
@@ -285,6 +486,7 @@ def build_region_fields(
 
     slope = sampler.sample(global_slope(mesh, elev_tex), faces, u, v)[:, 0]
     eff_slope = _effective_slope(slope, params)
+    water = _anchor_water(mesh, sampler, anchors)
 
     textures: dict[str, np.ndarray] = {}
 
@@ -294,7 +496,7 @@ def build_region_fields(
     amplitude = np.clip(
         float(params.relief_factor) * feature_length_km * eff_slope,
         0.0, float(params.max_relief_km),
-    )
+    ) * _shallow_water_damping(water.depth(elev_coarse[:, 0]), params)
     elevation = elev_coarse + (noise * amplitude)[:, None]
     elevation = conserve_additive(
         elevation, anchors, sampler.anchor_values(elev_tex, anchors), weights, n_anchors
@@ -305,14 +507,12 @@ def build_region_fields(
     # ~Zero-mean inside each anchor group, so it perturbs without biasing.
     relief_anomaly = elevation[:, 0] - elev_coarse[:, 0]
 
-    # ── masks (verbatim from the anchor — the coastline is a global fact) ────
-    for key in ("ocean_mask", "lake_mask"):
-        if key in mesh.face_textures:
-            mask_tex = mesh.face_textures[key]
-            values = sampler.anchor_values(mask_tex, anchors)
-            textures[key] = values.reshape(
-                m, tex_size, tex_size, mask_tex.shape[3]
-            ).astype(np.float32)
+    # ── water masks: the water surface is global, the shoreline is refined ───
+    textures.update(
+        _refine_water_masks(
+            water, elevation[:, 0].reshape(m, tex_size, tex_size), params
+        )
+    )
 
     # ── temperature: lapse rate on the refined relief ────────────────────────
     if "temperature" in mesh.face_textures:

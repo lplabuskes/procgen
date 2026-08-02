@@ -16,7 +16,12 @@
 > over-hangs it — the globe's face model one level down, and the footprint for a
 > future local map. `region/upsample.py` fills those textures with elevation,
 > climate and biome by the upsample + zero-mean-perturbation recipe in this
-> document, enforced exactly (`conservation_report`). Hydrology, resources, cost
+> document, enforced exactly (`conservation_report`). The ocean and lake masks
+> are **re-flooded** rather than conserved: a water body keeps the surface
+> elevation the globe gave it (sea level, or Priority-Flood's `filled_height`)
+> and its shoreline is re-cut against the refined relief — the one place a
+> region legitimately disagrees with the world map, because a binary mask cannot
+> average. Hydrology, resources, cost
 > and realmgen inside a region are still to do. Reference: [docs/region.md](../region.md).
 
 ## Purpose & Scope
@@ -443,6 +448,7 @@ World save/load in `main.py` (`save_world` / `load_world`) already iterate over 
 
 - [x] Implement elevation detail generation (band-limited fBm, slope-proportional, aggregate-conserving)
 - [x] Implement climate detail generation — elevation is the only noise source; temperature follows it by lapse rate and precipitation by an orographic response, and biome is reclassified from an area-average of the two (an independent noise stream in either input frays the classifier's boundaries)
+- [x] Refine the ocean and lake masks — the water surface is copied from the globe, the shoreline is re-flooded over the refined relief, and sub-grid relief fades out with the water depth so shallow lakes keep their body instead of dithering
 - [x] Test: `region/test/test_upsample.py` pins the conservation invariant; `scripts/debug_region.py` is the visual check
 
 ### Phase 3: Hydrology & Resources

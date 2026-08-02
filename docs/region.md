@@ -86,7 +86,7 @@ bands on the contours instead.
 | `temperature` | lapse rate on the refined relief | additively |
 | `precipitation` | orographic response to the refined relief (`orographic_gain`, per km) | multiplicatively (stays positive) |
 | `biome` | reclassified from the **area-averaged** refined climate | derived |
-| `ocean_mask`, `lake_mask` | none — copied from the anchor texel | exact by construction |
+| `ocean_mask`, `lake_mask` | re-flooded to the global water surface over the refined relief | surface exact; shoreline refined |
 
 **Why biome averages.** The refined temperature swings ~1 °C between adjacent
 ~4 km texels (mean \|Laplacian\| 0.63 °C vs the coarse field's 0.068 °C), which is
@@ -97,6 +97,30 @@ neighbourhood rather than of a single texel, so `classify_textures` reads a
 texels adjacent to a biome change from 9.2% back to 2.7% against a 2.1%
 no-refinement reference, while 1.2% of texels still change biome because of the
 terrain. `biome_smoothing=0` disables it.
+
+**Water masks.** A water body's *surface* is a global fact — the ocean sits at
+sea level, a lake at the fill height Priority-Flood gave it (`filled_height`) —
+so the level is copied from the globe and only the shoreline moves. Each texel is
+water when its **refined** elevation lies below the surface of a body it is
+connected to: the same level-constrained flood
+`compute_ocean_mask_texture` runs one tier up, seeded from the global mask
+instead of from deep-ocean faces. Water may cross low ground into up to
+`water_spread_texels` texels the globe called land (≈ one global texel at the
+defaults) but never over a rise above its surface; ocean and lake are flooded
+separately and neither may take the other's texels, so a coastal lake below sea
+level is not swallowed by the sea it is walled off from. `refine_water_masks=0`
+restores the verbatim anchor copy. On seed 4 region 49 the coast gains 0.14% of
+the region and loses 0.17% — bays and inlets against islands and spits.
+
+**Why the detail fades out under water.** Lakes are *shallow* (median ~40 m of
+water over the bed on a real world) against ~15–30 m of sub-grid relief, so
+zero-mean noise pokes half a lake bed back into the air and the refined mask —
+a threshold on the refined elevation — dithers the whole water body into
+confetti rather than only rearranging its shore. Detail amplitude is therefore
+scaled by the water depth over `water_relief_depth_km` (0.1 km), which keeps the
+bump strictly smaller than the water above it. The deep ocean (median 3.4 km) is
+far past the fade and keeps its full detail, and submerged relief is painted over
+by the water anyway. `debug_region.py` prints the flooded/dried percentages.
 
 **Detail band.** Octaves run from the global grid's Nyquist
 (`0.5 / global texel spacing`) up to the regional grid's
@@ -120,9 +144,10 @@ pins it.
 
 ### `RegionUpsampleParams`
 `n_cols`, `tex_size`, `relief_factor`, `slope_reference`, `slope_floor`,
-`max_relief_km`, `orographic_gain`, `lapse_rate_c_per_km`, `biome_smoothing`, `octaves`,
-`lacunarity`, `persistence`, `nyquist_safety` — a `paramclass`, so it is
-dialog-ready.
+`max_relief_km`, `orographic_gain`, `lapse_rate_c_per_km`,
+`water_relief_depth_km`, `refine_water_masks`, `water_spread_texels`,
+`biome_smoothing`, `octaves`, `lacunarity`, `persistence`, `nyquist_safety` — a
+`paramclass`, so it is dialog-ready.
 
 ### `RegionFields`
 `region_id`, `geometry`, `grid`, `tex_size`, `positions (M,T,T,3)`,
