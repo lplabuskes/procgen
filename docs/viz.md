@@ -39,7 +39,7 @@ Splits a unit-sphere polygon at a cut meridian.
 
 **Texture scheme association**: `associate_scheme_texture(scheme_name, texture_key)` binds a named `mesh.face_textures` key to a color scheme. When that scheme is active, `_rebuild_textures` reads the bound texture rather than the first one.
 
-**Overlays** (drawn in `paintEvent` after faces, with antialiasing on):
+**Overlays** (drawn in `paintEvent` after faces, with antialiasing on). The renderers live in `viz/mapview/overlays.py` and are shared with `RegionView`: `draw_overlays(painter, globe, visible, projector)` draws every visible overlay in a fixed order, and each view supplies an `OverlayProjector` — `zoom` (for sizing), `points`, `segments` (with a keep mask), `split_segment` (trade routes) and `polygons`. The world map's `_WorldProjector` projects through the map projection and drops/splits at the antimeridian; the region view's `_RegionProjector` goes through the cell's local frame. Marker sizes, line widths and wind/current arrow lengths scale with the projector's `zoom`:
 | Feature key | Renderer |
 |---|---|
 | `"rivers"` | Polyline segments; width ∝ √flow (0.5–4 px); in-lake segments hidden; antimeridian skip |
@@ -80,7 +80,7 @@ Hosts `MapWidget` with a toolbar and bottom bar.
 - `set_globe(world)` / `set_mesh(mesh)` — forwarded to `MapWidget`
 - `set_color_schemes(schemes)` — updates combo; preserves previously active scheme if still present
 - `set_active_scheme(name)` — programmatic scheme switch
-- `add_overlay(name, label, checked)` — idempotent; adds to Overlays menu on first call
+- `add_overlay(name, label, checked)` — idempotent; adds to Overlays menu on first call; one toggle drives both the world map and the region view
 - `register_legend(scheme_name, kind, entries)` — forwarded to `MapWidget`
 - `associate_scheme_texture(scheme_name, texture_key)` — forwarded to `MapWidget`
 - `set_hover_parts(fn)` — `fn(face, uv, local) -> list[str]` status fragments, joined into the status bar by both views; the region view passes `local` (see `DisplayRegistry.hover`) to substitute refined texel values for contributors tagged `refined=`

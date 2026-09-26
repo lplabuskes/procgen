@@ -3,13 +3,15 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import numpy as np  # noqa: E402
 import pytest  # noqa: E402
 from PySide6.QtCore import QPointF  # noqa: E402
 from PySide6.QtGui import QImage  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from region.geometry import RegionGeometry  # noqa: E402
-from viz.mapview.regionview import RegionView  # noqa: E402
+from viz.mapview.mapview import MapWindow  # noqa: E402
+from viz.mapview.regionview import RegionView, _RegionProjector  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -73,3 +75,40 @@ def test_new_region_resets_view(app):
     view.set_region(RegionGeometry(41, 0.0))
     assert view.zoom == 1.0
     assert tuple(view._pan) == (0.0, 0.0)
+
+
+def test_region_projector_matches_the_painted_cell(app):
+    """Sphere points land where the cell's own local frame is drawn."""
+    view = _view(45)
+    assert view._geometry is not None and view._cell_layout is not None
+    x0, y0, size, transform = view._cell_layout
+    proj = _RegionProjector(view._geometry, x0, y0, size, transform, 1.0)
+    ss = np.array([0.1, 0.5, 0.9])
+    tt = np.array([0.2, 0.5, 0.7])
+    sx, sy, keep = proj.points(view._geometry.local_to_ecef(ss, tt))
+    assert keep.all()
+    for s, t, x, y in zip(ss, tt, sx, sy):
+        assert _local_under(view, float(x), float(y)) == pytest.approx((s, t), abs=1e-6)
+
+
+def test_region_projector_culls_far_and_distant_features(app):
+    view = _view(45)
+    assert view._geometry is not None and view._cell_layout is not None
+    proj = _RegionProjector(view._geometry, *view._cell_layout, 1.0)
+    centre = view._geometry.center_ecef()
+    distant = view._geometry.local_to_ecef(np.array([3.0]), np.array([0.5]))[0]
+    _, _, keep = proj.points(np.stack([centre, -centre, distant]))
+    assert keep.tolist() == [True, False, False]
+    # A segment is drawn when either end is near the cell, never across the far side.
+    *_, seg_keep = proj.segments(np.stack([centre, centre]), np.stack([distant, -centre]))
+    assert seg_keep.tolist() == [True, False]
+
+
+def test_overlay_toggle_drives_both_views(app):
+    window = MapWindow()
+    window.add_overlay("rivers", "Rivers", checked=True)
+    assert window._map._overlay_visible["rivers"] is True
+    assert window._region_view._overlay_visible["rivers"] is True
+    window._overlay_actions["rivers"].setChecked(False)
+    assert window._map._overlay_visible["rivers"] is False
+    assert window._region_view._overlay_visible["rivers"] is False

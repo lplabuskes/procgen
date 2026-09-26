@@ -26,7 +26,10 @@ The sphere is wrapped in a cube; each cube face carries gnomonic coordinates
 - `ecef_to_cell(positions, antimeridian)` — sphere → region id
 - `cell_border_polylines(antimeridian)` — overlay curves for the world map
 - `RegionGeometry(region_id, antimeridian)` — that cell's local `[0, 1]²` frame:
-  `local_to_ecef`, `local_to_lonlat`, `sample_grid`, `center_ecef`, `up_direction`
+  `local_to_ecef`, `local_to_lonlat`, `sample_grid`, `center_ecef`, `up_direction`,
+  and `ecef_to_local` (the inverse: `(s, t, valid)`, projected through the cell's
+  own cube face so the frame extends smoothly past the cell; `valid` is False
+  only on the face's far hemisphere)
 
 Every entry point takes the viewer's `antimeridian` so region assignment is
 stable however the mesh is oriented.
@@ -223,6 +226,18 @@ after the north-up rotation, so hover goes through the same inverse transform.
 Pan is stored in footprint widths (resize-safe) and clamped so the view never
 leaves the cell; the map is clipped short of the legend. Entering a region
 resets the view. Outlines are cosmetic pens, so they stay 1 px at any zoom.
+
+The world map's feature overlays (rivers, borders, settlements, trade routes,
+resources, winds, …) draw on the region too, from the same Overlays menu toggles
+and the same renderers (`viz/mapview/overlays.py`). `_RegionProjector` maps
+sphere points through `ecef_to_local` and the cell's screen transform, culling
+anything beyond 0.15 of the cell or on the far side; overlays are drawn in
+screen space (upright markers, pixel widths) and clipped to the rotated cell.
+They size themselves by the *equivalent world zoom* — the world-map zoom that
+would show this ground at the same pixel scale — so a region looks like the
+world map zoomed to the same place. Overlays are world-resolution data: rivers
+and borders are not refined, so they follow the global paths rather than the
+refined terrain.
 
 ## Not yet implemented
 

@@ -61,6 +61,26 @@ def test_local_to_cell_roundtrip(antimeridian):
         assert np.all(ecef_to_cell(ecef, antimeridian) == region_id)
 
 
+@pytest.mark.parametrize("antimeridian", ANTIMERIDIANS)
+def test_ecef_to_local_inverts_local_to_ecef(antimeridian):
+    """Including past the cell's edges, where the frame keeps extending."""
+    grid = np.linspace(-0.4, 1.4, 7)
+    ss, tt = np.meshgrid(grid, grid)
+    ss, tt = ss.ravel(), tt.ravel()
+    for region_id in range(N_REGIONS):
+        geom = RegionGeometry(region_id, antimeridian)
+        s, t, valid = geom.ecef_to_local(geom.local_to_ecef(ss, tt))
+        assert valid.all()
+        np.testing.assert_allclose(s, ss, atol=1e-9)
+        np.testing.assert_allclose(t, tt, atol=1e-9)
+
+
+def test_ecef_to_local_far_side_is_invalid():
+    geom = RegionGeometry(22, 0.3)
+    _, _, valid = geom.ecef_to_local(-geom.center_ecef()[None, :])
+    assert not valid[0]
+
+
 def test_region_id_decomposition():
     for region_id in range(N_REGIONS):
         geom = RegionGeometry(region_id, np.pi)

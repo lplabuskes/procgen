@@ -181,6 +181,30 @@ class RegionGeometry:
         v_g = ea_inverse(pv)
         return _face_gnomonic_to_ecef(self.face, u_g, v_g, self.antimeridian)
 
+    def ecef_to_local(self, positions: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """ECEF ``(N, 3)`` -> ``(s, t, valid)``, the inverse of ``local_to_ecef``.
+
+        Points are projected through this cell's own cube face, so the frame
+        extends smoothly past the cell's edges (and past the cube face's) —
+        ``s``/``t`` simply leave ``[0, 1]``.  Only the far hemisphere of the
+        face has no image; ``valid`` is False there.
+        """
+        pts = np.asarray(positions, dtype=np.float64).reshape(-1, 3)
+        xr, yr, zr = _rotate_into_cube_frame(pts, self.antimeridian)
+        axis, a, b = {
+            0: (xr, yr, zr), 1: (-xr, yr, zr), 2: (yr, xr, zr),
+            3: (-yr, xr, zr), 4: (zr, xr, yr), 5: (-zr, xr, yr),
+        }[self.face]
+        valid = axis > 1e-6
+        m = np.where(valid, axis, 1.0)
+        u_g = a / m
+        v_g = b / m
+        if self.face in (1, 2, 5):
+            u_g = -u_g
+        s = ea_forward(u_g) * N_SUBDIV - self.ci
+        t = ea_forward(v_g) * N_SUBDIV - self.cj
+        return s, t, valid
+
     def local_to_lonlat(self, s: np.ndarray, t: np.ndarray) -> np.ndarray:
         """Local coords ``(s, t) in [0, 1]`` -> ``(N, 2)`` ``[lon, lat]`` radians."""
         ecef = self.local_to_ecef(s, t)

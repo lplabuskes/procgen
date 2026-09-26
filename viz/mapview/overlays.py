@@ -1,0 +1,428 @@
+"""Feature overlays, drawn the same way on the world map and the region view.
+
+Every overlay feature is stored on the sphere (ECEF unit vectors), so the only
+thing a view has to supply is how sphere points land on its screen — an
+:class:`OverlayProjector`.  The world map projects through its map projection
+(splitting at the antimeridian); the region view goes through the cell's local
+frame and its north-up rotation.  Styling, filtering and size-vs-zoom rules live
+here once, so the two views cannot drift apart.
+
+Marker sizes, line widths and wind/current arrow lengths all scale with
+``projector.zoom``: the world map's magnification, or, for a region, the world
+map zoom that would show the same ground at the same pixel size.
+"""
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Callable, Mapping, Protocol
+
+import numpy as np
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QPolygonF
+
+if TYPE_CHECKING:
+    from core.world import World
+
+# Screen-space line pieces: (x0, y0, x1, y1).
+Piece = tuple[float, float, float, float]
+
+
+class OverlayProjector(Protocol):
+    """How a view maps sphere points to its screen, for overlay drawing."""
+
+    @property
+    def zoom(self) -> float:
+        """World-map-equivalent magnification, for sizing markers and lines."""
+        ...
+
+    def points(self, ecef: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """``(N, 3)`` → ``(sx, sy, keep)``; ``keep`` drops points with no image."""
+        ...
+
+    def segments(
+        self, p0: np.ndarray, p1: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Two ``(N, 3)`` endpoint arrays → ``(sx0, sy0, sx1, sy1, keep)``.
+
+        ``keep`` drops segments the view cannot draw as one straight line
+        (e.g. crossing the world map's antimeridian).
+        """
+        ...
+
+    def split_segment(self, p0: np.ndarray, p1: np.ndarray) -> list[Piece]:
+        """One segment as the screen pieces to draw — split rather than dropped."""
+        ...
+
+    def polygons(self, verts: np.ndarray) -> list[tuple[np.ndarray, np.ndarray]]:
+        """``(N, 3)`` ring → the ``(sx, sy)`` screen rings that draw it."""
+        ...
+
+
+def draw_overlays(
+    painter: QPainter, globe: "World", visible: Mapping[str, bool], proj: OverlayProjector
+) -> None:
+    """Draw every visible overlay the globe has data for, in a fixed stacking order."""
+    def on(name: str) -> bool:
+        return bool(visible.get(name)) and globe.has_feature(name)
+
+    if on("rivers"):
+        _draw_rivers(painter, globe, proj)
+    if on("lakes"):
+        _draw_lakes(painter, globe, proj)
+    if globe.has_feature("winds"):
+        for season_idx in range(len(globe.get_feature("winds") or [])):
+            if visible.get(f"winds_season_{season_idx}"):
+                _draw_winds(painter, globe, proj, season_idx)
+    if on("currents"):
+        _draw_currents(painter, globe, proj)
+    if on("deltas"):
+        _draw_points(
+            painter, globe, proj, "deltas", QColor(0, 100, 0, 220), QColor(0, 200, 80, 200),
+            max(3.0, 5.0 * proj.zoom ** 0.3),
+        )
+    if on("volcanoes"):
+        _draw_points(
+            painter, globe, proj, "volcanoes", QColor(160, 30, 0, 220), QColor(255, 80, 0, 200),
+            max(2.5, 4.0 * proj.zoom ** 0.3),
+        )
+    if on("minerals"):
+        _draw_minerals(painter, globe, proj)
+    if on("rare_bio"):
+        _draw_rare_bio(painter, globe, proj)
+    if on("danger_sources"):
+        _draw_danger_sources(painter, globe, proj)
+    if on("trade_routes"):
+        _draw_trade_routes(painter, globe, proj)
+    if on("settlements"):
+        _draw_settlements(painter, globe, proj)
+    if on("polity_borders"):
+        _draw_polity_borders(painter, globe, proj)
+
+
+def _line(painter: QPainter, x0: float, y0: float, x1: float, y1: float) -> None:
+    painter.drawLine(QPointF(x0, y0), QPointF(x1, y1))
+
+
+# ── points ───────────────────────────────────────────────────────────────────
+
+def _draw_points(
+    painter: QPainter, globe: "World", proj: OverlayProjector, feature_name: str,
+    pen_color: QColor, brush_color: QColor, base_r: float,
+) -> None:
+    """A uniformly-styled circle at each position of a point feature."""
+    positions = globe.get_feature(feature_name)
+    if positions is None or len(positions) == 0:
+        return
+    sx, sy, keep = proj.points(np.asarray(positions))
+    painter.save()
+    painter.setPen(QPen(pen_color, 1.5))
+    painter.setBrush(QBrush(brush_color))
+    for i in np.flatnonzero(keep):
+        painter.drawEllipse(QPointF(float(sx[i]), float(sy[i])), base_r, base_r)
+    painter.restore()
+
+
+def _draw_resource(
+    painter: QPainter, globe: "World", proj: OverlayProjector, feature_name: str,
+    palette: np.ndarray, n_kinds: int, base_r: float,
+    draw_shape: Callable[[QPainter, float, float, float], None],
+) -> None:
+    """A palette-per-kind resource overlay, sized by abundance."""
+    feature = globe.get_feature(feature_name)
+    if feature is None:
+        return
+    positions, kinds, abundances = feature
+    if len(positions) == 0:
+        return
+    sx, sy, keep = proj.points(np.asarray(positions))
+    painter.save()
+    kinds_i = np.clip(kinds.astype(np.int32), 0, n_kinds - 1)
+    for k in range(n_kinds):
+        mask = (kinds_i == k) & keep
+        if not mask.any():
+            continue
+        rgba = palette[k]
+        r_fill, g_fill, b_fill = int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255)
+        painter.setPen(QPen(QColor(max(0, r_fill - 60), max(0, g_fill - 60), max(0, b_fill - 60), 220), 1.0))
+        painter.setBrush(QBrush(QColor(r_fill, g_fill, b_fill, 210)))
+        for x, y, a in zip(sx[mask], sy[mask], abundances[mask]):
+            draw_shape(painter, float(x), float(y), base_r * (0.7 + 0.6 * float(a)))
+    painter.restore()
+
+
+def _draw_minerals(painter: QPainter, globe: "World", proj: OverlayProjector) -> None:
+    from worldgen.resources.minerals import MINERAL_PALETTE, N_MINERALS
+
+    def _square(p: QPainter, x: float, y: float, r: float) -> None:
+        p.drawRect(QRectF(x - r, y - r, 2 * r, 2 * r))
+
+    _draw_resource(
+        painter, globe, proj, "minerals", MINERAL_PALETTE, N_MINERALS,
+        max(2.0, 3.5 * proj.zoom ** 0.3), _square,
+    )
+
+
+def _draw_rare_bio(painter: QPainter, globe: "World", proj: OverlayProjector) -> None:
+    from worldgen.resources.rare_bio import N_RARE_BIO, RARE_BIO_PALETTE
+
+    def _diamond(p: QPainter, x: float, y: float, r: float) -> None:
+        p.drawPolygon(QPolygonF([
+            QPointF(x, y - r), QPointF(x + r, y), QPointF(x, y + r), QPointF(x - r, y),
+        ]))
+
+    _draw_resource(
+        painter, globe, proj, "rare_bio", RARE_BIO_PALETTE, N_RARE_BIO,
+        max(2.5, 4.0 * proj.zoom ** 0.3), _diamond,
+    )
+
+
+def _draw_danger_sources(painter: QPainter, globe: "World", proj: OverlayProjector) -> None:
+    from worldgen.danger.sources import SOURCE_COLORS
+    feature = globe.get_feature("danger_sources")
+    if feature is None:
+        return
+    positions, kinds = feature
+    if len(positions) == 0:
+        return
+    sx, sy, keep = proj.points(np.asarray(positions))
+    r = max(3.0, 5.0 * proj.zoom ** 0.3)
+    painter.save()
+    n_colors = len(SOURCE_COLORS)
+    for i in np.flatnonzero(keep):
+        rgba = SOURCE_COLORS[min(int(kinds[i]), n_colors - 1)]
+        r_fill, g_fill, b_fill = int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255)
+        painter.setPen(QPen(QColor(max(0, r_fill - 70), max(0, g_fill - 70), max(0, b_fill - 70), 230), 1.5))
+        painter.setBrush(QBrush(QColor(r_fill, g_fill, b_fill, 210)))
+        # Downward-pointing triangle.
+        px, py = float(sx[i]), float(sy[i])
+        painter.drawPolygon(QPolygonF([
+            QPointF(px, py + r),
+            QPointF(px - r * 0.87, py - r * 0.5),
+            QPointF(px + r * 0.87, py - r * 0.5),
+        ]))
+    painter.restore()
+
+
+def _draw_settlements(painter: QPainter, globe: "World", proj: OverlayProjector) -> None:
+    from realmgen.placement.types import TIER_COLORS, TIER_RADII, population_display_tier
+    feature = globe.get_feature("settlements")
+    if not feature:
+        return
+    positions = np.array([s.position for s in feature], dtype=np.float64)
+    pops = np.array([s.population for s in feature], dtype=np.float64)
+    max_pop = float(pops.max()) if pops.size > 0 else 0.0
+    tiers = np.array([population_display_tier(float(p), max_pop) for p in pops], dtype=np.int32)
+    sx, sy, keep = proj.points(positions)
+    zoom_scale = max(1.0, proj.zoom ** 0.3)
+    # Population-scaled radii: sqrt(pop / max_pop) in [0.6, 1.0] relative to the
+    # tier base radius so the shape of the distribution is visible.
+    if max_pop > 0:
+        pop_scale = np.sqrt(np.clip(pops / max_pop, 0.0, 1.0)) * 0.4 + 0.6
+    else:
+        pop_scale = np.ones(len(feature), dtype=np.float64)
+    painter.save()
+    for tier_idx in range(len(TIER_COLORS)):
+        mask = (tiers == tier_idx) & keep
+        if not mask.any():
+            continue
+        rgba = TIER_COLORS[tier_idx]
+        r_fill, g_fill, b_fill = int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255)
+        pen_width = 1.5 if tier_idx == 0 else 1.0
+        painter.setPen(QPen(QColor(max(0, r_fill - 70), max(0, g_fill - 70), max(0, b_fill - 70), 230), pen_width))
+        painter.setBrush(QBrush(QColor(r_fill, g_fill, b_fill, 220)))
+        base_r = TIER_RADII[tier_idx] * zoom_scale
+        for x, y, sc in zip(sx[mask], sy[mask], pop_scale[mask]):
+            r = base_r * float(sc)
+            painter.drawEllipse(QRectF(float(x) - r, float(y) - r, 2 * r, 2 * r))
+    painter.restore()
+
+
+# ── lines ────────────────────────────────────────────────────────────────────
+
+def _arrow_ends(positions: np.ndarray, unit: np.ndarray, step: np.ndarray | float) -> np.ndarray:
+    """Step ``positions`` along the tangent ``unit`` by ``step`` radians, back onto the sphere."""
+    ends = positions + np.reshape(step, (-1, 1)) * unit
+    return ends / np.maximum(np.linalg.norm(ends, axis=1, keepdims=True), 1e-12)
+
+
+def _draw_winds(painter: QPainter, globe: "World", proj: OverlayProjector, season_idx: int) -> None:
+    winds_feature = globe.get_feature("winds")
+    if not winds_feature or season_idx >= len(winds_feature):
+        return
+    positions, vectors = winds_feature[season_idx]
+    if len(positions) == 0:
+        return
+    speeds = np.linalg.norm(vectors, axis=1)
+    if float(speeds.max()) <= 1e-6:
+        return
+    # Arc length per arrow on the unit sphere, shrinking as the view zooms in.
+    step = 0.025 / proj.zoom ** 0.5
+    unit = vectors / np.maximum(speeds[:, None], 1e-12)
+    sx0, sy0, sx1, sy1, keep = proj.segments(positions, _arrow_ends(positions, unit, step))
+    pen = QPen(QColor(40, 40, 40, 200))
+    pen.setWidthF(1.2)
+    painter.setPen(pen)
+    for i in np.flatnonzero(keep):
+        _line(painter, float(sx0[i]), float(sy0[i]), float(sx1[i]), float(sy1[i]))
+
+
+def _draw_currents(painter: QPainter, globe: "World", proj: OverlayProjector) -> None:
+    currents_feature = globe.get_feature("currents")
+    if not currents_feature:
+        return
+    entry = currents_feature[0]
+    if len(entry) >= 3:
+        positions, vectors, temp_delta = entry[0], entry[1], entry[2]
+    else:
+        positions, vectors = entry[0], entry[1]
+        temp_delta = np.zeros(len(positions), dtype=np.float32)
+    if len(positions) == 0:
+        return
+
+    speeds = np.linalg.norm(vectors, axis=1)
+    max_speed = float(speeds.max()) if speeds.size else 0.0
+    if max_speed <= 1e-6:
+        return
+    keep_fast = speeds > max_speed * 0.05
+    if not np.any(keep_fast):
+        return
+    positions, vectors = positions[keep_fast], vectors[keep_fast]
+    speeds, temp_delta = speeds[keep_fast], temp_delta[keep_fast]
+
+    step = (0.025 / proj.zoom ** 0.5) * (speeds / max_speed)
+    unit = vectors / np.maximum(speeds[:, None], 1e-12)
+    sx0, sy0, sx1, sy1, keep = proj.segments(positions, _arrow_ends(positions, unit, step))
+
+    # Diverging blue → neutral → red palette, quantised to keep QPen churn low.
+    max_abs = float(np.max(np.abs(temp_delta))) if temp_delta.size else 0.0
+    norm = np.clip(temp_delta / max_abs, -1.0, 1.0) if max_abs > 1e-6 else np.zeros_like(temp_delta)
+    bucket_count = 17
+    buckets = np.clip(
+        np.round((norm + 1.0) * 0.5 * (bucket_count - 1)).astype(np.int32), 0, bucket_count - 1,
+    )
+    bucket_pens: dict[int, QPen] = {}
+
+    def _pen_for(bucket: int) -> QPen:
+        pen = bucket_pens.get(bucket)
+        if pen is not None:
+            return pen
+        t = (bucket / (bucket_count - 1)) * 2.0 - 1.0  # in [-1, 1]
+        # Blue at t=-1, light gray near 0, red at t=+1.
+        if t >= 0.0:
+            r, g, b = int(200 + 30 * t), int(200 - 130 * t), int(200 - 150 * t)
+        else:
+            r, g, b = int(200 + 150 * t), int(200 + 130 * t), int(200 - 30 * t)
+        pen = QPen(QColor(r, g, b, 230))
+        pen.setWidthF(1.4)
+        bucket_pens[bucket] = pen
+        return pen
+
+    active = -1
+    for i in np.flatnonzero(keep):
+        b = int(buckets[i])
+        if b != active:
+            painter.setPen(_pen_for(b))
+            active = b
+        _line(painter, float(sx0[i]), float(sy0[i]), float(sx1[i]), float(sy1[i]))
+
+
+def _draw_rivers(painter: QPainter, globe: "World", proj: OverlayProjector) -> None:
+    river_paths = globe.get_feature("rivers")
+    if not river_paths:
+        return
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    max_flow = max((entry[1][-1] for entry in river_paths if len(entry[1]) > 0), default=0.0)
+    if max_flow <= 0.0:
+        return
+    min_width, max_width = 0.5, 4.0
+    zoom_scale = proj.zoom ** 0.5
+
+    active_pen: QPen | None = None
+    for entry in river_paths:
+        positions, flows = entry[0], entry[1]
+        in_lake = entry[2] if len(entry) > 2 else None
+        if len(positions) < 2:
+            continue
+        sx0, sy0, sx1, sy1, keep = proj.segments(positions[:-1], positions[1:])
+        for j in np.flatnonzero(keep):
+            if in_lake is not None and j < len(in_lake) and in_lake[j]:
+                continue  # segment lies inside a lake — hide it
+            w = (min_width + (max_width - min_width) * (flows[j] / max_flow) ** 0.5) * zoom_scale
+            if w <= 1.0:
+                continue
+            if active_pen is None or abs(active_pen.widthF() - w) > 0.05:
+                active_pen = QPen(QColor(100, 180, 255, 200))
+                active_pen.setWidthF(w)
+                painter.setPen(active_pen)
+            _line(painter, float(sx0[j]), float(sy0[j]), float(sx1[j]), float(sy1[j]))
+
+
+def _draw_lakes(painter: QPainter, globe: "World", proj: OverlayProjector) -> None:
+    polygons = globe.get_feature("lakes")
+    if not polygons:
+        return
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QBrush(QColor(80, 140, 220, 255)))
+    for verts in polygons:
+        for sx, sy in proj.polygons(np.asarray(verts)):
+            painter.drawPolygon(QPolygonF([QPointF(float(x), float(y)) for x, y in zip(sx, sy)]))
+
+
+def _draw_trade_routes(painter: QPainter, globe: "World", proj: OverlayProjector) -> None:
+    routes = globe.get_feature("trade_routes")
+    if not routes:
+        return
+    all_flows = np.array([r[2] for r in routes], dtype=np.float64)
+    max_flow = float(all_flows.max()) if all_flows.size > 0 else 0.0
+    if max_flow <= 0.0:
+        return
+
+    flow_threshold = float(np.median(all_flows))
+    min_width, max_width = 0.4, 4.0
+    zoom_scale = proj.zoom ** 0.4
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    active_pen: QPen | None = None
+    for start_pos, end_pos, flow in routes:
+        if float(flow) < flow_threshold:
+            continue
+        w = (min_width + (max_width - min_width) * (float(flow) / max_flow) ** 0.5) * zoom_scale
+        if w < 0.3:
+            continue
+        pieces = proj.split_segment(np.asarray(start_pos), np.asarray(end_pos))
+        if not pieces:
+            continue
+        if active_pen is None or abs(active_pen.widthF() - w) > 0.08:
+            active_pen = QPen(QColor(220, 180, 60, 180))
+            active_pen.setWidthF(w)
+            painter.setPen(active_pen)
+        for x0, y0, x1, y1 in pieces:
+            _line(painter, x0, y0, x1, y1)
+
+
+def _draw_polity_borders(painter: QPainter, globe: "World", proj: OverlayProjector) -> None:
+    borders_by_depth = globe.get_feature("polity_borders")
+    if not borders_by_depth:
+        return
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+
+    # Depth style: (line_width, alpha) — fainter at higher depth.
+    def _style(depth: int) -> tuple[float, int]:
+        if depth == 0:
+            return 2.0, 220
+        if depth == 1:
+            return 1.2, 140
+        return 0.7, 75
+
+    # Deeper (fainter) borders first so sovereign borders render on top.
+    for depth in sorted(borders_by_depth.keys(), reverse=True):
+        segs: np.ndarray = borders_by_depth[depth]
+        if segs.shape[0] == 0:
+            continue
+        sx0, sy0, sx1, sy1, keep = proj.segments(segs[:, :3], segs[:, 3:])
+        if not np.any(keep):
+            continue
+        width, alpha = _style(depth)
+        pen = QPen(QColor(0, 0, 0, alpha))
+        pen.setWidthF(width * proj.zoom ** 0.3)
+        painter.setPen(pen)
+        for i in np.flatnonzero(keep):
+            _line(painter, float(sx0[i]), float(sy0[i]), float(sx1[i]), float(sy1[i]))

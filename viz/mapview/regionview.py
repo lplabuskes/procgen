@@ -5,12 +5,13 @@ from typing import TYPE_CHECKING, Callable, Optional, Sequence
 
 import numpy as np
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPolygonF, QTransform
+from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPainterPath, QPen, QPolygonF, QTransform
 from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtWidgets import QWidget
 
 from region.display import build_layer_texture
 from viz.mapview.legend import draw_legend, legend_size
+from viz.mapview.overlays import draw_overlays
 from region.geometry import RegionGeometry
 from region.grid import RegionHexGrid
 from region.upsample import RegionFields, RegionUpsampleParams, build_region_fields
@@ -53,6 +54,7 @@ class RegionView(QWidget):
         self._scheme_fn: Optional[Callable[[dict], Sequence[float]]] = None
         self._texture_key: Optional[str] = None
         self._legend: Optional[tuple[str, list]] = None
+        self._overlay_visible: dict[str, bool] = {}
         self._hex_images: list[QImage] = []
         # (x0, y0, size, rotation) of the cell as last painted — hover hit-tests against it.
         self._cell_layout: Optional[tuple[float, float, float, QTransform]] = None
@@ -110,6 +112,11 @@ class RegionView(QWidget):
         self._scheme_fn = scheme_fn
         self._texture_key = texture_key
         self._rebuild_images()
+        self.update()
+
+    def set_overlay_visible(self, name: str, visible: bool) -> None:
+        """Toggle one of the world map's feature overlays (same names, same styling)."""
+        self._overlay_visible[name] = visible
         self.update()
 
     def set_legend(self, legend: Optional[tuple[str, list]]) -> None:
@@ -232,6 +239,22 @@ class RegionView(QWidget):
         painter.drawRect(QRectF(x0, y0, size, size))
         painter.restore()
 
+        # Overlays are drawn in screen space (so markers stay upright and sized
+        # in pixels), clipped to the rotated cell.
+        if self._globe is not None and self._geometry is not None:
+            painter.save()
+            if legend:
+                left = fx0 - 0.5 * legend_gap
+                painter.setClipRect(QRectF(left, 0.0, W - left, H))
+            cell = QPainterPath()
+            cell.addPolygon(transform.map(QPolygonF(QRectF(x0, y0, size, size))))
+            painter.setClipPath(cell, Qt.ClipOperation.IntersectClip)
+            draw_overlays(
+                painter, self._globe, self._overlay_visible,
+                _RegionProjector(self._geometry, x0, y0, size, transform, self._equivalent_zoom(size, W)),
+            )
+            painter.restore()
+
         # Outside the map, bottom-aligned with the cell's footprint to its left.
         if legend:
             draw_legend(
@@ -254,6 +277,19 @@ class RegionView(QWidget):
         ds, dt = self._geometry.up_direction()
         angle = math.atan2(-ds, dt)
         return 0.0 if abs(angle) < 1e-9 else angle
+
+    def _equivalent_zoom(self, size: float, W: float) -> float:
+        """The world-map zoom showing this cell's ground at its on-screen scale.
+
+        Overlays size their markers and lines by zoom; handing them this makes
+        a region look like the world map zoomed in to the same place.  The
+        world map at zoom 1 spans 2π of longitude across the view's width.
+        """
+        assert self._geometry is not None
+        ends = self._geometry.local_to_ecef(np.array([0.0, 1.0]), np.array([0.5, 0.5]))
+        side_rad = float(np.arccos(np.clip(np.dot(ends[0], ends[1]), -1.0, 1.0)))
+        px_per_rad = size * self._zoom / max(side_rad, 1e-9)
+        return px_per_rad / (W / (2.0 * np.pi))
 
     def _view_transform(self) -> QTransform:
         """Zoom about the footprint centre, then pan — applied after the rotation."""
@@ -437,3 +473,62 @@ def _cosmetic_pen(color: QColor) -> QPen:
     pen = QPen(color, 1.0)
     pen.setCosmetic(True)
     return pen
+
+
+class _RegionProjector:
+    """Overlay projector for a region: the cell's local frame, then its screen transform.
+
+    Features beyond ``_MARGIN`` of the cell (in local units) are culled rather
+    than drawn under the clip, and the far side of the globe has no image.
+    """
+
+    _MARGIN = 0.15
+
+    def __init__(
+        self, geometry: RegionGeometry, x0: float, y0: float, size: float,
+        transform: QTransform, zoom: float,
+    ) -> None:
+        self._geometry = geometry
+        self._x0, self._y0, self._size = x0, y0, size
+        self._t = transform
+        self._zoom = zoom
+
+    @property
+    def zoom(self) -> float:
+        return self._zoom
+
+    def _project(self, ecef: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """``(sx, sy, valid, near)``: screen position, has-an-image, near-the-cell."""
+        s, t, valid = self._geometry.ecef_to_local(np.asarray(ecef).reshape(-1, 3))
+        m = self._MARGIN
+        near = valid & (s > -m) & (s < 1.0 + m) & (t > -m) & (t < 1.0 + m)
+        x = self._x0 + s * self._size
+        y = self._y0 + (1.0 - t) * self._size
+        # QTransform maps x' = m11 x + m21 y + dx, y' = m12 x + m22 y + dy.
+        tr = self._t
+        sx = tr.m11() * x + tr.m21() * y + tr.dx()
+        sy = tr.m12() * x + tr.m22() * y + tr.dy()
+        return sx, sy, valid, near
+
+    def points(self, ecef: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        sx, sy, _, near = self._project(ecef)
+        return sx, sy, near
+
+    def segments(
+        self, p0: np.ndarray, p1: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        sx0, sy0, valid0, near0 = self._project(p0)
+        sx1, sy1, valid1, near1 = self._project(p1)
+        return sx0, sy0, sx1, sy1, valid0 & valid1 & (near0 | near1)
+
+    def split_segment(self, p0: np.ndarray, p1: np.ndarray) -> list[tuple[float, float, float, float]]:
+        sx0, sy0, sx1, sy1, keep = self.segments(p0, p1)
+        if not keep[0]:
+            return []
+        return [(float(sx0[0]), float(sy0[0]), float(sx1[0]), float(sy1[0]))]
+
+    def polygons(self, verts: np.ndarray) -> list[tuple[np.ndarray, np.ndarray]]:
+        sx, sy, valid, near = self._project(verts)
+        if not valid.all() or not near.any():
+            return []
+        return [(sx, sy)]
