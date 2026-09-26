@@ -12,7 +12,9 @@ import numpy as np
 from core.display import DisplayRegistry
 from core.params import field, param_field as _f, paramclass
 from core.pipeline import BuildContext, Stage
-from realmgen.channels import HINTERLAND_ID, POPULATION, RURAL_POPULATION, SITUATIONAL_VALUE, SUITABILITY, TRADE_FLOW
+from realmgen.channels import (
+    HINTERLAND_ID, POPULATION, RURAL_POPULATION, SITUATIONAL_VALUE, SUITABILITY, TOWN_POPULATION, TRADE_FLOW,
+)
 from realmgen.placement.builder import SeederParams
 from realmgen.placement.seeder import build_cost_graph
 from realmgen.placement.types import (
@@ -122,28 +124,6 @@ def _make_hinterland_color(settlements: "list[Settlement]"):
     return fn
 
 
-_RURAL_POP_STOPS = [
-    (0.0, (0.16, 0.14, 0.12, 1.0)),   # near-empty margins
-    (0.35, (0.45, 0.40, 0.20, 1.0)),
-    (0.70, (0.85, 0.65, 0.25, 1.0)),
-    (1.0, (1.00, 0.95, 0.60, 1.0)),   # dense agricultural core
-]
-
-
-def _make_rural_pop_color(rural_population: np.ndarray):
-    """Debug color scheme: per-face rural population, sqrt-scaled for contrast."""
-    max_pop = float(np.max(rural_population)) if np.size(rural_population) else 0.0
-
-    def fn(meta: dict) -> tuple:
-        if is_water_meta(meta):
-            return OCEAN_COLOR
-        r = float(meta.get("rural_population", 0.0))
-        s = min(r / max_pop, 1.0) ** 0.5 if max_pop > 0 else 0.0
-        return interp_stops_scalar(s, _RURAL_POP_STOPS)
-
-    return fn
-
-
 def _trade_flow_color(meta: dict, _max_flow: list) -> tuple:
     if is_water_meta(meta):
         return OCEAN_COLOR
@@ -216,6 +196,8 @@ class PopulationStage(Stage):
         )
         self.rural_population = compute_rural_population(food_base, is_water)
         RURAL_POPULATION.write(mesh, self.rural_population)
+        # All of it is countryside until the town stage carves its towns out.
+        TOWN_POPULATION.write(mesh, np.zeros(n, dtype=np.float64))
 
         self.settlements = list(world.get_feature("settlements"))
 
@@ -476,8 +458,6 @@ class PopulationStage(Stage):
             )
         if debug and self.hinterland is not None and self.settlements is not None:
             reg.add_scheme("Hinterland", _make_hinterland_color(self.settlements))
-        if debug and self.rural_population is not None:
-            reg.add_scheme("Rural Population", _make_rural_pop_color(self.rural_population))
         if self.settlements is not None:
             reg.add_overlay("settlements", "Settlements", checked=True)
         has_routes = (

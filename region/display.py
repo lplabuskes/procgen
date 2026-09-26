@@ -159,3 +159,42 @@ def hillshade(
     out = rgba.copy()
     out[..., :3] = np.clip(out[..., :3] * np.clip(shade, 0.4, 1.6)[..., None], 0.0, 1.0)
     return out
+
+
+def snap_to_land(fields: RegionFields, points: np.ndarray, max_dist: float) -> np.ndarray:
+    """Move points that fall on the region's refined water onto its nearest land.
+
+    Settlements are sited on the globe's texels, but the region re-floods the
+    shoreline against its refined relief, which can put a harbour town just
+    offshore. Each such point moves to the nearest in-hexagon land texel of the
+    region within ``max_dist`` (chord on the unit sphere); points on land,
+    outside the cell, or with no land that close are returned unchanged.
+    """
+    points = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+    out = points.copy()
+    ocean = fields.textures.get("ocean_mask")
+    lake = fields.textures.get("lake_mask")
+    if ocean is None or len(points) == 0:
+        return out
+    water = ocean[..., 0] > 0.5
+    if lake is not None:
+        water = water | (lake[..., 0] > 0.5)
+    grid, tex = fields.grid, fields.tex_size
+    s, t, valid = fields.geometry.ecef_to_local(points)
+    hexes, rows, cols, inside = grid.texels_at(s, t, tex)
+    wet = valid & inside & water[hexes, rows, cols]
+    land = fields.in_hex & ~water                                   # (M, T, T)
+    reach = 2.0 * grid.radius
+    for k in np.flatnonzero(wet):
+        # Land texels of the hexes around the point (a hex's texture covers it
+        # alone, so the nearest land may sit in a neighbour's).
+        d2 = (grid.centers[:, 0] - s[k]) ** 2 + (grid.centers[:, 1] - t[k]) ** 2
+        near = np.flatnonzero(d2 <= reach ** 2)
+        cand = fields.positions[near][land[near]]
+        if cand.shape[0] == 0:
+            continue
+        d = np.linalg.norm(cand - points[k], axis=1)
+        j = int(np.argmin(d))
+        if d[j] <= max_dist:
+            out[k] = cand[j]
+    return out

@@ -3,8 +3,9 @@
 Runs last in :class:`~realmgen.builder.RealmPipeline`.  Purely a geometric
 refinement pass over render outputs (no population/polity recomputation):
 
-1. **Settlements** — snap each settlement from its face centroid to the best
-   in-face texel (coast → river → fertility), mutating ``Settlement.position``.
+1. **Settlements** — site each settlement on the best texel of its face (harbour,
+   confluence, river, fertility), no closer than ``city_min_spacing_km`` to a
+   bigger city, mutating ``Settlement.position``.
 2. **Trade routes** — remap any route endpoint that coincided with a moved
    settlement to its refined position (same connections, adjusted geometry).
 3. **Polity borders** — replace the angular per-edge border soup with continuous,
@@ -24,6 +25,8 @@ from realmgen.persistence import pack_borders, pack_routes, unpack_borders, unpa
 from realmgen.refine.borders import smooth_polity_borders
 from realmgen.refine.fill import PolityLabelField, colorize_labels
 from realmgen.refine.settlements import refine_settlement_positions, remap_routes
+from realmgen.refine.sites import SiteField
+from worldgen.cost.surfaces import EARTH_RADIUS_KM
 from worldgen.cost.channels import IS_WATER
 from worldgen.geology.channels import OCEAN_MASK
 from worldgen.hydrology.channels import LAKE_MASK
@@ -34,6 +37,9 @@ from worldgen.resources.channels import FERTILITY_MEAN
 class RefineParams:
     river_threshold_factor: float = _f(
         1.5, label="River snap distance (× texel spacing)", min=0.5, max=5.0
+    )
+    city_min_spacing_km: float = _f(
+        120.0, label="Minimum distance between cities (km)", min=0.0, max=300.0, step=10.0
     )
     border_smoothing_iterations: int = _f(
         2, label="Border smoothing (Chaikin passes)", min=0, max=5, step=1
@@ -74,17 +80,16 @@ class RefineStage(Stage):
         if settlements and OCEAN_MASK.present(mesh):
             ocean_tex = OCEAN_MASK.read(mesh)
             lake_tex = LAKE_MASK.read(mesh) if LAKE_MASK.present(mesh) else None
-            fertility = FERTILITY_MEAN.read(mesh)
-            rivers = world.get_feature("rivers")
-
+            sites = SiteField(
+                mesh, ocean_tex, lake_tex, mesh.face_textures.get("fertility"),
+                world.get_feature("rivers"),
+                river_threshold_factor=float(p.river_threshold_factor),
+            )
             moved = refine_settlement_positions(
                 settlements,
-                mesh=mesh,
-                ocean_tex=ocean_tex,
-                lake_tex=lake_tex,
-                fertility=fertility,
-                rivers=rivers,
-                river_threshold_factor=float(p.river_threshold_factor),
+                sites=sites,
+                min_spacing=float(p.city_min_spacing_km) / EARTH_RADIUS_KM,
+                seed=int(world.seed or 0),
             )
 
             routes = world.get_feature("trade_routes")

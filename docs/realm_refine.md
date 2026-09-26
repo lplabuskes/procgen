@@ -17,14 +17,19 @@ Runs after `PolityStage`; reads the textures attached by worldgen (`ocean_mask`,
 ## Files
 
 - `realmgen/refine/builder.py` — `RefineStage`, `RefineParams`
-- `realmgen/refine/settlements.py` — settlement snapping + trade-route remapping
+- `realmgen/refine/sites.py` — `SiteField`: per-texel site features (coast, river, confluence, local fertility, face ownership), shared with the town stage
+- `realmgen/refine/settlements.py` — city siting + trade-route remapping
 - `realmgen/refine/fill.py` — `PolityLabelField` (the polity at any point of the sphere, incl. domain-warp erosion), the texel labels sampled from it, the fill texture, and `polity_fill_recipe`
 - `realmgen/refine/borders.py` — border polylines contoured from the same field on a seamless icosphere lattice (marching triangles + bisection + Chaikin)
 
 ## `RefineParams`
 
 - `river_threshold_factor` (default 1.5) — a candidate texel counts as "on a river"
-  if it lies within `factor × texel_spacing` of a river polyline vertex.
+  if it lies within `factor × texel_spacing` of a river polyline (densified to
+  half a texel).
+- `city_min_spacing_km` (default 120) — no city is sited closer than this to a
+  bigger one. Face centroids are ~200 km apart, so without it two cities on
+  adjacent faces could both take the shared edge.
 - `border_smoothing_iterations` (default 2) — Chaikin corner-cutting passes applied
   to the chained border polylines. Higher = rounder, denser lines.
 - `border_control_floor` (hidden, default 1e-3) — floor on per-face authority so a
@@ -37,25 +42,44 @@ Runs after `PolityStage`; reads the textures attached by worldgen (`ocean_mask`,
   finer, busier wiggles. Pushed too high it aliases against the texel grid.
 - `boundary_warp_octaves` (hidden, default 3) — fBm octave count for the warp.
 
-## Settlement snapping (`settlements.py`)
+## Site features (`sites.py`)
 
-`refine_settlement_positions` moves each settlement from its face centroid to the
-best texel **within the same face**, in priority order:
+`SiteField` reads the global face textures and answers, per texel of a face's
+grid: is it land, is it **owned** by the face (its nearest face centroid — the
+rule `GlobalSampler` and the label field use, so faces partition the sphere),
+is it ocean- or lake-coast (4-adjacent to that water), is it on a river or at a
+confluence (within `river_threshold_factor × texel_spacing`), and how fertile is
+its 3×3 land neighbourhood. `FaceSites.sites()` is a face's candidate sites: its
+owned land texels. `prefetch(faces)` computes many faces in one batch (one
+KD-tree query per feature), which is what both callers do.
 
-1. **Coast** — a land texel orthogonally adjacent to a water texel, preferring
-   ocean-adjacent over lake-adjacent. (A fully-interior face has no coast texels,
-   so the settlement stays inland.)
-2. **River** — restrict to candidates within `river_threshold_factor × texel_spacing`
-   of a river polyline vertex, when any candidate qualifies.
-3. **Fertility** — highest per-face fertility among remaining candidates. Fertility
-   is a per-face scalar, so within a single face this is uniform; the step is kept
-   for correctness and ranks first only if candidates ever span faces.
-4. **Nearest centroid** — deterministic final tiebreak; keeps the marker central
-   and stable among equally-ranked candidates.
+A confluence is a river mouth that lands within `confluence_search_radius` of an
+interior vertex of a *different* river (in the Hack decomposition every
+tributary ends on its stem).
 
-Water/coast tests use the per-texel `ocean_mask` / `lake_mask` textures (which are
-continuous across faces, so a coastal land face genuinely contains the texel-level
-coastline). Rivers are matched against a KD-tree of all river polyline vertices.
+## City siting (`settlements.py`)
+
+`refine_settlement_positions` moves each settlement from its face centroid to
+the best of its face's candidate sites, by a weighted score:
+
+| term | weight |
+|---|---|
+| ocean coast (else lake coast) | 3.0 (2.0) |
+| confluence (else river) | 2.0 (1.5) |
+| local fertility, 0–1 | 1.0 |
+| distance from the centroid, as a fraction of the face's radius | −0.5 |
+| jitter, uniform 0–1, keyed on `(seed, face)` | 0.3 |
+
+Terms add, so a river mouth beats a bare shore, and a harbour beats an inland
+river. The jitter keeps uniform inland faces from all choosing the same spot of
+the texel grid (a visible lattice at region scale).
+
+**Spacing.** Cities are sited largest first; a site within
+`city_min_spacing_km` of an already-sited city is rejected, so the bigger city
+gets its pick and a smaller neighbour takes its best remaining site (or, if every
+site is crowded, the least crowded one). On seeds 4/31/35 no two cities end up
+closer than 150 km, with or without the constraint — it is a guard for the
+unlucky coast, not something the scores routinely fight.
 
 The function returns `{old_position_key: new_position}` for moved settlements.
 `remap_routes` then rewrites any trade-route endpoint matching a moved settlement's
@@ -151,8 +175,8 @@ Mutates in place: `settlements` (`.position`), `trade_routes` (endpoint geometry
 
 ## Validation
 
-`realmgen/refine/test/test_refine.py` covers settlement snapping (coast,
-ocean-vs-lake, river), route remapping, Chaikin smoothing and edge chaining, the
+`realmgen/refine/test/test_refine.py` covers city siting (coast,
+ocean-vs-lake, river, owned texels only, minimum spacing with the bigger city first), route remapping, Chaikin smoothing and edge chaining, the
 icosphere lattice (closed mesh, edge ordering, depth for a texel size), lattice
 tracing (a closed loop between hemispheres, bisection onto the true boundary,
 coastlines ignored, a border ending at the coast, three-way junctions joining, a

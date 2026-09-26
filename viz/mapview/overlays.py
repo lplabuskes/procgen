@@ -34,6 +34,17 @@ class OverlayProjector(Protocol):
         """World-map-equivalent magnification, for sizing markers and lines."""
         ...
 
+    @property
+    def regional(self) -> bool:
+        """True in a region view — region-scale features (towns) draw only there."""
+        ...
+
+    def on_land(self, key: str, ecef: np.ndarray) -> np.ndarray:
+        """Settlement positions ``(N, 3)`` as this view should place them: moved
+        off any water the view draws finer than the globe (``key`` names the
+        feature, so a view can cache the result). Identity on the world map."""
+        ...
+
     def points(self, ecef: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """``(N, 3)`` → ``(sx, sy, keep)``; ``keep`` drops points with no image."""
         ...
@@ -92,6 +103,8 @@ def draw_overlays(
         _draw_danger_sources(painter, globe, proj)
     if on("trade_routes"):
         _draw_trade_routes(painter, globe, proj)
+    if on("towns"):
+        _draw_towns(painter, globe, proj)
     if on("settlements"):
         _draw_settlements(painter, globe, proj)
     if on("polity_borders"):
@@ -202,6 +215,12 @@ def _draw_danger_sources(painter: QPainter, globe: "World", proj: OverlayProject
     painter.restore()
 
 
+# City markers in a region view: size multiplier over the world-map marker.
+_REGION_CITY_SCALE = 1.5
+# Largest town dot radius at zoom 1 (``_draw_towns``: 0.9 + 0.7 at the top size).
+_TOWN_MAX_RADIUS = 1.6
+
+
 def _draw_settlements(painter: QPainter, globe: "World", proj: OverlayProjector) -> None:
     from realmgen.placement.types import TIER_COLORS, TIER_RADII, population_display_tier
     feature = globe.get_feature("settlements")
@@ -211,7 +230,7 @@ def _draw_settlements(painter: QPainter, globe: "World", proj: OverlayProjector)
     pops = np.array([s.population for s in feature], dtype=np.float64)
     max_pop = float(pops.max()) if pops.size > 0 else 0.0
     tiers = np.array([population_display_tier(float(p), max_pop) for p in pops], dtype=np.int32)
-    sx, sy, keep = proj.points(positions)
+    sx, sy, keep = proj.points(proj.on_land("settlements", positions))
     zoom_scale = max(1.0, proj.zoom ** 0.3)
     # Population-scaled radii: sqrt(pop / max_pop) in [0.6, 1.0] relative to the
     # tier base radius so the shape of the distribution is visible.
@@ -219,6 +238,12 @@ def _draw_settlements(painter: QPainter, globe: "World", proj: OverlayProjector)
         pop_scale = np.sqrt(np.clip(pops / max_pop, 0.0, 1.0)) * 0.4 + 0.6
     else:
         pop_scale = np.ones(len(feature), dtype=np.float64)
+    # In a region, cities share the map with the towns: draw them bigger (never
+    # smaller than twice the largest town), opaque, and ringed dark-then-white so
+    # they read as a different class of place rather than big towns.
+    regional = proj.regional
+    size_scale = _REGION_CITY_SCALE if regional else 1.0
+    min_r = 2.0 * _TOWN_MAX_RADIUS * proj.zoom ** 0.3 if regional else 0.0
     painter.save()
     for tier_idx in range(len(TIER_COLORS)):
         mask = (tiers == tier_idx) & keep
@@ -226,12 +251,46 @@ def _draw_settlements(painter: QPainter, globe: "World", proj: OverlayProjector)
             continue
         rgba = TIER_COLORS[tier_idx]
         r_fill, g_fill, b_fill = int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255)
-        pen_width = 1.5 if tier_idx == 0 else 1.0
-        painter.setPen(QPen(QColor(max(0, r_fill - 70), max(0, g_fill - 70), max(0, b_fill - 70), 230), pen_width))
-        painter.setBrush(QBrush(QColor(r_fill, g_fill, b_fill, 220)))
-        base_r = TIER_RADII[tier_idx] * zoom_scale
-        for x, y, sc in zip(sx[mask], sy[mask], pop_scale[mask]):
-            r = base_r * float(sc)
+        base_r = TIER_RADII[tier_idx] * zoom_scale * size_scale
+        radii = [max(base_r * float(sc), min_r) for sc in pop_scale[mask]]
+        centres = list(zip(sx[mask], sy[mask]))
+        if regional:
+            painter.setPen(QPen(QColor(255, 255, 255, 235), 2.5))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            for (x, y), r in zip(centres, radii):
+                h = r + 1.6
+                painter.drawEllipse(QRectF(float(x) - h, float(y) - h, 2 * h, 2 * h))
+            painter.setPen(QPen(QColor(25, 22, 18, 245), 1.6))
+            painter.setBrush(QBrush(QColor(r_fill, g_fill, b_fill, 255)))
+        else:
+            pen_width = 1.5 if tier_idx == 0 else 1.0
+            painter.setPen(QPen(
+                QColor(max(0, r_fill - 70), max(0, g_fill - 70), max(0, b_fill - 70), 230), pen_width))
+            painter.setBrush(QBrush(QColor(r_fill, g_fill, b_fill, 220)))
+        for (x, y), r in zip(centres, radii):
+            painter.drawEllipse(QRectF(float(x) - r, float(y) - r, 2 * r, 2 * r))
+    painter.restore()
+
+
+def _draw_towns(painter: QPainter, globe: "World", proj: OverlayProjector) -> None:
+    """Small kind-coloured dots, sized by population; only in the region view."""
+    from realmgen.towns.types import TOWN_KIND_COLORS
+    towns = globe.get_feature("towns")
+    if towns is None or len(towns) == 0 or not proj.regional:
+        return
+    sx, sy, keep = proj.points(proj.on_land("towns", towns.positions))
+    pop = towns.population
+    lo, hi = float(pop.min()), float(pop.max())
+    frac = np.sqrt((pop - lo) / (hi - lo)) if hi > lo else np.zeros_like(pop)
+    radii = (_TOWN_MAX_RADIUS - 0.7 + 0.7 * frac) * proj.zoom ** 0.3
+    painter.save()
+    painter.setPen(QPen(QColor(40, 36, 30, 200), 0.8))
+    for kind, rgba in enumerate(TOWN_KIND_COLORS):
+        mask = keep & (towns.kind == kind)
+        if not mask.any():
+            continue
+        painter.setBrush(QBrush(QColor.fromRgbF(*rgba)))
+        for x, y, r in zip(sx[mask], sy[mask], radii[mask]):
             painter.drawEllipse(QRectF(float(x) - r, float(y) - r, 2 * r, 2 * r))
     painter.restore()
 
@@ -367,6 +426,24 @@ def _draw_lakes(painter: QPainter, globe: "World", proj: OverlayProjector) -> No
             painter.drawPolygon(QPolygonF([QPointF(float(x), float(y)) for x, y in zip(sx, sy)]))
 
 
+def _position_key(pos) -> tuple[float, float, float]:
+    from realmgen.refine.settlements import position_key
+    return position_key(np.asarray(pos))
+
+
+def _moved_settlements(globe: "World", proj: OverlayProjector) -> dict:
+    """``{position_key: drawn position}`` for settlements the view moved onto
+    land (``proj.on_land``), so trade routes still end at their markers."""
+    feature = globe.get_feature("settlements")
+    if not feature:
+        return {}
+    positions = np.array([s.position for s in feature], dtype=np.float64)
+    drawn = proj.on_land("settlements", positions)
+    return {
+        _position_key(p): q for p, q in zip(positions, drawn) if not np.array_equal(p, q)
+    }
+
+
 def _draw_trade_routes(painter: QPainter, globe: "World", proj: OverlayProjector) -> None:
     routes = globe.get_feature("trade_routes")
     if not routes:
@@ -379,6 +456,7 @@ def _draw_trade_routes(painter: QPainter, globe: "World", proj: OverlayProjector
     flow_threshold = float(np.median(all_flows))
     min_width, max_width = 0.4, 4.0
     zoom_scale = proj.zoom ** 0.4
+    moved = _moved_settlements(globe, proj)
     painter.setBrush(Qt.BrushStyle.NoBrush)
     active_pen: QPen | None = None
     for start_pos, end_pos, flow in routes:
@@ -387,6 +465,9 @@ def _draw_trade_routes(painter: QPainter, globe: "World", proj: OverlayProjector
         w = (min_width + (max_width - min_width) * (float(flow) / max_flow) ** 0.5) * zoom_scale
         if w < 0.3:
             continue
+        if moved:
+            start_pos = moved.get(_position_key(start_pos), start_pos)
+            end_pos = moved.get(_position_key(end_pos), end_pos)
         pieces = proj.split_segment(np.asarray(start_pos), np.asarray(end_pos))
         if not pieces:
             continue

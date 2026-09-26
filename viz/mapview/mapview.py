@@ -170,6 +170,13 @@ class _WorldProjector:
     def zoom(self) -> float:
         return self._w._zoom
 
+    @property
+    def regional(self) -> bool:
+        return False
+
+    def on_land(self, key: str, ecef: np.ndarray) -> np.ndarray:
+        return ecef
+
     def _lonlat(self, ecef: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         ecef = np.asarray(ecef).reshape(-1, 3)
         lon = self._w._shift_lon(np.arctan2(ecef[:, 1], ecef[:, 0]))

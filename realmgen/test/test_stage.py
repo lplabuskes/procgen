@@ -9,6 +9,7 @@ from realmgen.polity.builder import PolityStage
 from realmgen.population.builder import PopulationStage
 from realmgen.refine.builder import RefineStage
 from realmgen.scoring.builder import ScoringStage
+from realmgen.towns.builder import TownStage
 from realmgen.channels import (
     BORDER_TENSION,
     HINTERLAND_ID,
@@ -44,14 +45,15 @@ def test_stage_channels():
     assert BORDER_TENSION in polity.provides
 
 
-def test_realm_pipeline_has_five_stages():
+def test_realm_pipeline_has_six_stages():
     rp = RealmPipeline()
-    assert len(rp.stages) == 5
+    assert len(rp.stages) == 6
     assert isinstance(rp.stages[0], ScoringStage)
     assert isinstance(rp.stages[1], PlacementStage)
     assert isinstance(rp.stages[2], PopulationStage)
     assert isinstance(rp.stages[3], PolityStage)
     assert isinstance(rp.stages[4], RefineStage)
+    assert isinstance(rp.stages[5], TownStage)
 
 
 def test_scoring_register_display_gated_on_results():

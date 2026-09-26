@@ -112,3 +112,45 @@ def test_overlay_toggle_drives_both_views(app):
     window._overlay_actions["rivers"].setChecked(False)
     assert window._map._overlay_visible["rivers"] is False
     assert window._region_view._overlay_visible["rivers"] is False
+
+
+class _StubTowns:
+    positions = np.array([[1.0, 0.0, 0.0]])
+    population = np.array([2_000.0])
+    kind = np.array([0], dtype=np.int8)
+
+    def __len__(self):
+        return 1
+
+
+class _StubGlobe:
+    def get_feature(self, name):
+        return _StubTowns() if name == "towns" else None
+
+
+class _CountingProjector:
+    zoom = 50.0
+
+    def __init__(self, regional):
+        self.regional = regional
+        self.on_land_calls = 0
+
+    def on_land(self, key, ecef):
+        self.on_land_calls += 1
+        return ecef
+
+    def points(self, ecef):
+        n = len(ecef)
+        return np.zeros(n), np.zeros(n), np.ones(n, dtype=bool)
+
+
+def test_towns_draw_only_in_the_region_view(app):
+    from PySide6.QtGui import QImage, QPainter
+    from viz.mapview.overlays import _draw_towns
+    image = QImage(10, 10, QImage.Format.Format_RGBA8888)
+    painter = QPainter(image)
+    world_proj, region_proj = _CountingProjector(False), _CountingProjector(True)
+    _draw_towns(painter, _StubGlobe(), world_proj)      # type: ignore[arg-type]
+    _draw_towns(painter, _StubGlobe(), region_proj)     # type: ignore[arg-type]
+    painter.end()
+    assert world_proj.on_land_calls == 0 and region_proj.on_land_calls == 1

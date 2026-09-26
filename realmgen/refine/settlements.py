@@ -1,15 +1,25 @@
-"""Texel-level settlement position refinement.
+"""Texel-level settlement siting.
 
-A settlement's face-level position is its face centroid.  This module snaps that
-position to the texel within the same face that best matches a placement
-preference, in priority order:
+A settlement's face-level position is its face centroid. This module moves it to
+the best site among its face's owned land texels (see
+:mod:`realmgen.refine.sites`), scored as a weighted sum:
 
-1. **Coast** — a land texel adjacent to water, preferring ocean over lake.
-2. **River confluence** — a land texel near a point where a tributary meets a
-   larger stem (highest-value river site).
-3. **River** — a land texel within a texel-spacing of any river polyline.
-4. **Nearest centroid** — deterministic final tiebreak; keeps the marker stable
-   and central among equally-ranked candidates.
+- **Harbour** — land adjacent to ocean (``SITE_OCEAN``), or failing that to a
+  lake (``SITE_LAKE``). Worth the most: ports are where medieval cities grew.
+- **River confluence** (``SITE_CONFLUENCE``), or any **river** (``SITE_RIVER``).
+  Additive with the coast, so a river mouth beats a bare shore.
+- **Fertility** — the local (3×3) soil around the texel (``SITE_FERTILITY``).
+- **Centrality** — a mild pull toward the face centre (``SITE_CENTRE``, at the
+  face's circumradius), so among equals a city does not sit on the seam.
+- **Jitter** — a small per-``(seed, face)`` random term (``SITE_JITTER``), so
+  otherwise-uniform inland faces do not all put their city in the same spot of
+  the texel grid (which reads as a lattice at region scale).
+
+**Spacing.** Cities are sited largest first, and a site closer than
+``min_spacing`` to an already-sited city is rejected — so two cities on adjacent
+faces cannot crowd the shared edge. The bigger city gets its pick; the smaller
+one takes its best remaining site. If every site is too close, it takes the one
+farthest from its neighbours.
 
 Positions are mutated in place on the ``Settlement`` objects.  The function
 returns the ``{old_position_key: new_position}`` map so dependent geometry (trade
@@ -17,10 +27,17 @@ routes) can be remapped without re-deriving which settlement moved.
 """
 from __future__ import annotations
 
-from typing import Optional
-
 import numpy as np
-from scipy.spatial import KDTree
+
+from realmgen.refine.sites import SiteField
+
+SITE_OCEAN = 3.0
+SITE_LAKE = 2.0
+SITE_CONFLUENCE = 2.0
+SITE_RIVER = 1.5
+SITE_FERTILITY = 1.0
+SITE_CENTRE = 0.5
+SITE_JITTER = 0.3
 
 
 def position_key(pos: np.ndarray) -> tuple[float, float, float]:
@@ -29,187 +46,73 @@ def position_key(pos: np.ndarray) -> tuple[float, float, float]:
     return (round(float(p[0]), 9), round(float(p[1]), 9), round(float(p[2]), 9))
 
 
-def _neighbor_any(mask2d: np.ndarray) -> np.ndarray:
-    """True where any 4-neighbour (no wrap) of a (H, W) boolean grid is True."""
-    out = np.zeros_like(mask2d)
-    out[1:, :] |= mask2d[:-1, :]
-    out[:-1, :] |= mask2d[1:, :]
-    out[:, 1:] |= mask2d[:, :-1]
-    out[:, :-1] |= mask2d[:, 1:]
-    return out
-
-
-def _build_river_tree(rivers) -> Optional[KDTree]:
-    """Build a KD-tree over all river polyline vertices, or None if unavailable."""
-    if not rivers:
-        return None
-    chunks = []
-    for entry in rivers:
-        pts = np.asarray(entry[0], dtype=np.float64)
-        if pts.ndim == 2 and pts.shape[0] > 0:
-            chunks.append(pts)
-    if not chunks:
-        return None
-    return KDTree(np.concatenate(chunks, axis=0))
-
-
-def _build_confluence_tree(rivers, search_radius: float = 0.01) -> Optional[KDTree]:
-    """KD-tree over river confluence points.
-
-    In the Hack decomposition each river terminates either at an ocean/sink
-    outlet or at the interior of a larger stem (a true confluence).  A mouth is
-    a confluence when it lands within ``search_radius`` (chord distance on the
-    unit sphere) of an interior vertex that belongs to a *different* river.
-    """
-    if not rivers or len(rivers) < 2:
-        return None
-
-    mouths: list[tuple[int, np.ndarray]] = []
-    interior_chunks: list[np.ndarray] = []
-    river_id_list: list[int] = []
-
-    for i, entry in enumerate(rivers):
-        pts = np.asarray(entry[0], dtype=np.float64)
-        if pts.ndim != 2 or pts.shape[0] < 2:
-            continue
-        mouths.append((i, pts[-1]))
-        interior_chunks.append(pts[:-1])          # all but the last (mouth) point
-        river_id_list.extend([i] * (len(pts) - 1))
-
-    if not mouths or not interior_chunks:
-        return None
-
-    interior_arr = np.concatenate(interior_chunks, axis=0)
-    river_ids = np.array(river_id_list, dtype=np.int32)
-    interior_tree = KDTree(interior_arr)
-
-    confluence_pts = []
-    for river_idx, mouth in mouths:
-        neighbors = interior_tree.query_ball_point(mouth, r=search_radius)
-        if any(river_ids[nb] != river_idx for nb in neighbors):
-            confluence_pts.append(mouth)
-
-    if not confluence_pts:
-        return None
-    return KDTree(np.stack(confluence_pts))
+def city_site_scores(sites, idx: np.ndarray, centroid: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    """Weighted site score of the texels ``idx`` of one face (higher is better)."""
+    ocean = sites.coast_ocean[idx]
+    lake = sites.coast_lake[idx] & ~ocean
+    conf = sites.confluence[idx]
+    river = sites.river[idx] & ~conf
+    d_centre = np.linalg.norm(sites.positions[idx] - centroid[None, :], axis=1)
+    radius = float(d_centre.max()) if d_centre.size else 0.0
+    centre = d_centre / radius if radius > 0 else np.zeros_like(d_centre)
+    return (
+        SITE_OCEAN * ocean + SITE_LAKE * lake
+        + SITE_CONFLUENCE * conf + SITE_RIVER * river
+        + SITE_FERTILITY * sites.fertility[idx]
+        - SITE_CENTRE * centre
+        + SITE_JITTER * rng.random(idx.size)
+    )
 
 
 def refine_settlement_positions(
     settlements,
     *,
-    mesh,
-    ocean_tex: np.ndarray,
-    lake_tex: Optional[np.ndarray],
-    fertility: np.ndarray,
-    rivers,
-    river_threshold_factor: float = 1.5,
-    confluence_search_radius: float = 0.01,
-    border_texels: int = 2,
+    sites: SiteField,
+    min_spacing: float = 0.0,
+    seed: int = 0,
 ) -> dict[tuple[float, float, float], np.ndarray]:
-    """Snap each settlement to its best in-face texel; mutate ``position`` in place.
+    """Site each settlement on its best in-face texel; mutate ``position`` in place.
 
-    Returns ``{old_position_key: new_position}`` for settlements that moved.
+    ``min_spacing`` is the minimum chord distance between two cities. Returns
+    ``{old_position_key: new_position}`` for settlements that moved.
     """
     moved: dict[tuple[float, float, float], np.ndarray] = {}
     if not settlements:
         return moved
 
-    n, h, w = ocean_tex.shape[0], ocean_tex.shape[1], ocean_tex.shape[2]
-    positions = mesh.face_texture_positions(h, w)  # (N, H, W, 3)
-    centroids = np.asarray(mesh.face_centroids, dtype=np.float64)
-    fertility = np.asarray(fertility, dtype=np.float64)
+    sites.prefetch(s.face_id for s in settlements if 0 <= int(s.face_id) < sites.n)
+    order = sorted(range(len(settlements)), key=lambda k: (-float(settlements[k].population), k))
+    placed: list[np.ndarray] = []
 
-    ocean = ocean_tex[..., 0] > 0.5                              # (N, H, W)
-    lake = (lake_tex[..., 0] > 0.5) if lake_tex is not None else np.zeros_like(ocean)
-    land = ~(ocean | lake)
-
-    river_tree = _build_river_tree(rivers)
-    confluence_tree = _build_confluence_tree(rivers, search_radius=confluence_search_radius)
-
-    # Interior mask: excludes border_texels rows/cols on each edge of the face grid.
-    # Applied when snapping to rivers, confluences, or fertility so markers don't
-    # land right at the face seam. Falls back to the full set when no interior
-    # candidates survive.
-    if border_texels > 0 and h > 2 * border_texels and w > 2 * border_texels:
-        _interior_2d = np.zeros((h, w), dtype=bool)
-        _interior_2d[border_texels:h - border_texels, border_texels:w - border_texels] = True
-        interior_flat = _interior_2d.reshape(-1)
-    else:
-        interior_flat = np.ones(h * w, dtype=bool)
-
-    for s in settlements:
+    for k in order:
+        s = settlements[k]
         f = int(s.face_id)
-        if f < 0 or f >= n:
+        if f < 0 or f >= sites.n:
             continue
-        pos_f = positions[f].reshape(-1, 3).astype(np.float64)  # (T, 3)
-        land2d = land[f]
-        if not land2d.any():
+        face = sites.face(f)
+        idx = face.sites()
+        if idx.size == 0:
             continue  # all-water texel grid; leave at centroid
 
-        # Coast preference (ocean over lake).
-        coast_ocean = (land2d & _neighbor_any(ocean[f])).reshape(-1)
-        coast_lake = (land2d & _neighbor_any(lake[f])).reshape(-1)
-        candidate = land2d.reshape(-1).copy()
-        if coast_ocean.any():
-            candidate = coast_ocean
-        elif coast_lake.any():
-            candidate = coast_lake
-
-        spacing = _texel_spacing(positions[f])
-
-        # Interior-only candidate pool for river/confluence/fertility snapping.
-        # Falls back to the full candidate set when the interior yields nothing.
-        inner = candidate & interior_flat
-        if not inner.any():
-            inner = candidate
-
-        # Confluence preference: river junction beats generic river proximity.
-        # Only falls through to the river check when no confluence is nearby.
-        at_confluence = False
-        if confluence_tree is not None and inner.any():
-            dists, _ = confluence_tree.query(pos_f[inner])
-            near = dists < (river_threshold_factor * spacing)
-            if near.any():
-                idx = np.flatnonzero(inner)[near]
-                new_mask = np.zeros_like(candidate)
-                new_mask[idx] = True
-                candidate = new_mask
-                at_confluence = True
-
-        # River proximity (fallback when no confluence found in candidates).
-        if not at_confluence and river_tree is not None and inner.any():
-            dists, _ = river_tree.query(pos_f[inner])
-            near = dists < (river_threshold_factor * spacing)
-            if near.any():
-                idx = np.flatnonzero(inner)[near]
-                new_mask = np.zeros_like(candidate)
-                new_mask[idx] = True
-                candidate = new_mask
-
-        cand_idx = np.flatnonzero(candidate)
-        if cand_idx.size == 0:
-            continue
-
-        # Nearest to centroid as the deterministic final selector.
-        cand_pos = pos_f[cand_idx]
-        d_centroid = np.linalg.norm(cand_pos - centroids[f][None, :], axis=1)
-        best = cand_idx[int(np.argmin(d_centroid))]
-        new_pos = pos_f[best].copy()
+        rng = np.random.default_rng([int(seed), f])
+        score = city_site_scores(face, idx, sites.centroids[f], rng)
+        if placed and min_spacing > 0:
+            others = np.stack(placed)
+            gap = np.linalg.norm(
+                face.positions[idx][:, None, :] - others[None, :, :], axis=2,
+            ).min(axis=1)
+            ok = gap >= min_spacing
+            # Every site is crowded: take the least-crowded one instead.
+            score = np.where(ok, score, -np.inf) if ok.any() else gap
+        best = idx[int(np.argmax(score))]
+        new_pos = face.positions[best].copy()
+        placed.append(new_pos)
 
         if not np.array_equal(new_pos, np.asarray(s.position, dtype=np.float64)):
             moved[position_key(s.position)] = new_pos
             s.position = new_pos
 
     return moved
-
-
-def _texel_spacing(face_positions: np.ndarray) -> float:
-    """Median 3-D distance between horizontally-adjacent texels of one face."""
-    grid = np.asarray(face_positions, dtype=np.float64)  # (H, W, 3)
-    diffs = np.linalg.norm(grid[:, 1:, :] - grid[:, :-1, :], axis=2)
-    if diffs.size == 0:
-        return 0.0
-    return float(np.median(diffs))
 
 
 def remap_routes(routes, moved: dict) -> list:

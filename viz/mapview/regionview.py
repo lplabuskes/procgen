@@ -10,7 +10,7 @@ from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtWidgets import QWidget
 
 from core.display import SchemeSpec
-from region.display import build_layer_texture
+from region.display import build_layer_texture, snap_to_land
 from viz.mapview.legend import draw_legend, legend_size
 from viz.mapview.overlays import draw_overlays
 from region.geometry import RegionGeometry
@@ -56,6 +56,8 @@ class RegionView(QWidget):
         self._legend: Optional[tuple[str, list]] = None
         self._overlay_visible: dict[str, bool] = {}
         self._hex_images: list[QImage] = []
+        # Per feature: (source positions, positions moved onto the refined land).
+        self._land_positions: dict[str, tuple[np.ndarray, np.ndarray]] = {}
         # (x0, y0, size, rotation) of the cell as last painted — hover hit-tests against it.
         self._cell_layout: Optional[tuple[float, float, float, QTransform]] = None
         self._hover_callback: Optional[Callable[[Optional[tuple[int, int, int]]], None]] = None
@@ -80,6 +82,7 @@ class RegionView(QWidget):
         self._grid = RegionHexGrid(geometry, int(self._params.n_cols))
         self._fields = None
         self._hex_images = []
+        self._land_positions = {}
         self._zoom = 1.0
         self._pan[:] = 0.0
         if globe is not None and "elevation" in globe.mesh.face_textures:
@@ -95,6 +98,7 @@ class RegionView(QWidget):
         self._grid = None
         self._fields = None
         self._hex_images = []
+        self._land_positions = {}
         self._cell_layout = None
         self._view_frame = None
         self._drag_start = None
@@ -243,7 +247,9 @@ class RegionView(QWidget):
             painter.setClipPath(cell, Qt.ClipOperation.IntersectClip)
             draw_overlays(
                 painter, self._globe, self._overlay_visible,
-                _RegionProjector(self._geometry, x0, y0, size, transform, self._equivalent_zoom(size, W)),
+                _RegionProjector(
+                    self._geometry, x0, y0, size, transform, self._equivalent_zoom(size, W), self._on_land,
+                ),
             )
             painter.restore()
 
@@ -253,6 +259,24 @@ class RegionView(QWidget):
                 painter, legend[0], legend[1],
                 fx0 - legend_gap - legend_w, fy0 + footprint, H - 2.0 * margin,
             )
+
+    def _on_land(self, key: str, ecef: np.ndarray) -> np.ndarray:
+        """``ecef`` moved off the refined water (``snap_to_land``), cached per feature.
+
+        The reach is the farthest the refinement lets water spread onto land the
+        globe called dry, plus a couple of texels of slack.
+        """
+        if self._fields is None:
+            return ecef
+        ecef = np.asarray(ecef, dtype=np.float64).reshape(-1, 3)
+        cached = self._land_positions.get(key)
+        if cached is not None and np.array_equal(cached[0], ecef):
+            return cached[1]
+        f = self._fields
+        reach = (int(self._params.water_spread_texels) + 2) * f.grid.texel_spacing_rad(f.tex_size)
+        moved = snap_to_land(f, ecef, reach)
+        self._land_positions[key] = (ecef.copy(), moved)
+        return moved
 
     def _up_angle(self) -> float:
         """Screen rotation (radians) that makes "up" read correctly for this cell.
@@ -479,15 +503,24 @@ class _RegionProjector:
     def __init__(
         self, geometry: RegionGeometry, x0: float, y0: float, size: float,
         transform: QTransform, zoom: float,
+        on_land: Optional[Callable[[str, np.ndarray], np.ndarray]] = None,
     ) -> None:
         self._geometry = geometry
         self._x0, self._y0, self._size = x0, y0, size
         self._t = transform
         self._zoom = zoom
+        self._on_land = on_land
 
     @property
     def zoom(self) -> float:
         return self._zoom
+
+    @property
+    def regional(self) -> bool:
+        return True
+
+    def on_land(self, key: str, ecef: np.ndarray) -> np.ndarray:
+        return self._on_land(key, ecef) if self._on_land is not None else ecef
 
     def _project(self, ecef: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """``(sx, sy, valid, near)``: screen position, has-an-image, near-the-cell."""

@@ -31,28 +31,35 @@ from realmgen.refine.fill import (
     polity_fill_recipe,
 )
 from realmgen.refine.settlements import (
-    _neighbor_any,
     position_key,
     refine_settlement_positions,
     remap_routes,
 )
+from realmgen.refine.sites import SiteField, _neighbor_any, densify_polylines
 
 
 # ── Stub mesh ──────────────────────────────────────────────────────────────────
 
 
 class _StubMesh:
-    """One 4×4-texel face whose texel (i, j) sits at [j, i, 0]."""
+    """4×4-texel faces laid side by side: face f's texel (i, j) sits at [4f + j, i, 0]."""
 
-    def __init__(self, centroid):
-        self.face_centroids = np.array([centroid], dtype=np.float64)
+    def __init__(self, *centroids):
+        self.face_centroids = np.array(centroids, dtype=np.float64)
 
     def face_texture_positions(self, h, w):
-        pos = np.zeros((1, h, w, 3), dtype=np.float64)
-        for i in range(h):
-            for j in range(w):
-                pos[0, i, j] = [j, i, 0.0]
+        n = len(self.face_centroids)
+        pos = np.zeros((n, h, w, 3), dtype=np.float64)
+        for f in range(n):
+            for i in range(h):
+                for j in range(w):
+                    pos[f, i, j] = [4 * f + j, i, 0.0]
         return pos
+
+
+def _refine(settlements, mesh, ocean, lake=None, rivers=None, **kw):
+    sites = SiteField(mesh, ocean, lake, None, rivers)
+    return refine_settlement_positions(settlements, sites=sites, **kw)
 
 
 _REFINE_POS = np.array([10.0, 10.0, 10.0])
@@ -74,44 +81,79 @@ def test_neighbor_any_orthogonal_only():
 
 def test_snap_to_ocean_coast():
     # Columns 2-3 are ocean → land cols 0-1; coast = col 1 (adjacent to ocean).
-    mesh = _StubMesh(centroid=[1.0, 1.5, 0.0])
+    mesh = _StubMesh([1.0, 1.5, 0.0])
     ocean = np.zeros((1, 4, 4, 1), dtype=np.float64)
     ocean[0, :, 2:, 0] = 1.0
     s = _settlement(pop=1000.0, position=_REFINE_POS)
-    moved = refine_settlement_positions(
-        [s], mesh=mesh, ocean_tex=ocean, lake_tex=None,
-        fertility=np.array([1.0]), rivers=None,
-    )
+    moved = _refine([s], mesh, ocean)
     assert s.position[0] == 1.0          # snapped onto the coast column
     assert position_key(np.array([10.0, 10.0, 10.0])) in moved
 
 
 def test_ocean_preferred_over_lake():
     # Col 0 borders a lake (col... actually make col 3 ocean, col 0 lake-side).
-    mesh = _StubMesh(centroid=[1.5, 1.5, 0.0])
+    mesh = _StubMesh([1.5, 1.5, 0.0])
     ocean = np.zeros((1, 4, 4, 1), dtype=np.float64)
     ocean[0, :, 3, 0] = 1.0              # ocean on col 3 → coast col 2
     lake = np.zeros((1, 4, 4, 1), dtype=np.float64)
     lake[0, :, 0, 0] = 1.0               # lake on col 0 → coast col 1
     s = _settlement(pop=1000.0, position=_REFINE_POS)
-    refine_settlement_positions(
-        [s], mesh=mesh, ocean_tex=ocean, lake_tex=lake,
-        fertility=np.array([1.0]), rivers=None,
-    )
+    _refine([s], mesh, ocean, lake)
     assert s.position[0] == 2.0          # ocean coast wins over lake coast
 
 
 def test_snap_to_river_when_no_coast():
-    mesh = _StubMesh(centroid=[0.0, 0.0, 0.0])
+    mesh = _StubMesh([0.0, 0.0, 0.0])
     ocean = np.zeros((1, 4, 4, 1), dtype=np.float64)  # all land
     river_pts = np.array([[0.0, 0.0, 0.0]], dtype=np.float64)
     rivers = [(river_pts, np.array([1.0]), None)]
     s = _settlement(pop=1000.0, position=_REFINE_POS)
-    refine_settlement_positions(
-        [s], mesh=mesh, ocean_tex=ocean, lake_tex=None,
-        fertility=np.array([1.0]), rivers=rivers,
-    )
+    _refine([s], mesh, ocean, rivers=rivers)
     assert np.allclose(s.position, [0.0, 0.0, 0.0])   # snapped onto the river texel
+
+
+def _two_cities_on_one_river(min_spacing):
+    # Two all-land faces; a river runs along their shared edge (x = 3.5), so both
+    # cities' best site hugs the same stretch of it.
+    mesh = _StubMesh([1.5, 1.5, 0.0], [5.5, 1.5, 0.0])
+    ocean = np.zeros((2, 4, 4, 1), dtype=np.float64)
+    rivers = [(np.array([[3.5, 0.0, 0.0], [3.5, 3.0, 0.0]]), np.array([1.0, 1.0]), None)]
+    small = _settlement(face_id=0, pop=1000.0, position=_REFINE_POS.copy())
+    big = _settlement(face_id=1, pop=5000.0, position=_REFINE_POS + 1.0)
+    _refine([small, big], mesh, ocean, rivers=rivers, min_spacing=min_spacing)
+    return small.position, big.position
+
+
+def test_adjacent_cities_crowd_the_shared_river_without_spacing():
+    small, big = _two_cities_on_one_river(0.0)
+    assert np.linalg.norm(small - big) < 3.0
+
+
+def test_min_spacing_keeps_adjacent_cities_apart_bigger_city_first():
+    small, big = _two_cities_on_one_river(3.0)
+    assert np.linalg.norm(small - big) >= 3.0
+    assert big[0] in (4.0, 5.0)           # the bigger city kept its river site
+    assert small[0] < 4.0                 # and each stays inside its own face
+
+
+def test_city_stays_on_owned_texels():
+    # Face 0's grid over-hangs face 1: its texels at x = 3 are nearer face 1's
+    # centroid, so they are not face 0's to build on even though they are coast.
+    mesh = _StubMesh([0.5, 1.5, 0.0], [3.0, 1.5, 0.0])
+    ocean = np.zeros((2, 4, 4, 1), dtype=np.float64)
+    ocean[1] = 1.0
+    ocean[0, :, 3, 0] = 1.0               # coast at face 0's col 2 — owned by face 1
+    s = _settlement(face_id=0, pop=1000.0, position=_REFINE_POS.copy())
+    _refine([s], mesh, ocean)
+    assert s.position[0] < 1.75           # nearer centroid 0 than centroid 1
+
+
+def test_densify_polylines_bounds_the_gap():
+    pts = densify_polylines([np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])], 0.3)
+    assert pts is not None
+    xs = np.sort(pts[:, 0])
+    assert xs[0] == 0.0 and xs[-1] == 1.0
+    assert np.diff(xs).max() <= 0.3 + 1e-12
 
 
 # ── route remapping ──────────────────────────────────────────────────────────

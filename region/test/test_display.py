@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from core.display import SchemeSpec, TextureRecipe
-from region.display import build_layer_texture, describe_texel, has_refined_layer
+from region.display import build_layer_texture, describe_texel, has_refined_layer, snap_to_land
 from region.upsample import RegionUpsampleParams, build_region_fields
 from worldgen.climate.display import (
     ANNUAL_TEMPERATURE_RECIPE,
@@ -154,3 +154,60 @@ def test_recipe_can_read_texel_positions(fields):
     assert has_refined_layer(fields, spec)
     rgba = build_layer_texture(fields, spec)
     assert np.allclose(rgba[..., :3], 0.5 + 0.5 * fields.positions)
+
+
+# ── snapping settlements onto land ───────────────────────────────────────────
+
+
+def _water(fields):
+    water = fields.textures["ocean_mask"][..., 0] > 0.5
+    return water | (fields.textures["lake_mask"][..., 0] > 0.5)
+
+
+def _is_wet(fields, points):
+    s, t, _ = fields.geometry.ecef_to_local(points)
+    h, r, c, inside = fields.grid.texels_at(s, t, fields.tex_size)
+    return inside & _water(fields)[h, r, c]
+
+
+def test_snap_moves_a_near_shore_point_onto_land_and_leaves_land_alone(fields):
+    water = _water(fields)
+    land = fields.in_hex & ~water
+    shore = fields.in_hex & water & (
+        np.roll(land, 1, axis=1) | np.roll(land, -1, axis=1)
+        | np.roll(land, 1, axis=2) | np.roll(land, -1, axis=2))
+    # Inside the cell square (hexes spill past it) and seen as water there.
+    shore_pts = fields.positions[shore]
+    wet_pt = shore_pts[_is_wet(fields, shore_pts)][:1]
+    land_pts = fields.positions[land]
+    dry_pt = land_pts[~_is_wet(fields, land_pts)][:1]
+    assert len(wet_pt) == 1 and len(dry_pt) == 1
+
+    reach = 3.0 * fields.grid.texel_spacing_rad(fields.tex_size)
+    out = snap_to_land(fields, np.concatenate([wet_pt, dry_pt]), reach)
+    assert not _is_wet(fields, out).any()
+    assert np.linalg.norm(out[0] - wet_pt[0]) <= reach
+    np.testing.assert_array_equal(out[1], dry_pt[0])
+
+
+def test_snap_leaves_open_water_beyond_reach(fields):
+    water = _water(fields)
+    land_pts = fields.positions[fields.in_hex & ~water]
+    wet_pts = fields.positions[fields.in_hex & water]
+    # The water texel farthest from any land.
+    gap = np.min(np.linalg.norm(wet_pts[:, None] - land_pts[None, ::7], axis=2), axis=1)
+    far = wet_pts[[int(np.argmax(gap))]]
+    out = snap_to_land(fields, far, 0.5 * float(gap.max()))
+    np.testing.assert_array_equal(out, far)
+
+
+def test_texels_at_matches_texel_at(fields):
+    grid, tex = fields.grid, fields.tex_size
+    rng = np.random.default_rng(0)
+    s, t = rng.uniform(-0.1, 1.1, 200), rng.uniform(-0.1, 1.1, 200)
+    hexes, rows, cols, inside = grid.texels_at(s, t, tex)
+    for k in range(200):
+        one = grid.texel_at(float(s[k]), float(t[k]), tex)
+        assert (one is not None) == bool(inside[k])
+        if one is not None:
+            assert one == (hexes[k], rows[k], cols[k])

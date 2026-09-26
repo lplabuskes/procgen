@@ -12,6 +12,8 @@ TRADE_FLOW = MetaChannel("trade_flow", dtype=np.float64)
 POPULATION = MetaChannel("population", dtype=np.float64)  # urban headcount (people) at settlement faces
 RURAL_POPULATION = MetaChannel("rural_population", dtype=np.float64)  # per-face rural people (land only)
 HINTERLAND_ID = MetaChannel("hinterland_id", dtype=np.int32)  # settlement index or -1
+# Towns — carved out of rural_population, which the town stage reduces to match
+TOWN_POPULATION = MetaChannel("town_population", dtype=np.float64)  # people in towns per face
 # Stage 5 — Polities
 POLITY_ID = MetaChannel("polity_id", dtype=np.int32, default=-1)  # directly-governing polity index or -1
 SOVEREIGN_ID = MetaChannel("sovereign_id", dtype=np.int32, default=-1)  # root polity of the face's tree or -1

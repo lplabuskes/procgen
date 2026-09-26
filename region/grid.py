@@ -139,15 +139,29 @@ class RegionHexGrid:
         The owning hexagon is the one with the nearest centre (a regular hex
         tiling is the Voronoi diagram of its centres); ``None`` outside the cell.
         """
-        if not (0.0 <= s <= 1.0 and 0.0 <= t <= 1.0) or len(self) == 0:
+        hexes, rows, cols, inside = self.texels_at(np.array([s]), np.array([t]), tex_size)
+        if not inside[0]:
             return None
-        d2 = (self.centers[:, 0] - s) ** 2 + (self.centers[:, 1] - t) ** 2
-        i = int(np.argmin(d2))
+        return int(hexes[0]), int(rows[0]), int(cols[0])
+
+    def texels_at(
+        self, s: np.ndarray, t: np.ndarray, tex_size: int,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """:meth:`texel_at` for arrays: ``(hex, row, col, inside)``; entries with
+        ``inside`` False (outside the cell) hold zeros."""
+        s = np.asarray(s, dtype=np.float64).ravel()
+        t = np.asarray(t, dtype=np.float64).ravel()
+        inside = (s >= 0.0) & (s <= 1.0) & (t >= 0.0) & (t <= 1.0) & (len(self) > 0)
+        zeros = np.zeros(s.shape, dtype=np.int64)
+        if not inside.any():
+            return zeros, zeros.copy(), zeros.copy(), inside
+        d2 = (self.centers[None, :, 0] - s[:, None]) ** 2 + (self.centers[None, :, 1] - t[:, None]) ** 2
+        hexes = np.where(inside, np.argmin(d2, axis=1), 0)
         half = _TEXTURE_HALF_WIDTH * self.radius
-        cs, ct = self.centers[i]
-        col = int(np.clip((s - (cs - half)) / (2.0 * half) * tex_size, 0, tex_size - 1))
-        row = int(np.clip(((ct + half) - t) / (2.0 * half) * tex_size, 0, tex_size - 1))
-        return i, row, col
+        cs, ct = self.centers[hexes, 0], self.centers[hexes, 1]
+        cols = np.clip(((s - (cs - half)) / (2.0 * half) * tex_size).astype(np.int64), 0, tex_size - 1)
+        rows = np.clip((((ct + half) - t) / (2.0 * half) * tex_size).astype(np.int64), 0, tex_size - 1)
+        return hexes, np.where(inside, rows, 0), np.where(inside, cols, 0), inside
 
     def texel_spacing_rad(self, tex_size: int) -> float:
         """Mean angular spacing (radians) between neighbouring texels on the sphere."""

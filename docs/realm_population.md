@@ -11,7 +11,7 @@ Part of `realmgen/`. [Back to realmgen overview](realmgen.md)
 
 ## Design
 
-All populations are **real people**, anchored to a medieval-tech Earth (~300–400 M world total). Design rationale: `docs/plans/city_population_rework_plan.md`. Three quantities: per-face **rural population** (`D_max · fertility^γ · area_km²` — the Malthusian food base, land only), per-settlement **carrying capacity** (food base summed over claimed hinterland shares), and per-settlement **urban population** (`s · share · cap + β · trade_flow` — additive trade lets a thin-hinterland chokepoint grow large on imported grain, the Constantinople/Venice case). A settlement exists as a city only if its urban population clears `city_min`; the modeled settlements are *major cities* — towns/villages are sub-face-scale and deliberately unmodeled (their slice of the regional surplus is reserved via `city_surplus_share`).
+All populations are **real people**, anchored to a medieval-tech Earth (~300–400 M world total). Design rationale: `docs/plans/city_population_rework_plan.md`. Three quantities: per-face **rural population** (`D_max · fertility^γ · area_km²` — the Malthusian food base, land only), per-settlement **carrying capacity** (food base summed over claimed hinterland shares), and per-settlement **urban population** (`s · share · cap + β · trade_flow` — additive trade lets a thin-hinterland chokepoint grow large on imported grain, the Constantinople/Venice case). A settlement exists as a city only if its urban population clears `city_min`; the modeled settlements are *major cities* — towns/villages are sub-face-scale and not modeled here (their slice of the regional surplus is reserved via `city_surplus_share`); display-only towns are carved out of the rural population later by the town stage, see [realm_towns.md](realm_towns.md).
 
 ## Params
 
@@ -31,9 +31,9 @@ The final-pass `pair_flow` is published by `PopulationStage` as the `trade_attri
 
 Runs third in `RealmPipeline`. Reads `IS_WATER`, `COST_SURFACES`, `MINERALS`, `RARE_BIO`, `FERTILITY_MEAN`, `SUITABILITY`. Danger (`DangerInfluenceParams.movement_scale`) is added to land base cost in the cost graphs.
 
-Computes the per-face food base and rural population up front (written to `RURAL_POPULATION`), then runs a relaxation loop for `relaxation_passes` iterations: each pass spawns trade-hub and waypoint settlements (`trade_spawn.py`), recomputes hinterland shares, carrying capacity, trade wealth, urban population, culls cities below `city_min`, then reruns the trade network with population-weighted demands.
+Computes the per-face food base and rural population up front (written to `RURAL_POPULATION`, with `TOWN_POPULATION` zeroed — the town stage later moves its towns from one to the other), then runs a relaxation loop for `relaxation_passes` iterations: each pass spawns trade-hub and waypoint settlements (`trade_spawn.py`), recomputes hinterland shares, carrying capacity, trade wealth, urban population, culls cities below `city_min`, then reruns the trade network with population-weighted demands.
 
-After the relaxation loop, **defensibility is computed per settlement** and stamped onto the `Settlement` objects — see [Defensibility](#defensibility) below. Stores final per-settlement diagnostics (`carrying_cap`, `trade_wealth`) aligned with `settlements`/`population`. In debug mode registers a "Rural Population" color scheme.
+After the relaxation loop, **defensibility is computed per settlement** and stamped onto the `Settlement` objects — see [Defensibility](#defensibility) below. Stores final per-settlement diagnostics (`carrying_cap`, `trade_wealth`) aligned with `settlements`/`population`. 
 
 ## calibration.py
 
@@ -66,6 +66,6 @@ Returns `(defensibility, has_walls, wall_strength)`, all stamped onto `Settlemen
 
 ## Outputs
 
-Per-face: `TRADE_FLOW`, `POPULATION`, `HINTERLAND_ID`, `RURAL_POPULATION`, `is_trade_hub`, `settlement_tier`.
+Per-face: `TRADE_FLOW`, `POPULATION`, `HINTERLAND_ID`, `RURAL_POPULATION`, `TOWN_POPULATION` (zeroed), `is_trade_hub`, `settlement_tier`.
 Features: `settlements` (updated with population, defensibility, has_walls, wall_strength), `trade_routes`, `trade_attribution` (`(S, S)` directional inter-settlement trade matrix, aligned with `settlements`).
-Color schemes: Trade Flow, Hinterland, and (debug) Rural Population.
+Color schemes (debug): Trade Flow, Hinterland. (Rural density is drawn by the town stage.)

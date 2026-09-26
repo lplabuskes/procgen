@@ -246,7 +246,19 @@ They size themselves by the *equivalent world zoom* — the world-map zoom that
 would show this ground at the same pixel scale — so a region looks like the
 world map zoomed to the same place. Overlays are world-resolution data: rivers
 and borders are not refined, so they follow the global paths rather than the
-refined terrain.
+refined terrain. The **Towns** overlay draws only here (`regional` on the
+projector; see [realm_towns.md](realm_towns.md)), and cities are drawn to stand
+apart from the towns: 1.5× their world-map size (and at least twice the
+largest town dot), opaque, and ringed dark-then-white.
+
+**Settlements onto land.** Towns and cities are sited on global texels, so the
+refined shoreline can flood one (~1% of towns, a few coastal cities). The
+projector's `on_land` runs `region.display.snap_to_land`: a marker on refined
+water moves to the nearest in-hexagon land texel within
+`water_spread_texels + 2` regional texels (the farthest the refinement lets water
+advance), typically 3–6 km. Trade-route endpoints at a moved city follow it.
+`RegionView` caches the result per feature. It is display-only, and the world
+features keep their global positions.
 
 ## Not yet implemented
 
