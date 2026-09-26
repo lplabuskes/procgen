@@ -1326,16 +1326,16 @@ class MapWindow(QMainWindow):
 
         zoom_out_btn = QPushButton("−")
         zoom_out_btn.setFixedWidth(30)
-        zoom_out_btn.clicked.connect(lambda: self._map.zoom_out())
+        zoom_out_btn.clicked.connect(lambda: self._active_view().zoom_out())
         toolbar_layout.addWidget(zoom_out_btn)
 
         zoom_in_btn = QPushButton("+")
         zoom_in_btn.setFixedWidth(30)
-        zoom_in_btn.clicked.connect(lambda: self._map.zoom_in())
+        zoom_in_btn.clicked.connect(lambda: self._active_view().zoom_in())
         toolbar_layout.addWidget(zoom_in_btn)
 
         reset_btn = QPushButton("Reset")
-        reset_btn.clicked.connect(lambda: self._map.reset_view())
+        reset_btn.clicked.connect(lambda: self._active_view().reset_view())
         toolbar_layout.addWidget(reset_btn)
 
         bottom_toolbar = QWidget()
@@ -1406,6 +1406,12 @@ class MapWindow(QMainWindow):
         self._stack.setCurrentWidget(self._region_view)
         self._region_btn.setVisible(False)
         self._back_btn.setVisible(True)
+
+    def _active_view(self) -> "MapWidget | RegionView":
+        """Whichever view is on screen — the zoom buttons act on it."""
+        if self._stack.currentWidget() is self._region_view:
+            return self._region_view
+        return self._map
 
     def _exit_region(self) -> None:
         """Return from the zoomed-in region view to the world map."""

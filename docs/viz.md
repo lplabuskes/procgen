@@ -72,7 +72,7 @@ Splits a unit-sphere polygon at a cut meridian.
 
 Hosts `MapWidget` with a toolbar and bottom bar.
 
-**Toolbar**: Save button, Projection combo (`ALL_PROJECTIONS`), Coloration combo (scheme names), Overlays dropdown menu (one checkable `QAction` per overlay), zoom −/+/Reset.
+**Toolbar**: Save button, Projection combo (`ALL_PROJECTIONS`), Coloration combo (scheme names), Overlays dropdown menu (one checkable `QAction` per overlay), zoom −/+/Reset (routed to the region view while it is showing).
 
 **Bottom bar**: status label, Parameters button, Re-run button.
 

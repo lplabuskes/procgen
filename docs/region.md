@@ -216,6 +216,14 @@ biome/temperature/precipitation → water-or-biome, T, P). Everything not refine
 regionally (fertility, danger, polity, settlements, …) is the world value.
 Leaving the cell restores the summary.
 
+Scroll zooms (1×–`RegionView.MAX_ZOOM` = 20×, anchored to the cursor) and drag
+pans, like the world map; the toolbar's −/+/Reset act on whichever view is
+showing. The zoom is a screen-space magnification of the laid-out cell, composed
+after the north-up rotation, so hover goes through the same inverse transform.
+Pan is stored in footprint widths (resize-safe) and clamped so the view never
+leaves the cell; the map is clipped short of the legend. Entering a region
+resets the view. Outlines are cosmetic pens, so they stay 1 px at any zoom.
+
 ## Not yet implemented
 
 Hydrology, resources, cost surfaces and realmgen inside a region; region

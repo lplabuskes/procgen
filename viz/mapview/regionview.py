@@ -33,7 +33,13 @@ class RegionView(QWidget):
 
     Without a globe (or before a region is picked) the view falls back to drawing
     the bare hex scaffolding.
+
+    Scroll to zoom (1×–``MAX_ZOOM``, anchored to the cursor) and drag to pan, as
+    on the world map.  The zoom is a screen-space magnification of the laid-out
+    cell, so it composes with the north-up rotation and the legend stays put.
     """
+
+    MAX_ZOOM = 20.0
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -51,8 +57,17 @@ class RegionView(QWidget):
         # (x0, y0, size, rotation) of the cell as last painted — hover hit-tests against it.
         self._cell_layout: Optional[tuple[float, float, float, QTransform]] = None
         self._hover_callback: Optional[Callable[[Optional[tuple[int, int, int]]], None]] = None
+        # Magnification about the cell's footprint centre, and the pan offset in
+        # units of the footprint width (so it survives a resize).
+        self._zoom: float = 1.0
+        self._pan = np.zeros(2, dtype=np.float64)
+        # (centre x, centre y, footprint px) of the last paint — zoom/pan anchor.
+        self._view_frame: Optional[tuple[float, float, float]] = None
+        self._drag_start: Optional[tuple[float, float]] = None
+        self._drag_start_pan = np.zeros(2, dtype=np.float64)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMouseTracking(True)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
 
     # ── data ─────────────────────────────────────────────────────────────────
 
@@ -63,6 +78,8 @@ class RegionView(QWidget):
         self._grid = RegionHexGrid(geometry, int(self._params.n_cols))
         self._fields = None
         self._hex_images = []
+        self._zoom = 1.0
+        self._pan[:] = 0.0
         if globe is not None and "elevation" in globe.mesh.face_textures:
             self._fields = build_region_fields(globe, geometry.region_id, self._params)
             self._grid = self._fields.grid
@@ -77,6 +94,8 @@ class RegionView(QWidget):
         self._fields = None
         self._hex_images = []
         self._cell_layout = None
+        self._view_frame = None
+        self._drag_start = None
 
     def set_layer(
         self,
@@ -190,10 +209,16 @@ class RegionView(QWidget):
         fy0 = (H - footprint) * 0.5
         x0 = fx0 + 0.5 * (footprint - size)
         y0 = fy0 + 0.5 * (footprint - size)
-        transform = self._cell_transform(angle, x0, y0, size)
+        cx, cy = fx0 + 0.5 * footprint, fy0 + 0.5 * footprint
+        self._view_frame = (cx, cy, footprint)
+        transform = self._cell_transform(angle, x0, y0, size) * self._view_transform()
         self._cell_layout = (x0, y0, size, transform)
 
         painter.save()
+        # Zoomed in, the map fills everything right of the legend but never covers it.
+        if legend:
+            left = fx0 - 0.5 * legend_gap
+            painter.setClipRect(QRectF(left, 0.0, W - left, H))
         painter.setTransform(transform, True)
         if self._hex_images:
             self._draw_textured_hexes(painter, x0, y0, size)
@@ -202,7 +227,7 @@ class RegionView(QWidget):
 
         # The cell outline; the run's summary goes to the window's status bar
         # (``status_text``) rather than over the map.
-        painter.setPen(QPen(QColor(70, 85, 100), 1.0))
+        painter.setPen(_cosmetic_pen(QColor(70, 85, 100)))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(QRectF(x0, y0, size, size))
         painter.restore()
@@ -230,6 +255,78 @@ class RegionView(QWidget):
         angle = math.atan2(-ds, dt)
         return 0.0 if abs(angle) < 1e-9 else angle
 
+    def _view_transform(self) -> QTransform:
+        """Zoom about the footprint centre, then pan — applied after the rotation."""
+        t = QTransform()
+        if self._view_frame is None:
+            return t
+        cx, cy, footprint = self._view_frame
+        t.translate(cx + self._pan[0] * footprint, cy + self._pan[1] * footprint)
+        t.scale(self._zoom, self._zoom)
+        t.translate(-cx, -cy)
+        return t
+
+    # ── zoom / pan ───────────────────────────────────────────────────────────
+
+    @property
+    def zoom(self) -> float:
+        return self._zoom
+
+    def zoom_toward(self, mx: float, my: float, factor: float) -> None:
+        """Scale by ``factor`` keeping the screen point ``(mx, my)`` fixed."""
+        if self._view_frame is None:
+            return
+        cx, cy, footprint = self._view_frame
+        new_zoom = max(1.0, min(self.MAX_ZOOM, self._zoom * factor))
+        if new_zoom == 1.0:
+            self._pan[:] = 0.0
+        else:
+            # The unzoomed point under the cursor must land under it again.
+            px = cx + self._pan[0] * footprint
+            py = cy + self._pan[1] * footprint
+            qx = (mx - px) / self._zoom
+            qy = (my - py) / self._zoom
+            self._pan[0] = (mx - cx - new_zoom * qx) / footprint
+            self._pan[1] = (my - cy - new_zoom * qy) / footprint
+        self._zoom = new_zoom
+        self._clamp_pan()
+        self.update()
+
+    def zoom_in(self) -> None:
+        self.zoom_toward(self.width() * 0.5, self.height() * 0.5, 1.2)
+
+    def zoom_out(self) -> None:
+        self.zoom_toward(self.width() * 0.5, self.height() * 0.5, 1.0 / 1.2)
+
+    def reset_view(self) -> None:
+        self._zoom = 1.0
+        self._pan[:] = 0.0
+        self.update()
+
+    def _clamp_pan(self) -> None:
+        """Keep the footprint centre's view covered — no panning off into the void."""
+        limit = 0.5 * (self._zoom - 1.0)
+        self._pan[:] = np.clip(self._pan, -limit, limit)
+
+    def wheelEvent(self, event) -> None:
+        delta = event.angleDelta().y()
+        if delta:
+            pos = event.position()
+            self.zoom_toward(float(pos.x()), float(pos.y()), 1.2 ** (delta / 120.0))
+        event.accept()
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            pos = event.position()
+            self._drag_start = (float(pos.x()), float(pos.y()))
+            self._drag_start_pan = self._pan.copy()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start = None
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+
     @staticmethod
     def _cell_transform(angle: float, x0: float, y0: float, size: float) -> QTransform:
         """Rotation of the whole cell about its centre by ``angle``."""
@@ -256,9 +353,16 @@ class RegionView(QWidget):
         return self._fields.grid.texel_at(s, t, self._fields.tex_size)
 
     def mouseMoveEvent(self, event) -> None:
+        pos = event.position()
+        mx, my = float(pos.x()), float(pos.y())
+        if self._drag_start is not None and self._view_frame is not None:
+            footprint = self._view_frame[2]
+            self._pan[0] = self._drag_start_pan[0] + (mx - self._drag_start[0]) / footprint
+            self._pan[1] = self._drag_start_pan[1] + (my - self._drag_start[1]) / footprint
+            self._clamp_pan()
+            self.update()
         if self._hover_callback is not None:
-            pos = event.position()
-            self._hover_callback(self.texel_at_screen(float(pos.x()), float(pos.y())))
+            self._hover_callback(self.texel_at_screen(mx, my))
 
     def leaveEvent(self, event) -> None:
         if self._hover_callback is not None:
@@ -286,11 +390,12 @@ class RegionView(QWidget):
         scale = (2.0 * r_px) / tex_size
         # Draw a hair past the hexagon so antialiased neighbours overlap instead
         # of leaving a seam; the extra pixel comes from the texture's over-hang,
-        # which is real data for the adjacent hexagon anyway.
-        r_draw = r_px + 0.75
+        # which is real data for the adjacent hexagon anyway.  Divided by the
+        # zoom so the overlap stays sub-pixel on screen.
+        r_draw = r_px + 0.75 / self._zoom
 
         painter.save()
-        painter.setClipRect(QRectF(x0, y0, size, size))
+        painter.setClipRect(QRectF(x0, y0, size, size), Qt.ClipOperation.IntersectClip)
         painter.setPen(Qt.PenStyle.NoPen)
         for i, (s, t) in enumerate(self._grid.centers):
             cx = x0 + s * size
@@ -305,7 +410,7 @@ class RegionView(QWidget):
         # Faint outlines: the hexagons are the scaffolding for local maps, so
         # they stay legible without competing with the terrain.
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(QColor(20, 25, 30, 60), 1.0))
+        painter.setPen(_cosmetic_pen(QColor(20, 25, 30, 60)))
         for s, t in self._grid.centers:
             painter.drawPolygon(
                 self._hex_polygon(x0 + s * size, y0 + (1.0 - t) * size, r_px)
@@ -317,13 +422,18 @@ class RegionView(QWidget):
         assert self._grid is not None
         r_px = self._grid.radius * size
         painter.save()
-        painter.setClipRect(QRectF(x0, y0, size, size))
-        pen = QPen(QColor(90, 110, 130))
-        pen.setWidthF(1.0)
-        painter.setPen(pen)
+        painter.setClipRect(QRectF(x0, y0, size, size), Qt.ClipOperation.IntersectClip)
+        painter.setPen(_cosmetic_pen(QColor(90, 110, 130)))
         painter.setBrush(QColor(34, 40, 48))
         for s, t in self._grid.centers:
             cx = x0 + s * size
             cy = y0 + (1.0 - t) * size
             painter.drawPolygon(self._hex_polygon(cx, cy, r_px))
         painter.restore()
+
+
+def _cosmetic_pen(color: QColor) -> QPen:
+    """A 1-px line that stays 1 px however far the view is zoomed."""
+    pen = QPen(color, 1.0)
+    pen.setCosmetic(True)
+    return pen
