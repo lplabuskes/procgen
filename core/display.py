@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 SchemeFn = Callable[[dict], tuple]
 # A hover contributor maps (face_idx, uv_or_None, world) to status fragments.
 HoverFn = Callable[[int, "Optional[np.ndarray]", "World"], List[str]]
+# Refined values for a set of texture keys, or None when not all are refined.
+LocalHoverFn = Callable[[Tuple[str, ...]], Optional[List[str]]]
 # A legend is (kind, entries) where kind is e.g. "gradient" | "categorical".
 Legend = Tuple[str, list]
 
@@ -32,6 +34,14 @@ class SchemeSpec:
     fn: SchemeFn
     texture: Optional[str] = None      # associated per-face RGBA texture, if any
     legend: Optional[Legend] = None
+
+
+@dataclass
+class HoverSpec:
+    fn: HoverFn
+    # Face-texture keys this contributor reports. A regional view that has
+    # refined all of them shows its own values in place of this contributor.
+    refined: Tuple[str, ...] = ()
 
 
 @dataclass
@@ -48,7 +58,7 @@ class DisplayRegistry:
     def __init__(self) -> None:
         self.schemes: dict[str, SchemeSpec] = {}
         self.overlays: List[OverlaySpec] = []
-        self.hover_fns: List[HoverFn] = []
+        self.hover_fns: List[HoverSpec] = []
 
     def add_scheme(
         self,
@@ -70,12 +80,29 @@ class DisplayRegistry:
     ) -> None:
         self.overlays.append(OverlaySpec(feature, label, checked, legend))
 
-    def add_hover(self, fn: HoverFn) -> None:
-        self.hover_fns.append(fn)
+    def add_hover(self, fn: HoverFn, *, refined: Tuple[str, ...] = ()) -> None:
+        """Register a hover contributor.
 
-    def hover(self, face_idx: int, uv: "Optional[np.ndarray]", world: "World") -> List[str]:
-        """Concatenate every registered contributor's fragments for a face."""
+        ``refined`` names the face textures it reports on (e.g. ``("elevation",)``);
+        see ``hover``'s ``local``.
+        """
+        self.hover_fns.append(HoverSpec(fn, tuple(refined)))
+
+    def hover(
+        self,
+        face_idx: int,
+        uv: "Optional[np.ndarray]",
+        world: "World",
+        local: Optional[LocalHoverFn] = None,
+    ) -> List[str]:
+        """Concatenate every registered contributor's fragments for a face.
+
+        ``local`` lets a regional view substitute its refined values: for each
+        contributor with ``refined`` keys, ``local(keys)`` is tried first and, if
+        it returns fragments, they replace the contributor's global ones in place.
+        """
         parts: List[str] = []
-        for fn in self.hover_fns:
-            parts.extend(fn(face_idx, uv, world))
+        for spec in self.hover_fns:
+            replaced = local(spec.refined) if local is not None and spec.refined else None
+            parts.extend(replaced if replaced is not None else spec.fn(face_idx, uv, world))
         return parts

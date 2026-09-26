@@ -351,7 +351,7 @@ class ElevationBuilder(Stage):
             ty = int(np.clip(uv[1] * h_t, 0, h_t - 1))
             return [f"[px: {float(elev_tex[face, ty, tx, 0]):.2f} km]"]
 
-        reg.add_hover(_elev_px_hover)
+        reg.add_hover(_elev_px_hover, refined=("elevation",))
 
     # ── Persistence ──────────────────────────────────────────────────────────
 

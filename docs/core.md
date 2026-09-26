@@ -55,7 +55,7 @@ Feature registry: `add_feature(name, data)`, `get_feature(name)`, `has_feature(n
 
 Qt-free surface that stages contribute visualization to. A viz adapter (`viz/mapview/registry.py`) later walks it and wires into a concrete `MapWindow`, keeping Qt/OpenGL out of `core`.
 
-- **`DisplayRegistry`**: `add_scheme(name, fn, *, texture?, legend?)`, `add_overlay(feature, label, *, checked?, legend?)`, `add_hover(fn)`. `hover(face_idx, uv, world)` concatenates all registered contributor fragments.
+- **`DisplayRegistry`**: `add_scheme(name, fn, *, texture?, legend?)`, `add_overlay(feature, label, *, checked?, legend?)`, `add_hover(fn, *, refined=())`. `hover(face_idx, uv, world, local=None)` concatenates all registered contributor fragments; `refined` names the face textures a contributor reports on, and a regional view's `local(keys)` replaces that contributor's fragments in place when it has refined all of them.
 - **`SchemeSpec`**: `fn: SchemeFn` (callable over face metadata dict → RGBA tuple), optional `texture` (associated per-face RGBA texture name), optional `legend`.
 - **`OverlaySpec`**: `feature: str`, `label: str`, `checked: bool`, optional `legend`.
 

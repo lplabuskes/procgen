@@ -587,7 +587,7 @@ class ClimateBuilder(Stage):
                 parts.append(f"P: {meta['precipitation_annual']:.0f} mm/yr")
             return parts
 
-        reg.add_hover(_climate_hover)
+        reg.add_hover(_climate_hover, refined=("biome", "temperature", "precipitation"))
 
     # ── Persistence ──────────────────────────────────────────────────────────
 

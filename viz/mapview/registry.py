@@ -11,7 +11,7 @@ from typing import Optional
 
 import numpy as np
 
-from core.display import DisplayRegistry
+from core.display import DisplayRegistry, LocalHoverFn
 from core.world import World
 
 
@@ -33,11 +33,12 @@ def apply_registry(reg: DisplayRegistry, window, world: World) -> None:
             kind, entries = ov.legend
             window.register_legend(ov.feature, kind, entries)
 
-    # Decomposed hover: concatenate every stage's fragments into the status bar.
-    def _hover(face_src: Optional[int], uv: Optional[np.ndarray] = None) -> None:
-        if face_src is None:
-            window.set_status("")
-            return
-        window.set_status("  |  ".join(reg.hover(face_src, uv, world)))
+    # Decomposed hover: every stage's fragments for a face; the window joins them
+    # into the status bar. The region view passes ``local`` to swap in its refined
+    # values for the contributors that report on refined textures.
+    def _hover_parts(
+        face_src: int, uv: Optional[np.ndarray] = None, local: Optional[LocalHoverFn] = None
+    ) -> list[str]:
+        return reg.hover(face_src, uv, world, local)
 
-    window.set_hover_callback(_hover)
+    window.set_hover_parts(_hover_parts)

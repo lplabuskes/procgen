@@ -4,7 +4,7 @@ import dataclasses
 import numpy as np
 import pytest
 
-from region.display import REFINED_LAYERS, build_layer_texture, has_refined_layer
+from region.display import REFINED_LAYERS, build_layer_texture, describe_texel, has_refined_layer
 from region.upsample import RegionUpsampleParams, build_region_fields
 
 REGION_ID = 40   # has land (the conftest lake sits on its highland)
@@ -62,3 +62,36 @@ def test_unrefined_layer_without_texture_colors_the_owning_face(fields, syntheti
 def test_unrefined_layer_needs_the_globe(fields):
     with pytest.raises(ValueError):
         build_layer_texture(fields, "Polities")
+
+
+ALL_REFINED = ("elevation", "biome", "temperature", "precipitation")
+
+
+def test_describe_texel_reports_the_refined_values(fields):
+    hex_idx, row, col = (int(x) for x in np.argwhere(fields.in_hex)[0])
+    parts = describe_texel(fields, hex_idx, row, col, ALL_REFINED)
+    assert parts is not None
+    elev = float(fields.textures["elevation"][hex_idx, row, col, 0])
+    assert f"[px: {elev:.2f} km]" in parts
+    assert any(p.startswith("T: ") for p in parts)
+    assert any(p.startswith("P: ") for p in parts)
+
+
+def test_describe_texel_reports_only_the_requested_keys(fields):
+    assert describe_texel(fields, 0, 0, 0, ("elevation",)) == [
+        f"[px: {float(fields.textures['elevation'][0, 0, 0, 0]):.2f} km]"
+    ]
+
+
+def test_describe_texel_defers_unrefined_keys_to_the_globe(fields):
+    assert describe_texel(fields, 0, 0, 0, ("fertility",)) is None
+    assert describe_texel(fields, 0, 0, 0, ("elevation", "fertility")) is None
+    assert describe_texel(fields, 0, 0, 0, ()) is None
+
+
+def test_describe_texel_names_water(fields):
+    ocean = np.argwhere(fields.textures["ocean_mask"][..., 0] > 0)
+    assert len(ocean)
+    hex_idx, row, col = (int(x) for x in ocean[0])
+    parts = describe_texel(fields, hex_idx, row, col, ("biome", "temperature", "precipitation"))
+    assert parts is not None and parts[0] == "Ocean"

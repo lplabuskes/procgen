@@ -18,6 +18,7 @@ Texture layout (deliberately *not* the mesh's endpoint convention):
 from __future__ import annotations
 
 import math
+from typing import Optional
 
 import numpy as np
 
@@ -131,6 +132,22 @@ class RegionHexGrid:
             & (sqrt3 * x + y <= sqrt3 * R + 1e-12)
             & (sqrt3 * x - y <= sqrt3 * R + 1e-12)
         )
+
+    def texel_at(self, s: float, t: float, tex_size: int) -> Optional[tuple[int, int, int]]:
+        """``(hex, row, col)`` of the texel drawn at local point ``(s, t)``, or None.
+
+        The owning hexagon is the one with the nearest centre (a regular hex
+        tiling is the Voronoi diagram of its centres); ``None`` outside the cell.
+        """
+        if not (0.0 <= s <= 1.0 and 0.0 <= t <= 1.0) or len(self) == 0:
+            return None
+        d2 = (self.centers[:, 0] - s) ** 2 + (self.centers[:, 1] - t) ** 2
+        i = int(np.argmin(d2))
+        half = _TEXTURE_HALF_WIDTH * self.radius
+        cs, ct = self.centers[i]
+        col = int(np.clip((s - (cs - half)) / (2.0 * half) * tex_size, 0, tex_size - 1))
+        row = int(np.clip(((ct + half) - t) / (2.0 * half) * tex_size, 0, tex_size - 1))
+        return i, row, col
 
     def texel_spacing_rad(self, tex_size: int) -> float:
         """Mean angular spacing (radians) between neighbouring texels on the sphere."""

@@ -53,7 +53,7 @@ Splits a unit-sphere polygon at a cut meridian.
 | `"trade_routes"` | Yellow lines, width ∝ √flow (0.4–4 px), antimeridian-split |
 | `"settlements"` | Tier-coloured circles; radius = `TIER_RADII[tier] * zoom^0.3 * √(pop/max_pop)*0.4+0.6` |
 
-**Legend**: gradient or categorical, rendered bottom-left. `register_legend(scheme_name, kind, entries)` where `kind` is `"gradient"` or `"categorical"` and `entries` is a list of `(label, rgba)`.
+**Legend**: gradient or categorical, rendered bottom-left by the shared `viz/mapview/legend.py` (`legend_size` / `draw_legend`, also used by `RegionView`). `register_legend(scheme_name, kind, entries)` where `kind` is `"gradient"` or `"categorical"` and `entries` is a list of `(label, rgba)`.
 
 **Hover hit-testing**: vectorised bbox prefilter on all projected polygons → ray-casting PIP → barycentric UV interpolation within the hit fan triangle. `set_hover_callback(cb)` registers `cb(face_src_or_None, uv_or_None)`.
 
@@ -83,7 +83,7 @@ Hosts `MapWidget` with a toolbar and bottom bar.
 - `add_overlay(name, label, checked)` — idempotent; adds to Overlays menu on first call
 - `register_legend(scheme_name, kind, entries)` — forwarded to `MapWidget`
 - `associate_scheme_texture(scheme_name, texture_key)` — forwarded to `MapWidget`
-- `set_hover_callback(cb)` — forwarded to `MapWidget`
+- `set_hover_parts(fn)` — `fn(face, uv, local) -> list[str]` status fragments, joined into the status bar by both views; the region view passes `local` (see `DisplayRegistry.hover`) to substitute refined texel values for contributors tagged `refined=`
 - `set_rebuild_callback(cb)` / `set_params_callback(cb)` / `set_save_callback(cb)` — wire Re-run / Parameters / Save buttons
 - `set_status(text)` / `set_rebuild_enabled(enabled)` — status bar and button-enable helpers
 - `active_scheme` property — returns current active scheme name
@@ -126,7 +126,7 @@ What it does:
 2. For each scheme with a `texture` key: `window.associate_scheme_texture(...)`.
 3. For each scheme/overlay with a `legend`: `window.register_legend(...)`.
 4. For each overlay in `reg.overlays`: `window.add_overlay(...)`.
-5. Builds a decomposed hover callback: calls `reg.hover(face_src, uv, world)` (concatenates all stage contributors' fragments) and writes the result to `window.set_status(...)`.
+5. Builds a decomposed hover function: `reg.hover(face_src, uv, world, local)` (concatenates all stage contributors' fragments), handed to `window.set_hover_parts(...)`.
 
 ---
 

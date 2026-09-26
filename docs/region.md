@@ -173,7 +173,7 @@ pins it.
 
 ### `RegionFields`
 `region_id`, `geometry`, `grid`, `tex_size`, `positions (M,T,T,3)`,
-`in_hex (M,T,T)`, `anchors (M,T,T)`, `faces (M,T,T)` (owning global face), `textures {name: (M,T,T,C)}`,
+`in_hex (M,T,T)`, `anchors (M,T,T)`, `faces (M,T,T)` (owning global face), `face_uv (M,T,T,2)` (texture coords on it), `textures {name: (M,T,T,C)}`,
 `detail_octaves`, `texel_area_km2`.
 
 ## Display (`region/display.py`)
@@ -205,7 +205,16 @@ itself stays Qt-free. Without a globe it falls back to the bare scaffolding.
 cell enters the region view, the shared **Coloration** combo picks the layer in
 both views (so it carries across switching), and
 `RegionView.status_text()` reports hex/texel counts and the detail-octave count
-in the status bar.
+in the status bar. The active layer's legend is drawn outside the cell, to the
+left of its (rotated) footprint; the cell is sized so the rotated footprint fits
+beside it. Hover maps the cursor back through the rotation to a texel
+(`RegionHexGrid.texel_at`) and shows the world map's full hover text for the
+texel's owning face and UV, except that contributors registered with
+`add_hover(..., refined=keys)` are replaced in place by the refined values when
+the region has all of those keys (`describe_texel`: elevation → `[px: …]`,
+biome/temperature/precipitation → water-or-biome, T, P). Everything not refined
+regionally (fertility, danger, polity, settlements, …) is the world value.
+Leaving the cell restores the summary.
 
 ## Not yet implemented
 

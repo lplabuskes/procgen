@@ -93,3 +93,20 @@ def test_texel_spacing_shrinks_with_resolution():
     coarse = grid.texel_spacing_rad(16)
     fine = grid.texel_spacing_rad(32)
     assert fine == pytest.approx(coarse * 0.5, rel=0.05)
+
+
+def test_texel_at_finds_the_in_hexagon_texel_at_its_own_centre():
+    grid = _grid(n_cols=5)
+    tex = 12
+    local = grid.texture_local(tex)
+    in_hex = grid.texture_in_hexagon(tex)
+    for i, row, col in zip(*np.nonzero(in_hex)):
+        s, t = local[i, row, col]
+        if 0.0 <= s <= 1.0 and 0.0 <= t <= 1.0:
+            assert grid.texel_at(s, t, tex) == (i, row, col)
+
+
+def test_texel_at_is_none_outside_the_cell():
+    grid = _grid(n_cols=5)
+    assert grid.texel_at(-0.01, 0.5, 8) is None
+    assert grid.texel_at(0.5, 1.01, 8) is None

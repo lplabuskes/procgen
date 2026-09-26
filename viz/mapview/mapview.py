@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Callable, Optional, Sequence
 
 import numpy as np
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QBrush, QColor, QImage, QLinearGradient, QPainter, QPen, QPolygonF, QTransform
+from PySide6.QtGui import QAction, QBrush, QColor, QImage, QPainter, QPen, QPolygonF, QTransform
 from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtWidgets import (
     QApplication,
@@ -20,9 +20,15 @@ from PySide6.QtWidgets import (
 )
 
 from core.antimeridian import find_ideal_antimeridian
+from core.display import LocalHoverFn
+from region.display import describe_texel
 from region.geometry import RegionGeometry, cell_border_polylines, ecef_to_cell
+from viz.mapview.legend import draw_legend
 from viz.mapview.projections import ALL_PROJECTIONS, RobinsonProjection, Projection
 from viz.mapview.regionview import RegionView
+
+# (face, uv, local) -> status fragments; see ``MapWindow.set_hover_parts``.
+HoverPartsFn = Callable[[int, Optional[np.ndarray], Optional[LocalHoverFn]], list[str]]
 
 if TYPE_CHECKING:
     from core.mesh import PolygonMesh
@@ -1045,85 +1051,12 @@ class MapWidget(QWidget):
         if legend is None:
             return
         kind, entries = legend
-        if len(entries) < 2:
-            return
-        painter.save()
-        if kind == "gradient":
-            self._draw_gradient_legend(painter, W, H, entries)
-        else:
-            self._draw_categorical_legend(painter, W, H, entries)
-        painter.restore()
-
-    def _draw_gradient_legend(self, painter: QPainter, W: float, H: float, entries: list) -> None:
-        font = painter.font()
-        font.setPointSizeF(9.0)
-        painter.setFont(font)
-        fm = painter.fontMetrics()
-
         margin = 12
-        pad = 6
-        bar_w = 18
-        bar_h = min(220, max(120, int(H * 0.38)))
-        lx_gap = 6
+        draw_legend(painter, kind, entries, margin, H - margin, H)
 
-        max_lw = max(fm.horizontalAdvance(lbl) for lbl, _ in entries)
-
-        x0 = margin + pad
-        y_bot = int(H) - margin - pad
-        y_top = y_bot - bar_h
-
-        bg_w = pad + bar_w + lx_gap + max_lw + pad
-        bg_h = pad + bar_h + pad
-        painter.fillRect(margin, y_top - pad, bg_w, bg_h, QColor(20, 20, 20, 160))
-
-        gradient = QLinearGradient(x0, y_top, x0, y_bot)
-        n = len(entries)
-        for i, (_, rgba) in enumerate(entries):
-            # entries[0] = lowest = bottom (pos 1.0); entries[-1] = highest = top (pos 0.0)
-            pos = 1.0 - i / (n - 1)
-            gradient.setColorAt(pos, QColor(int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255), 255))
-        painter.fillRect(QRectF(x0, y_top, bar_w, bar_h), QBrush(gradient))
-        painter.setPen(QPen(QColor(120, 120, 120, 180), 0.5))
-        painter.drawRect(QRectF(x0, y_top, bar_w, bar_h))
-
-        painter.setPen(QColor(240, 240, 240))
-        for i, (label, _) in enumerate(entries):
-            frac = i / (n - 1)
-            cy = y_bot - frac * bar_h
-            ty = int(cy + (fm.ascent() - fm.descent()) // 2)
-            painter.drawText(int(x0 + bar_w + lx_gap), ty, label)
-
-    def _draw_categorical_legend(self, painter: QPainter, W: float, H: float, entries: list) -> None:
-        font = painter.font()
-        font.setPointSizeF(9.0)
-        painter.setFont(font)
-        fm = painter.fontMetrics()
-
-        margin = 12
-        pad = 6
-        swatch = 13
-        swatch_gap = 5
-        row_h = max(swatch, fm.height()) + 3
-
-        max_lw = max(fm.horizontalAdvance(lbl) for lbl, _ in entries)
-        total_h = pad + len(entries) * row_h + pad
-        total_w = pad + swatch + swatch_gap + max_lw + pad
-
-        x0 = margin
-        y0 = int(H) - margin - total_h
-        painter.fillRect(x0, y0, total_w, total_h, QColor(20, 20, 20, 160))
-
-        for i, (label, rgba) in enumerate(entries):
-            row_y = y0 + pad + i * row_h
-            sw_x = x0 + pad
-            sw_y = row_y + (row_h - swatch) // 2
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(QColor(int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255))))
-            painter.drawRect(sw_x, sw_y, swatch, swatch)
-            painter.setPen(QColor(240, 240, 240))
-            cy = row_y + row_h / 2
-            ty = int(cy + (fm.ascent() - fm.descent()) // 2)
-            painter.drawText(x0 + pad + swatch + swatch_gap, ty, label)
+    def legend_for(self, scheme_name: Optional[str]) -> Optional[tuple[str, list]]:
+        """The ``(kind, entries)`` legend registered for a scheme, if any."""
+        return self._legends.get(scheme_name) if scheme_name is not None else None
 
     def set_region_mode(self, enabled: bool) -> None:
         self._region_mode = enabled
@@ -1425,6 +1358,8 @@ class MapWindow(QMainWindow):
         self._map = MapWidget()
         self._region_view = RegionView()
         self._color_combo.currentTextChanged.connect(self._on_scheme_changed)
+        self._hover_parts: Optional[HoverPartsFn] = None
+        self._region_view.set_hover_callback(self._region_hover)
         self._region_btn.toggled.connect(self._map.set_region_mode)
         self._map.set_region_click_callback(self._enter_region)
         self._back_btn.clicked.connect(self._exit_region)
@@ -1498,6 +1433,7 @@ class MapWindow(QMainWindow):
             self._map._color_schemes.get(name) if name is not None else None,
             self._map._scheme_texture_key.get(name) if name is not None else None,
         )
+        self._region_view.set_legend(self._map.legend_for(name))
 
     def set_status(self, text: str) -> None:
         self._status_label.setText(text)
@@ -1534,10 +1470,38 @@ class MapWindow(QMainWindow):
     def register_legend(self, scheme_name: str, kind: str, entries: list) -> None:
         self._map.register_legend(scheme_name, kind, entries)
 
-    def set_hover_callback(
-        self, cb: Optional[Callable[[Optional[int], Optional[np.ndarray]], None]]
-    ) -> None:
-        self._map.set_hover_callback(cb)
+    def set_hover_parts(self, fn: Optional[HoverPartsFn]) -> None:
+        """Status-bar fragments for a hovered ``(face, uv)`` — shared by both views.
+
+        ``fn(face, uv, local)``: the region view passes ``local`` to substitute its
+        refined values; everything it has not refined comes from the world face.
+        """
+        self._hover_parts = fn
+        self._map.set_hover_callback(self._world_hover if fn is not None else None)
+
+    def _world_hover(self, face: Optional[int], uv: Optional[np.ndarray]) -> None:
+        if face is None or self._hover_parts is None:
+            self.set_status("")
+            return
+        self.set_status("  |  ".join(self._hover_parts(face, uv, None)))
+
+    def _region_hover(self, texel: Optional[tuple[int, int, int]]) -> None:
+        """World-map hover for the texel's face, with refined values swapped in."""
+        fields = self._region_view.fields
+        if texel is None or fields is None:
+            self.set_status(self._region_view.status_text())
+            return
+        hex_idx, row, col = texel
+
+        def _local(keys: tuple[str, ...]) -> Optional[list[str]]:
+            return describe_texel(fields, hex_idx, row, col, keys)
+
+        if self._hover_parts is None:
+            parts = _local(("elevation", "biome", "temperature", "precipitation")) or []
+        else:
+            uv = np.clip(fields.face_uv[texel], 0.0, 1.0)
+            parts = self._hover_parts(int(fields.faces[texel]), uv, _local)
+        self.set_status("  |  ".join(parts))
 
     def add_overlay(self, name: str, label: Optional[str] = None, checked: bool = True) -> None:
         """Register a named overlay toggle. Safe to call on every re-run (idempotent)."""

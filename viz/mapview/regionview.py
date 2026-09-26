@@ -10,6 +10,7 @@ from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtWidgets import QWidget
 
 from region.display import build_layer_texture
+from viz.mapview.legend import draw_legend, legend_size
 from region.geometry import RegionGeometry
 from region.grid import RegionHexGrid
 from region.upsample import RegionFields, RegionUpsampleParams, build_region_fields
@@ -45,8 +46,13 @@ class RegionView(QWidget):
         self._layer: Optional[str] = None
         self._scheme_fn: Optional[Callable[[dict], Sequence[float]]] = None
         self._texture_key: Optional[str] = None
+        self._legend: Optional[tuple[str, list]] = None
         self._hex_images: list[QImage] = []
+        # (x0, y0, size, rotation) of the cell as last painted — hover hit-tests against it.
+        self._cell_layout: Optional[tuple[float, float, float, QTransform]] = None
+        self._hover_callback: Optional[Callable[[Optional[tuple[int, int, int]]], None]] = None
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setMouseTracking(True)
 
     # ── data ─────────────────────────────────────────────────────────────────
 
@@ -70,6 +76,7 @@ class RegionView(QWidget):
         self._grid = None
         self._fields = None
         self._hex_images = []
+        self._cell_layout = None
 
     def set_layer(
         self,
@@ -85,6 +92,17 @@ class RegionView(QWidget):
         self._texture_key = texture_key
         self._rebuild_images()
         self.update()
+
+    def set_legend(self, legend: Optional[tuple[str, list]]) -> None:
+        """The active layer's ``(kind, entries)`` legend, drawn beside the cell."""
+        self._legend = legend
+        self.update()
+
+    def set_hover_callback(
+        self, cb: Optional[Callable[[Optional[tuple[int, int, int]]], None]]
+    ) -> None:
+        """Called with the ``(hex, row, col)`` texel under the cursor, or None off the map."""
+        self._hover_callback = cb
 
     @property
     def layer(self) -> Optional[str]:
@@ -146,18 +164,37 @@ class RegionView(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), QColor(24, 28, 34))
+        self._cell_layout = None
 
+        if self._grid is None:
+            return
         W, H = float(self.width()), float(self.height())
         margin = 16.0
-        size = min(W, H) - 2.0 * margin
-        if size <= 0.0 or self._grid is None:
+        legend_gap = 12.0
+        legend = self._legend if self._legend is not None and len(self._legend[1]) >= 2 else None
+        legend_w, legend_h = (
+            legend_size(painter, legend[0], legend[1], H - 2.0 * margin) if legend else (0, 0)
+        )
+        reserved = legend_w + legend_gap if legend else 0.0
+
+        # Size the cell so its *rotated* footprint fits beside the legend; the
+        # rotation about the centre swings the corners out by |cos| + |sin|.
+        angle = self._up_angle()
+        spread = abs(math.cos(angle)) + abs(math.sin(angle))
+        footprint = min(H - 2.0 * margin, W - 2.0 * margin - reserved)
+        size = footprint / spread
+        if size <= 0.0:
             return
-        x0 = (W - size) * 0.5
-        y0 = (H - size) * 0.5
+        # Centred when there is room, otherwise pushed right to clear the legend.
+        fx0 = max((W - footprint) * 0.5, margin + reserved)
+        fy0 = (H - footprint) * 0.5
+        x0 = fx0 + 0.5 * (footprint - size)
+        y0 = fy0 + 0.5 * (footprint - size)
+        transform = self._cell_transform(angle, x0, y0, size)
+        self._cell_layout = (x0, y0, size, transform)
 
         painter.save()
-        self._apply_up_rotation(painter, x0, y0, size)
-
+        painter.setTransform(transform, True)
         if self._hex_images:
             self._draw_textured_hexes(painter, x0, y0, size)
         else:
@@ -170,26 +207,62 @@ class RegionView(QWidget):
         painter.drawRect(QRectF(x0, y0, size, size))
         painter.restore()
 
-    def _apply_up_rotation(self, painter: QPainter, x0: float, y0: float, size: float) -> None:
-        """Rotate the whole cell about its centre so "up" reads correctly.
+        # Outside the map, bottom-aligned with the cell's footprint to its left.
+        if legend:
+            draw_legend(
+                painter, legend[0], legend[1],
+                fx0 - legend_gap - legend_w, fy0 + footprint, H - 2.0 * margin,
+            )
+
+    def _up_angle(self) -> float:
+        """Screen rotation (radians) that makes "up" read correctly for this cell.
 
         ``RegionGeometry.up_direction()`` gives the local ``(ds, dt)`` that
         should render as up — true north ordinarily, or the antimeridian
         tangent on the two regions centred on a pole, where north has no
-        direction. The existing ``(s, screen-x) / (t, screen-y flipped)``
-        mapping already treats +t as up with no rotation, so this is a no-op
-        for every cell where that already points at the target.
+        direction. The ``(s, screen-x) / (t, screen-y flipped)`` mapping already
+        treats +t as up with no rotation, so this is 0 for every cell where that
+        already points at the target.
         """
         if self._geometry is None:
-            return
+            return 0.0
         ds, dt = self._geometry.up_direction()
-        angle_rad = math.atan2(-ds, dt)
-        if abs(angle_rad) < 1e-9:
-            return
+        angle = math.atan2(-ds, dt)
+        return 0.0 if abs(angle) < 1e-9 else angle
+
+    @staticmethod
+    def _cell_transform(angle: float, x0: float, y0: float, size: float) -> QTransform:
+        """Rotation of the whole cell about its centre by ``angle``."""
         cx, cy = x0 + 0.5 * size, y0 + 0.5 * size
-        painter.translate(cx, cy)
-        painter.rotate(math.degrees(angle_rad))
-        painter.translate(-cx, -cy)
+        t = QTransform()
+        t.translate(cx, cy)
+        t.rotate(math.degrees(angle))
+        t.translate(-cx, -cy)
+        return t
+
+    # ── hover ────────────────────────────────────────────────────────────────
+
+    def texel_at_screen(self, mx: float, my: float) -> Optional[tuple[int, int, int]]:
+        """``(hex, row, col)`` of the refined texel under a screen point, or None."""
+        if self._cell_layout is None or self._fields is None:
+            return None
+        x0, y0, size, transform = self._cell_layout
+        inverse, ok = transform.inverted()
+        if not ok:
+            return None
+        p = inverse.map(QPointF(mx, my))
+        s = (p.x() - x0) / size
+        t = 1.0 - (p.y() - y0) / size
+        return self._fields.grid.texel_at(s, t, self._fields.tex_size)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._hover_callback is not None:
+            pos = event.position()
+            self._hover_callback(self.texel_at_screen(float(pos.x()), float(pos.y())))
+
+    def leaveEvent(self, event) -> None:
+        if self._hover_callback is not None:
+            self._hover_callback(None)
 
     def _hex_polygon(self, cx: float, cy: float, r_px: float) -> QPolygonF:
         return QPolygonF([
@@ -221,7 +294,7 @@ class RegionView(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         for i, (s, t) in enumerate(self._grid.centers):
             cx = x0 + s * size
-            cy = y0 + (1.0 - t) * size       # local +t is up; _apply_up_rotation makes that true north
+            cy = y0 + (1.0 - t) * size       # local +t is up; _up_angle makes that true north
             brush = QBrush(self._hex_images[i])
             brush.setTransform(
                 QTransform(scale, 0.0, 0.0, scale, cx - r_px, cy - r_px)

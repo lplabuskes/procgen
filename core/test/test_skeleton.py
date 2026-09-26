@@ -165,3 +165,16 @@ def test_display_registry_hover_concatenates():
     reg.add_hover(lambda f, uv, w: ["wet"] if f == 1 else [])
     assert reg.hover(0, None, None) == ["biome:0"]  # type: ignore[arg-type]
     assert reg.hover(1, None, None) == ["biome:1", "wet"]  # type: ignore[arg-type]
+
+
+def test_display_registry_hover_substitutes_refined_values_in_place():
+    reg = DisplayRegistry()
+    reg.add_hover(lambda f, uv, w: ["global elev"], refined=("elevation",))
+    reg.add_hover(lambda f, uv, w: ["fert"])
+    reg.add_hover(lambda f, uv, w: ["global climate"], refined=("biome", "temperature"))
+
+    def local(keys):
+        return ["local elev"] if keys == ("elevation",) else None
+
+    assert reg.hover(0, None, None, local) == ["local elev", "fert", "global climate"]  # type: ignore[arg-type]
+    assert reg.hover(0, None, None) == ["global elev", "fert", "global climate"]  # type: ignore[arg-type]

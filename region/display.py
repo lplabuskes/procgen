@@ -106,6 +106,37 @@ def sample_global_layer(
     return np.ascontiguousarray(colors[inverse].reshape(*shape, 4))
 
 
+def describe_texel(
+    fields: RegionFields, hex_idx: int, row: int, col: int, keys: Sequence[str]
+) -> list[str] | None:
+    """Status-bar fragments for the refined ``keys`` at one texel.
+
+    Mirrors the world map's hover contributors for those textures (see
+    ``DisplayRegistry.add_hover(refined=...)``); ``None`` when any key is not
+    refined here, so the caller falls back to the global value.
+    """
+    tex = fields.textures
+    if not keys or any(k not in tex for k in keys):
+        return None
+    at = (hex_idx, row, col)
+    parts: list[str] = []
+    if "elevation" in keys:
+        parts.append(f"[px: {float(tex['elevation'][at][0]):.2f} km]")
+    if "biome" in keys:
+        if "ocean_mask" in tex and tex["ocean_mask"][at][0] > 0:
+            parts.append("Ocean")
+        elif "lake_mask" in tex and tex["lake_mask"][at][0] > 0:
+            parts.append("Lake")
+        else:
+            from worldgen.climate.classification import BIOME_NAMES
+            parts.append(BIOME_NAMES[int(tex["biome"][at][0])])
+    if "temperature" in keys:
+        parts.append(f"T: {float(tex['temperature'][at].mean()):.1f}°C")
+    if "precipitation" in keys:
+        parts.append(f"P: {float(tex['precipitation'][at].sum()):.0f} mm/yr")
+    return parts
+
+
 def _refined_layer_texture(fields: RegionFields, layer: str) -> np.ndarray:
     from viz.color_stops import categorical_texture
     from worldgen.climate.display import (
