@@ -40,6 +40,7 @@ from realmgen.persistence import pack_polities, unpack_polities
 from realmgen.polity.seeding import seed_capitals
 from realmgen.polity.tension import compute_border_tension
 from realmgen.polity.types import Polity
+from realmgen.refine.fill import polity_fill_recipe
 from realmgen.trade.network import build_base_hybrid_graph
 from worldgen.cost.channels import COST_SURFACES, IS_WATER
 
@@ -409,7 +410,13 @@ class PolityStage(Stage):
         if self.polities:
             tex = ("polity_fill" if world is not None
                    and "polity_fill" in world.mesh.face_textures else None)
-            reg.add_scheme("Polities", disp.make_polity_tree_color(self.polities), texture=tex)
+            # The refine stage's label field lets a region redraw the fill at its
+            # own resolution (see ``polity_fill_recipe``).
+            field = world.get_feature("polity_label_field") if world is not None else None
+            recipe = (polity_fill_recipe(field, self.polities)
+                      if tex is not None and field is not None else None)
+            reg.add_scheme("Polities", disp.make_polity_tree_color(self.polities),
+                           texture=tex, recipe=recipe)
             pol_by_id = {pol.polity_id: pol for pol in self.polities}
 
             def _polity_hover(face: int, _uv, w) -> list:

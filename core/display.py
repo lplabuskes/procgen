@@ -29,6 +29,12 @@ LocalHoverFn = Callable[[Tuple[str, ...]], Optional[List[str]]]
 Legend = Tuple[str, list]
 
 
+# Reserved recipe source: ``(N, H, W, 3)`` unit-sphere texel positions, for layers
+# that are a function of position rather than of stored data. A region view
+# supplies its own texel positions under this key.
+POSITIONS_KEY = "positions"
+
+
 @dataclass(frozen=True)
 class TextureRecipe:
     """How a scheme's RGBA texture is made from data textures.

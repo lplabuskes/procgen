@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Callable, Sequence
 
 import numpy as np
 
-from core.display import SchemeSpec
+from core.display import POSITIONS_KEY, SchemeSpec
 from region.sampling import GlobalSampler
 from region.upsample import RegionFields
 
@@ -22,9 +22,18 @@ if TYPE_CHECKING:
     from core.mesh import PolygonMesh
 
 
+def recipe_inputs(fields: RegionFields) -> dict[str, np.ndarray]:
+    """What a recipe may read here: the refined textures plus the texel positions.
+
+    Positions let a layer that is a function of place on the sphere (the polity
+    fill) be evaluated at the region's own resolution.
+    """
+    return {**fields.textures, POSITIONS_KEY: fields.positions}
+
+
 def has_refined_layer(fields: RegionFields, spec: SchemeSpec) -> bool:
     """True when the layer can be drawn from the region's own refined fields."""
-    return spec.recipe is not None and spec.recipe.available(fields.textures)
+    return spec.recipe is not None and spec.recipe.available(recipe_inputs(fields))
 
 
 def build_layer_texture(
@@ -39,7 +48,7 @@ def build_layer_texture(
     """
     if has_refined_layer(fields, spec):
         assert spec.recipe is not None
-        rgba = np.ascontiguousarray(spec.recipe(fields.textures), dtype=np.float32)
+        rgba = np.ascontiguousarray(spec.recipe(recipe_inputs(fields)), dtype=np.float32)
         if spec.recipe.relief and "elevation" in fields.textures:
             rgba = hillshade(
                 rgba, fields.textures["elevation"], math.sqrt(max(fields.texel_area_km2, 1e-6)),

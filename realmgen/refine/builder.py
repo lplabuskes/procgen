@@ -22,7 +22,7 @@ from core.pipeline import BuildContext, Stage
 from realmgen.channels import AUTHORITY, POLITY_ID
 from realmgen.persistence import pack_borders, pack_routes, unpack_borders, unpack_routes
 from realmgen.refine.borders import smooth_polity_borders
-from realmgen.refine.fill import build_polity_fill_texture, compute_texel_labels
+from realmgen.refine.fill import PolityLabelField, colorize_labels
 from realmgen.refine.settlements import refine_settlement_positions, remap_routes
 from worldgen.cost.channels import IS_WATER
 from worldgen.geology.channels import OCEAN_MASK
@@ -91,40 +91,21 @@ class RefineStage(Stage):
             if routes and moved:
                 world.add_feature("trade_routes", remap_routes(routes, moved))
 
-            if world.has_feature("polity_borders") and POLITY_ID.present(mesh):
-                polities = world.get_feature("polities") or []
-                pof = np.asarray(POLITY_ID.read(mesh), dtype=np.int32)
-                is_water = np.asarray(IS_WATER.read(mesh), dtype=bool)
-                authority = (np.asarray(AUTHORITY.read(mesh), dtype=np.float64)
-                             if AUTHORITY.present(mesh) else None)
-                if polities and authority is not None:
-                    # Single texel classification feeds both the fill and the borders,
-                    # so the lines fall exactly on the fill's region edges.
-                    # reconcile_edges=False: the cross-seam border tracer needs the
-                    # raw per-face label disagreement at shared edges to find borders
-                    # running *along* a seam. Reconciling would force those texels to
-                    # agree (hiding the border) and paints a one-texel neighbour fringe
-                    # across the seam in the fill; seam tracing supersedes it.
-                    labels = compute_texel_labels(
-                        mesh, pof, is_water, authority, ocean_tex, lake_tex,
-                        control_floor=float(p.border_control_floor),
-                        warp_amplitude=float(p.boundary_warp_amplitude),
-                        warp_frequency=float(p.boundary_warp_frequency),
-                        warp_octaves=int(p.boundary_warp_octaves),
-                        warp_seed=int(world.seed or 0),
-                        reconcile_edges=False,
-                    )
-                    world.add_feature("polity_borders", smooth_polity_borders(
-                        mesh, polities, labels,
-                        iterations=int(p.border_smoothing_iterations),
-                    ))
-                    rgba = build_polity_fill_texture(
-                        mesh, polities, pof, is_water,
-                        authority, ocean_tex, lake_tex,
-                        control_floor=float(p.border_control_floor),
-                        labels=labels,
-                    )
-                    mesh.set_face_textures("polity_fill", rgba, n_channels=4)
+            field = self._label_field(world)
+            polities = world.get_feature("polities") or []
+            if world.has_feature("polity_borders") and field is not None:
+                # One label field — the polity at each point of the sphere — feeds
+                # both the fill (sampled at every texel) and the borders (contoured
+                # on a seamless lattice), so the lines bound the fill.
+                H, W = int(ocean_tex.shape[1]), int(ocean_tex.shape[2])
+                labels = field.texel_labels(
+                    mesh.face_texture_positions(H, W), ocean_tex, lake_tex)
+                world.add_feature("polity_borders", smooth_polity_borders(
+                    mesh, polities, field, ocean_tex, lake_tex,
+                    iterations=int(p.border_smoothing_iterations),
+                ))
+                rgba = colorize_labels(labels, polities, ocean_tex, lake_tex)
+                mesh.set_face_textures("polity_fill", rgba.astype(np.float16), n_channels=4)
 
             ctx.report(f"  ✦ Refined {len(moved)} settlement position(s) to texel level.")
 
@@ -132,6 +113,29 @@ class RefineStage(Stage):
         # refinement ran (these may be the raw routes/borders from earlier stages).
         self._routes = world.get_feature("trade_routes")
         self._borders = world.get_feature("polity_borders")
+
+    def _label_field(self, world) -> PolityLabelField | None:
+        """The polity label field, also kept as the ``polity_label_field`` feature
+        so the display can redraw the fill at any resolution; None before polities."""
+        mesh = world.mesh
+        polities = world.get_feature("polities") or []
+        if not (polities and POLITY_ID.present(mesh) and AUTHORITY.present(mesh)
+                and IS_WATER.present(mesh)):
+            return None
+        p = self.params
+        field = PolityLabelField(
+            mesh,
+            np.asarray(POLITY_ID.read(mesh), dtype=np.int32),
+            np.asarray(IS_WATER.read(mesh), dtype=bool),
+            np.asarray(AUTHORITY.read(mesh), dtype=np.float64),
+            control_floor=float(p.border_control_floor),
+            warp_amplitude=float(p.boundary_warp_amplitude),
+            warp_frequency=float(p.boundary_warp_frequency),
+            warp_octaves=int(p.boundary_warp_octaves),
+            warp_seed=int(world.seed or 0),
+        )
+        world.add_feature("polity_label_field", field)
+        return field
 
     # ── Persistence ───────────────────────────────────────────────────────────
     # Trade-route and polity-border geometry reach their final form here (routes
@@ -154,3 +158,5 @@ class RefineStage(Stage):
         if "border_segs" in arrays:
             self._borders = unpack_borders(arrays)
             world.add_feature("polity_borders", self._borders)
+        # Not serialized: rebuilt from the persisted polity channels.
+        self._label_field(world)

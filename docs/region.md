@@ -188,8 +188,13 @@ is the world map's `SchemeSpec`. There is no region-side list of layers or
 palettes: a scheme with a `TextureRecipe` whose `sources` the region has refined
 (`has_refined_layer`) is drawn by running that recipe — the stage's own
 function — on `fields.textures`. Today that is Elevation, Biome,
-Annual/Summer/Winter Temperature and Annual Precipitation; a new stage layer
-with a recipe over refined keys appears refined automatically. Recipes with
+Annual/Summer/Winter Temperature, Annual Precipitation and Polities; a new stage
+layer with a recipe over refined keys appears refined automatically. Besides the
+refined textures, a recipe may read the region's texel positions under
+`core.display.POSITIONS_KEY` (`recipe_inputs`). Polities uses that: the polity is a
+function of position (`realmgen.refine.fill.PolityLabelField`), so its fill is
+evaluated at the region's own texels, with the refined shoreline, and lines up
+with the border overlay instead of stepping at the global texel size. Recipes with
 `relief=True` (Elevation, Biome) are then `hillshade(...)`d on land from the
 refined elevation — without it a 100 m bump is invisible at ~16 km²/texel;
 water stays flat. Every other layer goes through

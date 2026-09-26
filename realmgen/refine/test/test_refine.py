@@ -5,21 +5,30 @@ smoke test elsewhere.
 """
 from __future__ import annotations
 
+import dataclasses
+
 import numpy as np
+import pytest
 
 from realmgen.polity.types import Polity
 from realmgen.test.conftest import _settlement
+from core.display import POSITIONS_KEY
+from core.mesh import Mesh
 from realmgen.refine.borders import (
     _chaikin,
     _chain_edges,
-    _weld_seam_endpoints,
+    _icosphere_lattice,
+    lattice_depth_for,
     smooth_polity_borders,
-    trace_label_borders,
+    trace_lattice_borders,
 )
 from realmgen.refine.fill import (
-    _despeckle_interior_exclaves,
+    UNCLAIMED,
+    WATER,
+    PolityLabelField,
     build_polity_fill_texture,
     domain_warp,
+    polity_fill_recipe,
 )
 from realmgen.refine.settlements import (
     _neighbor_any,
@@ -138,89 +147,124 @@ def test_chain_edges_open_and_closed():
     assert len(loop) == 1 and loop[0][0] == loop[0][-1]                   # closed ring
 
 
-# ── texel border tracing ─────────────────────────────────────────────────────
+def test_chain_edges_stops_at_given_vertices():
+    # 0-1-2 is a degree-2 run, but a stop at 1 splits it (a junction held fixed
+    # by another depth's line) and keeps 1 as a shared chain end.
+    chains = _chain_edges({(0, 1), (1, 2)}, stops=frozenset({1}))
+    assert sorted(len(c) for c in chains) == [2, 2]
+    assert all(1 in (c[0], c[-1]) for c in chains)
 
 
-def _polar_grid(h, w):
-    """One face's (1, h, w, 3) texel positions on a small patch near +z."""
-    pos = np.zeros((1, h, w, 3), dtype=np.float64)
-    for i in range(h):
-        for j in range(w):
-            v = np.array([(j - (w - 1) / 2) * 0.1, (i - (h - 1) / 2) * 0.1, 1.0])
-            pos[0, i, j] = v / np.linalg.norm(v)
-    return pos
+# ── lattice ──────────────────────────────────────────────────────────────────
 
 
-def test_trace_label_borders_splits_two_polities():
-    # Left half polity 0, right half polity 1 → a single depth-0 border down the
-    # column seam between j=1 and j=2.
-    pos = _polar_grid(4, 4)
-    labels = np.array([[[0, 0, 1, 1]] * 4], dtype=np.int32)
-    out = trace_label_borders(pos, labels, [_pol(0), _pol(1)], iterations=0)
-    assert 0 in out and out[0].shape[1] == 6 and len(out[0]) >= 1
-    # The border runs vertically: endpoints span a range of y but a narrow x.
+def test_icosphere_lattice_is_a_closed_unit_mesh():
+    d = 3
+    verts, tris, edges, tri_edges = _icosphere_lattice(d)
+    assert len(verts) == 10 * 4 ** d + 2
+    assert len(tris) == 20 * 4 ** d
+    assert len(edges) == 30 * 4 ** d
+    assert np.allclose(np.linalg.norm(verts, axis=1), 1.0)
+    # Closed 2-manifold: every edge borders exactly two triangles.
+    assert np.all(np.bincount(tri_edges.ravel(), minlength=len(edges)) == 2)
+    # tri_edges[:, k] really is the edge (corner k, corner k+1).
+    a, b = tris[:, 0], tris[:, 1]
+    e = edges[tri_edges[:, 0]]
+    assert np.all(np.minimum(a, b) == e[:, 0]) and np.all(np.maximum(a, b) == e[:, 1])
+
+
+def test_lattice_depth_matches_texel_spacing():
+    # Default world: 10,242 faces at 16 texels → ~14 km texels → depth 9 (~15 km).
+    assert lattice_depth_for(10242, 16) == 9
+    assert lattice_depth_for(10242, 32) == 10
+
+
+# ── lattice border tracing ───────────────────────────────────────────────────
+
+
+def _lattice(depth=3):
+    return _icosphere_lattice(depth)
+
+
+def _degrees(segs):
+    from collections import Counter
+    c = Counter()
+    for row in np.round(segs, 6):
+        c[tuple(row[:3])] += 1
+        c[tuple(row[3:])] += 1
+    return c
+
+
+def test_trace_lattice_two_hemispheres_single_closed_loop():
+    verts, tris, edges, te = _lattice()
+    labels = np.where(verts[:, 0] > 0, 0, 1)
+    out = trace_lattice_borders(verts, tris, edges, te, labels, [_pol(0), _pol(1)],
+                                iterations=0)
     segs = out[0]
-    xs = np.concatenate([segs[:, 0], segs[:, 3]])
-    ys = np.concatenate([segs[:, 1], segs[:, 4]])
-    assert np.ptp(ys) > np.ptp(xs)
+    assert set(_degrees(segs).values()) == {2}                    # closed: no loose ends
+    edge_len = np.linalg.norm(verts[edges[0, 0]] - verts[edges[0, 1]])
+    assert np.all(np.abs(segs[:, [0, 3]]) < edge_len)             # hugs the x = 0 plane
 
 
-def _overlap_pair():
-    """Two faces whose square textures overlap near +z, both carrying the same
-    polity-0/polity-1 boundary down the j=1|j=2 seam — the configuration the
-    over-hang doubling arises from. The two grids are slightly *offset* (as real
-    neighbour faces are), so the two boundary copies have distinct vertex keys."""
-    def grid(dx):
-        g = np.zeros((4, 4, 3), dtype=np.float64)
-        for i in range(4):
-            for j in range(4):
-                v = np.array([(j - 1.5) * 0.2 + dx, (i - 1.5) * 0.2, 1.0])
-                g[i, j] = v / np.linalg.norm(v)
-        return g
-    pos = np.stack([grid(0.0), grid(0.07)])            # (2, 4, 4, 3) offset grids
-    labels = np.array([[[0, 0, 1, 1]] * 4] * 2, dtype=np.int32)
-    c = np.array([[-0.1, 0.0, 1.0], [0.1, 0.0, 1.0]])  # centroids straddle x=0
-    centroids = c / np.linalg.norm(c, axis=1, keepdims=True)
-    return pos, labels, centroids
+def test_trace_lattice_bisection_lands_on_the_true_boundary():
+    verts, tris, edges, te = _lattice()
+
+    def label_fn(p):
+        return np.where(p[:, 0] > 0.1, 0, 1)
+
+    labels = label_fn(verts)
+    out = trace_lattice_borders(verts, tris, edges, te, labels, [_pol(0), _pol(1)],
+                                iterations=0, label_fn=label_fn, bisect_steps=8)
+    x = out[0][:, [0, 3]]
+    edge_len = np.linalg.norm(verts[edges[0, 0]] - verts[edges[0, 1]])
+    assert np.max(np.abs(x - 0.1)) < edge_len / 50
 
 
-def test_texel_owner_assigns_by_nearest_centroid():
-    from realmgen.refine.borders import _texel_owner
-    pos, _, centroids = _overlap_pair()
-    owner = _texel_owner(pos, centroids, adj=[[1], [0]])
-    assert owner.shape == (2, 4, 4)
-    # Midline is x=0: the two left columns go to face 0, the two right to face 1,
-    # for *both* faces' (identical) grids.
-    assert (owner[:, :, :2] == 0).all()
-    assert (owner[:, :, 2:] == 1).all()
+def test_trace_lattice_ignores_coastline():
+    verts, tris, edges, te = _lattice()
+    labels = np.where(verts[:, 0] > 0, 0, WATER)
+    assert trace_lattice_borders(verts, tris, edges, te, labels, [_pol(0), _pol(1)]) == {}
 
 
-def test_texel_owner_polygon_assigns_overhang_to_neighbour():
-    from realmgen.refine.borders import _texel_owner
-    # With a polygon mask, a texel inside its own face's polygon is owned by that
-    # face *definitively* (no centroid-bisector sliver); an over-hang texel goes to
-    # the neighbour. Mark face 0's right half as over-hang.
-    pos, _, centroids = _overlap_pair()
-    in_poly = np.ones((2, 4, 4), dtype=bool)
-    in_poly[0, :, 2:] = False
-    owner = _texel_owner(pos, centroids, adj=[[1], [0]], in_poly=in_poly)
-    assert (owner[0, :, :2] == 0).all()                # in-polygon → own face
-    assert (owner[0, :, 2:] == 1).all()                # over-hang → neighbour
+def test_trace_lattice_border_ends_at_the_coast():
+    # Two polities split by x = 0 on land; everything below z = -0.5 is sea. The
+    # border is one open line whose two ends both sit on the coast.
+    verts, tris, edges, te = _lattice()
+    labels = np.where(verts[:, 0] > 0, 0, 1)
+    labels[verts[:, 2] < -0.5] = WATER
+    segs = trace_lattice_borders(verts, tris, edges, te, labels, [_pol(0), _pol(1)],
+                                 iterations=2)[0]
+    deg = _degrees(segs)
+    ends = np.array([k for k, v in deg.items() if v == 1])
+    assert len(ends) == 2 and set(deg.values()) <= {1, 2}
+    assert np.all(np.abs(ends[:, 2] + 0.5) < 0.1)
 
 
-def test_trace_label_borders_dedoubles_overlap():
-    # Both faces' over-hangs carry the same boundary. Without centroids each face
-    # draws it → a doubled line. Voronoi ownership makes only the lower-id face-cell
-    # draw each edge, halving the geometry to a single line.
-    pos, labels, centroids = _overlap_pair()
-    pols = [_pol(0), _pol(1)]
-    doubled = trace_label_borders(pos, labels, pols, iterations=0, weld_factor=0.0)
-    single = trace_label_borders(pos, labels, pols, iterations=0, weld_factor=0.0,
-                                 adj=[[1], [0]], centroids=centroids)
-    n_doubled = sum(len(v) for v in doubled.values())
-    n_single = sum(len(v) for v in single.values())
-    assert n_single >= 1
-    assert n_doubled == 2 * n_single                   # exactly the duplicate removed
+def test_trace_lattice_three_way_junctions_join():
+    # Three sectors of longitude meet at both poles: every line runs pole to pole,
+    # so the only odd vertices are the two degree-3 junctions.
+    verts, tris, edges, te = _lattice()
+    lon = np.arctan2(verts[:, 1], verts[:, 0])
+    labels = np.digitize(lon, [-np.pi / 3, np.pi / 3])
+    segs = trace_lattice_borders(verts, tris, edges, te, labels,
+                                 [_pol(0), _pol(1), _pol(2)], iterations=2)[0]
+    deg = _degrees(segs)
+    assert sorted(v for v in deg.values() if v != 2) == [3, 3]
+
+
+def test_trace_lattice_vassal_border_meets_sovereign_border():
+    # Sovereign 0 holds x > 0; inside it, vassal 1 holds y > 0. Sovereign 2 holds
+    # x < 0. The depth-1 line (0 | 1) must end exactly on the depth-0 line.
+    verts, tris, edges, te = _lattice()
+    labels = np.where(verts[:, 0] > 0, np.where(verts[:, 1] > 0, 1, 0), 2)
+    pols = [_pol(0), dataclasses.replace(_pol(1), liege=0, depth=1), _pol(2)]
+    out = trace_lattice_borders(verts, tris, edges, te, labels, pols, iterations=2)
+    assert set(out) == {0, 1}
+    d0 = _degrees(out[0])
+    d1 = _degrees(out[1])
+    ends1 = [k for k, v in d1.items() if v == 1]
+    assert len(ends1) == 2                                         # both ends at junctions
+    assert all(k in d0 for k in ends1)                             # ...on the depth-0 line
 
 
 def test_domain_warp_identity_and_continuity():
@@ -230,8 +274,7 @@ def test_domain_warp_identity_and_continuity():
     # amplitude 0 is a no-op (warp off → bit-identical positions).
     assert np.array_equal(domain_warp(pos, amplitude=0.0, base_frequency=40.0,
                                       octaves=3), pos)
-    # Pure function of position: coincident points (the basis for seam continuity)
-    # get an identical displacement.
+    # Pure function of position: coincident points get an identical displacement.
     dup = np.vstack([pos, pos[:5]])
     w = domain_warp(dup, amplitude=0.02, base_frequency=40.0, octaves=3, seed=7)
     assert np.allclose(w[:5], w[50:55])
@@ -239,86 +282,100 @@ def test_domain_warp_identity_and_continuity():
     assert np.max(np.linalg.norm(w[:50] - pos, axis=1)) < 0.02 * 3
 
 
-def test_trace_label_borders_resolves_saddle_without_center_x():
-    # A 2x2 checkerboard makes a single cell whose four edges are all borders.
-    # Routing every crossing to the cell centre would draw a self-crossing X
-    # (the visible knot); it must instead emit two non-crossing links that skip
-    # the centre point entirely.
-    pos = _polar_grid(2, 2)
-    labels = np.array([[[0, 1], [1, 0]]], dtype=np.int32)
-    out = trace_label_borders(pos, labels, [_pol(0), _pol(1)], iterations=0)
-    segs = out[0]
-    assert len(segs) == 2                                    # two links, not four
-    center = pos[0].reshape(-1, 3).mean(axis=0)
-    pts = np.concatenate([segs[:, :3], segs[:, 3:]], axis=0)
-    pts = pts / np.linalg.norm(pts, axis=1, keepdims=True)
-    center = center / np.linalg.norm(center)
-    assert np.all(np.linalg.norm(pts - center, axis=1) > 1e-6)  # never the centre
+# ── label field ──────────────────────────────────────────────────────────────
 
 
-def test_despeckle_dissolves_single_pixel_exclave():
-    # A lone polity-7 texel surrounded by polity 0 is reassigned to 0; an island
-    # texel surrounded only by water (-2) is left alone (no land neighbour).
-    labels = np.zeros((1, 5, 5), dtype=np.int32)
-    labels[0, 2, 2] = 7                      # interior exclave
-    out = _despeckle_interior_exclaves(labels)
-    assert out[0, 2, 2] == 0
-    water = np.full((1, 5, 5), -2, dtype=np.int32)
-    water[0, 2, 2] = 7                        # claimed island in water
-    assert _despeckle_interior_exclaves(water)[0, 2, 2] == 7
+@pytest.fixture(scope="module")
+def dual():
+    return Mesh.icosphere(2).mesh_dual()
 
 
-def test_despeckle_dissolves_diagonal_only_exclave():
-    # A polity-7 texel touching another 7 only diagonally has no orthogonal (D4)
-    # same-label neighbour, so it is dissolved into the surrounding 0.
-    labels = np.zeros((1, 5, 5), dtype=np.int32)
-    labels[0, 2, 2] = 7
-    labels[0, 3, 3] = 7                       # diagonal partner only
-    out = _despeckle_interior_exclaves(labels)
-    assert out[0, 2, 2] == 0
+def _field(dual, pof, water=None, authority=None, **kw):
+    n = len(dual.faces)
+    return PolityLabelField(
+        dual, np.asarray(pof), np.zeros(n, bool) if water is None else water,
+        np.ones(n) if authority is None else authority, **kw)
 
 
-def test_despeckle_leaves_edge_ring_untouched():
-    # An exclave on the outer ring is preserved (shared-edge reconciliation owns it).
-    labels = np.zeros((1, 5, 5), dtype=np.int32)
-    labels[0, 0, 2] = 7
-    assert _despeckle_interior_exclaves(labels)[0, 0, 2] == 7
+def test_label_field_interior_unclaimed_and_orphan(dual):
+    n = len(dual.faces)
+    c = np.asarray(dual.face_centroids, dtype=np.float64)
+    pof = np.where(c[:, 0] > 0, 0, 1)
+    pof[5] = -1                                        # an unclaimed land face
+    water = np.zeros(n, bool)
+    w = next(f for f in range(n) if f != 5 and 5 not in dual.face_adjacency[f]
+             and all(g != 5 for g in dual.face_adjacency[f]))
+    water[w] = True                                    # a face-level water face
+    field = _field(dual, pof, water=water)
+    lab = field.land_labels(c)
+    assert lab[5] == UNCLAIMED
+    # Orphan land in the water face goes to one of its claimed neighbours.
+    assert lab[w] in {int(pof[g]) for g in dual.face_adjacency[w]}
+    # Faces whose whole neighbourhood is one polity are that polity.
+    for f in range(n):
+        nb = [f, *dual.face_adjacency[f]]
+        if f != 5 and not water[f] and len({int(pof[g]) for g in nb}) == 1 \
+                and not any(water[g] or g == 5 for g in nb):
+            assert lab[f] == pof[f]
 
 
-def test_weld_seam_endpoints_joins_cross_face_dangles():
-    from realmgen.refine.settlements import position_key
-    a = np.array([2.0, 0.0, 0.0])       # face 0 interior endpoint
-    b = np.array([1.0, 0.0, 0.0])       # face 0 seam endpoint
-    c = np.array([1.0008, 0.0, 0.0])    # face 1 seam endpoint (near b)
-    d = np.array([0.0, 0.0, 0.0])       # face 1 interior endpoint
-    ka, kb, kc, kd = (position_key(p) for p in (a, b, c, d))
-    pt_of = {ka: a, kb: b, kc: c, kd: d}
-    edges = {tuple(sorted((ka, kb))), tuple(sorted((kc, kd)))}
-    key_face = {kb: 0, kc: 1}                 # b and c are outer-ring crossings
-
-    def deg1(e):
-        d_: dict = {}
-        for x, y in e:
-            d_[x] = d_.get(x, 0) + 1
-            d_[y] = d_.get(y, 0) + 1
-        return sum(1 for v in d_.values() if v == 1)
-
-    # Adjacent faces within tolerance → b and c weld, leaving only a and d dangling.
-    welded, _ = _weld_seam_endpoints(set(edges), dict(pt_of), key_face,
-                                     tol=0.01, adj=[[1], [0]])
-    assert deg1(welded) == 2
-    # Non-adjacent faces → no weld (all four endpoints stay dangling pairs).
-    same = _weld_seam_endpoints(set(edges), dict(pt_of), key_face,
-                                tol=0.01, adj=[[], []])[0]
-    assert same == edges
+def test_label_field_stronger_polity_bulges(dual):
+    c = np.asarray(dual.face_centroids, dtype=np.float64)
+    a = 0
+    b = dual.face_adjacency[0][0]
+    pof = np.full(len(dual.faces), 0)
+    pof[b] = 1
+    mid = (c[a] + c[b]) / np.linalg.norm(c[a] + c[b])
+    auth = np.ones(len(dual.faces))
+    auth[a] = 3.0
+    assert _field(dual, pof, authority=auth).land_labels(mid[None])[0] == 0
+    auth[a], auth[b] = 1.0, 3.0
+    assert _field(dual, pof, authority=auth).land_labels(mid[None])[0] == 1
 
 
-def test_trace_label_borders_ignores_coastline():
-    # Land polity 0 against water (-2): a coastline, not a border.
-    pos = _polar_grid(4, 4)
-    labels = np.array([[[0, 0, -2, -2]] * 4], dtype=np.int32)
-    out = trace_label_borders(pos, labels, [_pol(0), _pol(1)], iterations=0)
-    assert all(seg.shape[0] == 0 for seg in out.values()) or out == {}
+def test_texel_label_ignores_which_face_holds_the_texel(dual):
+    # The label is a function of position alone, so a face's over-hanging texture
+    # and its neighbour's agree wherever they sample the same ground — no seam in
+    # the fill. Put face a's texel grid in face b's slot: the labels must not move.
+    c = np.asarray(dual.face_centroids, dtype=np.float64)
+    pof = np.digitize(np.arctan2(c[:, 1], c[:, 0]), [-1.0, 1.0])
+    field = _field(dual, pof, warp_amplitude=0.05, warp_frequency=8.0, warp_seed=3)
+    pos = np.asarray(dual.face_texture_positions(8, 8), dtype=np.float64)
+    ocean = np.zeros((len(dual.faces), 8, 8, 1))
+    labels = field.texel_labels(pos, ocean, None)
+    a = int(np.argmax([len(set(labels[f].ravel())) for f in range(len(dual.faces))]))
+    b = dual.face_adjacency[a][0]
+    assert len(set(labels[a].ravel())) > 1                         # a genuine border face
+    swapped = pos.copy()
+    swapped[b] = pos[a]
+    assert np.array_equal(field.texel_labels(swapped, ocean, None)[b], labels[a])
+
+
+def test_smooth_polity_borders_on_a_real_mesh(dual):
+    c = np.asarray(dual.face_centroids, dtype=np.float64)
+    pof = np.where(c[:, 0] > 0, 0, 1)
+    field = _field(dual, pof)
+    ocean = np.zeros((len(dual.faces), 8, 8, 1))
+    out = smooth_polity_borders(dual, [_pol(0), _pol(1)], field, ocean, None)
+    assert set(out) == {0}
+    assert set(_degrees(out[0]).values()) == {2}                 # one closed loop
+
+
+def test_polity_fill_recipe_colours_any_texel_grid(dual):
+    from worldgen.geology.display import OCEAN_COLOR
+
+    c = np.asarray(dual.face_centroids, dtype=np.float64)
+    field = _field(dual, np.where(c[:, 0] > 0, 0, 1))
+    recipe = polity_fill_recipe(field, [_pol(0), _pol(1)])
+    pts = np.array([[[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]])   # (1, 3, 3)
+    ocean = np.zeros((1, 3, 1))
+    ocean[0, 2, 0] = 1.0
+    textures = {POSITIONS_KEY: pts, "ocean_mask": ocean}
+    assert recipe.available(textures)
+    rgba = recipe(textures)
+    assert rgba.shape == (1, 3, 4)
+    assert not np.allclose(rgba[0, 0], rgba[0, 1])              # two polities, two colours
+    assert np.allclose(rgba[0, 2, :3], OCEAN_COLOR[:3])
 
 
 # ── border / fill stub mesh ──────────────────────────────────────────────────
@@ -346,20 +403,6 @@ class _BorderMesh:
 def _pol(pid):
     return Polity(polity_id=pid, capital_face=pid, capital_position=np.array([1.0, 0.0, 0.0]),
                   power=10.0, n_faces=1, member_settlement_faces=[pid])
-
-
-class _GridMesh:
-    """One face whose texel grid is a small patch near +z."""
-
-    def face_texture_positions(self, h, w):
-        return _polar_grid(h, w)
-
-
-def test_smooth_polity_borders_emits_depth0_segments():
-    mesh = _GridMesh()
-    labels = np.array([[[0, 0, 1, 1]] * 4], dtype=np.int32)
-    out = smooth_polity_borders(mesh, [_pol(0), _pol(1)], labels)
-    assert 0 in out and out[0].shape[1] == 6 and len(out[0]) >= 1
 
 
 def test_fill_texture_shape_and_coastline():

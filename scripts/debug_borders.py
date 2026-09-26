@@ -1,26 +1,18 @@
 """Visual border-drawing troubleshooter — fill vs. traced lines, at texel resolution.
 
-Border bugs (gaps, doubled "lens" lines, lines drifting off the fill, dangling
-seam ends) are hard to see on the globe viewer. This script renders a *zoomed*,
-faithful raster of one region so the texel fill and the traced border polylines
-can be compared directly, pixel for pixel.
+Renders a *zoomed*, faithful raster of one region so the texel fill and the
+traced border polylines can be compared directly, pixel for pixel.
 
-The thing that has repeatedly tripped up border work: **each face's 16×16 texture
-is a square that over-hangs its hexagon, so a big fraction of texels are never
-rendered** (they belong to a neighbour's over-hang). The renderer clips every
-texel outside ``mesh.face_texture_in_polygon`` — so a border that looks "wrong"
-against the *full* texel grid may be perfectly correct against the *visible* one,
-and vice-versa. This script therefore:
+Each face's 16×16 texture is a square that over-hangs its hexagon, and the
+renderer clips every texel outside ``mesh.face_texture_in_polygon``. This script
+therefore draws ONLY visible (in-polygon) texels by default — what you see is
+what ships — and with ``--show-overhang`` also the invisible over-hang texels
+(faded, red-edged). The fill labels come from the polity label field
+(``fill.PolityLabelField``) and the borders are contoured from that same field
+(``borders.py``), both from the current code.
 
-  • draws ONLY visible (in-polygon) texels by default, exactly as the renderer
-    clips them — so what you see is what ships;
-  • with ``--show-overhang``, also draws the invisible over-hang texels (faded,
-    red-edged) so you can see the square-vs-hexagon mismatch that misleads tracing;
-  • overlays the traced border segments, optionally with their vertices and the
-    hexagon seams (where welding / de-doubling happens).
-
-Both the fill labels and the borders are recomputed live from the current
-``fill.py`` / ``borders.py`` code, so this exercises exactly what you are editing.
+Open endpoints in the printed diagnostics should all be coastal terminations: the
+lattice contour has no other way to end a line.
 
 Usage:
     python3 scripts/debug_borders.py                      # seed 4, auto-pick a busy border region
@@ -47,13 +39,8 @@ from matplotlib.collections import LineCollection, PolyCollection  # noqa: E402
 
 from core.pipeline import BuildContext  # noqa: E402
 from realmgen.builder import RealmParams, RealmPipeline  # noqa: E402
-from realmgen.channels import AUTHORITY, POLITY_ID  # noqa: E402
-from realmgen.refine.borders import smooth_polity_borders  # noqa: E402
-from realmgen.refine.fill import (  # noqa: E402
-    WATER, UNCLAIMED, _polity_color_map, compute_texel_labels,
-)
+from realmgen.refine.fill import WATER, UNCLAIMED, _polity_color_map  # noqa: E402
 from realmgen.polity.types import UNCLAIMED_COLOR  # noqa: E402
-from worldgen.cost.channels import IS_WATER  # noqa: E402
 from worldgen.geology.channels import OCEAN_MASK  # noqa: E402
 from worldgen.geology.display import OCEAN_COLOR  # noqa: E402
 from worldgen.hydrology.channels import LAKE_MASK  # noqa: E402
@@ -65,33 +52,20 @@ DEPTH_COLORS = ["black", "#d62728", "#1f77b4", "#2ca02c", "#9467bd", "#8c564b"]
 
 
 def build_realm(seed: int, rebuild: bool):
-    """Build the cached physical world + realm pipeline; return everything the
-    border tracer consumes, recomputed live from the current fill/border code."""
+    """Build the cached physical world + realm pipeline; return the texel labels
+    and borders it produced (so they come from the current fill/border code)."""
     world = get_physical_world(seed, rebuild)
     realm = RealmPipeline(RealmParams())
     realm.build(BuildContext(world=world, seed=seed))
     mesh = world.mesh
 
     polities = world.get_feature("polities") or []
-    pof = np.asarray(POLITY_ID.read(mesh), dtype=np.int32)
-    is_water = np.asarray(IS_WATER.read(mesh), dtype=bool)
-    authority = np.asarray(AUTHORITY.read(mesh), dtype=np.float64)
+    field = world.get_feature("polity_label_field")
     ocean_tex = OCEAN_MASK.read(mesh)
     lake_tex = LAKE_MASK.read(mesh) if LAKE_MASK.present(mesh) else None
-
-    rp = realm.refine_stage.params
-    labels = compute_texel_labels(
-        mesh, pof, is_water, authority, ocean_tex, lake_tex,
-        control_floor=float(rp.border_control_floor),
-        warp_amplitude=float(rp.boundary_warp_amplitude),
-        warp_frequency=float(rp.boundary_warp_frequency),
-        warp_octaves=int(rp.boundary_warp_octaves),
-        warp_seed=int(world.seed or 0),
-        reconcile_edges=False,
-    )
-    borders = smooth_polity_borders(
-        mesh, polities, labels, iterations=int(rp.border_smoothing_iterations)
-    )
+    H, W = int(ocean_tex.shape[1]), int(ocean_tex.shape[2])
+    labels = field.texel_labels(mesh.face_texture_positions(H, W), ocean_tex, lake_tex)
+    borders = world.get_feature("polity_borders") or {}
     return world, mesh, polities, labels, borders
 
 

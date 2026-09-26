@@ -139,3 +139,18 @@ def test_describe_texel_names_water(fields):
     hex_idx, row, col = (int(x) for x in ocean[0])
     parts = describe_texel(fields, hex_idx, row, col, ("biome", "temperature", "precipitation"))
     assert parts is not None and parts[0] == "Ocean"
+
+
+def test_recipe_can_read_texel_positions(fields):
+    """A layer that is a function of position (the polity fill) is evaluated at the
+    region's own texels, handed to its recipe under ``POSITIONS_KEY``."""
+    from core.display import POSITIONS_KEY
+
+    def fn(textures):
+        p = textures[POSITIONS_KEY]
+        return np.concatenate([0.5 + 0.5 * p, np.ones(p.shape[:-1] + (1,))], axis=-1)
+
+    spec = _spec(TextureRecipe(fn, sources=(POSITIONS_KEY,)))
+    assert has_refined_layer(fields, spec)
+    rgba = build_layer_texture(fields, spec)
+    assert np.allclose(rgba[..., :3], 0.5 + 0.5 * fields.positions)
