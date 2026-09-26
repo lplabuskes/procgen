@@ -26,10 +26,32 @@ The sphere is wrapped in a cube; each cube face carries gnomonic coordinates
 - `ecef_to_cell(positions, antimeridian)` — sphere → region id
 - `cell_border_polylines(antimeridian)` — overlay curves for the world map
 - `RegionGeometry(region_id, antimeridian)` — that cell's local `[0, 1]²` frame:
-  `local_to_ecef`, `local_to_lonlat`, `sample_grid`, `center_ecef`
+  `local_to_ecef`, `local_to_lonlat`, `sample_grid`, `center_ecef`, `up_direction`
 
 Every entry point takes the viewer's `antimeridian` so region assignment is
 stable however the mesh is oriented.
+
+**Orientation.** The local `(s, t)` frame is *not* uniformly north-up — on the
+4 equatorial cube faces +t happens to be exactly true north (moving along t at
+fixed s is exactly a meridian), but on the 2 polar faces the grid is a flat
+gnomonic cap where +t is an arbitrary direction that varies cell to cell.
+`RegionGeometry.up_direction()` returns the local `(ds, dt)` direction, at the
+cell centre, that a renderer should treat as up: true north ordinarily (the
+tangent of increasing latitude), or — for the one cell per pole actually
+centred on the pole, where north has no direction — the tangent toward the
+antimeridian meridian instead, found the same way (via the local Jacobian) so
+it degrades continuously into the equatorial case (a no-op there). It is 0 on
+every equatorial region.
+
+**Handedness.** `_cube_face_gnomonic` negates `u_g` on faces 1, 2 and 5 (and
+`_face_gnomonic_to_ecef` undoes it on the way back) so every face is
+right-handed the same way: `ds x dt` points outward everywhere, i.e. east is
+always to the right of north (`test_local_frame_is_right_handed`). Without
+that negation, sharing one raw `yr/m`-or-`xr/m` formula between a face and
+its opposite mirrors one of the two, since they're reflections of each other
+through the origin — invisible while `up_direction()` wasn't applied yet
+(any orientation looked equally arbitrary), but a hard left-right mirror once
+it was, since a rotation can't undo a reflection.
 
 ## Hex grid (`region/grid.py`)
 
@@ -45,7 +67,7 @@ deliberate differences from the mesh convention:
 | | mesh face textures | region hex textures |
 |---|---|---|
 | texel positions | grid **endpoints** (`linspace(0, 1, T)`) | **cell centres** (`(i+0.5)/T`) — so a plain mean is an area mean |
-| row order | v ascending | row 0 = **north**, so textures blit without a flip |
+| row order | v ascending | row 0 = largest t, so textures blit without a flip (see **Orientation** above for what "up" — +t — actually points at) |
 
 - `texture_local(T)` / `texture_positions(T)` — `(M, T, T, 2 | 3)`
 - `texture_in_hexagon(T)` — `(M, T, T)` bool; the over-hang is excluded from every aggregate
@@ -167,8 +189,11 @@ elevation — without it a 100 m bump is invisible at ~16 km²/texel.
 `RegionView.set_region(geometry, globe)` refines synchronously (~0.8 s for a
 region at defaults) and caches a `QImage` per hexagon. Local `(s, t)` → screen is
 a flip-and-scale, so each hex texture is an axis-aligned blit clipped to its
-hexagon (drawn 0.75 px proud so antialiased neighbours leave no seam). Without a
-globe it falls back to the bare scaffolding.
+hexagon (drawn 0.75 px proud so antialiased neighbours leave no seam), wrapped
+in a whole-cell rotation from `geometry.up_direction()` so the rendered map is
+actually up-is-north (up-is-antimeridian on the 2 pole regions); this is the
+one place that direction gets turned into a screen rotation, since `region/`
+itself stays Qt-free. Without a globe it falls back to the bare scaffolding.
 
 `MapWindow` wires it up: **Regions** toggles the world-map overlay, clicking a
 cell enters the region view, a **Layer** combo picks the layer, and

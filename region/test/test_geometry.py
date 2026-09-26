@@ -109,6 +109,99 @@ def test_local_to_lonlat_consistent_with_ecef():
     assert np.allclose(lonlat[:, 1], lat)
 
 
+@pytest.mark.parametrize("antimeridian", ANTIMERIDIANS)
+def test_local_frame_is_right_handed(antimeridian):
+    """``(ds, dt)`` must be east/north-handed like the sphere itself:
+    ``ds x dt`` points outward (same way as the cell centre), on every
+    region. A face whose gnomonic ``u`` axis is a mirror image of its
+    neighbours would flip this sign — a real bug, not a rendering artefact,
+    since a screen rotation can't undo a reflection.
+    """
+    eps = 1e-4
+    c = 0.5
+    for region_id in range(N_REGIONS):
+        geom = RegionGeometry(region_id, antimeridian)
+        center = geom.local_to_ecef(np.array([c]), np.array([c]))[0]
+        ds = (
+            geom.local_to_ecef(np.array([c + eps]), np.array([c]))[0]
+            - geom.local_to_ecef(np.array([c - eps]), np.array([c]))[0]
+        )
+        dt = (
+            geom.local_to_ecef(np.array([c]), np.array([c + eps]))[0]
+            - geom.local_to_ecef(np.array([c]), np.array([c - eps]))[0]
+        )
+        assert np.dot(np.cross(ds, dt), center) > 0, f"region {region_id} (face {geom.face}) is mirrored"
+
+
+@pytest.mark.parametrize("antimeridian", ANTIMERIDIANS)
+def test_up_direction_matches_true_north_or_antimeridian(antimeridian):
+    """``up_direction()`` must resolve to true north, or — only where north
+    is undefined, i.e. the cell centred on a pole — to the antimeridian
+    tangent, for every region."""
+    eps = 1e-4
+    c = 0.5
+    for region_id in range(N_REGIONS):
+        geom = RegionGeometry(region_id, antimeridian)
+        center = geom.local_to_ecef(np.array([c]), np.array([c]))[0]
+        ds = (
+            geom.local_to_ecef(np.array([c + eps]), np.array([c]))[0]
+            - geom.local_to_ecef(np.array([c - eps]), np.array([c]))[0]
+        )
+        dt = (
+            geom.local_to_ecef(np.array([c]), np.array([c + eps]))[0]
+            - geom.local_to_ecef(np.array([c]), np.array([c - eps]))[0]
+        )
+        z_hat = np.array([0.0, 0.0, 1.0])
+        north = z_hat - np.dot(z_hat, center) * center
+        if np.linalg.norm(north) < 1e-6:
+            target = np.array([np.cos(antimeridian), np.sin(antimeridian), 0.0])
+        else:
+            target = _unit(north)
+
+        a, b = geom.up_direction()
+        rendered_up = _unit(a * ds + b * dt)
+        assert np.dot(rendered_up, target) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_up_direction_equatorial_faces_need_no_rotation():
+    """The 4 equatorial cube faces already have +t pointing at true north."""
+    for region_id in range(0, 36):  # faces 0-3
+        geom = RegionGeometry(region_id, np.pi)
+        ds, dt = geom.up_direction()
+        assert ds == pytest.approx(0.0, abs=1e-6)
+        assert dt > 0.0
+
+
+def test_up_direction_pole_regions_agree_on_the_antimeridian():
+    """Both pole-centred regions render the same real-world direction as up.
+
+    Their raw ``(ds, dt)`` coefficients need not match — the two faces do not
+    share an axis convention (``_cube_face_gnomonic`` negates ``u`` on some
+    faces to keep every face right-handed) — only the actual sphere direction
+    those coefficients pick out.
+    """
+    eps = 1e-4
+    c = 0.5
+    for region_id in (40, 49):  # face 4 / face 5 centre cell
+        geom = RegionGeometry(region_id, np.pi)
+        assert np.linalg.norm(np.abs(geom.center_ecef()) - np.array([0, 0, 1])) < 1e-9
+
+    def rendered_up(region_id: int) -> np.ndarray:
+        geom = RegionGeometry(region_id, np.pi)
+        ds = (
+            geom.local_to_ecef(np.array([c + eps]), np.array([c]))[0]
+            - geom.local_to_ecef(np.array([c - eps]), np.array([c]))[0]
+        )
+        dt = (
+            geom.local_to_ecef(np.array([c]), np.array([c + eps]))[0]
+            - geom.local_to_ecef(np.array([c]), np.array([c - eps]))[0]
+        )
+        a, b = geom.up_direction()
+        return _unit(a * ds + b * dt)
+
+    assert rendered_up(40) == pytest.approx(rendered_up(49), abs=1e-6)
+
+
 def test_border_polylines_on_unit_sphere():
     polys = cell_border_polylines(np.pi, samples=50)
     # 6 faces * (N+1 constant-pu + N+1 constant-pv) gridlines.

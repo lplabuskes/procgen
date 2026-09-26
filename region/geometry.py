@@ -64,6 +64,13 @@ def _cube_face_gnomonic(
     Face axes:
       0/1 (±X): u = yr/m, v = zr/m     2/3 (±Y): u = xr/m, v = zr/m
       4/5 (±Z): u = xr/m, v = yr/m
+
+    Sharing one raw formula between a face and its opposite (e.g. both 0 and
+    1 from ``yr/m``) mirrors one of the pair, since the two are reflections
+    of each other through the origin. ``u_g`` is negated on faces 1, 2 and 5
+    to undo that, so every face is right-handed the same way: east is +u
+    wherever north is +v (see ``region/test/test_geometry.py``, which checks
+    this by sign of ``(d/ds local_to_ecef) x (d/dt local_to_ecef) . centre``).
     """
     ax, ay, az = np.abs(xr), np.abs(yr), np.abs(zr)
     dom_x = (ax >= ay) & (ax >= az)
@@ -78,6 +85,8 @@ def _cube_face_gnomonic(
     m = np.maximum(ax, np.maximum(ay, az))
     u_g = np.where(dom_x, yr / m, np.where(dom_y, xr / m, xr / m))
     v_g = np.where(dom_x, zr / m, np.where(dom_y, zr / m, yr / m))
+    mirrored = (face == 1) | (face == 2) | (face == 5)
+    u_g = np.where(mirrored, -u_g, u_g)
     return face, u_g, v_g
 
 
@@ -88,6 +97,8 @@ def _face_gnomonic_to_ecef(
 
     Inverse of ``_rotate_into_cube_frame`` composed with ``_cube_face_gnomonic``.
     """
+    if face in (1, 2, 5):
+        u_g = -u_g
     d = np.sqrt(1.0 + u_g ** 2 + v_g ** 2)
     if face == 0:
         xr, yr, zr = 1.0 / d, u_g / d, v_g / d
@@ -192,3 +203,40 @@ class RegionGeometry:
     def center_ecef(self) -> np.ndarray:
         """ECEF position of the cell centre (local ``(0.5, 0.5)``)."""
         return self.local_to_ecef(np.array([0.5]), np.array([0.5]))[0]
+
+    def up_direction(self) -> np.ndarray:
+        """Local ``(ds, dt)`` direction, at the cell centre, that a renderer
+        should treat as "up".
+
+        Ordinarily this is true geographic north: the tangent, at the cell
+        centre, of the direction of increasing latitude. A cell centred on an
+        actual pole (only possible for an odd ``N_SUBDIV``, and then only its
+        one centre cell) has no north — the tangent plane there has no
+        latitude gradient to follow — so "up" falls back to the tangent
+        toward the antimeridian meridian instead, which is at least a fixed,
+        predictable direction.
+
+        Only the direction matters; the returned vector is not normalised to
+        any particular local distance.
+        """
+        eps = 1e-4
+        c = 0.5
+        center = self.local_to_ecef(np.array([c]), np.array([c]))[0]
+        ds = (
+            self.local_to_ecef(np.array([c + eps]), np.array([c]))[0]
+            - self.local_to_ecef(np.array([c - eps]), np.array([c]))[0]
+        )
+        dt = (
+            self.local_to_ecef(np.array([c]), np.array([c + eps]))[0]
+            - self.local_to_ecef(np.array([c]), np.array([c - eps]))[0]
+        )
+        z_hat = np.array([0.0, 0.0, 1.0])
+        target = z_hat - np.dot(z_hat, center) * center
+        norm = np.linalg.norm(target)
+        if norm < 1e-6:
+            target = np.array([np.cos(self.antimeridian), np.sin(self.antimeridian), 0.0])
+        else:
+            target = target / norm
+        jacobian = np.column_stack([ds, dt])   # (3, 2)
+        coeffs, *_ = np.linalg.lstsq(jacobian, target, rcond=None)
+        return coeffs

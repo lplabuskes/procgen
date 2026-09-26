@@ -130,6 +130,9 @@ class RegionView(QWidget):
         x0 = (W - size) * 0.5
         y0 = (H - size) * 0.5
 
+        painter.save()
+        self._apply_up_rotation(painter, x0, y0, size)
+
         if self._hex_images:
             self._draw_textured_hexes(painter, x0, y0, size)
         else:
@@ -140,6 +143,28 @@ class RegionView(QWidget):
         painter.setPen(QPen(QColor(70, 85, 100), 1.0))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(QRectF(x0, y0, size, size))
+        painter.restore()
+
+    def _apply_up_rotation(self, painter: QPainter, x0: float, y0: float, size: float) -> None:
+        """Rotate the whole cell about its centre so "up" reads correctly.
+
+        ``RegionGeometry.up_direction()`` gives the local ``(ds, dt)`` that
+        should render as up — true north ordinarily, or the antimeridian
+        tangent on the two regions centred on a pole, where north has no
+        direction. The existing ``(s, screen-x) / (t, screen-y flipped)``
+        mapping already treats +t as up with no rotation, so this is a no-op
+        for every cell where that already points at the target.
+        """
+        if self._geometry is None:
+            return
+        ds, dt = self._geometry.up_direction()
+        angle_rad = math.atan2(-ds, dt)
+        if abs(angle_rad) < 1e-9:
+            return
+        cx, cy = x0 + 0.5 * size, y0 + 0.5 * size
+        painter.translate(cx, cy)
+        painter.rotate(math.degrees(angle_rad))
+        painter.translate(-cx, -cy)
 
     def _hex_polygon(self, cx: float, cy: float, r_px: float) -> QPolygonF:
         return QPolygonF([
@@ -171,7 +196,7 @@ class RegionView(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         for i, (s, t) in enumerate(self._grid.centers):
             cx = x0 + s * size
-            cy = y0 + (1.0 - t) * size       # local +t (north) is up on screen
+            cy = y0 + (1.0 - t) * size       # local +t is up; _apply_up_rotation makes that true north
             brush = QBrush(self._hex_images[i])
             brush.setTransform(
                 QTransform(scale, 0.0, 0.0, scale, cx - r_px, cy - r_px)
