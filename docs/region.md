@@ -173,16 +173,22 @@ pins it.
 
 ### `RegionFields`
 `region_id`, `geometry`, `grid`, `tex_size`, `positions (M,T,T,3)`,
-`in_hex (M,T,T)`, `anchors (M,T,T)`, `textures {name: (M,T,T,C)}`,
+`in_hex (M,T,T)`, `anchors (M,T,T)`, `faces (M,T,T)` (owning global face), `textures {name: (M,T,T,C)}`,
 `detail_octaves`, `texel_area_km2`.
 
 ## Display (`region/display.py`)
 
-`build_layer_texture(fields, layer)` → `(M, T, T, 4)` RGBA for
-`REGION_LAYERS = ["Terrain", "Elevation", "Temperature", "Precipitation"]`, all
-routed through the world map's palettes so a region reads as a continuation of
-the globe. Terrain and Elevation get `hillshade(...)` from the refined
-elevation — without it a 100 m bump is invisible at ~16 km²/texel.
+The region view offers exactly the world map's layers (its registered color
+schemes), under the same names and in the same order.
+`build_layer_texture(fields, layer, mesh, scheme_fn=, texture_key=)` →
+`(M, T, T, 4)` RGBA. Layers in `REFINED_LAYERS` (Elevation, Biome,
+Annual/Summer/Winter Temperature, Annual Precipitation) are drawn from the
+refined fields through the world map's palettes; Biome and Elevation get
+`hillshade(...)` from the refined elevation — without it a 100 m bump is
+invisible at ~16 km²/texel. Every other layer goes through
+`sample_global_layer`: the scheme's per-face RGBA texture read at each texel's
+anchor, or else the scheme's color function applied to each texel's owning face
+— the globe's own two rendering paths, with no detail invented.
 
 ## Viewer (`viz/mapview/regionview.py`)
 
@@ -196,7 +202,8 @@ one place that direction gets turned into a screen rotation, since `region/`
 itself stays Qt-free. Without a globe it falls back to the bare scaffolding.
 
 `MapWindow` wires it up: **Regions** toggles the world-map overlay, clicking a
-cell enters the region view, a **Layer** combo picks the layer, and
+cell enters the region view, the shared **Coloration** combo picks the layer in
+both views (so it carries across switching), and
 `RegionView.status_text()` reports hex/texel counts and the detail-octave count
 in the status bar.
 

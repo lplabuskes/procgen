@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
 )
 
 from core.antimeridian import find_ideal_antimeridian
-from region.display import REGION_LAYERS
 from region.geometry import RegionGeometry, cell_border_polylines, ecef_to_cell
 from viz.mapview.projections import ALL_PROJECTIONS, RobinsonProjection, Projection
 from viz.mapview.regionview import RegionView
@@ -1390,15 +1389,6 @@ class MapWindow(QMainWindow):
         self._back_btn.setVisible(False)
         toolbar_layout.addWidget(self._back_btn)
 
-        self._layer_label = QLabel("Layer:")
-        self._layer_combo = QComboBox()
-        for layer in REGION_LAYERS:
-            self._layer_combo.addItem(layer)
-        self._layer_label.setVisible(False)
-        self._layer_combo.setVisible(False)
-        toolbar_layout.addWidget(self._layer_label)
-        toolbar_layout.addWidget(self._layer_combo)
-
         toolbar_layout.addStretch()
 
         zoom_out_btn = QPushButton("−")
@@ -1434,8 +1424,7 @@ class MapWindow(QMainWindow):
 
         self._map = MapWidget()
         self._region_view = RegionView()
-        self._color_combo.currentTextChanged.connect(self._map.set_color_scheme)
-        self._layer_combo.currentTextChanged.connect(self._region_view.set_layer)
+        self._color_combo.currentTextChanged.connect(self._on_scheme_changed)
         self._region_btn.toggled.connect(self._map.set_region_mode)
         self._map.set_region_click_callback(self._enter_region)
         self._back_btn.clicked.connect(self._exit_region)
@@ -1473,6 +1462,7 @@ class MapWindow(QMainWindow):
         self.set_status(f"Refining region {region_id}…")
         QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
         try:
+            self._sync_region_layer()
             self._region_view.set_region(geometry, self._map.globe)
         finally:
             QApplication.restoreOverrideCursor()
@@ -1481,18 +1471,33 @@ class MapWindow(QMainWindow):
         self._stack.setCurrentWidget(self._region_view)
         self._region_btn.setVisible(False)
         self._back_btn.setVisible(True)
-        has_layers = self._region_view.fields is not None
-        self._layer_label.setVisible(has_layers)
-        self._layer_combo.setVisible(has_layers)
 
     def _exit_region(self) -> None:
         """Return from the zoomed-in region view to the world map."""
         self._stack.setCurrentWidget(self._map)
         self._back_btn.setVisible(False)
         self._region_btn.setVisible(True)
-        self._layer_label.setVisible(False)
-        self._layer_combo.setVisible(False)
+        self._region_view.clear_region()
         self.set_status(self._prev_status)
+
+    def _on_scheme_changed(self, name: str) -> None:
+        """One Coloration combo drives both views, so the layer survives switching."""
+        self._map.set_color_scheme(name)
+        if self._stack.currentWidget() is self._region_view:
+            QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
+            try:
+                self._sync_region_layer()
+            finally:
+                QApplication.restoreOverrideCursor()
+
+    def _sync_region_layer(self) -> None:
+        """Hand the world map's active scheme to the region view."""
+        name = self._map._active_scheme
+        self._region_view.set_layer(
+            name,
+            self._map._color_schemes.get(name) if name is not None else None,
+            self._map._scheme_texture_key.get(name) if name is not None else None,
+        )
 
     def set_status(self, text: str) -> None:
         self._status_label.setText(text)

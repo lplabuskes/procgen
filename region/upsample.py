@@ -141,6 +141,7 @@ class RegionFields:
     positions: np.ndarray                    # (M, T, T, 3) unit sphere
     in_hex: np.ndarray                       # (M, T, T) bool — aggregation weight
     anchors: np.ndarray                      # (M, T, T) global texel index
+    faces: np.ndarray                        # (M, T, T) owning global face
     textures: dict[str, np.ndarray]
     detail_octaves: int
     texel_area_km2: float
@@ -567,6 +568,7 @@ def build_region_fields(
         positions=positions,
         in_hex=in_hex,
         anchors=anchors.reshape(m, tex_size, tex_size),
+        faces=faces.reshape(m, tex_size, tex_size),
         textures=textures,
         detail_octaves=int(freqs.size),
         texel_area_km2=float(region_area_km2 / max(covering, 1)),

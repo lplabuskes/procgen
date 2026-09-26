@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Callable, Optional, Sequence
 
 import numpy as np
 from PySide6.QtCore import Qt
@@ -9,7 +9,7 @@ from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPolygonF, QTr
 from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtWidgets import QWidget
 
-from region.display import REGION_LAYERS, build_layer_texture
+from region.display import build_layer_texture
 from region.geometry import RegionGeometry
 from region.grid import RegionHexGrid
 from region.upsample import RegionFields, RegionUpsampleParams, build_region_fields
@@ -40,7 +40,11 @@ class RegionView(QWidget):
         self._grid: Optional[RegionHexGrid] = None
         self._fields: Optional[RegionFields] = None
         self._params = RegionUpsampleParams()
-        self._layer: str = REGION_LAYERS[0]
+        self._globe: Optional["World"] = None
+        # The world map's active scheme: name, color function, per-face texture key.
+        self._layer: Optional[str] = None
+        self._scheme_fn: Optional[Callable[[dict], Sequence[float]]] = None
+        self._texture_key: Optional[str] = None
         self._hex_images: list[QImage] = []
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
@@ -49,6 +53,7 @@ class RegionView(QWidget):
     def set_region(self, geometry: RegionGeometry, globe: Optional["World"] = None) -> None:
         """Show a region, refining the global fields inside it when a globe is given."""
         self._geometry = geometry
+        self._globe = globe
         self._grid = RegionHexGrid(geometry, int(self._params.n_cols))
         self._fields = None
         self._hex_images = []
@@ -58,15 +63,31 @@ class RegionView(QWidget):
             self._rebuild_images()
         self.update()
 
-    def set_layer(self, layer: str) -> None:
-        if layer == self._layer:
+    def clear_region(self) -> None:
+        """Drop the current region (and its refined fields) until the next ``set_region``."""
+        self._geometry = None
+        self._globe = None
+        self._grid = None
+        self._fields = None
+        self._hex_images = []
+
+    def set_layer(
+        self,
+        layer: Optional[str],
+        scheme_fn: Optional[Callable[[dict], Sequence[float]]] = None,
+        texture_key: Optional[str] = None,
+    ) -> None:
+        """Show one of the world map's layers (its scheme name, color fn, texture key)."""
+        if (layer, scheme_fn, texture_key) == (self._layer, self._scheme_fn, self._texture_key):
             return
         self._layer = layer
+        self._scheme_fn = scheme_fn
+        self._texture_key = texture_key
         self._rebuild_images()
         self.update()
 
     @property
-    def layer(self) -> str:
+    def layer(self) -> Optional[str]:
         return self._layer
 
     @property
@@ -104,9 +125,13 @@ class RegionView(QWidget):
     def _rebuild_images(self) -> None:
         """Convert each hexagon's refined texture to a QImage for painting."""
         self._hex_images = []
-        if self._fields is None:
+        if self._fields is None or self._layer is None:
             return
-        rgba = build_layer_texture(self._fields, self._layer)     # (M, T, T, 4)
+        rgba = build_layer_texture(                                 # (M, T, T, 4)
+            self._fields, self._layer,
+            self._globe.mesh if self._globe is not None else None,
+            scheme_fn=self._scheme_fn, texture_key=self._texture_key,
+        )
         data = np.ascontiguousarray((rgba * 255.0).clip(0, 255).astype(np.uint8))
         m, h, w, _ = data.shape
         for i in range(m):

@@ -37,7 +37,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.patches import Polygon  # noqa: E402
 
-from region.display import REGION_LAYERS, build_layer_texture  # noqa: E402
+from region.display import REFINED_LAYERS, build_layer_texture  # noqa: E402
 from region.geometry import N_REGIONS, ecef_to_cell  # noqa: E402
 from region.upsample import (  # noqa: E402
     RegionFields, RegionUpsampleParams, build_region_fields, conservation_report,
@@ -109,7 +109,7 @@ def main() -> None:
     parser.add_argument("seed", nargs="?", type=int, default=4)
     parser.add_argument("--region", type=int, default=None,
                         help=f"region id in [0, {N_REGIONS}); default: most land-rich")
-    parser.add_argument("--layer", default="Terrain", choices=REGION_LAYERS)
+    parser.add_argument("--layer", default="Biome", choices=REFINED_LAYERS)
     parser.add_argument("--tex-size", type=int, default=None)
     parser.add_argument("--n-cols", type=int, default=None)
     parser.add_argument("--relief", type=float, default=None,
