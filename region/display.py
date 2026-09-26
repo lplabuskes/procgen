@@ -1,8 +1,10 @@
 """RGBA display textures for the region view.
 
 Deliberately thin: the region view offers exactly the world map's layers, under
-the same names.  Layers the upsampler refines route through the same palettes
-the world map uses; every other layer is read straight off the globe, so a
+the same names, coloured by the same code.  A scheme whose texture has a
+:class:`~core.display.TextureRecipe` is rebuilt from the region's refined
+fields by running that recipe on them — the very function its stage ran on the
+globe's face textures.  Every other layer is read straight off the globe, so a
 region reads as a zoomed-in continuation of it rather than a different map.
 """
 from __future__ import annotations
@@ -12,68 +14,49 @@ from typing import TYPE_CHECKING, Callable, Sequence
 
 import numpy as np
 
+from core.display import SchemeSpec
 from region.sampling import GlobalSampler
 from region.upsample import RegionFields
 
 if TYPE_CHECKING:
     from core.mesh import PolygonMesh
 
-# World-map layers the region view renders from its own refined fields — the
-# names are the world map's scheme names, so one combo drives both views.  Every
-# other scheme is sampled from the global map (``sample_global_layer``).
-REFINED_LAYERS: list[str] = [
-    "Elevation",
-    "Biome",
-    "Annual Temperature",
-    "Summer Temperature",
-    "Winter Temperature",
-    "Annual Precipitation",
-]
 
-# Season channel per temperature layer (None = annual mean), matching the world
-# map's climate display.
-_TEMPERATURE_SEASON: dict[str, int | None] = {
-    "Annual Temperature": None,
-    "Summer Temperature": 1,
-    "Winter Temperature": 3,
-}
-
-# The texture each refined layer needs; without it the layer is sampled instead.
-_REFINED_SOURCE: dict[str, str] = {
-    "Elevation": "elevation",
-    "Biome": "biome",
-    "Annual Temperature": "temperature",
-    "Summer Temperature": "temperature",
-    "Winter Temperature": "temperature",
-    "Annual Precipitation": "precipitation",
-}
-
-
-def has_refined_layer(fields: RegionFields, layer: str) -> bool:
-    """True when ``layer`` can be drawn from the region's own refined fields."""
-    key = _REFINED_SOURCE.get(layer)
-    return key is not None and key in fields.textures
+def has_refined_layer(fields: RegionFields, spec: SchemeSpec) -> bool:
+    """True when the layer can be drawn from the region's own refined fields."""
+    return spec.recipe is not None and spec.recipe.available(fields.textures)
 
 
 def build_layer_texture(
-    fields: RegionFields,
-    layer: str,
-    mesh: "PolygonMesh | None" = None,
-    *,
-    scheme_fn: "Callable[[dict], Sequence[float]] | None" = None,
-    texture_key: str | None = None,
+    fields: RegionFields, spec: SchemeSpec, mesh: "PolygonMesh | None" = None
 ) -> np.ndarray:
     """(M, T, T, 4) float32 RGBA for one world-map layer over a refined region.
 
-    Layers in ``REFINED_LAYERS`` are drawn from the refined fields; any other
-    layer is sampled from the global map (``mesh`` plus the scheme's
-    ``texture_key`` / ``scheme_fn``), so a region offers every world-map layer.
+    A layer with a recipe whose sources the region has refined is rebuilt from
+    them (hillshaded by the refined relief when the recipe asks for it); any
+    other layer is sampled from the global map (``mesh`` plus the scheme's
+    texture or colour function), so a region offers every world-map layer.
     """
-    if has_refined_layer(fields, layer):
-        return _refined_layer_texture(fields, layer)
+    if has_refined_layer(fields, spec):
+        assert spec.recipe is not None
+        rgba = np.ascontiguousarray(spec.recipe(fields.textures), dtype=np.float32)
+        if spec.recipe.relief and "elevation" in fields.textures:
+            rgba = hillshade(
+                rgba, fields.textures["elevation"], math.sqrt(max(fields.texel_area_km2, 1e-6)),
+                water=_water_mask(fields),
+            )
+        return rgba
     if mesh is None:
-        raise ValueError(f"layer {layer!r} is not refined and no global mesh was given")
-    return sample_global_layer(fields, mesh, scheme_fn=scheme_fn, texture_key=texture_key)
+        raise ValueError("layer is not refined and no global mesh was given")
+    return sample_global_layer(fields, mesh, scheme_fn=spec.fn, texture_key=spec.texture)
+
+
+def _water_mask(fields: RegionFields) -> np.ndarray | None:
+    """(M, T, T) True on refined ocean or lake texels, which hillshading leaves flat."""
+    masks = [fields.textures[k][..., 0] > 0 for k in ("ocean_mask", "lake_mask") if k in fields.textures]
+    if not masks:
+        return None
+    return np.logical_or.reduce(masks)
 
 
 def sample_global_layer(
@@ -137,54 +120,12 @@ def describe_texel(
     return parts
 
 
-def _refined_layer_texture(fields: RegionFields, layer: str) -> np.ndarray:
-    from viz.color_stops import categorical_texture
-    from worldgen.climate.display import (
-        BIOME_PALETTE,
-        build_precipitation_display_texture,
-        build_temperature_display_texture,
-    )
-    from worldgen.geology.display import apply_water_masks, elevation_rgba
-
-    tex = fields.textures
-    elevation = tex.get("elevation")
-    ocean_mask = tex.get("ocean_mask")
-    lake_mask = tex.get("lake_mask")
-
-    if layer == "Elevation":
-        assert elevation is not None
-        mask = ocean_mask[..., 0] > 0 if ocean_mask is not None else None
-        rgba = elevation_rgba(elevation[..., 0], ocean_mask=mask)
-    elif layer in _TEMPERATURE_SEASON:
-        rgba = build_temperature_display_texture(
-            tex["temperature"], season=_TEMPERATURE_SEASON[layer],
-            elevation_tex=elevation, ocean_mask_tex=ocean_mask,
-        )
-    elif layer == "Annual Precipitation":
-        rgba = build_precipitation_display_texture(
-            tex["precipitation"], elevation_tex=elevation, ocean_mask_tex=ocean_mask
-        )
-    elif layer == "Biome":
-        rgba = categorical_texture(tex["biome"], BIOME_PALETTE, len(BIOME_PALETTE))
-    else:
-        raise ValueError(f"unknown refined layer {layer!r}")
-
-    rgba = np.ascontiguousarray(rgba, dtype=np.float32)
-    if layer in ("Biome", "Elevation") and elevation is not None:
-        rgba = hillshade(rgba, elevation, math.sqrt(max(fields.texel_area_km2, 1e-6)))
-    return apply_water_masks(
-        rgba,
-        elevation_tex=elevation if ocean_mask is None else None,
-        ocean_mask_tex=ocean_mask,
-        lake_mask_tex=lake_mask,
-    )
-
-
 def hillshade(
     rgba: np.ndarray,
     elevation: np.ndarray,
     texel_km: float,
     *,
+    water: np.ndarray | None = None,
     strength: float = 0.55,
 ) -> np.ndarray:
     """Relight ``(M, T, T, 4)`` colours by the slope of the refined elevation.
@@ -193,7 +134,7 @@ def hillshade(
     ~16 km²/texel simply cannot show a 100 m bump.  Gradients are taken inside
     each hex texture (which over-hangs its hexagon, so the visible area is lit
     from real neighbours) with the light from the north-west, the cartographic
-    convention.
+    convention.  Pixels under ``water`` (``(M, T, T)`` bool) are left as they are.
     """
     elev = np.asarray(elevation, dtype=np.float32)[..., 0]
     dz_ds = np.gradient(elev, axis=2) / texel_km     # east-west, columns
@@ -204,6 +145,8 @@ def hillshade(
     light /= np.linalg.norm(light)
     intensity = np.clip(normal @ light, 0.0, 1.0)
     shade = (1.0 - strength) + strength * (intensity / 0.707)
+    if water is not None:
+        shade = np.where(water, 1.0, shade)
     out = rgba.copy()
     out[..., :3] = np.clip(out[..., :3] * np.clip(shade, 0.4, 1.6)[..., None], 0.0, 1.0)
     return out

@@ -183,12 +183,16 @@ pins it.
 
 The region view offers exactly the world map's layers (its registered color
 schemes), under the same names and in the same order.
-`build_layer_texture(fields, layer, mesh, scheme_fn=, texture_key=)` →
-`(M, T, T, 4)` RGBA. Layers in `REFINED_LAYERS` (Elevation, Biome,
-Annual/Summer/Winter Temperature, Annual Precipitation) are drawn from the
-refined fields through the world map's palettes; Biome and Elevation get
-`hillshade(...)` from the refined elevation — without it a 100 m bump is
-invisible at ~16 km²/texel. Every other layer goes through
+`build_layer_texture(fields, spec, mesh)` → `(M, T, T, 4)` RGBA, where `spec`
+is the world map's `SchemeSpec`. There is no region-side list of layers or
+palettes: a scheme with a `TextureRecipe` whose `sources` the region has refined
+(`has_refined_layer`) is drawn by running that recipe — the stage's own
+function — on `fields.textures`. Today that is Elevation, Biome,
+Annual/Summer/Winter Temperature and Annual Precipitation; a new stage layer
+with a recipe over refined keys appears refined automatically. Recipes with
+`relief=True` (Elevation, Biome) are then `hillshade(...)`d on land from the
+refined elevation — without it a 100 m bump is invisible at ~16 km²/texel;
+water stays flat. Every other layer goes through
 `sample_global_layer`: the scheme's per-face RGBA texture read at each texel's
 anchor, or else the scheme's color function applied to each texel's owning face
 — the globe's own two rendering paths, with no detail invented.

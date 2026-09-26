@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.antimeridian import find_ideal_antimeridian
-from core.display import LocalHoverFn
+from core.display import LocalHoverFn, SchemeSpec, TextureRecipe
 from region.display import describe_texel
 from region.geometry import RegionGeometry, cell_border_polylines, ecef_to_cell
 from viz.mapview.legend import draw_legend
@@ -798,6 +798,9 @@ class MapWindow(QMainWindow):
         self._region_view = RegionView()
         self._color_combo.currentTextChanged.connect(self._on_scheme_changed)
         self._hover_parts: Optional[HoverPartsFn] = None
+        # Scheme → the recipe its texture was built with; the region view reruns
+        # it on refined data.  The world map only needs the finished texture.
+        self._scheme_recipes: dict[str, TextureRecipe] = {}
         self._region_view.set_hover_callback(self._region_hover)
         self._region_btn.toggled.connect(self._map.set_region_mode)
         self._map.set_region_click_callback(self._enter_region)
@@ -873,11 +876,14 @@ class MapWindow(QMainWindow):
     def _sync_region_layer(self) -> None:
         """Hand the world map's active scheme to the region view."""
         name = self._map._active_scheme
-        self._region_view.set_layer(
-            name,
-            self._map._color_schemes.get(name) if name is not None else None,
-            self._map._scheme_texture_key.get(name) if name is not None else None,
-        )
+        fn = self._map._color_schemes.get(name) if name is not None else None
+        spec = None
+        if name is not None and fn is not None:
+            spec = SchemeSpec(
+                fn, texture=self._map._scheme_texture_key.get(name),
+                recipe=self._scheme_recipes.get(name),
+            )
+        self._region_view.set_layer(name, spec)
         self._region_view.set_legend(self._map.legend_for(name))
 
     def set_status(self, text: str) -> None:
@@ -911,6 +917,10 @@ class MapWindow(QMainWindow):
 
     def associate_scheme_texture(self, scheme_name: str, texture_key: str) -> None:
         self._map.associate_scheme_texture(scheme_name, texture_key)
+
+    def associate_scheme_recipe(self, scheme_name: str, recipe: TextureRecipe) -> None:
+        """How a scheme's texture is made, so the region view can remake it from refined data."""
+        self._scheme_recipes[scheme_name] = recipe
 
     def register_legend(self, scheme_name: str, kind: str, entries: list) -> None:
         self._map.register_legend(scheme_name, kind, entries)

@@ -37,7 +37,7 @@ from worldgen.geology.display import (
     OCEAN_COLOR,
     _elevation_color,
     _plate_palette,
-    build_elevation_display_texture,
+    ELEVATION_RECIPE,
     elevation_legend_entries,
 )
 from worldgen.geology.tectonics import (
@@ -313,10 +313,11 @@ class ElevationBuilder(Stage):
         palette = _plate_palette(self.params.plates.n_plates)
         mesh.set_face_colors(palette[np.array(self.plate_ids, dtype=np.int32)])
 
-        mesh.set_face_textures("elevation_rgba", build_elevation_display_texture(mesh))
+        mesh.set_face_textures("elevation_rgba", ELEVATION_RECIPE(mesh.face_textures))
         reg.add_scheme(
             "Elevation", _elevation_color,
             texture="elevation_rgba", legend=("gradient", elevation_legend_entries()),
+            recipe=ELEVATION_RECIPE,
         )
         if not debug:
             return

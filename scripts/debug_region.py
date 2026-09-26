@@ -19,7 +19,7 @@ what the viewer shows.
 Usage:
     python3 scripts/debug_region.py                       # seed 4, auto-pick the most land-rich region
     python3 scripts/debug_region.py 31 --region 20        # explicit region id
-    python3 scripts/debug_region.py --layer Elevation     # Terrain | Elevation | Temperature | Precipitation
+    python3 scripts/debug_region.py --layer Elevation     # any name in LAYERS below
     python3 scripts/debug_region.py --tex-size 96 --n-cols 20
     python3 scripts/debug_region.py --relief 4.0          # override the detail relief factor
     python3 scripts/debug_region.py --out /tmp/region.png
@@ -37,12 +37,29 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.patches import Polygon  # noqa: E402
 
-from region.display import REFINED_LAYERS, build_layer_texture  # noqa: E402
+from core.display import SchemeSpec, TextureRecipe  # noqa: E402
+from region.display import build_layer_texture  # noqa: E402
 from region.geometry import N_REGIONS, ecef_to_cell  # noqa: E402
 from region.upsample import (  # noqa: E402
     RegionFields, RegionUpsampleParams, build_region_fields, conservation_report,
 )
+from worldgen.climate.display import (  # noqa: E402
+    ANNUAL_TEMPERATURE_RECIPE, BIOME_RECIPE, PRECIPITATION_RECIPE,
+    SUMMER_TEMPERATURE_RECIPE, WINTER_TEMPERATURE_RECIPE,
+)
+from worldgen.geology.display import ELEVATION_RECIPE  # noqa: E402
 from _common import get_physical_world  # noqa: E402
+
+# The world-map layers a region refines, by their scheme names — the same recipe
+# objects the stages register, so this renders exactly what the viewer shows.
+LAYERS: dict[str, TextureRecipe] = {
+    "Elevation": ELEVATION_RECIPE,
+    "Biome": BIOME_RECIPE,
+    "Annual Temperature": ANNUAL_TEMPERATURE_RECIPE,
+    "Summer Temperature": SUMMER_TEMPERATURE_RECIPE,
+    "Winter Temperature": WINTER_TEMPERATURE_RECIPE,
+    "Annual Precipitation": PRECIPITATION_RECIPE,
+}
 
 RESULTS_DIR = Path(__file__).parent / "results"
 
@@ -59,7 +76,8 @@ def pick_land_region(world) -> int:  # type: ignore[no-untyped-def]
 
 def draw_region(ax, fields: RegionFields, layer: str, title: str) -> None:  # type: ignore[no-untyped-def]
     """Blit every hexagon's texture, clipped to the hexagon, in local (s, t) space."""
-    rgba = np.clip(build_layer_texture(fields, layer), 0.0, 1.0)
+    spec = SchemeSpec(lambda _meta: (0.0, 0.0, 0.0, 1.0), recipe=LAYERS[layer])
+    rgba = np.clip(build_layer_texture(fields, spec), 0.0, 1.0)
     r = fields.grid.radius
     corners = np.array([
         [math.cos(math.radians(60 * i)), math.sin(math.radians(60 * i))] for i in range(6)
@@ -109,7 +127,7 @@ def main() -> None:
     parser.add_argument("seed", nargs="?", type=int, default=4)
     parser.add_argument("--region", type=int, default=None,
                         help=f"region id in [0, {N_REGIONS}); default: most land-rich")
-    parser.add_argument("--layer", default="Biome", choices=REFINED_LAYERS)
+    parser.add_argument("--layer", default="Biome", choices=list(LAYERS))
     parser.add_argument("--tex-size", type=int, default=None)
     parser.add_argument("--n-cols", type=int, default=None)
     parser.add_argument("--relief", type=float, default=None,

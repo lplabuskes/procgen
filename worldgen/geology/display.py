@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import colorsys
+from typing import Mapping
 
 import numpy as np
+
+from core.display import TextureRecipe
 
 from viz.color_stops import interp_stops, interp_stops_scalar, gradient_scheme, categorical_scheme
 
@@ -153,12 +156,14 @@ def elevation_rgba(elevs: np.ndarray, ocean_mask: np.ndarray | None = None) -> n
     return result
 
 
-def build_elevation_display_texture(mesh) -> np.ndarray:
-    """RGBA (N, H, W, 4) elevation texture from the single-channel ``"elevation"``
-    data layer, painting ocean pixels by depth and lake pixels in lake blue."""
-    elev_tex = mesh.face_textures["elevation"]          # (N, H, W, 1)
-    ocean_mask = None
-    if "ocean_mask" in mesh.face_textures:
-        ocean_mask = mesh.face_textures["ocean_mask"][:, :, :, 0] > 0  # (N, H, W) bool
-    rgba = elevation_rgba(elev_tex[:, :, :, 0], ocean_mask=ocean_mask)  # (N, H, W, 4)
-    return apply_water_masks(rgba, lake_mask_tex=mesh.face_textures.get("lake_mask"))
+def _render_elevation(tex: Mapping[str, np.ndarray]) -> np.ndarray:
+    """Ocean pixels by depth, land by elevation, lakes in lake blue."""
+    ocean = tex.get("ocean_mask")
+    rgba = elevation_rgba(
+        tex["elevation"][..., 0], ocean_mask=ocean[..., 0] > 0 if ocean is not None else None
+    )
+    return apply_water_masks(rgba, lake_mask_tex=tex.get("lake_mask"))
+
+
+# The "Elevation" layer, for the world map and (from refined data) regions alike.
+ELEVATION_RECIPE = TextureRecipe(_render_elevation, sources=("elevation",), relief=True)

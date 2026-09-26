@@ -22,6 +22,8 @@ def apply_registry(reg: DisplayRegistry, window, world: World) -> None:
     for name, spec in reg.schemes.items():
         if spec.texture is not None:
             window.associate_scheme_texture(name, spec.texture)
+        if spec.recipe is not None:
+            window.associate_scheme_recipe(name, spec.recipe)
         if spec.legend is not None:
             kind, entries = spec.legend
             window.register_legend(name, kind, entries)

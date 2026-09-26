@@ -49,9 +49,11 @@ from worldgen.climate.winds import pressure_winds, zonal_winds
 from worldgen.climate.display import (
     biome_color,
     biome_legend_entries,
-    build_biome_display_texture,
-    build_precipitation_display_texture,
-    build_temperature_display_texture,
+    ANNUAL_TEMPERATURE_RECIPE,
+    BIOME_RECIPE,
+    PRECIPITATION_RECIPE,
+    SUMMER_TEMPERATURE_RECIPE,
+    WINTER_TEMPERATURE_RECIPE,
     humidity_color,
     precipitation_color,
     precipitation_legend_entries,
@@ -517,54 +519,34 @@ class ClimateBuilder(Stage):
         mesh = world.mesh
         if "temperature" not in mesh.face_textures:
             return
-        elev_tex = mesh.face_textures["elevation"]
 
-        mesh.set_face_textures("biome_rgba", build_biome_display_texture(mesh))
-        reg.add_scheme(
-            "Biome", biome_color,
-            texture="biome_rgba", legend=("categorical", biome_legend_entries()),
+        def _textured(name: str, fn, key: str, recipe, legend) -> None:
+            mesh.set_face_textures(key, recipe(mesh.face_textures))
+            reg.add_scheme(name, fn, texture=key, legend=legend, recipe=recipe)
+
+        _textured(
+            "Biome", biome_color, "biome_rgba", BIOME_RECIPE,
+            ("categorical", biome_legend_entries()),
         )
         if not debug:
             return
 
-        temp_tex = mesh.face_textures["temperature"]
-        precip_tex = mesh.face_textures["precipitation"]
-        ocean_mask_tex = mesh.face_textures.get("ocean_mask")
-        mesh.set_face_textures(
-            "temperature_annual_rgba",
-            build_temperature_display_texture(temp_tex, elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex),
+        temperature_legend = ("gradient", temperature_legend_entries())
+        _textured(
+            "Annual Temperature", temperature_color, "temperature_annual_rgba",
+            ANNUAL_TEMPERATURE_RECIPE, temperature_legend,
         )
-        mesh.set_face_textures(
-            "temperature_summer_rgba",
-            build_temperature_display_texture(
-                temp_tex, season=1, elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex
-            ),
+        _textured(
+            "Summer Temperature", temperature_warmest_color, "temperature_summer_rgba",
+            SUMMER_TEMPERATURE_RECIPE, temperature_legend,
         )
-        mesh.set_face_textures(
-            "temperature_winter_rgba",
-            build_temperature_display_texture(
-                temp_tex, season=3, elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex
-            ),
+        _textured(
+            "Winter Temperature", temperature_coldest_color, "temperature_winter_rgba",
+            WINTER_TEMPERATURE_RECIPE, temperature_legend,
         )
-        mesh.set_face_textures(
-            "precipitation_rgba",
-            build_precipitation_display_texture(precip_tex, elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex),
-        )
-        reg.add_scheme(
-            "Annual Temperature", temperature_color,
-            texture="temperature_annual_rgba", legend=("gradient", temperature_legend_entries()),
-        )
-        reg.add_scheme(
-            "Summer Temperature", temperature_warmest_color,
-            texture="temperature_summer_rgba", legend=("gradient", temperature_legend_entries()),
-        )
-        reg.add_scheme(
-            "Winter Temperature", temperature_coldest_color,
-            texture="temperature_winter_rgba", legend=("gradient", temperature_legend_entries()),
-        )
-        reg.add_scheme(
-            "Annual Precipitation", precipitation_color,
-            texture="precipitation_rgba", legend=("gradient", precipitation_legend_entries()),
+        _textured(
+            "Annual Precipitation", precipitation_color, "precipitation_rgba",
+            PRECIPITATION_RECIPE, ("gradient", precipitation_legend_entries()),
         )
         reg.add_scheme("Humidity", humidity_color)
 

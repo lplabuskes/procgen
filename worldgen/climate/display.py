@@ -1,8 +1,11 @@
 """Color schemes and display-texture builders for the climate stage."""
 from __future__ import annotations
 
+from typing import Mapping
+
 import numpy as np
 
+from core.display import TextureRecipe
 from viz.color_stops import interp_stops, interp_stops_scalar, categorical_texture, palette_legend_entries
 from worldgen.geology.display import (
     OCEAN_COLOR,
@@ -100,34 +103,42 @@ def biome_legend_entries() -> list[tuple[str, tuple]]:
     return palette_legend_entries(BIOME_NAMES, BIOME_PALETTE)
 
 
-def build_temperature_display_texture(temperature_tex: np.ndarray,
-                                      season: int | None = None,
-                                      elevation_tex: np.ndarray | None = None,
-                                      ocean_mask_tex: np.ndarray | None = None) -> np.ndarray:
-    """Convert (N, H, W, K) °C texture to (N, H, W, 4) RGBA."""
-    if season is None:
-        values = temperature_tex.mean(axis=-1)
-    else:
-        values = temperature_tex[..., season]
-    rgba = interp_stops(values, _TEMP_STOPS)
-    return apply_water_masks(rgba, elevation_tex=elevation_tex, ocean_mask_tex=ocean_mask_tex)
+def _render_temperature(season: int | None):
+    def render(tex: Mapping[str, np.ndarray]) -> np.ndarray:
+        """(N, H, W, K) °C → (N, H, W, 4) RGBA, one season or the annual mean; ocean masked."""
+        t = tex["temperature"]
+        values = t.mean(axis=-1) if season is None else t[..., season]
+        return apply_water_masks(
+            interp_stops(values, _TEMP_STOPS),
+            elevation_tex=tex.get("elevation"), ocean_mask_tex=tex.get("ocean_mask"),
+        )
+    return render
 
 
-def build_precipitation_display_texture(precipitation_tex: np.ndarray,
-                                        elevation_tex: np.ndarray | None = None,
-                                        ocean_mask_tex: np.ndarray | None = None) -> np.ndarray:
-    """Convert (N, H, W, K) mm/season texture to (N, H, W, 4) RGBA (annual log scale)."""
-    annual = np.maximum(precipitation_tex.sum(axis=-1), 1.0)
-    rgba = interp_stops(np.log10(annual), _LOG_PRECIP_STOPS)
-    return apply_water_masks(rgba, elevation_tex=elevation_tex, ocean_mask_tex=ocean_mask_tex)
+def _render_precipitation(tex: Mapping[str, np.ndarray]) -> np.ndarray:
+    """(N, H, W, K) mm/season → (N, H, W, 4) RGBA on an annual log scale; ocean masked."""
+    annual = np.maximum(tex["precipitation"].sum(axis=-1), 1.0)
+    return apply_water_masks(
+        interp_stops(np.log10(annual), _LOG_PRECIP_STOPS),
+        elevation_tex=tex.get("elevation"), ocean_mask_tex=tex.get("ocean_mask"),
+    )
 
 
-def build_biome_display_texture(mesh) -> np.ndarray:
-    """Look up ``"biome"`` indices in BIOME_PALETTE → (N, H, W, 4) RGBA."""
-    rgba = categorical_texture(mesh.face_textures["biome"], BIOME_PALETTE, len(BIOME_PALETTE))
+def _render_biome(tex: Mapping[str, np.ndarray]) -> np.ndarray:
+    """Biome indices through BIOME_PALETTE; ocean and lakes masked."""
+    rgba = categorical_texture(tex["biome"], BIOME_PALETTE, len(BIOME_PALETTE))
     return apply_water_masks(
         rgba,
-        elevation_tex=mesh.face_textures.get("elevation"),
-        ocean_mask_tex=mesh.face_textures.get("ocean_mask"),
-        lake_mask_tex=mesh.face_textures.get("lake_mask"),
+        elevation_tex=tex.get("elevation"),
+        ocean_mask_tex=tex.get("ocean_mask"),
+        lake_mask_tex=tex.get("lake_mask"),
     )
+
+
+# The climate layers, for the world map and (from refined data) regions alike.
+# Seasons follow SEASON_LABELS: 1 is summer, 3 is winter.
+BIOME_RECIPE = TextureRecipe(_render_biome, sources=("biome",), relief=True)
+ANNUAL_TEMPERATURE_RECIPE = TextureRecipe(_render_temperature(None), sources=("temperature",))
+SUMMER_TEMPERATURE_RECIPE = TextureRecipe(_render_temperature(1), sources=("temperature",))
+WINTER_TEMPERATURE_RECIPE = TextureRecipe(_render_temperature(3), sources=("temperature",))
+PRECIPITATION_RECIPE = TextureRecipe(_render_precipitation, sources=("precipitation",))

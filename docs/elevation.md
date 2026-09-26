@@ -46,4 +46,4 @@ Elevation textures are single-channel `(N, H, W, 1)` float32 (channel 0 = elevat
 
 ## `display.py`
 
-Holds color scheme callables (`_elevation_color`, `_elevation_color_vec`), RGBA constants (`OCEAN_COLOR`, `LAND_COLOR`, `BOUNDARY_COLORS`), and `_plate_palette` helper. Imported by `worldgen/globe/builder.py` — no standalone entrypoint.
+Holds color scheme callables (`_elevation_color`, `_elevation_color_vec`), `ELEVATION_RECIPE` (the `TextureRecipe` behind the "Elevation" texture, also run by the region view on refined data), RGBA constants (`OCEAN_COLOR`, `LAND_COLOR`, `BOUNDARY_COLORS`), and `_plate_palette` helper. Imported by `worldgen/globe/builder.py` — no standalone entrypoint.

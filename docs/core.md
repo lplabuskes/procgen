@@ -55,8 +55,9 @@ Feature registry: `add_feature(name, data)`, `get_feature(name)`, `has_feature(n
 
 Qt-free surface that stages contribute visualization to. A viz adapter (`viz/mapview/registry.py`) later walks it and wires into a concrete `MapWindow`, keeping Qt/OpenGL out of `core`.
 
-- **`DisplayRegistry`**: `add_scheme(name, fn, *, texture?, legend?)`, `add_overlay(feature, label, *, checked?, legend?)`, `add_hover(fn, *, refined=())`. `hover(face_idx, uv, world, local=None)` concatenates all registered contributor fragments; `refined` names the face textures a contributor reports on, and a regional view's `local(keys)` replaces that contributor's fragments in place when it has refined all of them.
-- **`SchemeSpec`**: `fn: SchemeFn` (callable over face metadata dict → RGBA tuple), optional `texture` (associated per-face RGBA texture name), optional `legend`.
+- **`DisplayRegistry`**: `add_scheme(name, fn, *, texture?, legend?, recipe?)`, `add_overlay(feature, label, *, checked?, legend?)`, `add_hover(fn, *, refined=())`. `hover(face_idx, uv, world, local=None)` concatenates all registered contributor fragments; `refined` names the face textures a contributor reports on, and a regional view's `local(keys)` replaces that contributor's fragments in place when it has refined all of them.
+- **`SchemeSpec`**: `fn: SchemeFn` (callable over face metadata dict → RGBA tuple), optional `texture` (associated per-face RGBA texture name), optional `legend`, optional `recipe`.
+- **`TextureRecipe`**: how a scheme's RGBA texture is made — `fn(textures) -> (N, H, W, 4)` over a `{key: (N, H, W, C)}` dict, the `sources` keys it needs (extras such as water masks are read with `.get`), and `relief` (a regional view may hillshade it). The owning stage builds its world texture with `mesh.set_face_textures(key, recipe(mesh.face_textures))` and registers the same object; the region view reruns it on its refined textures, so both views colour a layer with one function. `available(textures)` checks the sources.
 - **`OverlaySpec`**: `feature: str`, `label: str`, `checked: bool`, optional `legend`.
 
 ## `core/mesh.py` — Mesh data structures

@@ -1,13 +1,35 @@
-"""Region layers: refined where the upsampler covers them, sampled from the globe otherwise."""
+"""Region layers: rebuilt by the stage's own recipe where refined, sampled from the globe otherwise."""
 import dataclasses
 
 import numpy as np
 import pytest
 
-from region.display import REFINED_LAYERS, build_layer_texture, describe_texel, has_refined_layer
+from core.display import SchemeSpec, TextureRecipe
+from region.display import build_layer_texture, describe_texel, has_refined_layer
 from region.upsample import RegionUpsampleParams, build_region_fields
+from worldgen.climate.display import (
+    ANNUAL_TEMPERATURE_RECIPE,
+    BIOME_RECIPE,
+    PRECIPITATION_RECIPE,
+    SUMMER_TEMPERATURE_RECIPE,
+    WINTER_TEMPERATURE_RECIPE,
+)
+from worldgen.geology.display import ELEVATION_RECIPE
 
 REGION_ID = 40   # has land (the conftest lake sits on its highland)
+
+RECIPES = [
+    ELEVATION_RECIPE, BIOME_RECIPE, ANNUAL_TEMPERATURE_RECIPE,
+    SUMMER_TEMPERATURE_RECIPE, WINTER_TEMPERATURE_RECIPE, PRECIPITATION_RECIPE,
+]
+
+
+def _flat(_meta):
+    return (0.25, 0.5, 0.75, 1.0)
+
+
+def _spec(recipe=None, texture=None) -> SchemeSpec:
+    return SchemeSpec(_flat, texture=texture, recipe=recipe)
 
 
 @pytest.fixture(scope="module")
@@ -15,12 +37,29 @@ def fields(synthetic_globe):
     return build_region_fields(synthetic_globe, REGION_ID, RegionUpsampleParams(n_cols=6, tex_size=16))
 
 
-@pytest.mark.parametrize("layer", REFINED_LAYERS)
-def test_refined_layers_render(fields, layer):
-    assert has_refined_layer(fields, layer)
-    rgba = build_layer_texture(fields, layer)
+@pytest.mark.parametrize("recipe", RECIPES)
+def test_world_recipes_render_refined_fields(fields, recipe):
+    spec = _spec(recipe)
+    assert has_refined_layer(fields, spec)
+    rgba = build_layer_texture(fields, spec)
     assert rgba.shape == (fields.n_hexes, fields.tex_size, fields.tex_size, 4)
     assert np.isfinite(rgba).all()
+
+
+@pytest.mark.parametrize("recipe", [r for r in RECIPES if not r.relief])
+def test_flat_recipe_output_is_the_recipe_itself(fields, recipe):
+    """No region-side colouring: the layer is exactly the stage's function on refined data."""
+    assert np.array_equal(build_layer_texture(fields, _spec(recipe)), recipe(fields.textures))
+
+
+@pytest.mark.parametrize("recipe", [r for r in RECIPES if r.relief])
+def test_relief_recipe_is_hillshaded_on_land_only(fields, recipe):
+    raw = recipe(fields.textures)
+    out = build_layer_texture(fields, _spec(recipe))
+    water = (fields.textures["ocean_mask"][..., 0] > 0) | (fields.textures["lake_mask"][..., 0] > 0)
+    assert water.any() and (~water).any()
+    assert np.array_equal(out[water], raw[water])
+    assert not np.allclose(out[~water], raw[~water])
 
 
 def test_seasonal_temperature_layers_read_their_season(fields):
@@ -28,10 +67,18 @@ def test_seasonal_temperature_layers_read_their_season(fields):
     temperature = fields.textures["temperature"].copy()
     temperature[..., 1] += 30.0
     hot = dataclasses.replace(fields, textures={**fields.textures, "temperature": temperature})
-    summer = build_layer_texture(hot, "Summer Temperature")
-    winter = build_layer_texture(hot, "Winter Temperature")
+    summer = build_layer_texture(hot, _spec(SUMMER_TEMPERATURE_RECIPE))
+    winter = build_layer_texture(hot, _spec(WINTER_TEMPERATURE_RECIPE))
     assert not np.allclose(summer, winter)
-    assert np.allclose(winter, build_layer_texture(fields, "Winter Temperature"))
+    assert np.allclose(winter, build_layer_texture(fields, _spec(WINTER_TEMPERATURE_RECIPE)))
+
+
+def test_recipe_on_unrefined_sources_falls_back_to_the_globe(fields, synthetic_globe):
+    recipe = TextureRecipe(lambda tex: np.zeros((1, 1, 1, 4)), sources=("fertility",))
+    spec = _spec(recipe)
+    assert not has_refined_layer(fields, spec)
+    out = build_layer_texture(fields, spec, synthetic_globe.mesh)
+    assert np.allclose(out, np.array(_flat({}), dtype=np.float32))
 
 
 def test_unrefined_layer_reads_the_global_texture_at_the_anchor(fields, synthetic_globe):
@@ -42,7 +89,7 @@ def test_unrefined_layer_reads_the_global_texture_at_the_anchor(fields, syntheti
     rgba = np.stack([code, np.zeros_like(code), np.zeros_like(code), np.ones_like(code)], axis=-1)
     mesh.set_face_textures("face_code_rgba", rgba, n_channels=4)
     try:
-        out = build_layer_texture(fields, "Face Code", mesh, texture_key="face_code_rgba")
+        out = build_layer_texture(fields, _spec(texture="face_code_rgba"), mesh)
     finally:
         del mesh.face_textures["face_code_rgba"]
     assert out.shape == (fields.n_hexes, fields.tex_size, fields.tex_size, 4)
@@ -51,17 +98,14 @@ def test_unrefined_layer_reads_the_global_texture_at_the_anchor(fields, syntheti
 
 def test_unrefined_layer_without_texture_colors_the_owning_face(fields, synthetic_globe):
     mesh = synthetic_globe.mesh
-    n = len(mesh.face_metadata)
-    out = build_layer_texture(
-        fields, "Plates", mesh, scheme_fn=lambda meta: (0.25, 0.5, 0.75, 1.0)
-    )
-    assert np.allclose(out, np.array([0.25, 0.5, 0.75, 1.0], dtype=np.float32))
-    assert fields.faces.max() < n
+    out = build_layer_texture(fields, _spec(), mesh)
+    assert np.allclose(out, np.array(_flat({}), dtype=np.float32))
+    assert fields.faces.max() < len(mesh.face_metadata)
 
 
 def test_unrefined_layer_needs_the_globe(fields):
     with pytest.raises(ValueError):
-        build_layer_texture(fields, "Polities")
+        build_layer_texture(fields, _spec())
 
 
 ALL_REFINED = ("elevation", "biome", "temperature", "precipitation")

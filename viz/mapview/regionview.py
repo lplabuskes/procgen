@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Callable, Optional, Sequence
+from typing import TYPE_CHECKING, Callable, Optional
 
 import numpy as np
 from PySide6.QtCore import Qt
@@ -9,6 +9,7 @@ from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPainterPath, QPen, 
 from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtWidgets import QWidget
 
+from core.display import SchemeSpec
 from region.display import build_layer_texture
 from viz.mapview.legend import draw_legend, legend_size
 from viz.mapview.overlays import draw_overlays
@@ -49,10 +50,9 @@ class RegionView(QWidget):
         self._fields: Optional[RegionFields] = None
         self._params = RegionUpsampleParams()
         self._globe: Optional["World"] = None
-        # The world map's active scheme: name, color function, per-face texture key.
+        # The world map's active scheme: its name and spec (colour fn, texture, recipe).
         self._layer: Optional[str] = None
-        self._scheme_fn: Optional[Callable[[dict], Sequence[float]]] = None
-        self._texture_key: Optional[str] = None
+        self._spec: Optional[SchemeSpec] = None
         self._legend: Optional[tuple[str, list]] = None
         self._overlay_visible: dict[str, bool] = {}
         self._hex_images: list[QImage] = []
@@ -99,18 +99,12 @@ class RegionView(QWidget):
         self._view_frame = None
         self._drag_start = None
 
-    def set_layer(
-        self,
-        layer: Optional[str],
-        scheme_fn: Optional[Callable[[dict], Sequence[float]]] = None,
-        texture_key: Optional[str] = None,
-    ) -> None:
-        """Show one of the world map's layers (its scheme name, color fn, texture key)."""
-        if (layer, scheme_fn, texture_key) == (self._layer, self._scheme_fn, self._texture_key):
+    def set_layer(self, layer: Optional[str], spec: Optional[SchemeSpec] = None) -> None:
+        """Show one of the world map's layers, by scheme name and spec."""
+        if (layer, spec) == (self._layer, self._spec):
             return
         self._layer = layer
-        self._scheme_fn = scheme_fn
-        self._texture_key = texture_key
+        self._spec = spec
         self._rebuild_images()
         self.update()
 
@@ -169,12 +163,10 @@ class RegionView(QWidget):
     def _rebuild_images(self) -> None:
         """Convert each hexagon's refined texture to a QImage for painting."""
         self._hex_images = []
-        if self._fields is None or self._layer is None:
+        if self._fields is None or self._spec is None:
             return
         rgba = build_layer_texture(                                 # (M, T, T, 4)
-            self._fields, self._layer,
-            self._globe.mesh if self._globe is not None else None,
-            scheme_fn=self._scheme_fn, texture_key=self._texture_key,
+            self._fields, self._spec, self._globe.mesh if self._globe is not None else None,
         )
         data = np.ascontiguousarray((rgba * 255.0).clip(0, 255).astype(np.uint8))
         m, h, w, _ = data.shape
