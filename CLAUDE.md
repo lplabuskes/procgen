@@ -36,6 +36,7 @@ Shared helpers for all `measure_*.py` scripts live in `scripts/_common.py`:
 - `load_history(path)` / `save_history(history, path)` — JSON append-log read/write
 - `add_seed_args(parser)` / `resolve_seeds(args, defaults)` — standard `seeds` + `--random N` CLI args
 - `get_physical_world(seed, rebuild, cache_dir=CACHE_DIR)` — build-or-load the cached physical world (saves to `saved_worlds/`)
+- `get_realm_world(seed, rebuild, cache_dir=CACHE_DIR)` — the same with the realm stage run on it (settlements, towns, rural density, routes, danger) — what the region/local tiers read
 - `avg(rows, key)` — NaN-safe mean over a list of result dicts
 - `CACHE_DIR` — default world cache path (`saved_worlds/`)
 
@@ -54,6 +55,8 @@ python3 scripts/measure_polities.py       [seeds…|--random N|--detail|--rebuil
 python3 scripts/profile_pipeline.py       [seeds…|--repeat N|--top N|--cprofile [--module M]]
 python3 scripts/debug_borders.py          [seed|--face F|--lat/--lon|--radius D|--depth N|--show-overhang|--seams|--vertices]
 python3 scripts/debug_region.py           [seed|--region R|--layer L|--tex-size N|--n-cols N|--relief F]
+python3 scripts/debug_local.py            [seed|--region R|--hex H|--layer L|--relief F]
+python3 scripts/measure_villages.py       [seeds…|--random N|--hexes N|--rebuild-cache]
 ```
 
 - `measure_seam_quality.py` — mean/median/RMS/max elevation jump (km) across ~350k matched boundary pixel pairs per seed.
@@ -67,6 +70,8 @@ python3 scripts/debug_region.py           [seed|--region R|--layer L|--tex-size 
 - `profile_pipeline.py` — per-phase wall-clock breakdown of the full globe pipeline. Use `--cprofile` for function-level drill-down.
 - `debug_borders.py` — visual border-drawing troubleshooter. Renders a zoomed, faithful raster of one region: the texel polity fill as actual corner-quads (tiles at any orientation) with the border polylines overlaid, both from the current `fill.py`/`borders.py`. Draws **only visible (in-`face_texture_in_polygon`) texels** by default; `--show-overhang` reveals the clipped over-hang texels (faded, red-edged). `--seams`/`--vertices` overlay hexagon seams and border vertices. Prints open endpoints per depth (should all be coastal). Auto-picks a border-rich centre; `--face`/`--lat`/`--lon`/`--radius` aim it. Writes `scripts/results/borders_<seed>.png`.
 - `debug_region.py` — regional upsampling check. Renders one region's hex textures side by side — left with detail off and the water masks copied verbatim (the global field, upsampled only), right with the real params — and prints the added-relief statistics, how far the refined shoreline moved (flooded/dried), and the **conservation report** (per-global-texel residual after downsampling; must stay at float32 noise). Auto-picks the most land-rich region; `--region` aims it. Writes `scripts/results/region_<seed>_<region>_<layer>.png`. See [docs/region.md](docs/region.md).
+- `debug_local.py` — local-map check. Renders one regional hex's local map side by side — left the region's fields upsampled only, right the real local map with its rivers, roads, towns, cities and villages — and prints the added relief, shoreline movement, the **conservation report** against the region (per regional texel; float32 noise), and the **village budget report** (rural + villages per global texel ∩ map; exact) with village counts, sizes, spacing and kinds. Defaults to the hex of the densest land; `--layer "Rural Density"` shows the countryside net of villages. Writes `scripts/results/local_<seed>_<region>_<hex>_<layer>.png`. See [docs/local.md](docs/local.md).
+- `measure_villages.py` — village statistics on local maps of hexes sampled across the rural-density range (face-density quantiles 0.5–1.0): villages per 100 km² vs the budget's prediction, size, nearest-neighbour spacing, share of rural people in villages (target `village_fraction`), share stranded in no-village budgets, kinds, conservation residual. Default seeds 4/31/35 (~85 s). Results appended to `scripts/results/village_results.json`.
 
 
 ## Architecture

@@ -4,7 +4,7 @@ Qt-free package for the finest tier: **each regional hexagon becomes a local
 map**, refined from the region exactly the way a region is refined from the
 globe. Plan and status: [plans/local_maps.md](plans/local_maps.md). Built so far:
 geometry, grid and field refinement, rivers, roads, settlements and villages
-(phases 1–4), and the viewer (phase 5).
+(phases 1–4), the viewer (phase 5) and the diagnostic scripts (phase 6).
 
 ## Files
 - `localmap/geometry.py` — `LocalGeometry`: the parent hex's texture square, mapped affinely onto `[0, 1]²`
@@ -180,3 +180,32 @@ as a faint block, since its countryside is scaled by its own realised village
 share (0.27–0.35 on seed 4), and budgets that are small slivers of a global
 texel (11% of budgets, 0.5% of the people) get no village and stay at full
 density, showing as bright slivers along the hexagon edge and face seams.
+
+## Diagnostics
+
+- **`scripts/debug_local.py`** — one local map side by side with the region's
+  fields upsampled only, features and villages drawn over it; prints the
+  conservation report against the region, shoreline movement and the village
+  budget report. Defaults to the hex of the densest land.
+- **`scripts/measure_villages.py`** — village statistics on hexes sampled
+  across the rural-density range, appended to
+  `scripts/results/village_results.json`.
+
+Seeds 4/31/35, five hexes each (2026-09-27):
+
+| rural density | villages / 100 km² | mean size | nearest neighbour (median) | in villages | stranded in no-village budgets |
+|---|---|---|---|---|---|
+| ~10/km² | 1.9–2.2 | 350–370 | 4.0–4.5 km | 69–70% | 0.2–0.6% |
+| ~5/km² | 1.0–1.1 | 320–335 | 5.8 km | 69% | 1% |
+| ~2/km² | 0.4 | ~300 | 9 km | 65% | 7% |
+| < 1/km² | 0–0.2 | ~200–235 | 11–12 km | 0–37% | 48–100% |
+
+Budgets balance to ≤ 7e-9 everywhere. Village counts run ~10% above the budget's
+prediction (`fraction · ρ / 402`) because each budget's last draw is cut to what
+is left, pulling the mean size to ~330–370.
+
+**Sparse land is nearly villageless.** Below ~1 person/km² a global texel
+(~195 km²) holds fewer than 200 people and cannot afford a village, so its people
+all stay dispersed — and on seed 4 the *median* land face is that sparse
+(0.4/km²). This is the per-(global texel ∩ map) conservation rule meeting the
+200-person floor, the same effect as the edge slivers above.

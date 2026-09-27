@@ -58,6 +58,16 @@ def get_physical_world(seed: int, rebuild: bool, cache_dir: Path = CACHE_DIR) ->
     return world
 
 
+def get_realm_world(seed: int, rebuild: bool, cache_dir: Path = CACHE_DIR) -> World:
+    """:func:`get_physical_world` with the realm stage run on it (default
+    ``RealmParams``): settlements, towns, rural density, trade routes, danger —
+    everything the region and local tiers read."""
+    from realmgen.builder import RealmParams, RealmPipeline
+    world = get_physical_world(seed, rebuild, cache_dir)
+    RealmPipeline(RealmParams()).build(BuildContext(world=world, seed=seed))
+    return world
+
+
 def avg(rows: list[dict], key: str) -> float:
     vals = [r[key] for r in rows if isinstance(r.get(key), (int, float)) and r[key] == r[key]]
     return sum(vals) / len(vals) if vals else float("nan")

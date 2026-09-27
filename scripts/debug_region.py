@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import math
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 
@@ -82,9 +83,13 @@ def pick_land_region(world) -> int:  # type: ignore[no-untyped-def]
     return int(np.argmax(land_counts))
 
 
-def draw_region(ax, fields: RegionFields, layer: str, title: str) -> None:  # type: ignore[no-untyped-def]
-    """Blit every hexagon's texture, clipped to the hexagon, in local (s, t) space."""
-    spec = SchemeSpec(lambda _meta: (0.0, 0.0, 0.0, 1.0), recipe=LAYERS[layer])
+def draw_region(  # type: ignore[no-untyped-def]
+    ax, fields: RegionFields, layer: str, title: str, recipe: Optional[TextureRecipe] = None,
+) -> None:
+    """Blit every hexagon's texture, clipped to the hexagon, in local (s, t) space.
+
+    ``recipe`` overrides the ``LAYERS`` entry for ``layer`` (a layer not listed there)."""
+    spec = SchemeSpec(lambda _meta: (0.0, 0.0, 0.0, 1.0), recipe=recipe or LAYERS[layer])
     rgba = np.clip(build_layer_texture(fields, spec), 0.0, 1.0)
     r = fields.grid.radius
     corners = np.array([
