@@ -13,7 +13,8 @@ geometry, grid and field refinement, rivers, roads, settlements and villages
 - `localmap/rivers.py` — `LocalRiverParams`, `build_local_rivers`: the region's rivers re-routed over the local relief
 - `localmap/roads.py` — `LocalRoadParams`, `build_local_roads`: the region's roads re-routed over the local terrain
 - `localmap/villages.py` — `VillageParams`, `Villages`, `place_villages`, `village_budget_report`
-- `localmap/params.py` — `LocalParams`: `upsample`, `rivers`, `roads`, `villages`
+- `localmap/cities.py` — `CityParams`, `CityFootprints`, `city_footprints`: each city's built-up texels
+- `localmap/params.py` — `LocalParams`: `upsample`, `rivers`, `roads`, `villages`, `cities`
 - `localmap/builder.py` — `LocalMap`, `build_local_map`: everything above for one regional hex
 
 ## Scale (defaults)
@@ -118,6 +119,15 @@ moved off the local water; a river town onto its local river within 2.5
 regional texels; a port onto the local coast within 2. The world's `towns`
 feature keeps the region's refinement. Villages keep clear of these positions.
 
+**City footprints** (`localmap/cities.py`, display-only). A city of `P` people
+covers `P / density_per_ha` (200 people/ha — a walled medieval city) of dry
+ground: that many local texels (~0.12 km² each, at least one), claimed outward
+from its local position by distance × `1 + edge_roughness · U[0,1)` (0.25, a
+ragged edge). Water is never claimed, so a coastal city wraps its shore; rivers
+are vector lines, so a city spans its river. Larger cities claim first; no texel
+is shared. Seed 4's largest city (~540k) covers ~27 km² (~225 texels, ~6 km
+across); a 19k city ~1 km² (8 texels). Rural density is not carved out.
+
 ## Villages (`localmap/villages.py`)
 
 `place_villages(local, rivers, roads, settlement_positions,
@@ -168,7 +178,11 @@ maps (see [viz.md](viz.md)).
   Overlays get the local rivers, roads, deltas and a `Towns` at the local
   positions as `refined` features; villages are drawn under the towns by
   `overlays._draw_villages` (1.3–2.4 px dots coloured by kind: farming, river,
-  fishing, roadside), behind the **Villages** overlay toggle.
+  fishing, roadside), behind the **Villages** overlay toggle. Towns take the
+  dark-then-white ring cities have in a region; cities are drawn as their
+  footprints (`refined["cities"]`), or as a floor marker twice the largest
+  town's radius while the footprint is smaller than that on screen, walled
+  (dark, white, dark rings, a dark centre dot) so it stands apart from the towns.
 - **Hover.** The status bar leads with the village under the cursor (within
   6 px: "Farming village · 340 people"), then the usual texel readout. Texels
   outside the parent hexagon report nothing.

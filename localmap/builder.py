@@ -12,7 +12,8 @@ hex, from the region's own refined fields, rivers and roads:
    coast when one is in reach.  Display-only: the world's ``towns`` feature
    keeps the region's refinement;
 5. the villages (:func:`localmap.villages.place_villages`), clear of those
-   towns and cities.
+   towns and cities;
+6. the cities' built-up footprints (:func:`localmap.cities.city_footprints`).
 
 Qt-free and deterministic.
 """
@@ -24,6 +25,7 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 from scipy.spatial import KDTree
 
+from localmap.cities import CityFootprints, city_footprints
 from localmap.params import LocalParams
 from localmap.rivers import build_local_rivers
 from localmap.roads import build_local_roads
@@ -60,6 +62,7 @@ class LocalMap:
     city_index: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
     city_positions: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))
     deltas: Optional[np.ndarray] = None
+    city_footprints: Optional[CityFootprints] = None
 
     @property
     def hex_index(self) -> int:
@@ -168,7 +171,9 @@ def build_local_map(
     villages = place_villages(
         local, rivers, roads, np.concatenate([t_pos, c_pos]), np.concatenate([t_pop, c_pop]), seed, params.villages,
     )
+    footprints = city_footprints(local, c_pos, c_pop, seed, params.cities)
     return LocalMap(
         fields=local, rivers=rivers, roads=roads, villages=villages,
         town_index=t_idx, town_positions=t_pos, city_index=c_idx, city_positions=c_pos, deltas=deltas,
+        city_footprints=footprints,
     )

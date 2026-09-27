@@ -20,7 +20,7 @@ import weakref
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QPolygonF
+from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, QPolygonF, QRegion
 
 if TYPE_CHECKING:
     from core.world import World
@@ -95,8 +95,14 @@ def draw_overlays(
     thresholds still come from the world feature, so a refined feature is drawn
     exactly as heavily as the world's.  ``refined["villages"]`` (a local map's
     :class:`localmap.villages.Villages`) is drawn under the towns.
+
+    On a local map (a view with ``px_per_km``) towns take the ring that marks
+    cities in a region, and ``refined["cities"]`` — ``(city_index, positions,
+    footprints)``, a :class:`localmap.cities.CityFootprints` over the world
+    ``settlements`` at ``city_index`` — draws each city as its built-up ground.
     """
     refined = refined or {}
+    local = proj.px_per_km is not None
 
     def on(name: str) -> bool:
         return bool(visible.get(name)) and globe.has_feature(name)
@@ -135,9 +141,12 @@ def draw_overlays(
     if visible.get("villages", True) and refined.get("villages") is not None:
         _draw_villages(painter, refined["villages"], proj)
     if on("towns"):
-        _draw_towns(painter, refined.get("towns", globe.get_feature("towns")), proj)
+        _draw_towns(painter, refined.get("towns", globe.get_feature("towns")), proj, ringed=local)
     if on("settlements"):
-        _draw_settlements(painter, globe, proj)
+        if local and refined.get("cities") is not None:
+            _draw_city_footprints(painter, globe, proj, *refined["cities"])
+        else:
+            _draw_settlements(painter, globe, proj)
     if on("polity_borders"):
         _draw_polity_borders(painter, globe, proj)
 
@@ -252,6 +261,10 @@ def _draw_danger_sources(painter: QPainter, globe: "World", proj: OverlayProject
 _REGION_CITY_SCALE = 1.5
 # Largest town dot radius at zoom 1 (``_draw_towns``: 0.9 + 0.7 at the top size).
 _TOWN_MAX_RADIUS = 1.6
+# Each city texel drawn this much larger about its centre (``_draw_city_footprints``).
+_FOOTPRINT_GROW = 1.1
+# Width (px) of the white band between a floor city marker's two dark rings.
+_CITY_WALL_PX = 2.5
 
 
 def _draw_settlements(painter: QPainter, globe: "World", proj: OverlayProjector) -> None:
@@ -305,8 +318,79 @@ def _draw_settlements(painter: QPainter, globe: "World", proj: OverlayProjector)
     painter.restore()
 
 
-def _draw_towns(painter: QPainter, towns, proj: OverlayProjector) -> None:
-    """Small kind-coloured dots, sized by population; only in the region view."""
+def _draw_city_footprints(
+    painter: QPainter, globe: "World", proj: OverlayProjector,
+    city_index: np.ndarray, positions: np.ndarray, footprints,
+) -> None:
+    """A local map's cities as their built-up ground, in their tier colour.
+
+    A footprint smaller on screen than the floor marker (twice the largest town)
+    is drawn as that marker instead, so a city never vanishes or reads smaller
+    than a town at low zoom; it is "walled" (dark, white, dark rings, a dark
+    centre dot) to stand apart from the ringed towns.
+    """
+    from realmgen.placement.types import TIER_COLORS, population_display_tier
+    settlements = globe.get_feature("settlements") or []
+    if not settlements or len(city_index) == 0:
+        return
+    max_pop = max(float(s.population) for s in settlements)
+    px_per_km = float(proj.px_per_km or 0.0)
+    floor_r = 2.0 * _TOWN_MAX_RADIUS * proj.zoom ** 0.3
+    csx, csy, ckeep = proj.points(np.asarray(positions, dtype=np.float64))
+    corners = np.asarray(footprints.corners, dtype=np.float64)
+    qx, qy, qkeep = proj.points(corners.reshape(-1, 3))
+    qx, qy = qx.reshape(-1, 4), qy.reshape(-1, 4)
+    qkeep = qkeep.reshape(-1, 4).all(axis=1)
+    # Grow each texel a little about its centre: texels of neighbouring hexes do
+    # not tile exactly, and the union must not show hairline seams.
+    mx, my = qx.mean(axis=1, keepdims=True), qy.mean(axis=1, keepdims=True)
+    qx, qy = mx + _FOOTPRINT_GROW * (qx - mx), my + _FOOTPRINT_GROW * (qy - my)
+    outline = QPen(QColor(25, 22, 18, 235), 1.2)
+    painter.save()
+    for c, w in enumerate(np.asarray(city_index, dtype=np.int64)):
+        rgba = TIER_COLORS[population_display_tier(float(settlements[w].population), max_pop)]
+        fill = QColor.fromRgbF(*rgba[:3], 1.0)
+        mine = np.flatnonzero((footprints.city == c) & qkeep)
+        r_px = np.sqrt(float(footprints.area_km2[c]) / np.pi) * px_per_km
+        painter.setPen(outline)
+        if mine.size == 0 or r_px < floor_r:
+            if not ckeep[c]:
+                continue
+            # Walled: a white band inside a second dark ring, where a town's
+            # ring stops at the white — so the marker never reads as a big town.
+            x, y = float(csx[c]), float(csy[c])
+            wall = floor_r + _CITY_WALL_PX
+            painter.setPen(QPen(QColor(25, 22, 18, 245), 2.0))
+            painter.setBrush(QBrush(QColor(255, 255, 255, 245)))
+            painter.drawEllipse(QRectF(x - wall, y - wall, 2 * wall, 2 * wall))
+            painter.setPen(outline)
+            painter.setBrush(QBrush(fill))
+            painter.drawEllipse(QRectF(x - floor_r, y - floor_r, 2 * floor_r, 2 * floor_r))
+            # A dark keep at the centre: no town has one.
+            keep_r = 0.35 * floor_r
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(QColor(25, 22, 18, 245)))
+            painter.drawEllipse(QRectF(x - keep_r, y - keep_r, 2 * keep_r, 2 * keep_r))
+            continue
+        # Union on the pixel grid: texels of one hex share edges only to float
+        # noise, and neighbouring hexes' texels overlap, so a float union leaves
+        # slivers along both.
+        region = QRegion()
+        for k in mine:
+            quad = QPolygonF([QPointF(float(qx[k, j]), float(qy[k, j])) for j in range(4)])
+            region = region.united(QRegion(quad.toPolygon()))
+        path = QPainterPath()
+        path.addRegion(region)
+        fill.setAlphaF(0.85)
+        painter.setBrush(QBrush(fill))
+        painter.drawPath(path.simplified())
+    painter.restore()
+
+
+def _draw_towns(painter: QPainter, towns, proj: OverlayProjector, ringed: bool = False) -> None:
+    """Small kind-coloured dots, sized by population; only in the region view.
+    ``ringed`` (a local map) circles each one dark-then-white, as cities are in
+    a region, so towns read as a class above the villages."""
     from realmgen.towns.types import TOWN_KIND_COLORS
     if towns is None or len(towns) == 0 or not proj.regional:
         return
@@ -316,7 +400,15 @@ def _draw_towns(painter: QPainter, towns, proj: OverlayProjector) -> None:
     frac = np.sqrt((pop - lo) / (hi - lo)) if hi > lo else np.zeros_like(pop)
     radii = (_TOWN_MAX_RADIUS - 0.7 + 0.7 * frac) * proj.zoom ** 0.3
     painter.save()
-    painter.setPen(QPen(QColor(40, 36, 30, 200), 0.8))
+    if ringed:
+        painter.setPen(QPen(QColor(255, 255, 255, 235), 2.0))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for x, y, r in zip(sx[keep], sy[keep], radii[keep]):
+            h = r + 1.3
+            painter.drawEllipse(QRectF(float(x) - h, float(y) - h, 2 * h, 2 * h))
+        painter.setPen(QPen(QColor(25, 22, 18, 245), 1.3))
+    else:
+        painter.setPen(QPen(QColor(40, 36, 30, 200), 0.8))
     for kind, rgba in enumerate(TOWN_KIND_COLORS):
         mask = keep & (towns.kind == kind)
         if not mask.any():

@@ -51,7 +51,8 @@ Splits a unit-sphere polygon at a cut meridian.
 | `"minerals"` | Coloured squares per mineral type, size ∝ abundance; type-palette from `minerals.MINERAL_PALETTE` |
 | `"rare_bio"` | Coloured diamonds per type, size ∝ abundance; type-palette from `rare_bio.RARE_BIO_PALETTE` |
 | `"trade_routes"` | Yellow lines, width ∝ √flow (0.4–4 px), antimeridian-split |
-| `"settlements"` | Tier-coloured circles; radius = `TIER_RADII[tier] * zoom^0.3 * √(pop/max_pop)*0.4+0.6` |
+| `"settlements"` | Tier-coloured circles; radius = `TIER_RADII[tier] * zoom^0.3 * √(pop/max_pop)*0.4+0.6`. Region: × 1.5, at least twice the largest town, ringed dark-then-white. Local map: each city's built-up footprint (`localmap/cities.py`, texels unioned on the pixel grid via `QRegion`, tier colour, dark outline); a footprint smaller than the floor marker (2 × the largest town radius) is drawn as that marker, "walled" — dark outline, white band, second dark ring, dark centre dot — so it never reads as a ringed town |
+| `"towns"` | Region and local map only: kind-coloured dots, 0.9–1.6 px × zoom^0.3. Local map: ringed dark-then-white, as cities are in a region |
 
 **Legend**: gradient or categorical, rendered bottom-left by the shared `viz/mapview/legend.py` (`legend_size` / `draw_legend`, also used by `RegionView`). `register_legend(scheme_name, kind, entries)` where `kind` is `"gradient"` or `"categorical"` and `entries` is a list of `(label, rgba)`.
 

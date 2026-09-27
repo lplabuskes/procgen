@@ -492,7 +492,8 @@ class RegionView(QWidget):
         """Overlay features this region draws finer than the world map: the
         rivers and roads re-routed over the refined terrain, and the deltas on the
         new river mouths. (Towns need no override: their refined positions are in
-        the world feature.)"""
+        the world feature.)  A local map adds its villages, its towns at local
+        positions and its cities' footprints."""
         out: dict = {}
         if self._local is not None:
             out["villages"] = self._local.villages
@@ -504,6 +505,8 @@ class RegionView(QWidget):
                     face_id=towns.face_id[idx], parent=towns.parent[idx], kind=towns.kind[idx],
                     site_positions=towns.site_positions[idx], refined=towns.refined[idx],
                 )
+            if self._local.city_footprints is not None:
+                out["cities"] = (self._local.city_index, self._local.city_positions, self._local.city_footprints)
         if self._rivers is not None:
             out["rivers"] = self._rivers.paths
         if self._roads is not None:
