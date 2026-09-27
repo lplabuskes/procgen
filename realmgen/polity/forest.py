@@ -43,7 +43,7 @@ class ProjectionParams:
     range_floor: float = _f(
         0.5, label="Projection range floor (+ infrastructure)", min=0.0, max=2.0
     )
-    sea_range_factor: float = _f(1.5, label="Sea projection range factor (× land)", min=1.0, max=10.0)
+    sea_range_factor: float = _f(1.4, label="Sea projection range factor (× land)", min=1.0, max=10.0)
     sea_weight: float = _f(1.0, label="Sea channel magnitude weight (vs land)", min=0.0, max=1.0)
     legitimacy_spread: float = _f(0.3, label="Legitimacy spread (±)", min=0.0, max=1.0)
     maritime_scale: float = _f(1.5, label="Maritime reach scale (× trade)", min=0.0, max=5.0)
@@ -65,7 +65,7 @@ class ClaimingParams:
 @paramclass
 class HierarchyParams:
     """Direct/vassal/independent cutoffs and the cohesion→authority-gain map."""
-    direct_threshold: float = _f(1.0, label="Direct-rule authority ratio", min=0.5, max=20.0)
+    direct_threshold: float = _f(0.8, label="Direct-rule authority ratio", min=0.5, max=20.0)
     vassal_floor: float = _f(0.3, label="Vassal authority ratio floor", min=0.05, max=10.0)
     power_exponent: float = _f(
         0.5, label="Authority population exponent (1 = raw ratio)", min=0.0, max=1.0
