@@ -3,13 +3,18 @@
 Qt-free package for the finest tier: **each regional hexagon becomes a local
 map**, refined from the region exactly the way a region is refined from the
 globe. Plan and status: [plans/local_maps.md](plans/local_maps.md). Built so far:
-geometry, grid and field refinement (phases 1–2); features, villages and the
-viewer are still to come.
+geometry, grid and field refinement, rivers, roads, settlements and villages
+(phases 1–4); the viewer is still to come.
 
 ## Files
 - `localmap/geometry.py` — `LocalGeometry`: the parent hex's texture square, mapped affinely onto `[0, 1]²`
 - `localmap/grid.py` — `LocalHexGrid`: `RegionHexGrid` kept to the parent hexagon; `texture_in_map`
 - `localmap/upsample.py` — `LocalUpsampleParams`, `build_local_fields`, `local_conservation_report`
+- `localmap/rivers.py` — `LocalRiverParams`, `build_local_rivers`: the region's rivers re-routed over the local relief
+- `localmap/roads.py` — `LocalRoadParams`, `build_local_roads`: the region's roads re-routed over the local terrain
+- `localmap/villages.py` — `VillageParams`, `Villages`, `place_villages`, `village_budget_report`
+- `localmap/params.py` — `LocalParams`: `upsample`, `rivers`, `roads`, `villages`
+- `localmap/builder.py` — `LocalMap`, `build_local_map`: everything above for one regional hex
 
 ## Scale (defaults)
 
@@ -21,7 +26,8 @@ viewer are still to come.
 | Hexes | ~250 | ~180 |
 | Detail octaves | 2 | 4 |
 
-About 1.4 s per local map on seed 4.
+About 1.5 s for the fields and ~2.1 s for a whole local map (fields, rivers, roads,
+villages) on seed 4.
 
 ## Geometry (`localmap/geometry.py`)
 
@@ -76,3 +82,69 @@ A `RegionUpsampleParams` subclass with local defaults: `n_cols=16`,
 (about one regional texel, to hide the per-texel conservation blocks), and
 `slope_saturation=0.1`. The relief numbers are a first cut and not yet tuned
 (seed 4 region 34: ~50 m std of land relief against the parent texel).
+
+## Rivers (`localmap/rivers.py`)
+
+`build_local_rivers(local, region, region_rivers, globe, params)` re-traces
+each of the region's river paths within `corridor_parent_texels` (1) regional
+texels of the region's line, over the local relief, with the region's own
+routing loop (`region.rivers.route_stream_paths`) and valley-seeking cost. A
+path leaving and re-entering the raster is routed once per visit; a visit that
+holds the path's last vertex ends on whatever it drains into near there (its
+stem, a lake, the local coast). Flow is the region's.
+
+**Only the world's channels exist.** Every stream is one of the hydrology
+stage's, down to its `stream_flow_threshold`, which is coarse for villages.
+`_region_paths` carries the note on where a finer local network (flow
+accumulation over the local relief) would add tributaries.
+
+On seed 4 the local rivers run ~1.1× the length of the regional ones over the
+same ground (median sinuosity 1.1–1.2), ~0.1 s per map.
+
+## Roads (`localmap/roads.py`)
+
+`build_local_roads(local, region, region_roads, globe, rivers, …)` re-traces
+each of the region's road polylines (`RegionRoads.polylines`, with their
+`polyline_flows`) within `corridor_parent_texels` (2) regional texels, with the
+world's land-cost model per local raster node and the local rivers' fords
+(`region.roads.route_polyline`). Road ends are moved off the local water and
+land exactly on their points. Sea legs and undrawn routes that cross the local
+raster pass through straight. ~0.1 s per map.
+
+## Settlements (`localmap/builder.py`)
+
+Towns and cities in and around the map get **local, display-only** positions:
+moved off the local water; a river town onto its local river within 2.5
+regional texels; a port onto the local coast within 2. The world's `towns`
+feature keeps the region's refinement. Villages keep clear of these positions.
+
+## Villages (`localmap/villages.py`)
+
+`place_villages(local, rivers, roads, settlement_positions,
+settlement_populations, seed, params) → Villages`.
+
+- **Budgets** are the people in each *global texel ∩ map* (local rural density
+  × texel area over the domain). `village_fraction` (0.7) of each is spent on
+  villages; the rest stays as rural density (hamlets, farmsteads).
+- **Sizes** are the town stage's truncated Pareto (`draw_town_sizes`) on
+  `[village_min, village_max]` = [200, 1000], α = `size_exponent` (1), with its
+  stochastic remainder.
+- **Sites**, largest first, among the budget's dry domain texels by Gumbel-max
+  over `log((ρ/ρ̄ + 0.05) · (1 + river·r + confluence·c + coast·k + road·d) ·
+  (1 − slope_penalty · slope))`. A village claims `spacing_km` (2 km) ×
+  `(pop/200)^0.25`; towns and cities claim `settlement_clearance_km` (3 km) ×
+  `(pop/1000)^0.25`. Kinds: farming, river, fishing (coast), roadside.
+- **Accounting.** A village with no free site stays rural; each budget's rural
+  density is scaled down by what its villages took, so rural + villages per
+  budget is unchanged (`village_budget_report`: ~1e-8 relative on seed 4).
+  `Villages.rural_density` is the countryside net of villages; the fields'
+  `rural_density` stays the pre-village one (it is what the region conserves).
+- Deterministic: one stream per budget, seeded by world, region, hex and global
+  texel.
+
+Seed 4, the densest land (~11 people/km²): ~940 villages per local map, mean
+~370 people, median nearest neighbour 4.2 km (p10 2.7, p90 6.4). Sparser land
+(~4/km²): ~350–400 villages, 6–7 km apart. Real high-medieval villages sat
+2–3 km apart at about twice that density; the population calibration, not
+this tier, sets the difference. Nearly all are farming villages: the world
+network gives a map only 0–6 rivers.

@@ -160,8 +160,9 @@ def _run_flows(
 
 
 @dataclass
-class _StreamPath:
-    """One main stem of the network inside the raster, in local coordinates."""
+class StreamPath:
+    """One path to re-route, inside the raster, in the map's local coordinates: a
+    main stem of the world's network (region), or a region's river (local map)."""
 
     s: np.ndarray
     t: np.ndarray
@@ -171,7 +172,7 @@ class _StreamPath:
 
 def _stream_paths(
     streams: StreamNetwork, fields: RegionFields, lo: float, step: float, n: int, min_nodes: int,
-) -> list[_StreamPath]:
+) -> list[StreamPath]:
     """The network's main stems inside the raster, largest flow first."""
     s, t, valid = fields.geometry.ecef_to_local(np.asarray(streams.positions, dtype=np.float64))
     hi = lo + step * (n - 1)
@@ -190,7 +191,7 @@ def _stream_paths(
     for path in main_stem_paths(receiver, flow, streams.channel[idx], streams.stop[idx], min_nodes):
         nodes = np.asarray(path, dtype=np.int64)
         running = np.maximum.accumulate(flow[nodes])
-        out.append(_StreamPath(
+        out.append(StreamPath(
             s=s[idx][nodes], t=t[idx][nodes], edge_flows=running[:-1],
             ends_here=not (receiver[nodes[-1]] < 0 and leaves_raster[nodes[-1]]),
         ))
@@ -243,6 +244,24 @@ def build_region_rivers(
     radius_nodes = max(float(params.corridor_global_texels) * global_spacing / node_spacing_rad(fields, step), 1.5)
 
     paths = _stream_paths(streams, fields, lo, step, n, int(params.min_global_nodes))
+    return route_stream_paths(fields, globe, paths, lo, step, n, radius_nodes, params)
+
+
+def route_stream_paths(
+    fields: RegionFields,
+    globe: "World",
+    paths: list[StreamPath],
+    lo: float,
+    step: float,
+    n: int,
+    radius_nodes: float,
+    params: RegionRiverParams,
+) -> RegionRivers:
+    """Re-route ``paths`` (largest flow first) over ``fields``' raster ``(lo, step, n)``.
+
+    The tier-agnostic half of :func:`build_region_rivers`: a region feeds it the
+    world's stream network, a local map the region's re-routed rivers.
+    """
     reach = corridor_reach([(p.s, p.t) for p in paths], lo, step, n, 2.0 * radius_nodes + 2.0)
     raster = sample_raster(fields, globe, lo, step, n, reach)
 
@@ -293,5 +312,6 @@ def snap_deltas(deltas: np.ndarray, rivers: RegionRivers, reach: float) -> np.nd
 def river_length_km(path: RiverPath) -> float:
     """Great-circle length of a river polyline, km."""
     pts = np.asarray(path[0], dtype=np.float64)
-    dots = np.clip(np.einsum("ij,ij->i", pts[:-1], pts[1:]), -1.0, 1.0)
-    return float(np.arccos(dots).sum()) * EARTH_RADIUS_KM
+    # Chord form: arccos of a float32 dot product loses sub-km steps entirely.
+    chords = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+    return float((2.0 * np.arcsin(np.clip(0.5 * chords, 0.0, 1.0))).sum()) * EARTH_RADIUS_KM

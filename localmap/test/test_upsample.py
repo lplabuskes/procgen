@@ -2,30 +2,13 @@
 import numpy as np
 import pytest
 
-from localmap.upsample import LocalUpsampleParams, build_local_fields, local_conservation_report
-from region.upsample import RegionUpsampleParams, build_region_fields
-
-REGION_ID = 40      # the synthetic globe's lake region (see region/test/conftest.py)
-TEX_SIZE = 16
-
-
-@pytest.fixture(scope="module")
-def region(globe):
-    return build_region_fields(globe, REGION_ID, RegionUpsampleParams(n_cols=6, tex_size=TEX_SIZE))
-
-
-@pytest.fixture(scope="module")
-def lake_hex(region) -> int:
-    return int(np.argmax((region.textures["lake_mask"][..., 0] > 0.5).sum(axis=(1, 2))))
-
-
-def _params() -> LocalUpsampleParams:
-    return LocalUpsampleParams(n_cols=6, tex_size=TEX_SIZE, water_spread_texels=4, biome_smoothing=3)
+from localmap.test.conftest import local_params
+from localmap.upsample import build_local_fields, local_conservation_report
 
 
 @pytest.fixture(scope="module")
 def local(globe, region, lake_hex):
-    return build_local_fields(globe, region, lake_hex, _params())
+    return build_local_fields(globe, region, lake_hex, local_params())
 
 
 def test_region_exports_its_lake_surface(region):
@@ -74,7 +57,7 @@ def test_the_parent_lake_carries_down(local):
 
 
 def test_local_maps_regenerate_identically(globe, region, lake_hex, local):
-    again = build_local_fields(globe, region, lake_hex, _params())
+    again = build_local_fields(globe, region, lake_hex, local_params())
     for key, tex in local.textures.items():
         assert np.array_equal(tex, again.textures[key]), key
 

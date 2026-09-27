@@ -37,6 +37,8 @@ The detail band gains ~3–4 octaves (a 12× refinement, against the region's 3�
 
 ## Phases
 
+Status: phases 1–4 done (2026-09-27); 5–6 to do.
+
 1. **Geometry and grid** — `localmap/geometry.py`: `LocalGeometry(region
    geometry, hex index)` maps local `[0, 1]²` affinely onto the parent hex's
    texture square in the region's `(s, t)` frame (which extends smoothly past the

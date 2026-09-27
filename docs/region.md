@@ -278,6 +278,9 @@ stage (which favours stream texels) and the region agree on where streams are.
 Stems shorter than `min_global_nodes` are dropped as stubs. How far down the
 network goes is a *world* param, since towns are sited on it.
 
+The routing loop is `route_stream_paths(fields, globe, paths, …)`, which a
+local map also runs over the region's own rivers (see [local.md](local.md)).
+
 **Re-routing.** Each stem becomes the least-cost 8-connected path through a
 *corridor* of `corridor_global_texels` (1 global texel) either side of its
 world centreline — the positional uncertainty the global grid leaves. A node
@@ -317,7 +320,9 @@ shared edge independently (each is shown alone, so no seam is visible).
 
 `build_region_roads(fields, globe, rivers, params, land, danger_scale,
 land_reach) → RegionRoads` (`segments` in the world `"trade_routes"` feature's
-`(start, end, flow)` form, `polylines`, `sea`, `undrawn`). ~0.2 s per region.
+`(start, end, flow)` form, `polylines` with their per-edge `polyline_flows`, `sea`,
+`undrawn`). ~0.2 s per region. Each chain is re-routed by `route_polyline`, which a
+local map also runs over the region's own polylines (see [local.md](local.md)).
 
 The trade stage routes over the face graph, so a world route is a chain of
 straight hops between face centroids (~225 km). Which places trade, over which

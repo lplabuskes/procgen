@@ -87,6 +87,8 @@ class RegionRoads:
     polylines: list[np.ndarray] = field(default_factory=list)
     # The straight sea legs among ``segments``.
     sea: list[RouteSegment] = field(default_factory=list)
+    # (K - 1,) per-edge flow of each of ``polylines``, for the tier below.
+    polyline_flows: list[np.ndarray] = field(default_factory=list)
 
 
 def _key(p: np.ndarray) -> tuple[float, float, float]:
@@ -429,30 +431,54 @@ def build_region_roads(
     ends_on_land = snap_to_land(fields, pts, land_reach)
     segments: list[RouteSegment] = list(sea)
     polylines: list[np.ndarray] = []
+    polyline_flows: list[np.ndarray] = []
     for chain, chain_flows in _chains(land_edges, len(points)):
-        verts = ends_on_land[chain]
-        s, t, _ = fields.geometry.ecef_to_local(verts)
-        for st in _stretches(s, t, verts, np.asarray(chain_flows), lo, hi):
-            anchors = np.where(st.real[:, None], st.ecef, fields.geometry.local_to_ecef(st.s, st.t))
-            routed = _route_stretch(raster, st.s, st.t, radius_nodes, edge_cost)
-            if routed is None:
-                # No dry way through (an island hop the refined coast cut): the world line.
-                path, edge_flows = anchors, st.flows
-            else:
-                path = raster.positions[routed].copy()
-                # A world end lands exactly on its point (a settlement's marker); a
-                # cut at the raster edge keeps its node.
-                if st.real[0]:
-                    path[0] = st.ecef[0]
-                if st.real[-1]:
-                    path[-1] = st.ecef[-1]
-                path = np.stack(laplacian_smooth_sphere(list(path), iterations=int(params.smoothing_iterations)))
-                path = path.astype(np.float64)
-                edge_flows = _assign_flows(path, anchors, st.flows)
+        routed_chain = route_polyline(
+            fields, raster, ends_on_land[chain], np.asarray(chain_flows), radius_nodes, edge_cost,
+            int(params.smoothing_iterations),
+        )
+        for path, edge_flows in routed_chain:
             polylines.append(path)
+            polyline_flows.append(np.asarray(edge_flows, dtype=np.float64))
             for k in range(len(path) - 1):
                 segments.append((path[k].astype(np.float32), path[k + 1].astype(np.float32), float(edge_flows[k])))
-    return RegionRoads(region_id=fields.region_id, segments=segments, undrawn=undrawn, polylines=polylines, sea=sea)
+    return RegionRoads(region_id=fields.region_id, segments=segments, undrawn=undrawn, polylines=polylines, sea=sea,
+                       polyline_flows=polyline_flows)
+
+
+def route_polyline(
+    fields: RegionFields,
+    raster: Raster,
+    verts: np.ndarray,
+    flows: np.ndarray,
+    radius_nodes: float,
+    edge_cost,
+    smoothing_iterations: int,
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Re-route one road polyline ``verts`` (K, 3) with per-edge ``flows`` over
+    ``raster``; returns ``(path, edge flows)`` per in-raster stretch.
+
+    Its ends land exactly on their points (a settlement's marker); a cut at the
+    raster edge keeps its node.  A stretch with no dry way through (an island hop
+    the refined coast cut) keeps the given line.
+    """
+    hi = raster.lo + raster.step * (raster.n - 1)
+    s, t, _ = fields.geometry.ecef_to_local(verts)
+    out = []
+    for st in _stretches(s, t, verts, flows, raster.lo, hi):
+        anchors = np.where(st.real[:, None], st.ecef, fields.geometry.local_to_ecef(st.s, st.t))
+        routed = _route_stretch(raster, st.s, st.t, radius_nodes, edge_cost)
+        if routed is None:
+            out.append((anchors, st.flows))
+            continue
+        path = raster.positions[routed].copy()
+        if st.real[0]:
+            path[0] = st.ecef[0]
+        if st.real[-1]:
+            path[-1] = st.ecef[-1]
+        path = np.stack(laplacian_smooth_sphere(list(path), iterations=smoothing_iterations)).astype(np.float64)
+        out.append((path, _assign_flows(path, anchors, st.flows)))
+    return out
 
 
 def _route_stretch(
