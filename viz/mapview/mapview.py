@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Callable, Optional, Sequence
 
 import numpy as np
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QBrush, QColor, QImage, QPainter, QPen, QPolygonF, QTransform
+from PySide6.QtGui import QAction, QBrush, QColor, QImage, QPainter, QPen, QPixmap, QPolygonF, QTransform
 from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import (
     QApplication,
@@ -277,6 +277,13 @@ class MapWidget(QWidget):
         self._region_face_cells: Optional[np.ndarray] = None
         self._region_border_polylines: list[np.ndarray] = []  # each (N, 3) ECEF
 
+        # Cached render of the map body (faces + overlays). Repainting all textured faces is
+        # slow, so hover-only changes (region tint) just re-blit this and redraw on top.
+        self._base_cache: Optional[QPixmap] = None
+        self._base_cache_key: Optional[tuple] = None
+        # View-independent face geometry + brushes in projected space; rebuilt lazily.
+        self._draw_items: Optional[list[list[tuple[QPolygonF, QBrush]]]] = None
+
     def _shift_lon(self, lon: np.ndarray) -> np.ndarray:
         """Shift longitudes into the frame where self._antimeridian maps to ±π."""
         return ((lon - self._antimeridian) % (2.0 * np.pi)) - np.pi
@@ -292,7 +299,7 @@ class MapWidget(QWidget):
         self._region_border_polylines = []
         if self._region_mode:
             self._rebuild_region_cells()
-        self.update()
+        self._invalidate_base()
 
     def set_globe(self, globe: "World") -> None:
         self._globe = globe
@@ -308,18 +315,18 @@ class MapWidget(QWidget):
 
     def set_overlay_visible(self, name: str, visible: bool) -> None:
         self._overlay_visible[name] = visible
-        self.update()
+        self._invalidate_base()
 
     def set_projection(self, proj: Projection) -> None:
         self._projection = proj
         self._reproject()
-        self.update()
+        self._invalidate_base()
 
     def set_color_schemes(self, schemes: dict[str, Callable[[dict], Sequence[float]]]) -> None:
         self._color_schemes = schemes
         self._active_scheme = next(iter(schemes)) if schemes else None
         self._rebuild_colors()
-        self.update()
+        self._invalidate_base()
 
     def set_color_scheme(self, name: str) -> None:
         self._active_scheme = name
@@ -327,7 +334,7 @@ class MapWidget(QWidget):
         self._rebuild_textures()
         self._rebuild_colors()
         self._reproject()
-        self.update()
+        self._invalidate_base()
 
     def associate_scheme_texture(self, scheme_name: str, texture_key: str) -> None:
         """Associate a named face texture with a color scheme for per-pixel rendering."""
@@ -336,7 +343,7 @@ class MapWidget(QWidget):
             self._rebuild_faces()
             self._rebuild_textures()
             self._reproject()
-            self.update()
+            self._invalidate_base()
 
     def _rebuild_faces(self) -> None:
         """Convert ECEF faces to lon/lat polygons, splitting at the antimeridian."""
@@ -368,6 +375,7 @@ class MapWidget(QWidget):
     def _rebuild_textures(self) -> None:
         """Build cached QImages from mesh face textures, one per face."""
         self._texture_qimages = {}
+        self._draw_items = None
         if self._mesh is None or not self._mesh.face_textures:
             return
         if self._scheme_texture_key and self._active_scheme is not None:
@@ -386,6 +394,7 @@ class MapWidget(QWidget):
 
     def _rebuild_colors(self) -> None:
         """Build per-polygon color list indexed via _face_src."""
+        self._draw_items = None
         if self._mesh is None or not self._face_src:
             return
         if self._active_scheme is not None:
@@ -399,6 +408,7 @@ class MapWidget(QWidget):
 
     def _reproject(self) -> None:
         """Project lon/lat polygons to (u, v) map coordinates."""
+        self._draw_items = None
         self._proj_faces = [
             self._projection.project_lonlat(poly) for poly in self._faces_lonlat
         ]
@@ -409,11 +419,89 @@ class MapWidget(QWidget):
             self._face_bbox_min = np.empty((0, 2), dtype=np.float64)
             self._face_bbox_max = np.empty((0, 2), dtype=np.float64)
 
-    def paintEvent(self, _) -> None:
-        painter = QPainter(self)
-        W, H = float(self.width()), float(self.height())
+    def _build_draw_items(self) -> list[list[tuple[QPolygonF, QBrush]]]:
+        """Per-polygon (polygon, brush) pairs in projected (u, v) space, independent of the view.
 
-        painter.fillRect(self.rect(), QColor(30, 100, 180))
+        Textured faces are split into fan triangles, each with a brush transform mapping
+        image pixels → projected coordinates; flat faces get one solid-colour polygon.
+        """
+        items: list[list[tuple[QPolygonF, QBrush]]] = [[] for _ in self._proj_faces]
+
+        # Gather every textured fan triangle so the affine solves run as one batch.
+        tri_poly: list[int] = []
+        tri_img: list[np.ndarray] = []   # (3, 2) image-pixel coords
+        tri_proj: list[np.ndarray] = []  # (3, 2) projected coords
+        for idx, poly_proj in enumerate(self._proj_faces):
+            face_src = self._face_src[idx]
+            qimage = self._texture_qimages.get(face_src)
+            if qimage is None:
+                color = self._face_colors[idx]
+                brush = QBrush(QColor.fromRgbF(
+                    float(color[0]), float(color[1]), float(color[2]), float(color[3])
+                ))
+                polygon = QPolygonF([QPointF(float(u), float(v)) for u, v in poly_proj])
+                items[idx].append((polygon, brush))
+                continue
+            img = self._face_uvs[idx] * np.array([qimage.width(), qimage.height()], dtype=np.float64)
+            for k in range(1, len(poly_proj) - 1):
+                tri = [0, k, k + 1]
+                tri_poly.append(idx)
+                tri_img.append(img[tri])
+                tri_proj.append(poly_proj[tri])
+
+        if tri_poly:
+            img_pts = np.array(tri_img, dtype=np.float64)                        # (T, 3, 2)
+            A = np.concatenate([img_pts, np.ones((len(tri_poly), 3, 1))], axis=2)  # (T, 3, 3)
+            B = np.array(tri_proj, dtype=np.float64)                             # (T, 3, 2)
+            ok = np.abs(np.linalg.det(A)) >= 1e-8
+            X = np.zeros((len(tri_poly), 3, 2))
+            X[ok] = np.linalg.solve(A[ok], B[ok])
+            for t in np.nonzero(ok)[0]:
+                idx = tri_poly[t]
+                brush = QBrush(self._texture_qimages[self._face_src[idx]])
+                x = X[t]
+                brush.setTransform(QTransform(
+                    float(x[0, 0]), float(x[0, 1]),
+                    float(x[1, 0]), float(x[1, 1]),
+                    float(x[2, 0]), float(x[2, 1]),
+                ))
+                polygon = QPolygonF([QPointF(float(u), float(v)) for u, v in B[t]])
+                items[idx].append((polygon, brush))
+        return items
+
+    def _invalidate_base(self) -> None:
+        """Mark the cached map body stale (data changed) and schedule a repaint."""
+        self._base_cache = None
+        self.update()
+
+    def paintEvent(self, _) -> None:
+        W, H = float(self.width()), float(self.height())
+        dpr = self.devicePixelRatioF()
+        key = (self.width(), self.height(), dpr, self._zoom, float(self._center[0]), float(self._center[1]))
+        if self._base_cache is None or self._base_cache_key != key:
+            pixmap = QPixmap(max(1, round(W * dpr)), max(1, round(H * dpr)))
+            pixmap.setDevicePixelRatio(dpr)
+            base_painter = QPainter(pixmap)
+            self._paint_base(base_painter, W, H)
+            base_painter.end()
+            self._base_cache = pixmap
+            self._base_cache_key = key
+
+        painter = QPainter(self)
+        painter.drawPixmap(0, 0, self._base_cache)
+        if not self._proj_faces:
+            return
+
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self._region_mode:
+            cx, cy = self._center[0], self._center[1]
+            self._draw_region_overlay(painter, W, H, cx, cy, self._zoom * 0.5 * W, self._zoom * 0.5 * H)
+
+        self._draw_legend(painter, W, H)
+
+    def _paint_base(self, painter: QPainter, W: float, H: float) -> None:
+        """Draw the ocean background, all faces, and world overlays."""
+        painter.fillRect(0, 0, int(W) + 1, int(H) + 1, QColor(30, 100, 180))
 
         if not self._proj_faces:
             return
@@ -422,65 +510,31 @@ class MapWidget(QWidget):
         scale_x = self._zoom * 0.5 * W
         scale_y = self._zoom * 0.5 * H
 
-        painter.setPen(Qt.PenStyle.NoPen)
-        for idx, (poly_proj, color) in enumerate(zip(self._proj_faces, self._face_colors)):
-            face_src = self._face_src[idx]
-            px = (poly_proj[:, 0] - cx) * scale_x + W * 0.5
-            py = -(poly_proj[:, 1] - cy) * scale_y + H * 0.5
+        if self._draw_items is None:
+            self._draw_items = self._build_draw_items()
 
-            if face_src in self._texture_qimages:
-                # Per-triangle affine texture mapping: solve image-pixel → screen for each fan triangle.
-                qimage = self._texture_qimages[face_src]
-                img_w = float(qimage.width())
-                img_h = float(qimage.height())
-                uvs = self._face_uvs[idx]  # (n_verts, 2)
-                n_verts = len(px)
-                for k in range(1, n_verts - 1):
-                    sx = np.array([px[0], px[k], px[k + 1]])
-                    sy = np.array([py[0], py[k], py[k + 1]])
-                    tu = uvs[[0, k, k + 1], 0] * img_w
-                    tv = uvs[[0, k, k + 1], 1] * img_h
-                    A = np.array([[tu[0], tv[0], 1.0],
-                                  [tu[1], tv[1], 1.0],
-                                  [tu[2], tv[2], 1.0]])
-                    if abs(np.linalg.det(A)) < 1e-8:
-                        continue
-                    X = np.linalg.solve(A, np.array([[sx[0], sy[0]],
-                                                     [sx[1], sy[1]],
-                                                     [sx[2], sy[2]]]))
-                    # QTransform(m11,m12,m21,m22,dx,dy): x'=m11*x+m21*y+dx, y'=m12*x+m22*y+dy
-                    brush = QBrush(qimage)
-                    brush.setTransform(QTransform(
-                        float(X[0, 0]), float(X[0, 1]),
-                        float(X[1, 0]), float(X[1, 1]),
-                        float(X[2, 0]), float(X[2, 1]),
-                    ))
-                    painter.setBrush(brush)
-                    painter.drawPolygon(QPolygonF([
-                        QPointF(sx[0], sy[0]),
-                        QPointF(sx[1], sy[1]),
-                        QPointF(sx[2], sy[2]),
-                    ]))
-            else:
-                painter.setBrush(
-                    QBrush(QColor.fromRgbF(
-                        float(color[0]), float(color[1]),
-                        float(color[2]), float(color[3])
-                    ))
-                )
-                painter.drawPolygon(
-                    QPolygonF([QPointF(float(x), float(y)) for x, y in zip(px, py)])
-                )
+        # Draw items live in projected (u, v) space; one world transform maps them to the screen.
+        # QTransform(m11,m12,m21,m22,dx,dy): x'=m11*x+m21*y+dx, y'=m12*x+m22*y+dy
+        painter.save()
+        painter.setTransform(QTransform(
+            scale_x, 0.0, 0.0, -scale_y, W * 0.5 - cx * scale_x, H * 0.5 + cy * scale_y,
+        ))
+        painter.setPen(Qt.PenStyle.NoPen)
+        half_u, half_v = W * 0.5 / scale_x, H * 0.5 / scale_y
+        visible = np.nonzero(
+            (self._face_bbox_max[:, 0] >= cx - half_u) & (self._face_bbox_min[:, 0] <= cx + half_u)
+            & (self._face_bbox_max[:, 1] >= cy - half_v) & (self._face_bbox_min[:, 1] <= cy + half_v)
+        )[0]
+        for idx in visible:
+            for polygon, brush in self._draw_items[idx]:
+                painter.setBrush(brush)
+                painter.drawPolygon(polygon)
+        painter.restore()
 
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         if self._globe is not None:
             draw_overlays(painter, self._globe, self._overlay_visible, _WorldProjector(self, W, H))
-
-        if self._region_mode:
-            self._draw_region_overlay(painter, W, H, cx, cy, scale_x, scale_y)
-
-        self._draw_legend(painter, W, H)
 
     def register_legend(self, scheme_name: str, kind: str, entries: list) -> None:
         """Register legend data for a color scheme.
@@ -490,7 +544,7 @@ class MapWidget(QWidget):
         For 'gradient', order from lowest value (bottom of bar) to highest (top).
         """
         self._legends[scheme_name] = (kind, entries)
-        self.update()
+        self._invalidate_base()
 
     def _draw_legend(self, painter: QPainter, W: float, H: float) -> None:
         if self._active_scheme is None:
