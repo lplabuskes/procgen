@@ -76,8 +76,10 @@ def draw_overlays(
 
     ``refined`` holds a view's own finer version of a feature, in the world
     feature's form, drawn in its place (the region view's rivers, roads and
-    deltas). Widths and thresholds still come from the world feature, so a
-    refined feature is drawn exactly as heavily as the world's.
+    deltas; a local map's also its towns at local positions). Widths and
+    thresholds still come from the world feature, so a refined feature is drawn
+    exactly as heavily as the world's.  ``refined["villages"]`` (a local map's
+    :class:`localmap.villages.Villages`) is drawn under the towns.
     """
     refined = refined or {}
 
@@ -114,6 +116,9 @@ def draw_overlays(
         _draw_danger_sources(painter, globe, proj)
     if on("trade_routes"):
         _draw_trade_routes(painter, globe, proj, refined.get("trade_routes"))
+    # Villages exist only on a local map, never as a world feature.
+    if visible.get("villages", True) and refined.get("villages") is not None:
+        _draw_villages(painter, refined["villages"], proj)
     if on("towns"):
         _draw_towns(painter, refined.get("towns", globe.get_feature("towns")), proj)
     if on("settlements"):
@@ -302,6 +307,36 @@ def _draw_towns(painter: QPainter, towns, proj: OverlayProjector) -> None:
         if not mask.any():
             continue
         painter.setBrush(QBrush(QColor.fromRgbF(*rgba)))
+        for x, y, r in zip(sx[mask], sy[mask], radii[mask]):
+            painter.drawEllipse(QRectF(float(x) - r, float(y) - r, 2 * r, 2 * r))
+    painter.restore()
+
+
+# Farming, river, fishing, roadside (localmap.villages.VILLAGE_* order).
+_VILLAGE_COLORS = (
+    QColor(214, 190, 120), QColor(110, 170, 235), QColor(90, 205, 190), QColor(200, 150, 110),
+)
+# Dot radius (px) for the smallest and largest village: under the towns'
+# ``_TOWN_MAX_RADIUS`` scale, so a village never reads as a town.
+_VILLAGE_RADIUS = (1.3, 2.4)
+
+
+def _draw_villages(painter: QPainter, villages, proj: OverlayProjector) -> None:
+    """Small kind-coloured dots, sized by population; only on a local map."""
+    if villages is None or len(villages) == 0:
+        return
+    sx, sy, keep = proj.points(villages.positions)
+    pop = np.asarray(villages.population, dtype=np.float64)
+    lo, hi = float(pop.min()), float(pop.max())
+    frac = np.sqrt((pop - lo) / (hi - lo)) if hi > lo else np.zeros_like(pop)
+    radii = _VILLAGE_RADIUS[0] + (_VILLAGE_RADIUS[1] - _VILLAGE_RADIUS[0]) * frac
+    painter.save()
+    painter.setPen(QPen(QColor(35, 30, 25, 210), 0.7))
+    for kind, color in enumerate(_VILLAGE_COLORS):
+        mask = keep & (villages.kind == kind)
+        if not mask.any():
+            continue
+        painter.setBrush(QBrush(color))
         for x, y, r in zip(sx[mask], sy[mask], radii[mask]):
             painter.drawEllipse(QRectF(float(x) - r, float(y) - r, 2 * r, 2 * r))
     painter.restore()

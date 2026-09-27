@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import dataclasses
 import math
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Callable, Optional
 
 import numpy as np
@@ -10,6 +12,10 @@ from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtWidgets import QWidget
 
 from core.display import SchemeSpec
+from localmap.builder import LocalMap, build_local_map
+from localmap.geometry import PARENT_CENTER, PARENT_RADIUS
+from localmap.params import LocalParams
+from localmap.villages import VILLAGE_KIND_NAMES
 from region.display import build_layer_texture, snap_to_land
 from viz.mapview.legend import draw_legend, legend_size
 from viz.mapview.overlays import draw_overlays
@@ -19,6 +25,7 @@ from region.params import RegionParams
 from region.rivers import RegionRivers, build_region_rivers, snap_deltas
 from region.roads import RegionRoads, build_region_roads
 from region.towns import refine_region_towns
+from realmgen.towns.types import Towns
 from region.upsample import RegionFields, build_region_fields
 
 if TYPE_CHECKING:
@@ -28,7 +35,7 @@ if TYPE_CHECKING:
 
 
 class RegionView(QWidget):
-    """Zoomed-in view of a single region.
+    """Zoomed-in view of a single region — or of one regional hex's local map.
 
     The region cell is a unit square in the equal-area ``(s, t)`` local frame
     (see :mod:`region.geometry`), tiled with flat-top hexagons by
@@ -42,12 +49,24 @@ class RegionView(QWidget):
     Without a globe (or before a region is picked) the view falls back to drawing
     the bare hex scaffolding.
 
+    **Local maps.**  The same widget shows a local map (:meth:`set_local`): its
+    frame is the parent hex's square, its hexes the local grid, and everything
+    is clipped to the parent hexagon.  Rivers, roads and towns are the local
+    map's; villages are drawn as dots.  In a region, :meth:`set_local_pick`
+    turns clicks (not drags) into "open this hex's local map".
+
     Scroll to zoom (1×–``MAX_ZOOM``, anchored to the cursor) and drag to pan, as
     on the world map.  The zoom is a screen-space magnification of the laid-out
     cell, so it composes with the north-up rotation and the legend stays put.
     """
 
     MAX_ZOOM = 20.0
+    # Local maps kept for revisiting, most recent last.
+    LOCAL_CACHE_SIZE = 6
+    # A press-release that moved less than this (px) is a click, not a drag.
+    _CLICK_SLOP = 4.0
+    # How close (px) the cursor must be to a village dot to describe it.
+    _VILLAGE_HOVER_PX = 6.0
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -86,6 +105,19 @@ class RegionView(QWidget):
         self._view_frame: Optional[tuple[float, float, float]] = None
         self._drag_start: Optional[tuple[float, float]] = None
         self._drag_start_pan = np.zeros(2, dtype=np.float64)
+        self._press_pos: Optional[tuple[float, float]] = None
+        # ── local maps ──
+        self._local_params = LocalParams()
+        self._local: Optional[LocalMap] = None
+        # (region_id, hex) → LocalMap, valid for ``_cache_owner`` (the region
+        # fields they were built from) and the current local params.
+        self._local_cache: "OrderedDict[tuple[int, int], LocalMap]" = OrderedDict()
+        self._cache_owner: Optional[RegionFields] = None
+        # Region mode: clicking a hex opens its local map.
+        self._local_pick = False
+        self._hover_hex: Optional[int] = None
+        self._hex_click_callback: Optional[Callable[[int], None]] = None
+        self._mouse: Optional[tuple[float, float]] = None
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.OpenHandCursor)
@@ -97,6 +129,8 @@ class RegionView(QWidget):
         self._geometry = geometry
         self._globe = globe
         self._grid = RegionHexGrid(geometry, int(self._region_params.upsample.n_cols))
+        self._local = None
+        self._hover_hex = None
         self._fields = None
         self._rivers = None
         self._roads = None
@@ -148,6 +182,82 @@ class RegionView(QWidget):
             rp.towns, roads=self._roads,
         )
 
+    # ── local maps ───────────────────────────────────────────────────────────
+
+    def set_local(self, parent: "RegionView", hex_index: int, keep_view: bool = False) -> None:
+        """Show the local map of ``parent``'s regional hex ``hex_index``.
+
+        Built from the parent's refined fields, rivers, roads and deltas (with
+        this view's :class:`LocalParams` and the world's tuning), or taken from
+        the cache when it was built from those same region fields.
+        ``keep_view`` keeps the zoom and pan (a rebuild of the map on screen).
+        """
+        fields, globe = parent._fields, parent._globe
+        if fields is None or globe is None:
+            return
+        if self._cache_owner is not fields:
+            self._local_cache.clear()
+            self._cache_owner = fields
+        key = (fields.region_id, int(hex_index))
+        local = self._local_cache.pop(key, None)
+        if local is None:
+            realm, world = self._realm_params, self._world_params
+            local = build_local_map(
+                globe, fields, int(hex_index), self._local_params,
+                region_rivers=parent._rivers, region_roads=parent._roads, region_deltas=parent._deltas,
+                resources=world.resources if world is not None else None,
+                fertility_exponent=float(realm.population.fertility_exponent) if realm is not None else 2.0,
+                land=world.cost.land if world is not None else None,
+                danger_scale=float(realm.danger.movement_scale) if realm is not None else 2.0,
+            )
+        self._local_cache[key] = local
+        while len(self._local_cache) > self.LOCAL_CACHE_SIZE:
+            self._local_cache.popitem(last=False)
+
+        self._local = local
+        self._globe = globe
+        self._geometry = local.fields.geometry
+        self._grid = local.fields.grid
+        # The countryside the map draws is net of its villages.
+        self._fields = dataclasses.replace(
+            local.fields, textures={**local.fields.textures, "rural_density": local.villages.rural_density},
+        )
+        self._rivers, self._roads, self._deltas = local.rivers, local.roads, local.deltas
+        self._hex_images = []
+        self._land_positions = {}
+        if not keep_view:
+            self._zoom = 1.0
+            self._pan[:] = 0.0
+        self._rebuild_images()
+        self.update()
+
+    def set_local_params(self, params: LocalParams) -> None:
+        """Replace the local tuning; cached local maps are dropped (the caller
+        re-opens the one on screen)."""
+        if params == self._local_params:
+            return
+        self._local_params = params
+        self._local_cache.clear()
+
+    def clear_local_cache(self) -> None:
+        self._local_cache.clear()
+        self._cache_owner = None
+
+    @property
+    def local_map(self) -> Optional[LocalMap]:
+        return self._local
+
+    def set_local_pick(self, enabled: bool) -> None:
+        """Region mode: highlight the hex under the cursor and report clicks on it."""
+        self._local_pick = bool(enabled)
+        if not enabled:
+            self._hover_hex = None
+        self.update()
+
+    def set_hex_click_callback(self, cb: Optional[Callable[[int], None]]) -> None:
+        """Called with the regional hex index clicked while local picking is on."""
+        self._hex_click_callback = cb
+
     def set_params(self, params: RegionParams, globe: Optional["World"] = None) -> None:
         """Replace the region tuning; a region on screen is refined again with it.
 
@@ -191,6 +301,8 @@ class RegionView(QWidget):
         self._globe = None
         self._grid = None
         self._fields = None
+        self._local = None
+        self._hover_hex = None
         self._rivers = None
         self._roads = None
         self._deltas = None
@@ -256,6 +368,13 @@ class RegionView(QWidget):
         if self._fields is None or self._grid is None:
             return f"Region {self.region_id}"
         f = self._fields
+        if self._local is not None:
+            v = self._local.villages
+            return (
+                f"Local map · region {f.region_id} hex {self._local.hex_index} · {f.n_hexes} hexes × "
+                f"{f.tex_size}² texels (~{f.texel_area_km2:.2f} km²/texel) · {len(v)} villages "
+                f"({float(v.population.sum()):,.0f} people)"
+            )
         return (
             f"Region {f.region_id} · {f.n_hexes} hexes × {f.tex_size}² texels "
             f"(~{f.texel_area_km2:.0f} km²/texel) · {f.detail_octaves} detail octaves"
@@ -329,7 +448,15 @@ class RegionView(QWidget):
         # (``status_text``) rather than over the map.
         painter.setPen(_cosmetic_pen(QColor(70, 85, 100)))
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRect(QRectF(x0, y0, size, size))
+        painter.drawPolygon(self._outline(x0, y0, size))
+        if self._local_pick and self._hover_hex is not None and self._local is None:
+            r_px = self._grid.radius * size
+            hs, ht = self._grid.centers[self._hover_hex]
+            pen = _cosmetic_pen(QColor(255, 235, 140, 230))
+            pen.setWidthF(2.0)
+            painter.setPen(pen)
+            painter.setBrush(QColor(255, 235, 140, 40))
+            painter.drawPolygon(self._hex_polygon(x0 + hs * size, y0 + (1.0 - ht) * size, r_px))
         painter.restore()
 
         # Overlays are drawn in screen space (so markers stay upright and sized
@@ -340,7 +467,7 @@ class RegionView(QWidget):
                 left = fx0 - 0.5 * legend_gap
                 painter.setClipRect(QRectF(left, 0.0, W - left, H))
             cell = QPainterPath()
-            cell.addPolygon(transform.map(QPolygonF(QRectF(x0, y0, size, size))))
+            cell.addPolygon(transform.map(self._outline(x0, y0, size)))
             painter.setClipPath(cell, Qt.ClipOperation.IntersectClip)
             draw_overlays(
                 painter, self._globe, self._overlay_visible,
@@ -364,6 +491,16 @@ class RegionView(QWidget):
         new river mouths. (Towns need no override: their refined positions are in
         the world feature.)"""
         out: dict = {}
+        if self._local is not None:
+            out["villages"] = self._local.villages
+            towns = self._globe.get_feature("towns") if self._globe is not None else None
+            if towns is not None and len(towns):
+                idx = self._local.town_index
+                out["towns"] = Towns(
+                    positions=self._local.town_positions, population=towns.population[idx],
+                    face_id=towns.face_id[idx], parent=towns.parent[idx], kind=towns.kind[idx],
+                    site_positions=towns.site_positions[idx], refined=towns.refined[idx],
+                )
         if self._rivers is not None:
             out["rivers"] = self._rivers.paths
         if self._roads is not None:
@@ -379,7 +516,8 @@ class RegionView(QWidget):
         f = self._fields
         if f is None:
             return 0.0
-        return (int(self._region_params.upsample.water_spread_texels) + 2) * f.grid.texel_spacing_rad(f.tex_size)
+        upsample = self._local_params.upsample if self._local is not None else self._region_params.upsample
+        return (int(upsample.water_spread_texels) + 2) * f.grid.texel_spacing_rad(f.tex_size)
 
     def _on_land(self, key: str, ecef: np.ndarray) -> np.ndarray:
         """``ecef`` moved off the refined water (``snap_to_land``), cached per feature."""
@@ -485,6 +623,7 @@ class RegionView(QWidget):
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position()
+            self._press_pos = (float(pos.x()), float(pos.y()))
             self._drag_start = (float(pos.x()), float(pos.y()))
             self._drag_start_pan = self._pan.copy()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
@@ -493,6 +632,13 @@ class RegionView(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_start = None
             self.setCursor(Qt.CursorShape.OpenHandCursor)
+            pos = event.position()
+            press, self._press_pos = self._press_pos, None
+            clicked = press is not None and math.hypot(pos.x() - press[0], pos.y() - press[1]) < self._CLICK_SLOP
+            if clicked and self._local_pick and self._local is None and self._hex_click_callback is not None:
+                texel = self.texel_at_screen(float(pos.x()), float(pos.y()))
+                if texel is not None:
+                    self._hex_click_callback(texel[0])
 
     @staticmethod
     def _cell_transform(angle: float, x0: float, y0: float, size: float) -> QTransform:
@@ -517,11 +663,37 @@ class RegionView(QWidget):
         p = inverse.map(QPointF(mx, my))
         s = (p.x() - x0) / size
         t = 1.0 - (p.y() - y0) / size
-        return self._fields.grid.texel_at(s, t, self._fields.tex_size)
+        texel = self._fields.grid.texel_at(s, t, self._fields.tex_size)
+        if texel is not None and self._fields.in_map is not None and not self._fields.in_map[texel]:
+            return None                     # a local map's square corner, outside the parent hexagon
+        return texel
+
+    def village_under_cursor(self) -> Optional[str]:
+        """``"<kind> · <people>"`` for the village dot under the cursor, if any."""
+        if self._local is None or self._cell_layout is None or self._mouse is None or self._geometry is None:
+            return None
+        v = self._local.villages
+        if len(v) == 0:
+            return None
+        x0, y0, size, transform = self._cell_layout
+        proj = _RegionProjector(self._geometry, x0, y0, size, transform, 1.0)
+        sx, sy, keep = proj.points(v.positions)
+        d = np.where(keep, np.hypot(sx - self._mouse[0], sy - self._mouse[1]), np.inf)
+        i = int(np.argmin(d))
+        if d[i] > self._VILLAGE_HOVER_PX:
+            return None
+        return f"{VILLAGE_KIND_NAMES[int(v.kind[i])]} · {float(v.population[i]):,.0f} people"
 
     def mouseMoveEvent(self, event) -> None:
         pos = event.position()
         mx, my = float(pos.x()), float(pos.y())
+        self._mouse = (mx, my)
+        if self._local_pick and self._local is None and self._drag_start is None:
+            texel = self.texel_at_screen(mx, my)
+            hover = texel[0] if texel is not None else None
+            if hover != self._hover_hex:
+                self._hover_hex = hover
+                self.update()
         if self._drag_start is not None and self._view_frame is not None:
             footprint = self._view_frame[2]
             self._pan[0] = self._drag_start_pan[0] + (mx - self._drag_start[0]) / footprint
@@ -532,8 +704,24 @@ class RegionView(QWidget):
             self._hover_callback(self.texel_at_screen(mx, my))
 
     def leaveEvent(self, event) -> None:
+        self._mouse = None
+        if self._hover_hex is not None:
+            self._hover_hex = None
+            self.update()
         if self._hover_callback is not None:
             self._hover_callback(None)
+
+    def _outline(self, x0: float, y0: float, size: float) -> QPolygonF:
+        """The map's edge in cell-layout pixels: the region's square, or a local
+        map's parent hexagon (flat-top, filling the square's width)."""
+        if self._local is None:
+            return QPolygonF(QRectF(x0, y0, size, size))
+        return self._hex_polygon(x0 + PARENT_CENTER * size, y0 + (1.0 - PARENT_CENTER) * size, PARENT_RADIUS * size)
+
+    def _clip_to_outline(self, painter: QPainter, x0: float, y0: float, size: float) -> None:
+        path = QPainterPath()
+        path.addPolygon(self._outline(x0, y0, size))
+        painter.setClipPath(path, Qt.ClipOperation.IntersectClip)
 
     def _hex_polygon(self, cx: float, cy: float, r_px: float) -> QPolygonF:
         return QPolygonF([
@@ -562,7 +750,7 @@ class RegionView(QWidget):
         r_draw = r_px + 0.75 / self._zoom
 
         painter.save()
-        painter.setClipRect(QRectF(x0, y0, size, size), Qt.ClipOperation.IntersectClip)
+        self._clip_to_outline(painter, x0, y0, size)
         painter.setPen(Qt.PenStyle.NoPen)
         for i, (s, t) in enumerate(self._grid.centers):
             cx = x0 + s * size
@@ -589,7 +777,7 @@ class RegionView(QWidget):
         assert self._grid is not None
         r_px = self._grid.radius * size
         painter.save()
-        painter.setClipRect(QRectF(x0, y0, size, size), Qt.ClipOperation.IntersectClip)
+        self._clip_to_outline(painter, x0, y0, size)
         painter.setPen(_cosmetic_pen(QColor(90, 110, 130)))
         painter.setBrush(QColor(34, 40, 48))
         for s, t in self._grid.centers:

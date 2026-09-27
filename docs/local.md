@@ -4,7 +4,7 @@ Qt-free package for the finest tier: **each regional hexagon becomes a local
 map**, refined from the region exactly the way a region is refined from the
 globe. Plan and status: [plans/local_maps.md](plans/local_maps.md). Built so far:
 geometry, grid and field refinement, rivers, roads, settlements and villages
-(phases 1–4); the viewer is still to come.
+(phases 1–4), and the viewer (phase 5).
 
 ## Files
 - `localmap/geometry.py` — `LocalGeometry`: the parent hex's texture square, mapped affinely onto `[0, 1]²`
@@ -148,3 +148,35 @@ Seed 4, the densest land (~11 people/km²): ~940 villages per local map, mean
 2–3 km apart at about twice that density; the population calibration, not
 this tier, sets the difference. Nearly all are farming villages: the world
 network gives a map only 0–6 rivers.
+
+## Viewer
+
+`RegionView` shows either tier; `MapWindow` stacks a second instance for local
+maps (see [viz.md](viz.md)).
+
+- **Opening.** In a region, the **Local maps** toggle highlights the hex under
+  the cursor; a click (a press and release under 4 px apart, so drags still
+  pan) opens its local map. **← Region** goes back to the region as it was.
+- **`RegionView.set_local(region_view, hex)`** builds the map with
+  `build_local_map` from the region view's fields, rivers, roads and deltas and
+  the world's tuning, or reuses it from an LRU cache (`LOCAL_CACHE_SIZE` = 6,
+  ~0.02 s), valid while the region's fields are the same object and the local
+  params are unchanged; a region-params change clears it.
+- **Drawing.** Everything is clipped to the parent hexagon (`_outline`). Layers
+  are the world map's recipes over the local fields, with `rural_density`
+  swapped for `Villages.rural_density` (the countryside net of villages).
+  Overlays get the local rivers, roads, deltas and a `Towns` at the local
+  positions as `refined` features; villages are drawn under the towns by
+  `overlays._draw_villages` (1.3–2.4 px dots coloured by kind: farming, river,
+  fishing, roadside), behind the **Villages** overlay toggle.
+- **Hover.** The status bar leads with the village under the cursor (within
+  6 px: "Farming village · 340 people"), then the usual texel readout. Texels
+  outside the parent hexagon report nothing.
+- **Params.** `AppParams.local` (`LocalParams`, "Local map" in the dialog) is
+  view-side only, like `region`.
+
+Known artefact: the Rural Density layer shows each budget (global texel ∩ map)
+as a faint block, since its countryside is scaled by its own realised village
+share (0.27–0.35 on seed 4), and budgets that are small slivers of a global
+texel (11% of budgets, 0.5% of the people) get no village and stay at full
+density, showing as bright slivers along the hexagon edge and face seams.

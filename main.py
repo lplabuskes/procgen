@@ -11,6 +11,7 @@ from core.world import World
 from viz.mapview.mapview import MapWindow
 from viz.params_dialog import ParamsDialog
 from realmgen.builder import RealmParams, RealmPipeline
+from localmap.params import LocalParams
 from region.params import RegionParams
 from worldgen import GlobePipeline, GlobeParams
 
@@ -26,6 +27,9 @@ class AppParams:
     # View-side only: never changes the world build (see AppPipeline).
     region: RegionParams = dataclasses.field(
         default_factory=RegionParams, metadata={"label": "Region"}
+    )
+    local: LocalParams = dataclasses.field(
+        default_factory=LocalParams, metadata={"label": "Local map"}
     )
 
 
@@ -77,6 +81,7 @@ def main() -> None:
         params = dataclasses.replace(params, globe=globe_params)
         current_params[0] = params
         window.set_region_params(params.region)
+        window.set_local_params(params.local)
         window.set_realm_params(params.realm)
         window.set_world_params(params.globe)
 
@@ -106,6 +111,7 @@ def main() -> None:
         current_params[0] = params
         current_pipeline[0] = pipeline
         window.set_region_params(params.region)
+        window.set_local_params(params.local)
         window.set_realm_params(params.realm)
         window.set_world_params(params.globe)
 
@@ -126,10 +132,12 @@ def main() -> None:
             new_params = dialog.result_params(current_params[0])
             if new_params == current_params[0]:
                 return
-            # Region params only re-refine the view; anything else rebuilds the world.
-            if dataclasses.replace(new_params, region=current_params[0].region) == current_params[0]:
+            # Region and local params only re-refine the views; anything else rebuilds the world.
+            old = current_params[0]
+            if dataclasses.replace(new_params, region=old.region, local=old.local) == old:
                 current_params[0] = new_params
                 window.set_region_params(new_params.region)
+                window.set_local_params(new_params.local)
             else:
                 _build_and_apply(new_params)
 

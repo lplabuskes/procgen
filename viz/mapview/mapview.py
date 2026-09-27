@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from core.world import World
     from realmgen.builder import RealmParams
     from worldgen.builder import GlobeParams
+    from localmap.params import LocalParams
     from region.params import RegionParams
 
 
@@ -825,6 +826,13 @@ class MapWindow(QMainWindow):
         self._back_btn.setVisible(False)
         toolbar_layout.addWidget(self._back_btn)
 
+        # In a region: click a hex to open its local map.
+        self._local_btn = QPushButton("Local maps")
+        self._local_btn.setCheckable(True)
+        self._local_btn.setChecked(False)
+        self._local_btn.setVisible(False)
+        toolbar_layout.addWidget(self._local_btn)
+
         toolbar_layout.addStretch()
 
         zoom_out_btn = QPushButton("−")
@@ -865,14 +873,20 @@ class MapWindow(QMainWindow):
         # Scheme → the recipe its texture was built with; the region view reruns
         # it on refined data.  The world map only needs the finished texture.
         self._scheme_recipes: dict[str, TextureRecipe] = {}
-        self._region_view.set_hover_callback(self._region_hover)
+        self._region_view.set_hover_callback(lambda texel: self._zoomed_hover(self._region_view, texel))
         self._region_btn.toggled.connect(self._map.set_region_mode)
         self._map.set_region_click_callback(self._enter_region)
-        self._back_btn.clicked.connect(self._exit_region)
+        self._back_btn.clicked.connect(self._go_back)
+        # A second view for local maps, so going back shows the region as it was.
+        self._local_view = RegionView()
+        self._local_view.set_hover_callback(lambda texel: self._zoomed_hover(self._local_view, texel))
+        self._local_btn.toggled.connect(self._region_view.set_local_pick)
+        self._region_view.set_hex_click_callback(self._enter_local)
 
         self._stack = QStackedWidget()
         self._stack.addWidget(self._map)          # index 0: world map
         self._stack.addWidget(self._region_view)  # index 1: zoomed region
+        self._stack.addWidget(self._local_view)   # index 2: a regional hex's local map
 
         layout.addWidget(toolbar)
         layout.addWidget(self._stack, stretch=1)
@@ -888,31 +902,61 @@ class MapWindow(QMainWindow):
     def set_globe(self, globe: "World") -> None:
         # A re-run replaces the world under our feet; any region on screen is now
         # stale, so drop back to the world map rather than show old detail.
+        if self._stack.currentWidget() is self._local_view:
+            self._exit_local()
         if self._stack.currentWidget() is self._region_view:
             self._exit_region()
+        self._local_view.clear_local_cache()
         self._map.set_globe(globe)
 
     def set_realm_params(self, params: "RealmParams") -> None:
         """The realm tuning the world was built with; the region view re-sites towns with it."""
         self._region_view.set_realm_params(params)
+        self._local_view.set_realm_params(params)
 
     def set_world_params(self, params: "GlobeParams") -> None:
         """The physical tuning the world was built with; the region view refines
         resources and re-routes roads with it."""
         self._region_view.set_world_params(params)
+        self._local_view.set_world_params(params)
 
     def set_region_params(self, params: "RegionParams") -> None:
-        """Tune the region tier; the region on screen (if any) is refined again."""
-        showing = self._stack.currentWidget() is self._region_view
+        """Tune the region tier; the region on screen (if any) is refined again,
+        and so is a local map on screen (it is built from the region)."""
+        local = self._stack.currentWidget() is self._local_view
+        showing = local or self._stack.currentWidget() is self._region_view
         if showing:
             self.set_status("Refining region…")
             QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
         try:
             self._region_view.set_params(params, self._map.globe)
+            # Local maps are built from the region's rivers and roads too, which
+            # a region-params change can rebuild without new fields.
+            self._local_view.clear_local_cache()
+            if local:
+                self._reopen_local()
         finally:
             if showing:
                 QApplication.restoreOverrideCursor()
-                self.set_status(self._region_view.status_text())
+                self.set_status((self._local_view if local else self._region_view).status_text())
+
+    def set_local_params(self, params: "LocalParams") -> None:
+        """Tune the local tier; the local map on screen (if any) is rebuilt."""
+        self._local_view.set_local_params(params)
+        if self._stack.currentWidget() is self._local_view:
+            self.set_status("Building local map…")
+            QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
+            try:
+                self._reopen_local()
+            finally:
+                QApplication.restoreOverrideCursor()
+                self.set_status(self._local_view.status_text())
+
+    def _reopen_local(self) -> None:
+        """Rebuild the local map on screen from the region view's current data."""
+        local = self._local_view.local_map
+        if local is not None:
+            self._local_view.set_local(self._region_view, local.hex_index, keep_view=True)
 
     def _enter_region(self, region_id: int) -> None:
         """Switch from the world map to the zoomed-in view of a clicked region.
@@ -933,18 +977,53 @@ class MapWindow(QMainWindow):
         self.set_status(self._region_view.status_text())
         self._stack.setCurrentWidget(self._region_view)
         self._region_btn.setVisible(False)
+        self._back_btn.setText("← World Map")
         self._back_btn.setVisible(True)
+        self._local_btn.setVisible(True)
+
+    def _enter_local(self, hex_index: int) -> None:
+        """Open the local map of a regional hex clicked in local-maps mode."""
+        # Villages only exist on local maps; their toggle appears with the first one.
+        self.add_overlay("villages", "Villages")
+        self.set_status(f"Building local map of hex {hex_index}…")
+        QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
+        try:
+            self._sync_region_layer(self._local_view)
+            self._local_view.set_local(self._region_view, hex_index)
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.set_status(self._local_view.status_text())
+        self._stack.setCurrentWidget(self._local_view)
+        self._back_btn.setText("← Region")
+        self._local_btn.setVisible(False)
 
     def _active_view(self) -> "MapWidget | RegionView":
         """Whichever view is on screen — the zoom buttons act on it."""
-        if self._stack.currentWidget() is self._region_view:
-            return self._region_view
+        current = self._stack.currentWidget()
+        if current is self._region_view or current is self._local_view:
+            return current  # type: ignore[return-value]
         return self._map
+
+    def _go_back(self) -> None:
+        """One tier up: local map → region → world map."""
+        if self._stack.currentWidget() is self._local_view:
+            self._exit_local()
+        else:
+            self._exit_region()
+
+    def _exit_local(self) -> None:
+        """Return from a local map to the region it was opened from."""
+        self._stack.setCurrentWidget(self._region_view)
+        self._local_view.clear_region()
+        self._back_btn.setText("← World Map")
+        self._local_btn.setVisible(True)
+        self.set_status(self._region_view.status_text())
 
     def _exit_region(self) -> None:
         """Return from the zoomed-in region view to the world map."""
         self._stack.setCurrentWidget(self._map)
         self._back_btn.setVisible(False)
+        self._local_btn.setVisible(False)
         self._region_btn.setVisible(True)
         self._region_view.clear_region()
         self.set_status(self._prev_status)
@@ -952,15 +1031,17 @@ class MapWindow(QMainWindow):
     def _on_scheme_changed(self, name: str) -> None:
         """One Coloration combo drives both views, so the layer survives switching."""
         self._map.set_color_scheme(name)
-        if self._stack.currentWidget() is self._region_view:
+        current = self._stack.currentWidget()
+        if current is self._region_view or current is self._local_view:
             QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
             try:
-                self._sync_region_layer()
+                self._sync_region_layer(current)  # type: ignore[arg-type]
             finally:
                 QApplication.restoreOverrideCursor()
 
-    def _sync_region_layer(self) -> None:
-        """Hand the world map's active scheme to the region view."""
+    def _sync_region_layer(self, view: Optional[RegionView] = None) -> None:
+        """Hand the world map's active scheme to a zoomed view (default: the region's)."""
+        view = view if view is not None else self._region_view
         name = self._map._active_scheme
         fn = self._map._color_schemes.get(name) if name is not None else None
         spec = None
@@ -969,8 +1050,8 @@ class MapWindow(QMainWindow):
                 fn, texture=self._map._scheme_texture_key.get(name),
                 recipe=self._scheme_recipes.get(name),
             )
-        self._region_view.set_layer(name, spec)
-        self._region_view.set_legend(self._map.legend_for(name))
+        view.set_layer(name, spec)
+        view.set_legend(self._map.legend_for(name))
 
     def set_status(self, text: str) -> None:
         self._status_label.setText(text)
@@ -1026,11 +1107,12 @@ class MapWindow(QMainWindow):
             return
         self.set_status("  |  ".join(self._hover_parts(face, uv, None)))
 
-    def _region_hover(self, texel: Optional[tuple[int, int, int]]) -> None:
-        """World-map hover for the texel's face, with refined values swapped in."""
-        fields = self._region_view.fields
+    def _zoomed_hover(self, view: RegionView, texel: Optional[tuple[int, int, int]]) -> None:
+        """World-map hover for the texel's face, with refined values swapped in
+        (and, on a local map, the village under the cursor first)."""
+        fields = view.fields
         if texel is None or fields is None:
-            self.set_status(self._region_view.status_text())
+            self.set_status(view.status_text())
             return
         hex_idx, row, col = texel
 
@@ -1042,6 +1124,9 @@ class MapWindow(QMainWindow):
         else:
             uv = np.clip(fields.face_uv[texel], 0.0, 1.0)
             parts = self._hover_parts(int(fields.faces[texel]), uv, _local)
+        village = view.village_under_cursor()
+        if village is not None:
+            parts = [village, *parts]
         self.set_status("  |  ".join(parts))
 
     def add_overlay(self, name: str, label: Optional[str] = None, checked: bool = True) -> None:
@@ -1064,6 +1149,7 @@ class MapWindow(QMainWindow):
     def _set_overlay_visible(self, name: str, visible: bool) -> None:
         self._map.set_overlay_visible(name, visible)
         self._region_view.set_overlay_visible(name, visible)
+        self._local_view.set_overlay_visible(name, visible)
 
     @property
     def active_scheme(self) -> "str | None":

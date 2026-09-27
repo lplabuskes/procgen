@@ -72,7 +72,9 @@ Splits a unit-sphere polygon at a cut meridian.
 
 Hosts `MapWidget` with a toolbar and bottom bar.
 
-**Toolbar**: Save button, Projection combo (`ALL_PROJECTIONS`), Coloration combo (scheme names), Overlays dropdown menu (one checkable `QAction` per overlay), zoom −/+/Reset (routed to the region view while it is showing).
+**Toolbar**: Save button, Projection combo (`ALL_PROJECTIONS`), Coloration combo (scheme names), Overlays dropdown menu (one checkable `QAction` per overlay), Regions toggle, Back button ("← World Map" in a region, "← Region" on a local map), **Local maps** toggle (in a region: click a hex to open its local map), zoom −/+/Reset (routed to whichever zoomed view is showing).
+
+**Views**: a `QStackedWidget` of the world map, a `RegionView` for the region and a second `RegionView` for local maps, so going back from a local map shows the region untouched. `_enter_local(hex)` builds (or takes from the local view's LRU cache) the hex's local map from the region view's fields, rivers, roads and deltas; `_go_back()` steps local → region → world. The **Villages** overlay toggle is added with the first local map.
 
 **Bottom bar**: status label, Parameters button, Re-run button.
 
@@ -80,7 +82,8 @@ Hosts `MapWidget` with a toolbar and bottom bar.
 - `set_globe(world)` / `set_mesh(mesh)` — forwarded to `MapWidget`
 - `set_color_schemes(schemes)` — updates combo; preserves previously active scheme if still present
 - `set_active_scheme(name)` — programmatic scheme switch
-- `add_overlay(name, label, checked)` — idempotent; adds to Overlays menu on first call; one toggle drives both the world map and the region view
+- `add_overlay(name, label, checked)` — idempotent; adds to Overlays menu on first call; one toggle drives the world map, the region view and the local view
+- `set_region_params(params)` / `set_local_params(params)` — tune the region / local tiers (`AppParams.region` / `AppParams.local`, view-side only); the map on screen is rebuilt, and a region change also rebuilds a local map on screen and drops cached ones
 - `register_legend(scheme_name, kind, entries)` — forwarded to `MapWidget`
 - `associate_scheme_texture(scheme_name, texture_key)` — forwarded to `MapWidget`
 - `set_hover_parts(fn)` — `fn(face, uv, local) -> list[str]` status fragments, joined into the status bar by both views; the region view passes `local` (see `DisplayRegistry.hover`) to substitute refined texel values for contributors tagged `refined=`
