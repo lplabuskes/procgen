@@ -82,7 +82,7 @@ class RegionRiverParams:
     valley_seeking: float = _f(2.0, label="Valley seeking", min=0.0, max=6.0, step=0.25)
     # Minimum accumulated flow for a regional tributary, in the world's flow units
     # (the world's default river threshold is 500).
-    tributary_min_flow: float = _f(40.0, label="Tributary min flow", min=1.0, max=500.0)
+    tributary_min_flow: float = _f(100.0, label="Tributary min flow", min=1.0, max=500.0)
     # Tributaries shorter than this many raster nodes are dropped as stubs.
     tributary_min_nodes: int = _f(6, label="Tributary min length (nodes)", min=2, max=50)
     smoothing_iterations: int = _f(8, label="Path smoothing iterations", min=0, max=20)

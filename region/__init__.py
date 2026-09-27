@@ -18,6 +18,8 @@ from region.geometry import (
     ecef_to_cell,
 )
 from region.grid import RegionHexGrid
+from region.params import RegionParams
+from region.rivers import RegionRiverParams, RegionRivers, build_region_rivers
 from region.sampling import GlobalSampler
 from region.upsample import (
     RegionFields,
@@ -33,8 +35,12 @@ __all__ = [
     "RegionFields",
     "RegionGeometry",
     "RegionHexGrid",
+    "RegionParams",
+    "RegionRiverParams",
+    "RegionRivers",
     "RegionUpsampleParams",
     "build_region_fields",
+    "build_region_rivers",
     "cell_border_polylines",
     "conservation_report",
     "ea_forward",

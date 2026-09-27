@@ -34,6 +34,7 @@ HoverPartsFn = Callable[[int, Optional[np.ndarray], Optional[LocalHoverFn]], lis
 if TYPE_CHECKING:
     from core.mesh import PolygonMesh
     from core.world import World
+    from region.params import RegionParams
 
 
 def _pip_polygon(pu: float, pv: float, poly: np.ndarray) -> bool:
@@ -834,6 +835,19 @@ class MapWindow(QMainWindow):
         if self._stack.currentWidget() is self._region_view:
             self._exit_region()
         self._map.set_globe(globe)
+
+    def set_region_params(self, params: "RegionParams") -> None:
+        """Tune the region tier; the region on screen (if any) is refined again."""
+        showing = self._stack.currentWidget() is self._region_view
+        if showing:
+            self.set_status("Refining region…")
+            QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
+        try:
+            self._region_view.set_params(params)
+        finally:
+            if showing:
+                QApplication.restoreOverrideCursor()
+                self.set_status(self._region_view.status_text())
 
     def _enter_region(self, region_id: int) -> None:
         """Switch from the world map to the zoomed-in view of a clicked region.

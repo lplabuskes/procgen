@@ -15,8 +15,9 @@ from viz.mapview.legend import draw_legend, legend_size
 from viz.mapview.overlays import draw_overlays
 from region.geometry import RegionGeometry
 from region.grid import RegionHexGrid
-from region.rivers import RegionRiverParams, RegionRivers, build_region_rivers
-from region.upsample import RegionFields, RegionUpsampleParams, build_region_fields
+from region.params import RegionParams
+from region.rivers import RegionRivers, build_region_rivers
+from region.upsample import RegionFields, build_region_fields
 
 if TYPE_CHECKING:
     from core.world import World
@@ -49,8 +50,7 @@ class RegionView(QWidget):
         self._geometry: Optional[RegionGeometry] = None
         self._grid: Optional[RegionHexGrid] = None
         self._fields: Optional[RegionFields] = None
-        self._params = RegionUpsampleParams()
-        self._river_params = RegionRiverParams()
+        self._region_params = RegionParams()
         # Rivers refined over this region's relief; built the first time the
         # Rivers overlay is shown here.
         self._rivers: Optional[RegionRivers] = None
@@ -84,7 +84,7 @@ class RegionView(QWidget):
         """Show a region, refining the global fields inside it when a globe is given."""
         self._geometry = geometry
         self._globe = globe
-        self._grid = RegionHexGrid(geometry, int(self._params.n_cols))
+        self._grid = RegionHexGrid(geometry, int(self._region_params.upsample.n_cols))
         self._fields = None
         self._rivers = None
         self._hex_images = []
@@ -92,9 +92,27 @@ class RegionView(QWidget):
         self._zoom = 1.0
         self._pan[:] = 0.0
         if globe is not None and "elevation" in globe.mesh.face_textures:
-            self._fields = build_region_fields(globe, geometry.region_id, self._params)
+            self._fields = build_region_fields(globe, geometry.region_id, self._region_params.upsample)
             self._grid = self._fields.grid
             self._rebuild_images()
+        self.update()
+
+    def set_params(self, params: RegionParams) -> None:
+        """Replace the region tuning; a region on screen is refined again with it.
+
+        Only what changed is rebuilt: new river params keep the refined fields.
+        """
+        if params == self._region_params:
+            return
+        old, self._region_params = self._region_params, params
+        if self._geometry is None:
+            return
+        if params.upsample != old.upsample:
+            zoom, pan = self._zoom, self._pan.copy()
+            self.set_region(self._geometry, self._globe)
+            self._zoom, self._pan = zoom, pan
+        else:
+            self._rivers = None
         self.update()
 
     def clear_region(self) -> None:
@@ -274,7 +292,7 @@ class RegionView(QWidget):
         if self._fields is None or self._globe is None or not self._overlay_visible.get("rivers"):
             return {}
         if self._rivers is None:
-            self._rivers = build_region_rivers(self._fields, self._globe, self._river_params)
+            self._rivers = build_region_rivers(self._fields, self._globe, self._region_params.rivers)
         return {"rivers": self._rivers.paths}
 
     def _on_land(self, key: str, ecef: np.ndarray) -> np.ndarray:
@@ -290,7 +308,7 @@ class RegionView(QWidget):
         if cached is not None and np.array_equal(cached[0], ecef):
             return cached[1]
         f = self._fields
-        reach = (int(self._params.water_spread_texels) + 2) * f.grid.texel_spacing_rad(f.tex_size)
+        reach = (int(self._region_params.upsample.water_spread_texels) + 2) * f.grid.texel_spacing_rad(f.tex_size)
         moved = snap_to_land(f, ecef, reach)
         self._land_positions[key] = (ecef.copy(), moved)
         return moved

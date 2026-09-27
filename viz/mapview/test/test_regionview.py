@@ -10,6 +10,7 @@ from PySide6.QtGui import QImage  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from region.geometry import RegionGeometry  # noqa: E402
+from region.test.conftest import synthetic_globe  # noqa: E402, F401  (fixture)
 from viz.mapview.mapview import MapWindow  # noqa: E402
 from viz.mapview.regionview import RegionView, _RegionProjector  # noqa: E402
 
@@ -154,3 +155,28 @@ def test_towns_draw_only_in_the_region_view(app):
     _draw_towns(painter, _StubGlobe(), region_proj)     # type: ignore[arg-type]
     painter.end()
     assert world_proj.on_land_calls == 0 and region_proj.on_land_calls == 1
+
+
+def test_new_params_refine_the_region_again(app, synthetic_globe):  # noqa: F811
+    """Refinement params rebuild the fields (keeping the view); river params
+    only drop the cached rivers."""
+    import dataclasses
+    from region.params import RegionParams
+
+    view = RegionView()
+    view.resize(600, 400)
+    view.set_region(RegionGeometry(40, synthetic_globe.antimeridian), synthetic_globe)
+    view.set_overlay_visible("rivers", True)
+    view._refined_features()
+    fields = view.fields
+    assert fields is not None and view._rivers is not None
+    _painted(view).zoom_toward(300.0, 200.0, 3.0)
+
+    base = RegionParams()
+    view.set_params(dataclasses.replace(base, rivers=dataclasses.replace(base.rivers, tributary_min_flow=10.0)))
+    assert view.fields is fields and view._rivers is None
+
+    view.set_params(dataclasses.replace(base, upsample=dataclasses.replace(base.upsample, n_cols=6)))
+    assert view.fields is not fields and view.fields is not None
+    assert view.fields.grid.n_cols == 6
+    assert view.zoom == pytest.approx(3.0)

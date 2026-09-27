@@ -11,6 +11,7 @@ from core.world import World
 from viz.mapview.mapview import MapWindow
 from viz.params_dialog import ParamsDialog
 from realmgen.builder import RealmParams, RealmPipeline
+from region.params import RegionParams
 from worldgen import GlobePipeline, GlobeParams
 
 
@@ -21,6 +22,10 @@ class AppParams:
     )
     realm: RealmParams = dataclasses.field(
         default_factory=RealmParams, metadata={"label": "Realm / Settlements"}
+    )
+    # View-side only: never changes the world build (see AppPipeline).
+    region: RegionParams = dataclasses.field(
+        default_factory=RegionParams, metadata={"label": "Region"}
     )
 
 
@@ -71,6 +76,7 @@ def main() -> None:
 
         params = dataclasses.replace(params, globe=globe_params)
         current_params[0] = params
+        window.set_region_params(params.region)
 
         world = World(globe_params.mesh, seed=globe_params.seed, progress=_progress)
         ctx = BuildContext(world=world, progress=_progress)
@@ -97,6 +103,7 @@ def main() -> None:
         pipeline.load(data, BuildContext(world=world))
         current_params[0] = params
         current_pipeline[0] = pipeline
+        window.set_region_params(params.region)
 
         window.set_globe(world)
         pipeline.apply_display(window, debug=debug)
@@ -113,7 +120,13 @@ def main() -> None:
         dialog = AppParamsDialog(current_params[0], parent=window)
         if dialog.exec() == AppParamsDialog.DialogCode.Accepted:
             new_params = dialog.result_params(current_params[0])
-            if new_params != current_params[0]:
+            if new_params == current_params[0]:
+                return
+            # Region params only re-refine the view; anything else rebuilds the world.
+            if dataclasses.replace(new_params, region=current_params[0].region) == current_params[0]:
+                current_params[0] = new_params
+                window.set_region_params(new_params.region)
+            else:
                 _build_and_apply(new_params)
 
     def _save() -> None:

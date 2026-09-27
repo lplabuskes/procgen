@@ -13,6 +13,7 @@ replaced.
 - `region/upsample.py` — `build_region_fields`: the refinement itself, plus `conservation_report`
 - `region/display.py` — RGBA layer textures for the viewer (reuses the world map's palettes)
 - `region/rivers.py` — `build_region_rivers`: the world's rivers re-routed over the refined relief, plus sub-threshold tributaries
+- `region/params.py` — `RegionParams`: `upsample` (`RegionUpsampleParams`) + `rivers` (`RegionRiverParams`), the **Region** section of the params dialog
 - `viz/mapview/regionview.py` — `RegionView`, the zoomed-in widget
 
 ---
@@ -172,8 +173,16 @@ pins it.
 `n_cols`, `tex_size`, `relief_factor`, `slope_reference`, `slope_floor`,
 `max_relief_km`, `orographic_gain`, `lapse_rate_c_per_km`,
 `water_relief_depth_km`, `refine_water_masks`, `water_spread_texels`,
-`biome_smoothing`, `octaves`, `lacunarity`, `persistence`, `nyquist_safety` — a
-`paramclass`, so it is dialog-ready.
+`biome_smoothing`, `octaves`, `lacunarity`, `persistence`, `nyquist_safety`.
+
+### `RegionParams` (`region/params.py`)
+Groups both tiers of region tuning — `upsample` ("Detail refinement") and
+`rivers` ("Rivers") — as `AppParams.region`, the **Region** section of the params
+dialog. It is view-side only: `main.py` hands it to
+`MapWindow.set_region_params` → `RegionView.set_params`, and a dialog edit that
+changes nothing but `region` never rebuilds the world. On screen, a new
+`upsample` re-refines the region (keeping zoom and pan); a new `rivers` only
+drops the cached rivers, which rebuild on the next paint.
 
 ### `RegionFields`
 `region_id`, `geometry`, `grid`, `tex_size`, `positions (M,T,T,3)`,
