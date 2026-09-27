@@ -80,6 +80,7 @@ Stage reference docs (read the relevant one before working on a stage):
 - [docs/core.md](docs/core.md) — `core/` infrastructure (pipeline, channels, params, display, mesh cache, mesh data structures)
 - [docs/viz.md](docs/viz.md) — `viz/` layer (MapWidget, MapWindow, projections, antimeridian, registry adapter, MeshViewer, ParamsDialog, color_stops)
 - [docs/region.md](docs/region.md) — `region/` regional maps (cubed-sphere cells, hex grid, global sampling, conserving upsample, RegionView)
+- [docs/local.md](docs/local.md) — `localmap/` local maps (one regional hex refined onto its own hex grid; villages planned)
 - [docs/worldgen.md](docs/worldgen.md) — `worldgen/builder.py`, `main.py`, pipeline stage contract
 - [docs/elevation.md](docs/elevation.md) — `worldgen/geology/`
 - [docs/climate.md](docs/climate.md) — `worldgen/climate/`

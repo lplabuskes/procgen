@@ -33,11 +33,12 @@ from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
-from region.sampling import GlobalSampler, anchor_means
+from region.sampling import anchor_means
 from region.smooth import FaceFanField
 
 if TYPE_CHECKING:
     from core.mesh import PolygonMesh
+    from region.source import Located, ParentSource
     from region.upsample import RegionUpsampleParams
     from worldgen.resources.builder import ResourcesParams
 
@@ -46,15 +47,13 @@ if TYPE_CHECKING:
 class RefineContext:
     """What every field's refinement needs: the texels, their anchors and the relief.
 
-    All per-texel arrays are flat ``(P,)`` over the region's hex textures, which
-    have shape ``shape`` = ``(M, T, T)``.
+    All per-texel arrays are flat ``(P,)`` over the child tier's hex textures,
+    which have shape ``shape`` = ``(M, T, T)``; ``source`` is the parent tier
+    (the globe for a region, a region for a local map).
     """
 
-    mesh: "PolygonMesh"
-    sampler: GlobalSampler
-    faces: np.ndarray
-    u: np.ndarray
-    v: np.ndarray
+    source: "ParentSource"
+    located: "Located"
     anchors: np.ndarray
     weights: np.ndarray          # in-hexagon inclusion weight
     n_anchors: int
@@ -66,11 +65,14 @@ class RefineContext:
     land: np.ndarray             # refined dry ground
     anchor_land: np.ndarray      # the anchor texel is dry on the globe
 
+    def has(self, key: str) -> bool:
+        return self.source.has(key)
+
     def coarse(self, key: str) -> np.ndarray:
-        return self.sampler.sample(self.mesh.face_textures[key], self.faces, self.u, self.v)[:, 0]
+        return self.source.coarse(key, self.located)[:, 0]
 
     def anchor(self, key: str) -> np.ndarray:
-        return self.sampler.anchor_values(self.mesh.face_textures[key], self.anchors)[:, 0]
+        return self.source.anchor_values(key, self.located)[:, 0]
 
     def conserve_unit(self, values: np.ndarray, targets: np.ndarray, mask: np.ndarray, rounds: int = 8) -> np.ndarray:
         """:meth:`conserve_mean` for a field bounded to ``[0, 1]``: clipping after
@@ -79,6 +81,26 @@ class RefineContext:
         out = np.clip(values, 0.0, 1.0)
         for _ in range(rounds):
             out = np.clip(self.conserve_mean(out, targets, mask), 0.0, 1.0)
+        return self._settle_unit(out, targets, mask)
+
+    def _settle_unit(self, values: np.ndarray, targets: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        """Close what the alternation left open, exactly and inside ``[0, 1]``.
+
+        A group still short of its target moves every texel toward 1 in
+        proportion to its headroom; one still over scales down.  Needed where a
+        target sits at (or near) 1 — the parent tier's own clip saturated it —
+        which the scale-and-clip rounds only approach geometrically.
+        """
+        w = self.weights * mask
+        means, counts = anchor_means(values, self.anchors, w, self.n_anchors)
+        m = means[self.anchors, 0]
+        t = np.clip(targets, 0.0, 1.0)
+        ok = counts[self.anchors] > 0.0
+        up = ok & (m < t)
+        down = ok & (m > t) & (m > 1e-12)
+        out = values.copy()
+        out[up] = 1.0 - (1.0 - values[up]) * (1.0 - t[up]) / (1.0 - m[up])
+        out[down] = values[down] * t[down] / m[down]
         return out
 
     def conserve_mean(self, values: np.ndarray, targets: np.ndarray, mask: np.ndarray) -> np.ndarray:
@@ -138,13 +160,15 @@ def refine_resources(
     params: "RegionUpsampleParams",
     world: Optional["ResourcesParams"],
     fertility_exponent: float,
-    danger: Optional[np.ndarray],
+    danger: Optional[tuple[np.ndarray, Optional[np.ndarray]]],
 ) -> dict[str, np.ndarray]:
-    """The refined resource, rural-density and danger textures present on the globe."""
+    """The refined resource, rural-density and danger textures present on the parent.
+
+    ``danger`` is :meth:`ParentSource.danger`'s ``(base, targets)``, or None.
+    """
     from region.upsample import _box_filter
     from worldgen.resources.builder import ResourcesParams
     world = world or ResourcesParams()
-    tex = ctx.mesh.face_textures
     shape = ctx.shape
     out: dict[str, np.ndarray] = {}
 
@@ -156,7 +180,7 @@ def refine_resources(
 
     # ── forest density: the treeline on the refined relief ───────────────────
     forest = None
-    if "forest_density" in tex:
+    if ctx.has("forest_density"):
         gp = world.forest_density
         falloff = max(float(gp.treeline_falloff_km), 1e-3)
 
@@ -170,7 +194,7 @@ def refine_resources(
 
     # ── fertility: valley floors richer, steep slopes poorer ─────────────────
     fertility = None
-    if "fertility" in tex:
+    if ctx.has("fertility"):
         coarse = ctx.coarse("fertility")
         valley = np.clip(1.0 - float(params.fertility_valley_gain) * (ctx.elevation - ctx.elev_coarse), 0.5, 1.5)
         mod = valley * (1.0 - float(params.fertility_slope_penalty) * slope_n)
@@ -187,7 +211,7 @@ def refine_resources(
         out["fertility"] = texture(fertility)
 
     # ── dominant crop: reclassified from the refined fields ──────────────────
-    if fertility is not None and "dominant_crop" in tex and "temperature" in textures and "precipitation" in textures:
+    if fertility is not None and ctx.has("dominant_crop") and "temperature" in textures and "precipitation" in textures:
         from worldgen.resources.crops import classify_crops
         k = int(params.biome_smoothing)
         out["dominant_crop"] = classify_crops(
@@ -199,7 +223,7 @@ def refine_resources(
         )
 
     # ── rural density: each global texel's people over its refined land ──────
-    if "rural_density" in tex:
+    if ctx.has("rural_density"):
         target = ctx.anchor("rural_density")
         fert = fertility if fertility is not None else np.ones(len(target))
         w = np.where(ctx.land, np.clip(fert, 0.0, 1.0) ** float(fertility_exponent), 0.0)
@@ -214,14 +238,16 @@ def refine_resources(
 
     # ── danger: continuous across faces, nudged by terrain ───────────────────
     if danger is not None:
-        base = _danger_field(ctx.mesh, danger)(ctx.positions)
+        base, targets = danger
         # Area-averaged like the biome's climate: texel slope is too noisy to read
         # alone.  Water scores like open flat ground, so a shore is not a seam.
         score = np.where(ctx.land, slope_n + (forest if forest is not None else 0.0), 0.0)
         score = _box_filter(score.reshape(*shape, 1), int(params.biome_smoothing)).reshape(-1)
         nudged = base * np.exp(float(params.danger_terrain_gain) * score)
-        means, _ = anchor_means(base, ctx.anchors, ctx.weights, ctx.n_anchors)
-        nudged = ctx.conserve_mean(nudged, means[ctx.anchors, 0], np.ones(len(base), dtype=bool))
+        if targets is None:
+            means, _ = anchor_means(base, ctx.anchors, ctx.weights, ctx.n_anchors)
+            targets = means[ctx.anchors, 0]
+        nudged = ctx.conserve_mean(nudged, targets, np.ones(len(base), dtype=bool))
         out["danger"] = texture(nudged)
 
     return out

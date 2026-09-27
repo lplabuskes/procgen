@@ -10,6 +10,7 @@ replaced.
 - `region/geometry.py` — equal-area cubed-sphere cells; sphere ↔ local `(s, t)` maps
 - `region/grid.py` — `RegionHexGrid`: hexagons + their over-hanging textures inside one cell
 - `region/sampling.py` — `GlobalSampler`: read global face textures at arbitrary sphere points; anchor assignment
+- `region/source.py` — `ParentSource`: what a refinement reads from the tier above — `GlobalSource` (the globe, for a region) and `RegionSource` (a region, for a local map; see [local.md](local.md))
 - `region/upsample.py` — `build_region_fields`: the refinement itself, plus `conservation_report`
 - `region/resources.py` — `refine_resources`: forest, fertility, crops, rural density and danger, run inside `build_region_fields`
 - `region/smooth.py` — `FaceFanField`: a continuous, non-negative surface with exact per-face means through per-face values (danger)
@@ -102,6 +103,14 @@ over-hang weighted out.
 
 `build_region_fields(globe, region_id, params) → RegionFields`. Seeded with
 `world.seed XOR region_id`, so a region always regenerates identically.
+
+The work is done by the tier-agnostic `refine_fields(source, positions, weights,
+…)`, which reads the tier above only through a `ParentSource` (`locate`,
+`coarse`, `anchor_values`, `slope`, `danger`); `build_region_fields` wraps it
+with a `GlobalSource`. The local tier runs the same function over a region.
+The water masks also write back `filled_height` (the lake surface on lake
+texels, the refined ground elsewhere, as on the globe) so the tier below can
+refine the region's lakes.
 
 Per field: **bilinear coarse read → detail → per-anchor correction.**
 
@@ -199,9 +208,11 @@ and `PopulationParams.fertility_exponent`).
   `(1 − fertility_valley_gain · anomaly)` × `(1 − fertility_slope_penalty ·
   slope)` × the forest penalty's change. Both are densities of *land*: conserved
   over the texels dry on both maps, with conservation and the `[0, 1]` clip
-  alternated (`conserve_unit`). Residuals: fertility at float noise; forest
-  ~1e-4 mean, a few hundredths at worst on coastal texels whose bilinear read
-  crossed the water. Water keeps the globe's aquatic fertility; water the
+  alternated (`conserve_unit`), then closed exactly by one headroom step (a
+  group still short moves each texel toward 1 in proportion to `1 − v`, one
+  still over scales down) — needed where a target sits at or near 1, which the
+  alternation only approaches geometrically. Residuals: both at float noise.
+  Water keeps the globe's aquatic fertility; water the
   refined shoreline added takes it from the neighbouring water.
 - **Rural density** redistributes each global texel's people over its refined
   land by the rural model's own weight `fertility ** γ` — the design doc's hard

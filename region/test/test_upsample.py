@@ -8,8 +8,8 @@ from region.upsample import (
     build_region_fields,
     conservation_report,
     flood_to_level,
-    global_slope,
 )
+from region.source import global_slope
 
 REGION_ID = 40   # the region conftest carves its lake into: coast *and* a lake
 BIOME_REGION = 20  # region 40's synthetic climate is all one biome; this one is not
