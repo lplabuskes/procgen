@@ -9,11 +9,14 @@ here once, so the two views cannot drift apart.
 
 Marker sizes, line widths and wind/current arrow lengths all scale with
 ``projector.zoom``: the world map's magnification, or, for a region, the world
-map zoom that would show the same ground at the same pixel size.
+map zoom that would show the same ground at the same pixel size.  Rivers are
+the exception: each map level sizes them on its own scale (``view_zoom``), and a
+local map draws them at their physical width (``px_per_km``).
 """
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Protocol, Sequence
+import weakref
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt
@@ -32,6 +35,18 @@ class OverlayProjector(Protocol):
     @property
     def zoom(self) -> float:
         """World-map-equivalent magnification, for sizing markers and lines."""
+        ...
+
+    @property
+    def view_zoom(self) -> float:
+        """Magnification relative to this view's own unzoomed extent (the world
+        map's zoom on the world map, the region view's own zoom in a region)."""
+        ...
+
+    @property
+    def px_per_km(self) -> Optional[float]:
+        """Screen pixels per km of ground when this view draws rivers at their
+        physical width (a local map); None to size them cartographically."""
         ...
 
     @property
@@ -89,7 +104,7 @@ def draw_overlays(
     if on("rivers"):
         world_rivers = globe.get_feature("rivers") or []
         paths = refined.get("rivers", world_rivers)
-        _draw_rivers(painter, paths, _max_river_flow(world_rivers), proj)
+        _draw_rivers(painter, paths, _max_river_flow(world_rivers), proj, _discharge_scale(globe))
     if on("lakes"):
         _draw_lakes(painter, globe, proj)
     if globe.has_feature("winds"):
@@ -435,14 +450,53 @@ def _max_river_flow(river_paths: Sequence) -> float:
     return float(max((entry[1][-1] for entry in river_paths if len(entry[1]) > 0), default=0.0))
 
 
-def _draw_rivers(painter: QPainter, river_paths: Sequence, max_flow: float, proj: OverlayProjector) -> None:
-    """River polylines, width by flow relative to ``max_flow`` (the world's
-    largest, so a refined river is drawn at the width its world river is)."""
+# World → m³/s per unit of river flow (a mean over the precipitation textures).
+_DISCHARGE_SCALES: "weakref.WeakKeyDictionary[World, float]" = weakref.WeakKeyDictionary()
+
+
+def _discharge_scale(globe: "World") -> float:
+    scale = _DISCHARGE_SCALES.get(globe)
+    if scale is None:
+        from worldgen.hydrology.discharge import discharge_per_flow_unit
+        scale = _DISCHARGE_SCALES[globe] = discharge_per_flow_unit(globe.mesh)
+    return scale
+
+
+# The narrowest line a local map draws a river with, so a river narrower than a
+# pixel still shows as a hairline.
+_MIN_PHYSICAL_RIVER_PX = 1.0
+# Region-view rivers are drawn this much heavier than the world map's.
+_REGION_RIVER_SCALE = 1.5
+
+
+def _river_widths(flows: np.ndarray, max_flow: float, proj: OverlayProjector, discharge_scale: float) -> np.ndarray:
+    """Screen width (px) of each river segment carrying ``flows``; ≤ 1 px is not drawn.
+
+    On a local map (``proj.px_per_km`` set) a river is as wide as its channel:
+    discharge from the flow, width from the hydraulic geometry, at least a
+    hairline.  Elsewhere the width is cartographic — by flow relative to the
+    world's largest river, on this map level's own zoom — so the world map and a
+    region at the same zoom draw the same line weights.
+    """
+    flows = np.asarray(flows, dtype=np.float64)
+    px_per_km = proj.px_per_km
+    if px_per_km is not None and discharge_scale > 0.0:
+        from worldgen.hydrology.discharge import channel_width_km
+        width = channel_width_km(flows * discharge_scale) * px_per_km
+        return np.maximum(width, _MIN_PHYSICAL_RIVER_PX + 1e-3)
+    min_width, max_width = 0.5, 4.0
+    scale = _REGION_RIVER_SCALE if proj.regional else 1.0
+    return (min_width + (max_width - min_width) * (flows / max_flow) ** 0.5) * proj.view_zoom ** 0.5 * scale
+
+
+def _draw_rivers(
+    painter: QPainter, river_paths: Sequence, max_flow: float, proj: OverlayProjector, discharge_scale: float = 0.0,
+) -> None:
+    """River polylines, width by flow (see :func:`_river_widths`). ``max_flow``
+    is the world's largest, so a refined river keeps its world river's weight."""
     if not river_paths or max_flow <= 0.0:
         return
     painter.setBrush(Qt.BrushStyle.NoBrush)
-    min_width, max_width = 0.5, 4.0
-    zoom_scale = proj.zoom ** 0.5
 
     active_pen: QPen | None = None
     for entry in river_paths:
@@ -451,15 +505,17 @@ def _draw_rivers(painter: QPainter, river_paths: Sequence, max_flow: float, proj
         if len(positions) < 2:
             continue
         sx0, sy0, sx1, sy1, keep = proj.segments(positions[:-1], positions[1:])
+        widths = _river_widths(flows, max_flow, proj, discharge_scale)
         for j in np.flatnonzero(keep):
             if in_lake is not None and j < len(in_lake) and in_lake[j]:
                 continue  # segment lies inside a lake — hide it
-            w = (min_width + (max_width - min_width) * (flows[j] / max_flow) ** 0.5) * zoom_scale
+            w = float(widths[j])
             if w <= 1.0:
                 continue
             if active_pen is None or abs(active_pen.widthF() - w) > 0.05:
                 active_pen = QPen(QColor(100, 180, 255, 200))
                 active_pen.setWidthF(w)
+                active_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
                 painter.setPen(active_pen)
             _line(painter, float(sx0[j]), float(sy0[j]), float(sx1[j]), float(sy1[j]))
 

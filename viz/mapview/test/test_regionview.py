@@ -197,3 +197,30 @@ def test_new_params_refine_the_region_again(app, synthetic_globe):  # noqa: F811
         assert towns.refined[here].all()
     finally:
         synthetic_globe.remove_feature("towns")
+
+
+class _WidthProjector:
+    def __init__(self, view_zoom=1.0, px_per_km=None, regional=False):
+        self.view_zoom = view_zoom
+        self.px_per_km = px_per_km
+        self.regional = regional
+
+
+def test_river_widths_are_cartographic_on_the_levels_own_zoom():
+    from viz.mapview.overlays import _river_widths
+    flows = np.array([100.0, 10_000.0])
+    base = _river_widths(flows, 10_000.0, _WidthProjector(1.0), 1.0)  # type: ignore[arg-type]
+    assert base[1] == pytest.approx(4.0)
+    zoomed = _river_widths(flows, 10_000.0, _WidthProjector(4.0), 1.0)  # type: ignore[arg-type]
+    assert np.allclose(zoomed, 2.0 * base)
+    region = _river_widths(flows, 10_000.0, _WidthProjector(1.0, regional=True), 1.0)  # type: ignore[arg-type]
+    assert np.allclose(region, 1.5 * base)
+
+
+def test_river_widths_are_physical_on_a_local_map():
+    from viz.mapview.overlays import _river_widths
+    from worldgen.hydrology.discharge import channel_width_km
+    flows = np.array([1.0, 1e5])
+    w = _river_widths(flows, 1e5, _WidthProjector(1.0, px_per_km=10.0), 2.0)  # type: ignore[arg-type]
+    assert w[1] == pytest.approx(float(channel_width_km(2e5)) * 10.0)
+    assert w[0] > 1.0  # too narrow for a pixel — still drawn as a hairline

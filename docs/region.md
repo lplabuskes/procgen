@@ -494,7 +494,11 @@ features; the towns need no override, as their refined positions are in the
 world feature itself. Widths and thresholds still come from the *world*
 feature — river width against the world's largest flow, route width against the
 world's largest route flow and the world's median as the drawing cut — so a
-re-routed river or road is drawn exactly as heavily as on the world map. The **Towns** overlay draws only here (`regional` on the
+re-routed road is drawn exactly as heavily as on the world map. **River widths
+are the exception**: they scale by the region view's *own* zoom (`view_zoom`),
+so a region at 1× draws 1.5× the line weights the world map does at 1×, and a local
+map draws each river at its physical channel width (`px_per_km`; see
+[viz.md](viz.md)). The **Towns** overlay draws only here (`regional` on the
 projector; see [realm_towns.md](realm_towns.md)), and cities are drawn to stand
 apart from the towns: 1.5× their world-map size (and at least twice the
 largest town dot), opaque, and ringed dark-then-white.

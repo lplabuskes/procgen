@@ -27,6 +27,7 @@ from region.roads import RegionRoads, build_region_roads
 from region.towns import refine_region_towns
 from realmgen.towns.types import Towns
 from region.upsample import RegionFields, build_region_fields
+from worldgen.hydrology.discharge import EARTH_RADIUS_KM
 
 if TYPE_CHECKING:
     from core.world import World
@@ -473,6 +474,8 @@ class RegionView(QWidget):
                 painter, self._globe, self._overlay_visible,
                 _RegionProjector(
                     self._geometry, x0, y0, size, transform, self._equivalent_zoom(size, W), self._on_land,
+                    view_zoom=self._zoom,
+                    px_per_km=self._px_per_rad(size) / EARTH_RADIUS_KM if self._local is not None else None,
                 ),
                 refined=self._refined_features(),
             )
@@ -554,11 +557,14 @@ class RegionView(QWidget):
         a region look like the world map zoomed in to the same place.  The
         world map at zoom 1 spans 2π of longitude across the view's width.
         """
+        return self._px_per_rad(size) / (W / (2.0 * np.pi))
+
+    def _px_per_rad(self, size: float) -> float:
+        """Screen pixels per radian of ground across the cell, as drawn now."""
         assert self._geometry is not None
         ends = self._geometry.local_to_ecef(np.array([0.0, 1.0]), np.array([0.5, 0.5]))
         side_rad = float(np.arccos(np.clip(np.dot(ends[0], ends[1]), -1.0, 1.0)))
-        px_per_rad = size * self._zoom / max(side_rad, 1e-9)
-        return px_per_rad / (W / (2.0 * np.pi))
+        return size * self._zoom / max(side_rad, 1e-9)
 
     def _view_transform(self) -> QTransform:
         """Zoom about the footprint centre, then pan — applied after the rotation."""
@@ -807,16 +813,27 @@ class _RegionProjector:
         self, geometry: RegionGeometry, x0: float, y0: float, size: float,
         transform: QTransform, zoom: float,
         on_land: Optional[Callable[[str, np.ndarray], np.ndarray]] = None,
+        view_zoom: float = 1.0, px_per_km: Optional[float] = None,
     ) -> None:
         self._geometry = geometry
         self._x0, self._y0, self._size = x0, y0, size
         self._t = transform
         self._zoom = zoom
         self._on_land = on_land
+        self._view_zoom = view_zoom
+        self._px_per_km = px_per_km
 
     @property
     def zoom(self) -> float:
         return self._zoom
+
+    @property
+    def view_zoom(self) -> float:
+        return self._view_zoom
+
+    @property
+    def px_per_km(self) -> Optional[float]:
+        return self._px_per_km
 
     @property
     def regional(self) -> bool:

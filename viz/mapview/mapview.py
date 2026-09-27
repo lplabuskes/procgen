@@ -175,6 +175,14 @@ class _WorldProjector:
         return self._w._zoom
 
     @property
+    def view_zoom(self) -> float:
+        return self._w._zoom
+
+    @property
+    def px_per_km(self) -> Optional[float]:
+        return None
+
+    @property
     def regional(self) -> bool:
         return False
 
