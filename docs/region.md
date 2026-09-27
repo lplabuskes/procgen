@@ -106,13 +106,29 @@ over-hang weighted out.
 
 The work is done by the tier-agnostic `refine_fields(source, positions, weights,
 …)`, which reads the tier above only through a `ParentSource` (`locate`,
-`coarse`, `anchor_values`, `slope`, `danger`); `build_region_fields` wraps it
+`coarse`, `anchor_values`, `stencil`/`interpolate`, `slope`, `danger`); `build_region_fields` wraps it
 with a `GlobalSource`. The local tier runs the same function over a region.
 The water masks also write back `filled_height` (the lake surface on lake
 texels, the refined ground elsewhere, as on the globe) so the tier below can
 refine the region's lakes.
 
 Per field: **bilinear coarse read → detail → per-anchor correction.**
+
+The correction for elevation, temperature and precipitation is **smooth**
+(`conserve_smooth`). A per-anchor constant would leave a step at every
+parent-texel edge, because a bilinear read never averages back to its own
+texels where the parent is curved. That step was obvious in hillshade one tier
+down, since the region is far more curved than the globe. Instead the
+per-anchor residuals are read back through the same bilinear stencil as the
+parent (`ParentSource.interpolate`) and added. This runs for several
+over-relaxed passes (`_RELAXATION = 1.4`), until the well-covered anchors'
+worst residual is 1% of where it started, usually 7–8 passes. Then the exact
+constant step (`conserve_additive` / `conserve_multiplicative`) closes the
+last bit, plus the slivers of parent texels a map's rim cuts off. The
+stencil's corners go through an *owner* map (the anchor owning each parent
+texel's position), so a texture's over-hang reads its neighbour's residual
+and the correction stays continuous across hex and face seams. Precipitation
+runs in log space, so it stays positive.
 
 **Elevation is the only field with a noise stream.** Everything else is a
 physical consequence of the refined relief, or is copied verbatim. Independent
@@ -123,9 +139,9 @@ bands on the contours instead.
 
 | field | detail | conserved |
 |---|---|---|
-| `elevation` | slope-proportional fBm — **the only noise source** | additively |
-| `temperature` | lapse rate on the refined relief | additively |
-| `precipitation` | orographic response to the refined relief (`orographic_gain`, per km) | multiplicatively (stays positive) |
+| `elevation` | slope-proportional fBm — **the only noise source** | additively, smooth |
+| `temperature` | lapse rate on the refined relief | additively, smooth |
+| `precipitation` | orographic response to the refined relief (`orographic_gain`, per km) | multiplicatively, smooth (stays positive) |
 | `biome` | reclassified from the **area-averaged** refined climate | derived |
 | `ocean_mask`, `lake_mask` | re-flooded to the global water surface over the refined relief | surface exact; shoreline refined |
 | `forest_density` | treeline on the refined elevation | multiplicatively, over land |

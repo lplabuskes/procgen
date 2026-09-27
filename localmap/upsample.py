@@ -53,8 +53,8 @@ class LocalUpsampleParams(RegionUpsampleParams):
     max_relief_km: float = _f(0.6, label="Max detail relief (km)", min=0.0, max=5.0)
     # About one regional texel (~4.5 km / ~365 m).
     water_spread_texels: int = _f(12, label="Shoreline spread (texels)", min=0, max=32)
-    # The per-regional-texel conservation step leaves ~4.5 km blocks in the
-    # climate; the classifiers average over about one of them.
+    # The classifiers average the climate over about one regional texel (~4.5 km),
+    # so biome edges follow the region's pattern rather than local relief speckle.
     biome_smoothing: int = _f(13, label="Biome climate averaging (texels)", min=0, max=31)
     # Local slopes over ~365 m texels are far steeper than the region's.
     slope_saturation: float = _f(

@@ -1,6 +1,9 @@
 """Local rivers and roads: the region's re-routed again over the local terrain."""
 import numpy as np
 import pytest
+from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import connected_components
+from scipy.spatial import KDTree
 
 from localmap.rivers import build_local_rivers
 from localmap.roads import build_local_roads
@@ -65,10 +68,16 @@ def test_no_region_rivers_no_local_rivers(local, region, globe):
 
 @pytest.fixture(scope="module")
 def road_input(local):
-    """A regional road straight across the local map, over dry land, and a sea
-    leg far outside it."""
+    """A regional road straight across the local map between two points of one
+    dry landmass, and a sea leg far outside it."""
     water = (local.textures["ocean_mask"][..., 0] > 0.5) | (local.textures["lake_mask"][..., 0] > 0.5)
     dry = local.positions[local.domain & ~water]
+    # Keep the largest connected stretch of dry texels, so a way through exists.
+    spacing = local.grid.texel_spacing_rad(local.tex_size)
+    pairs = KDTree(dry).query_pairs(1.6 * spacing, output_type="ndarray")
+    graph = coo_matrix((np.ones(len(pairs)), (pairs[:, 0], pairs[:, 1])), shape=(len(dry), len(dry)))
+    _, label = connected_components(graph, directed=False)
+    dry = dry[label == np.bincount(label).argmax()]
     s, t, _ = local.geometry.ecef_to_local(dry)
     a = dry[np.argmin(s)]
     b = dry[np.argmax(s)]

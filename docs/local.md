@@ -79,7 +79,7 @@ differently (a ~1/T effect).
 A `RegionUpsampleParams` subclass with local defaults: `n_cols=16`,
 `slope_reference=0.03`, `slope_floor=0.03`, `max_relief_km=0.6`,
 `water_spread_texels=12` (about one regional texel), `biome_smoothing=13`
-(about one regional texel, to hide the per-texel conservation blocks), and
+(about one regional texel, so biome edges follow the region's pattern), and
 `slope_saturation=0.1`. The relief numbers are a first cut and not yet tuned
 (seed 4 region 34: ~50 m std of land relief against the parent texel).
 

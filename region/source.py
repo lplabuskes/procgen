@@ -52,6 +52,22 @@ def global_slope(mesh: "PolygonMesh", elevation_tex: np.ndarray) -> np.ndarray:
     return slope[..., None].astype(np.float64)
 
 
+def _bilinear_stencil(
+    tiles: np.ndarray, x: np.ndarray, y: np.ndarray, h: int, w: int, owner: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Corners and weights of a bilinear read at continuous texel coords ``(x, y)``
+    of ``(N, h, w)`` textures, corners mapped through ``owner`` (flat texel → anchor)."""
+    x0 = np.clip(np.floor(x).astype(np.int64), 0, max(w - 2, 0))
+    y0 = np.clip(np.floor(y).astype(np.int64), 0, max(h - 2, 0))
+    x1 = np.minimum(x0 + 1, w - 1)
+    y1 = np.minimum(y0 + 1, h - 1)
+    fx, fy = x - x0, y - y0
+    base = tiles * (h * w)
+    idx = np.stack([base + y0 * w + x0, base + y0 * w + x1, base + y1 * w + x0, base + y1 * w + x1], axis=1)
+    weights = np.stack([(1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy], axis=1)
+    return owner[idx], weights
+
+
 @dataclass
 class Located:
     """Child texels located on the parent: their anchors plus whatever the
@@ -84,6 +100,25 @@ class ParentSource:
         """``(P, C)`` float64 value of each anchor texel in texture ``key``."""
         raise NotImplementedError
 
+    def stencil(self, loc: Located) -> tuple[np.ndarray, np.ndarray]:
+        """``((P, 4) anchors, (P, 4) weights)``: the bilinear read of a per-anchor field.
+
+        The four corners are the parent texels a bilinear read touches, each
+        replaced by the anchor that *owns* that texel's position — so a
+        texture's over-hang reads its neighbour's values and the read stays
+        continuous across hex / face seams.
+        """
+        raise NotImplementedError
+
+    def interpolate(
+        self, per_anchor: np.ndarray, loc: Located,
+        stencil: Optional[tuple[np.ndarray, np.ndarray]] = None,
+    ) -> np.ndarray:
+        """``(P, C)`` smooth read of an ``(n_anchors, C)`` per-anchor field (see :meth:`stencil`)."""
+        idx, w = stencil if stencil is not None else self.stencil(loc)
+        values = np.asarray(per_anchor, dtype=np.float64).reshape(self.n_anchors, -1)
+        return np.einsum("pk,pkc->pc", w, values[idx])
+
     def slope(self, loc: Located) -> np.ndarray:
         """``(P,)`` surface slope (km/km) of the parent's elevation."""
         raise NotImplementedError
@@ -112,9 +147,35 @@ class GlobalSource(ParentSource):
         self._hw = (gh, gw)
         self.n_anchors = n_faces * gh * gw
         self.spacing_rad = float(np.sqrt(np.mean(mesh.face_areas))) / max(gw - 1, 1)
+        self._owner: Optional[np.ndarray] = None
 
     def has(self, key: str) -> bool:
         return key in self.mesh.face_textures
+
+    def _owners(self) -> np.ndarray:
+        """``(n_anchors,)`` the anchor owning each global texel's position."""
+        if self._owner is None:
+            n, (gh, gw) = self.mesh.face_textures["elevation"].shape[0], self._hw
+            frames = self.mesh.face_tangent_frames()
+            u_axes, v_axes, u_off, v_off, u_rng, v_rng = (
+                np.asarray(f, dtype=np.float64) for f in frames[:6]
+            )
+            centres = np.asarray(self.mesh._tangent_centroids, dtype=np.float64)
+            u = np.linspace(0.0, 1.0, gw)[None, None, :, None]
+            v = np.linspace(0.0, 1.0, gh)[None, :, None, None]
+            pos = (
+                centres[:, None, None, :]
+                + (u_off[:, None, None, None] + u * u_rng[:, None, None, None]) * u_axes[:, None, None, :]
+                + (v_off[:, None, None, None] + v * v_rng[:, None, None, None]) * v_axes[:, None, None, :]
+            ).reshape(n * gh * gw, 3)
+            self._owner = self.locate(pos).anchors
+        return self._owner
+
+    def stencil(self, loc: Located) -> tuple[np.ndarray, np.ndarray]:
+        faces, u, v = loc.data
+        gh, gw = self._hw
+        x, y = GlobalSampler._texel_coords(u, v, gh, gw)
+        return _bilinear_stencil(faces, x, y, gh, gw, self._owners())
 
     def locate(self, points: np.ndarray) -> Located:
         faces, u, v = self.sampler.locate(points)
@@ -157,9 +218,17 @@ class RegionSource(ParentSource):
         self.n_anchors = len(grid) * t * t
         self.spacing_rad = grid.texel_spacing_rad(t)
         self._slope: Optional[np.ndarray] = None
+        self._owner: Optional[np.ndarray] = None
 
     def has(self, key: str) -> bool:
         return key in self.fields.textures
+
+    def stencil(self, loc: Located) -> tuple[np.ndarray, np.ndarray]:
+        if self._owner is None:
+            self._owner = self.locate(self.fields.positions.reshape(-1, 3)).anchors
+        hexes, x, y = loc.data
+        t = self.fields.tex_size
+        return _bilinear_stencil(hexes, x, y, t, t, self._owner)
 
     def locate(self, points: np.ndarray) -> Located:
         f = self.fields

@@ -9,8 +9,9 @@ field the recipe is
 3. force each global texel's average back to its exact global value.
 
 Step 3 is what makes the result legal: downsampling a region by averaging
-recovers the global map bit-for-bit (see :func:`conservation_report`).  It is a
-per-anchor constant nudge, so it costs the detail nothing visually.
+recovers the global map bit-for-bit (see :func:`conservation_report`).  For the
+continuous fields it is a *smooth* correction (:func:`conserve_smooth`) rather
+than a per-anchor constant, so it leaves no steps at the parent's texel edges.
 
 **Elevation is the only field with a noise stream of its own.**  Every other
 field is a physical consequence of the refined relief, or is copied verbatim.
@@ -368,6 +369,60 @@ def conserve_multiplicative(
     return values * scale
 
 
+# Over-relaxation of each smoothing pass: a bilinear read gives back between
+# ~1/4 (checkerboard residuals) and all (smooth ones) of a residual, so a step a
+# bit larger than 1 converges ~1.5x faster without overshooting either end.
+_RELAXATION = 1.4
+
+
+def conserve_smooth(
+    values: np.ndarray, source: ParentSource, loc: Located, targets: np.ndarray,
+    weights: np.ndarray, *, multiplicative: bool = False,
+    tolerance: float = 0.01, max_iterations: int = 16,
+) -> np.ndarray:
+    """:func:`conserve_additive` / :func:`conserve_multiplicative` with a *smooth* correction.
+
+    A per-anchor constant leaves a step at every parent-texel edge wherever the
+    groups need different nudges — which is everywhere the parent is curved, as
+    a bilinear read never averages back to its own texels.  Instead the
+    per-anchor residuals are read back smoothly, like the parent itself
+    (:meth:`ParentSource.interpolate`), and added; each pass removes about
+    half of what is left.  Passes stop once the well-covered anchors' worst
+    residual is ``tolerance`` of where it started, and the exact per-anchor
+    step then fixes the crumbs — plus the slivers of parent texels a map's rim
+    cuts off, which a smooth field can barely reach.  Multiplicative mode works
+    in log space, so the field stays positive.
+    """
+    anchors, n = loc.anchors, source.n_anchors
+    tgt = np.zeros((n, targets.shape[1]))
+    tgt[anchors] = targets
+    stencil = source.stencil(loc)
+    v = np.asarray(values, dtype=np.float64).copy()
+    kept, first, best = v, None, np.inf
+    for _ in range(max_iterations):
+        means, counts = anchor_means(v, anchors, weights, n)
+        live = counts > 0.0
+        if multiplicative:
+            ok = live[:, None] & (means > 1e-12) & (tgt > 1e-12)
+            resid = np.where(ok, np.log(np.clip(tgt, 1e-12, None) / np.clip(means, 1e-12, None)), 0.0)
+            resid = np.clip(resid, -3.0, 3.0)
+        else:
+            resid = np.where(live[:, None], tgt - means, 0.0)
+        well_covered = counts >= 0.5 * counts.max(initial=0.0)
+        worst = float(np.abs(resid[well_covered]).max(initial=0.0))
+        if worst >= best:            # a pass stopped helping: keep the best so far
+            v = kept
+            break
+        kept, best = v, worst
+        first = worst if first is None else first
+        if worst <= tolerance * first:
+            break
+        step = _RELAXATION * source.interpolate(resid, loc, stencil)
+        v = v * np.exp(step) if multiplicative else v + step
+    finish = conserve_multiplicative if multiplicative else conserve_additive
+    return finish(v, anchors, targets, weights, n)
+
+
 # ── the pipeline ─────────────────────────────────────────────────────────────
 
 
@@ -525,9 +580,7 @@ def refine_fields(
         0.0, float(params.max_relief_km),
     ) * _shallow_water_damping(water.depth(elev_coarse[:, 0]), params)
     elevation = elev_coarse + (noise * amplitude)[:, None]
-    elevation = conserve_additive(
-        elevation, anchors, source.anchor_values("elevation", loc), weights, n_anchors
-    )
+    elevation = conserve_smooth(elevation, source, loc, source.anchor_values("elevation", loc), weights)
     textures["elevation"] = elevation.reshape(m, tex_size, tex_size, 1).astype(np.float32)
 
     # The sub-grid relief, in km: the one signal every derived field reads from.
@@ -548,8 +601,8 @@ def refine_fields(
         # global temperature stage.
         delta_elev = np.maximum(elevation[:, 0], 0.0) - np.maximum(elev_coarse[:, 0], 0.0)
         temperature = t_coarse - float(params.lapse_rate_c_per_km) * delta_elev[:, None]
-        temperature = conserve_additive(
-            temperature, anchors, source.anchor_values("temperature", loc), weights, n_anchors
+        temperature = conserve_smooth(
+            temperature, source, loc, source.anchor_values("temperature", loc), weights
         )
         textures["temperature"] = temperature.reshape(
             m, tex_size, tex_size, t_coarse.shape[1]
@@ -564,9 +617,9 @@ def refine_fields(
         p_coarse = source.coarse("precipitation", loc)                      # (P, K)
         wobble = np.clip(float(params.orographic_gain) * relief_anomaly, -0.9, 0.9)
         precipitation = p_coarse * (1.0 + wobble)[:, None]
-        precipitation = conserve_multiplicative(
-            precipitation, anchors, source.anchor_values("precipitation", loc),
-            weights, n_anchors,
+        precipitation = conserve_smooth(
+            precipitation, source, loc, source.anchor_values("precipitation", loc),
+            weights, multiplicative=True,
         )
         textures["precipitation"] = np.maximum(precipitation, 0.0).reshape(
             m, tex_size, tex_size, p_coarse.shape[1]
