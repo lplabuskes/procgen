@@ -76,7 +76,6 @@ class CurrentsResult:
     advected_insolation: np.ndarray   # (N,) W/m² post-advection (for inspection)
 
 
-
 def _wind_stress_curl(face_centroids: np.ndarray,
                       face_adjacency: Sequence[Sequence[int]],
                       annual_winds: np.ndarray) -> np.ndarray:

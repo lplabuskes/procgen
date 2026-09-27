@@ -1,7 +1,7 @@
 """Zonal Hadley/Ferrel/Polar surface winds with seasonal ITCZ shift."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import Sequence, TYPE_CHECKING
 
 import numpy as np
 

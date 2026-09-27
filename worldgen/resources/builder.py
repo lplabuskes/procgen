@@ -438,7 +438,6 @@ class ResourcesBuilder(Stage):
 
             reg.add_hover(_minerals_hover)
 
-        if debug:
             rare_bio_by_face: dict = {}
             if world.has_feature("rare_bio"):
                 from worldgen.resources.rare_bio import RARE_BIO_NAMES

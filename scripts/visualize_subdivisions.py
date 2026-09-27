@@ -98,7 +98,7 @@ def _healpix_centers(nside):
     p = np.arange(npix)
 
     theta = np.empty(npix)
-    phi   = np.empty(npix)
+    phi = np.empty(npix)
 
     # North polar cap  (rings 1 … Nside-1, 4·ring pixels each)
     mn = p < ncap
@@ -107,18 +107,18 @@ def _healpix_centers(nside):
         ir = ((1 + np.sqrt(1 + 2 * ip)) / 2).astype(int)   # 1-indexed ring
         ik = ip - 2 * ir * (ir - 1)                         # pixel within ring
         theta[mn] = np.arccos(1 - ir**2 / (3 * nside**2))
-        phi[mn]   = (ik + 0.5) * np.pi / (2 * ir)
+        phi[mn] = (ik + 0.5) * np.pi / (2 * ir)
 
     # Equatorial belt  (rings Nside … 3·Nside, 4·Nside pixels each)
     me = ~mn & (p < npix - ncap)
     if me.any():
-        ip  = p[me] - ncap
-        ir  = (ip // (4 * nside) + nside).astype(int)       # ring number
-        ik  = ip % (4 * nside)
+        ip = p[me] - ncap
+        ir = (ip // (4 * nside) + nside).astype(int)       # ring number
+        ik = ip % (4 * nside)
         # kshift=1 (unshifted) when (ir+nside) is odd, 0 (half-shift) when even
-        ks  = ((ir + nside) % 2).astype(float)
+        ks = ((ir + nside) % 2).astype(float)
         theta[me] = np.arccos((2 * nside - ir) * 2 / (3 * nside))
-        phi[me]   = (ik + 0.5 * (1 - ks)) * np.pi / (2 * nside)
+        phi[me] = (ik + 0.5 * (1 - ks)) * np.pi / (2 * nside)
 
     # South polar cap  (mirror of north)
     ms = p >= npix - ncap
@@ -127,7 +127,7 @@ def _healpix_centers(nside):
         ir = ((1 + np.sqrt(1 + 2 * ip)) / 2).astype(int)
         ik = ip - 2 * ir * (ir - 1)
         theta[ms] = np.arccos(-(1 - ir**2 / (3 * nside**2)))
-        phi[ms]   = (ik + 0.5) * np.pi / (2 * ir)
+        phi[ms] = (ik + 0.5) * np.pi / (2 * ir)
 
     cx = np.sin(theta) * np.cos(phi)
     cy = np.sin(theta) * np.sin(phi)
@@ -138,7 +138,7 @@ def _healpix_centers(nside):
 def healpix_cell(x, y, z, nside=2):
     """Assign points to the nearest HEALPix pixel center (Voronoi on sphere)."""
     centers = _healpix_centers(nside)                                # (npix, 3)
-    pts     = np.stack([x.ravel(), y.ravel(), z.ravel()], axis=1)   # (N, 3)
+    pts = np.stack([x.ravel(), y.ravel(), z.ravel()], axis=1)   # (N, 3)
     return np.argmax(pts @ centers.T, axis=1).reshape(x.shape)
 
 
@@ -147,7 +147,7 @@ def healpix_cell(x, y, z, nside=2):
 # ─────────────────────────────────────────────────────────────────
 
 def _make_palette(n, seed=42):
-    rng  = np.random.default_rng(seed)
+    rng = np.random.default_rng(seed)
     hues = np.linspace(0, 1, n, endpoint=False)
     sats = np.where(np.arange(n) % 2 == 0, 0.80, 0.50)
     vals = np.where(np.arange(n) % 2 == 0, 0.88, 0.68)
@@ -157,25 +157,25 @@ def _make_palette(n, seed=42):
 
 def _edge_mask(cells):
     """True where a pixel borders a cell with a different index."""
-    d_up    = np.pad(cells[:-1] != cells[1:],  ((1, 0), (0, 0)))
-    d_down  = np.pad(cells[1:]  != cells[:-1], ((0, 1), (0, 0)))
-    d_left  = np.pad(cells[:, :-1] != cells[:, 1:],  ((0, 0), (1, 0)))
-    d_right = np.pad(cells[:, 1:]  != cells[:, :-1], ((0, 0), (0, 1)))
+    d_up = np.pad(cells[:-1] != cells[1:], ((1, 0), (0, 0)))
+    d_down = np.pad(cells[1:] != cells[:-1], ((0, 1), (0, 0)))
+    d_left = np.pad(cells[:, :-1] != cells[:, 1:], ((0, 0), (1, 0)))
+    d_right = np.pad(cells[:, 1:] != cells[:, :-1], ((0, 0), (0, 1)))
     return d_up | d_down | d_left | d_right
 
 
 def _area_stats(cells, n_cells, lat_grid):
     """Fraction of sphere area per cell (weighted by cos(lat))."""
     weights = np.cos(np.radians(lat_grid))
-    total   = weights.sum()
-    fracs   = np.array([weights[cells == i].sum() / total for i in range(n_cells)])
-    ideal   = 1.0 / n_cells
+    total = weights.sum()
+    fracs = np.array([weights[cells == i].sum() / total for i in range(n_cells)])
+    ideal = 1.0 / n_cells
     return fracs.min() / ideal, fracs.max() / ideal   # min/max relative to ideal
 
 
 def render(ax, cells, n_cells, title, lat_grid):
     palette = _make_palette(n_cells)
-    rgb     = palette[cells].copy()
+    rgb = palette[cells].copy()
     rgb[_edge_mask(cells)] = 0.0   # black borders
 
     ax.imshow(rgb, extent=[-180, 180, -90, 90], origin='lower',
@@ -206,7 +206,7 @@ def main():
     x_g, y_g, z_g = lonlat_to_xyz(lon_g, lat_g)
 
     n_cube = 3    # 6·N² = 24 regions
-    nside  = 2    # 12·Nside² = 48 regions
+    nside = 2    # 12·Nside² = 48 regions
 
     print('Computing cubed-sphere cells …')
     cs = cubed_sphere_cell_ea(x_g, y_g, z_g, n=n_cube)

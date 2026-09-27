@@ -20,6 +20,7 @@ from realmgen.scoring.builder import (
     SituationalValueWeightParams,
 )
 
+
 def _norm(v) -> np.ndarray:
     v = np.asarray(v, dtype=np.float64)
     return v / np.linalg.norm(v)
