@@ -13,7 +13,7 @@ map zoom that would show the same ground at the same pixel size.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, Mapping, Protocol
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol, Sequence
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt
@@ -69,14 +69,21 @@ class OverlayProjector(Protocol):
 
 
 def draw_overlays(
-    painter: QPainter, globe: "World", visible: Mapping[str, bool], proj: OverlayProjector
+    painter: QPainter, globe: "World", visible: Mapping[str, bool], proj: OverlayProjector,
+    refined: Mapping[str, Any] | None = None,
 ) -> None:
-    """Draw every visible overlay the globe has data for, in a fixed stacking order."""
+    """Draw every visible overlay the globe has data for, in a fixed stacking order.
+
+    ``refined`` holds a view's own finer version of a feature, in the world
+    feature's form, drawn in its place (the region view's rivers).
+    """
     def on(name: str) -> bool:
         return bool(visible.get(name)) and globe.has_feature(name)
 
     if on("rivers"):
-        _draw_rivers(painter, globe, proj)
+        world_rivers = globe.get_feature("rivers") or []
+        paths = (refined or {}).get("rivers", world_rivers)
+        _draw_rivers(painter, paths, _max_river_flow(world_rivers), proj)
     if on("lakes"):
         _draw_lakes(painter, globe, proj)
     if globe.has_feature("winds"):
@@ -384,14 +391,16 @@ def _draw_currents(painter: QPainter, globe: "World", proj: OverlayProjector) ->
         _line(painter, float(sx0[i]), float(sy0[i]), float(sx1[i]), float(sy1[i]))
 
 
-def _draw_rivers(painter: QPainter, globe: "World", proj: OverlayProjector) -> None:
-    river_paths = globe.get_feature("rivers")
-    if not river_paths:
+def _max_river_flow(river_paths: Sequence) -> float:
+    return float(max((entry[1][-1] for entry in river_paths if len(entry[1]) > 0), default=0.0))
+
+
+def _draw_rivers(painter: QPainter, river_paths: Sequence, max_flow: float, proj: OverlayProjector) -> None:
+    """River polylines, width by flow relative to ``max_flow`` (the world's
+    largest, so a refined river is drawn at the width its world river is)."""
+    if not river_paths or max_flow <= 0.0:
         return
     painter.setBrush(Qt.BrushStyle.NoBrush)
-    max_flow = max((entry[1][-1] for entry in river_paths if len(entry[1]) > 0), default=0.0)
-    if max_flow <= 0.0:
-        return
     min_width, max_width = 0.5, 4.0
     zoom_scale = proj.zoom ** 0.5
 

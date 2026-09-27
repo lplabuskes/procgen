@@ -388,40 +388,10 @@ class RiverGenerator:
         # Channel nodes: enough tree flow, not open sea. Lake interiors stay in
         # (rivers route through exorheic lakes, flagged in_lake downstream).
         is_channel = (tree_accum >= threshold) & ~ocean
-
-        # main_child[d] = the channel node draining into d (via prx) with the
-        # largest tree accumulation — the main-stem continuation upstream of d.
-        # Ascending iteration leaves the max as the final writer. A chain stops
-        # where its node is not its receiver's main_child; channel leaves
-        # (main_child == -1) are the headwaters.
-        ch = np.where(is_channel)[0]
-        ch_sorted = ch[np.argsort(tree_accum[ch], kind="stable")]
-        main_child = np.full(n, -1, dtype=np.int64)
-        for node in ch_sorted.tolist():
-            d = prx[node]
-            if d >= 0 and is_channel[d]:
-                main_child[d] = node
-
-        sources = ch[main_child[ch] == -1]
-
-        rivers: List[River] = []
-        for src in sources.tolist():
-            path = [src]
-            cur = src
-            for _ in range(n):
-                d = prx[cur]
-                if d < 0:
-                    break
-                path.append(d)
-                if ocean[d] or endo[d]:
-                    break
-                if main_child[d] != cur:   # merged into a larger stem here
-                    break
-                cur = d
-            if len(path) < 4:              # drop stubs (matches old >2-segment rule)
-                continue
-            rivers.append(self._river_from_path(path, tree_accum))
-        return rivers
+        return [
+            self._river_from_path(path, tree_accum)
+            for path in main_stem_paths(prx, tree_accum, is_channel, ocean | endo)
+        ]
 
     def _river_from_path(self, path: List[int], flow_accum: np.ndarray) -> River:
         """Assemble a River from an ordered list of node indices (headwater→mouth)."""
@@ -516,3 +486,53 @@ class RiverGenerator:
         """(N, H, W, 1) uint8 lake mask; 1 inside a lake. Call after generate()."""
         res = self.resolution
         return self._lake_mask.reshape(self.n_faces, res, res, 1).astype(np.uint8)
+
+
+def main_stem_paths(
+    receiver: np.ndarray,
+    accum: np.ndarray,
+    is_channel: np.ndarray,
+    is_stop: np.ndarray,
+    min_nodes: int = 4,
+) -> List[List[int]]:
+    """Main-stem (Hack) decomposition of a single-receiver channel tree.
+
+    ``receiver[i]`` is node ``i``'s downstream node (-1 at an outlet), ``accum``
+    the flow along those edges, ``is_channel`` the nodes carrying enough of it to
+    be drawn and ``is_stop`` the sinks a river ends on (sea, endorheic lakes, …).
+    Returns node paths headwater → mouth: each runs from a channel leaf down to a
+    sink or to the confluence where it meets a larger stem (that node included),
+    so no two paths share an interior node. Paths shorter than ``min_nodes`` are
+    dropped as stubs.
+    """
+    n = len(receiver)
+    # main_child[d] = the channel node draining into d with the largest
+    # accumulation — the main-stem continuation upstream of d. Ascending
+    # iteration leaves the max as the final writer. A chain stops where its node
+    # is not its receiver's main_child; channel leaves (main_child == -1) are the
+    # headwaters.
+    ch = np.where(is_channel)[0]
+    ch_sorted = ch[np.argsort(accum[ch], kind="stable")]
+    main_child = np.full(n, -1, dtype=np.int64)
+    for node in ch_sorted.tolist():
+        d = receiver[node]
+        if d >= 0 and is_channel[d]:
+            main_child[d] = node
+
+    paths: List[List[int]] = []
+    for src in ch[main_child[ch] == -1].tolist():
+        path = [src]
+        cur = src
+        for _ in range(n):
+            d = int(receiver[cur])
+            if d < 0:
+                break
+            path.append(d)
+            if is_stop[d]:
+                break
+            if main_child[d] != cur:   # merged into a larger stem here
+                break
+            cur = d
+        if len(path) >= min_nodes:     # drop stubs (matches old >2-segment rule)
+            paths.append(path)
+    return paths

@@ -15,6 +15,7 @@ from viz.mapview.legend import draw_legend, legend_size
 from viz.mapview.overlays import draw_overlays
 from region.geometry import RegionGeometry
 from region.grid import RegionHexGrid
+from region.rivers import RegionRiverParams, RegionRivers, build_region_rivers
 from region.upsample import RegionFields, RegionUpsampleParams, build_region_fields
 
 if TYPE_CHECKING:
@@ -49,6 +50,10 @@ class RegionView(QWidget):
         self._grid: Optional[RegionHexGrid] = None
         self._fields: Optional[RegionFields] = None
         self._params = RegionUpsampleParams()
+        self._river_params = RegionRiverParams()
+        # Rivers refined over this region's relief; built the first time the
+        # Rivers overlay is shown here.
+        self._rivers: Optional[RegionRivers] = None
         self._globe: Optional["World"] = None
         # The world map's active scheme: its name and spec (colour fn, texture, recipe).
         self._layer: Optional[str] = None
@@ -81,6 +86,7 @@ class RegionView(QWidget):
         self._globe = globe
         self._grid = RegionHexGrid(geometry, int(self._params.n_cols))
         self._fields = None
+        self._rivers = None
         self._hex_images = []
         self._land_positions = {}
         self._zoom = 1.0
@@ -97,6 +103,7 @@ class RegionView(QWidget):
         self._globe = None
         self._grid = None
         self._fields = None
+        self._rivers = None
         self._hex_images = []
         self._land_positions = {}
         self._cell_layout = None
@@ -250,6 +257,7 @@ class RegionView(QWidget):
                 _RegionProjector(
                     self._geometry, x0, y0, size, transform, self._equivalent_zoom(size, W), self._on_land,
                 ),
+                refined=self._refined_features(),
             )
             painter.restore()
 
@@ -259,6 +267,15 @@ class RegionView(QWidget):
                 painter, legend[0], legend[1],
                 fx0 - legend_gap - legend_w, fy0 + footprint, H - 2.0 * margin,
             )
+
+    def _refined_features(self) -> dict:
+        """Overlay features this region draws finer than the world map: the rivers,
+        re-routed over the refined relief with their sub-threshold tributaries."""
+        if self._fields is None or self._globe is None or not self._overlay_visible.get("rivers"):
+            return {}
+        if self._rivers is None:
+            self._rivers = build_region_rivers(self._fields, self._globe, self._river_params)
+        return {"rivers": self._rivers.paths}
 
     def _on_land(self, key: str, ecef: np.ndarray) -> np.ndarray:
         """``ecef`` moved off the refined water (``snap_to_land``), cached per feature.

@@ -12,6 +12,8 @@ Public API:
                         pixels_per_face) -> None
     accumulate_flow(receiver1, receiver2, frac1, frac2, eff,
                     precip_weights=None) -> flow_accum
+    priority_flood_tree(elevations, outlet_mask, nbr_indptr, nbr_flat)
+        -> (parent, rank)        # carving variant, used by region/rivers.py
 
 `priority_flood` and `accumulate_flow` are the two sequential per-node loops that
 dominate hydrology runtime; both are JIT-compiled with numba when available and
@@ -388,3 +390,129 @@ def accumulate_flow(
     if _HAVE_NUMBA:
         return _accumulate_flow_njit(receiver1, receiver2, frac1, frac2, order, flow_accum)
     return _accumulate_flow_py(receiver1, receiver2, frac1, frac2, order, flow_accum)
+
+
+def _priority_flood_tree_py(
+    elevations: np.ndarray,
+    outlet_mask: np.ndarray,
+    nbr_indptr: np.ndarray,
+    nbr_flat: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Pure-Python carving flood (numba fallback)."""
+    n = len(elevations)
+    parent = np.full(n, -1, dtype=np.int64)
+    rank = np.full(n, -1, dtype=np.int64)
+    visited = np.zeros(n, dtype=bool)
+    heap: List[Tuple[float, int]] = []
+    for idx in np.where(outlet_mask)[0].tolist():
+        heapq.heappush(heap, (float(elevations[idx]), idx))
+        visited[idx] = True
+    count = 0
+    while heap:
+        _, key = heapq.heappop(heap)
+        rank[key] = count
+        count += 1
+        for nb in nbr_flat[nbr_indptr[key]:nbr_indptr[key + 1]].tolist():
+            if visited[nb]:
+                continue
+            visited[nb] = True
+            parent[nb] = key
+            heapq.heappush(heap, (float(elevations[nb]), nb))
+    return parent, rank
+
+
+if _HAVE_NUMBA:
+    @njit(cache=True)
+    def _priority_flood_tree_njit(elevations, outlet_mask, nbr_indptr, nbr_flat):
+        """JIT carving flood; same ``(priority, index)`` heap order as ``heapq``."""
+        n = elevations.shape[0]
+        elev64 = elevations.astype(np.float64)
+        parent = np.full(n, -1, dtype=np.int64)
+        rank = np.full(n, -1, dtype=np.int64)
+        visited = np.zeros(n, dtype=np.bool_)
+        hp = np.empty(n, dtype=np.float64)       # heap priorities
+        hi = np.empty(n, dtype=np.int64)         # heap node indices
+        hsize = 0
+
+        for idx in range(n):
+            if outlet_mask[idx]:
+                hp[hsize] = elev64[idx]
+                hi[hsize] = idx
+                c = hsize
+                while c > 0:
+                    par = (c - 1) // 2
+                    if hp[par] < hp[c] or (hp[par] == hp[c] and hi[par] <= hi[c]):
+                        break
+                    hp[par], hp[c] = hp[c], hp[par]
+                    hi[par], hi[c] = hi[c], hi[par]
+                    c = par
+                hsize += 1
+                visited[idx] = True
+
+        count = 0
+        while hsize > 0:
+            key = hi[0]
+            hsize -= 1
+            hp[0] = hp[hsize]
+            hi[0] = hi[hsize]
+            c = 0
+            while True:
+                lc = 2 * c + 1
+                rc = 2 * c + 2
+                sm = c
+                if lc < hsize and (hp[lc] < hp[sm] or (hp[lc] == hp[sm] and hi[lc] < hi[sm])):
+                    sm = lc
+                if rc < hsize and (hp[rc] < hp[sm] or (hp[rc] == hp[sm] and hi[rc] < hi[sm])):
+                    sm = rc
+                if sm == c:
+                    break
+                hp[sm], hp[c] = hp[c], hp[sm]
+                hi[sm], hi[c] = hi[c], hi[sm]
+                c = sm
+            rank[key] = count
+            count += 1
+
+            for p in range(nbr_indptr[key], nbr_indptr[key + 1]):
+                nb = nbr_flat[p]
+                if visited[nb]:
+                    continue
+                visited[nb] = True
+                parent[nb] = key
+                hp[hsize] = elev64[nb]
+                hi[hsize] = nb
+                c = hsize
+                while c > 0:
+                    par = (c - 1) // 2
+                    if hp[par] < hp[c] or (hp[par] == hp[c] and hi[par] <= hi[c]):
+                        break
+                    hp[par], hp[c] = hp[c], hp[par]
+                    hi[par], hi[c] = hi[c], hi[par]
+                    c = par
+                hsize += 1
+
+        return parent, rank
+
+
+def priority_flood_tree(
+    elevations: np.ndarray,
+    outlet_mask: np.ndarray,
+    nbr_indptr: np.ndarray,
+    nbr_flat: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Carving Priority-Flood: a drainage tree that breaches depressions.
+
+    Floods inward from ``outlet_mask`` in order of *raw* elevation and records,
+    for every other node, the node that reached it (``parent``) and the order it
+    was settled in (``rank``). Water drains node → parent, so every node reaches
+    an outlet. A depression is entered at its spill point and, being lower,
+    flooded next — down its lowest route — so the tree drains it by carving
+    along that route instead of across a filled flat, where the epsilon tilt of
+    :func:`priority_flood` routes straight lines toward the spill.
+
+    Reversed ``rank`` is a topological order (every node settles after its
+    parent), for accumulating flow along the tree. Same CSR adjacency as
+    :func:`priority_flood`.
+    """
+    if _HAVE_NUMBA:
+        return _priority_flood_tree_njit(elevations, outlet_mask, nbr_indptr, nbr_flat)
+    return _priority_flood_tree_py(elevations, outlet_mask, nbr_indptr, nbr_flat)

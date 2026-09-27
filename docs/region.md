@@ -12,6 +12,7 @@ replaced.
 - `region/sampling.py` — `GlobalSampler`: read global face textures at arbitrary sphere points; anchor assignment
 - `region/upsample.py` — `build_region_fields`: the refinement itself, plus `conservation_report`
 - `region/display.py` — RGBA layer textures for the viewer (reuses the world map's palettes)
+- `region/rivers.py` — `build_region_rivers`: the world's rivers re-routed over the refined relief, plus sub-threshold tributaries
 - `viz/mapview/regionview.py` — `RegionView`, the zoomed-in widget
 
 ---
@@ -179,6 +180,60 @@ pins it.
 `in_hex (M,T,T)`, `anchors (M,T,T)`, `faces (M,T,T)` (owning global face), `face_uv (M,T,T,2)` (texture coords on it), `textures {name: (M,T,T,C)}`,
 `detail_octaves`, `texel_area_km2`.
 
+## Rivers (`region/rivers.py`)
+
+`build_region_rivers(fields, globe, params) → RegionRivers` (`rivers`,
+`tributaries`, `paths` = both), each a `(positions, flows, in_lake)` polyline in
+the world `"rivers"` feature's form. Qt-free and deterministic; ~0.6–0.9 s per
+region at defaults.
+
+Everything runs on one uniform raster over the local frame, at the regional
+texel spacing (`raster_texels`) and `margin` past the cell. It reads the refined
+elevation / masks / precipitation from the nearest hex texel (reaching through
+the over-hang), and the global fields bilinearly beyond the textures.
+
+**World rivers are re-routed, not replaced.** Each stretch of a world river on
+the raster becomes the least-cost 8-connected path through a *corridor* of
+`corridor_global_texels` (1 global texel) either side of the world polyline —
+the positional uncertainty the global grid leaves. A node costs
+`exp(valley_seeking · anomaly / σ)`, the anomaly being refined minus coarse
+elevation and σ its spread in the corridor, so the river takes the refined
+valley floor on a plain as much as in the mountains, but can never change
+valley or basin. Stems are routed first (descending flow). A river whose world
+mouth is on the raster ends on the cheapest sink near that mouth — its
+re-routed stem, a lake, or the *refined* sea — found in a widened disc of two
+corridors around the mouth, since the stem itself moved by up to a corridor.
+Flow is copied from the nearest world vertex (running max, so monotonic).
+
+**Tributaries.** The refined relief is drained by a *carving* Priority-Flood
+(`worldgen.hydrology.routing.priority_flood_tree`) whose outlets are the sea,
+lakes, the re-routed rivers and the raster rim: each node drains to the node
+that flooded it. The ordinary filled-DEM + steepest-descent routing drew
+dead-straight lines across every filled depression in the sub-grid noise (the
+epsilon tilt picks the route, not the terrain); carving drains a depression
+down its lowest route instead. Flow is accumulated precipitation-weighted **in
+the world's flow units** (a node weighs `precip / global mean precip ×` its
+share of a global texel's area), so `tributary_min_flow` (default 40) reads on
+the scale of the world's `river_flow_threshold` (default 500). Channels are cut
+into main stems with the global stage's own
+`worldgen.hydrology.rivers.main_stem_paths`, each ending on the river, lake or
+coast it drains into; stubs under `tributary_min_nodes` are dropped.
+
+Both kinds are Laplacian-smoothed (`smoothing_iterations`); a segment is flagged
+`in_lake` (hidden) when both its ends are on refined water, with land runs of up
+to 2 nodes between water treated as water so a lake crossing is not drawn as
+dashes over the refined shoreline's speckle.
+
+Known limits: a tributary flowing in across the raster rim only has the
+catchment inside the raster behind it; neighbouring regions route their shared
+edge independently (each is shown alone, so no seam is visible); and a
+tributary's accumulated flow can occasionally exceed the world threshold where
+the world's D-infinity split sent that water elsewhere.
+
+### `RegionRiverParams`
+`raster_texels`, `margin`, `corridor_global_texels`, `valley_seeking`,
+`tributary_min_flow`, `tributary_min_nodes`, `smoothing_iterations`.
+
 ## Display (`region/display.py`)
 
 The region view offers exactly the world map's layers (its registered color
@@ -244,9 +299,13 @@ anything beyond 0.15 of the cell or on the far side; overlays are drawn in
 screen space (upright markers, pixel widths) and clipped to the rotated cell.
 They size themselves by the *equivalent world zoom* — the world-map zoom that
 would show this ground at the same pixel scale — so a region looks like the
-world map zoomed to the same place. Overlays are world-resolution data: rivers
-and borders are not refined, so they follow the global paths rather than the
-refined terrain. The **Towns** overlay draws only here (`regional` on the
+world map zoomed to the same place. Overlays are world-resolution data — borders
+follow the global paths rather than the refined terrain — except **rivers**:
+the first time the Rivers overlay is shown in a region, `build_region_rivers`
+runs and its paths are handed to `draw_overlays(..., refined={"rivers": …})` in
+place of the world feature (cached until the region changes). Widths still
+scale against the *world's* largest flow, so a re-routed river is drawn as wide
+as on the world map and tributaries at the thin end. The **Towns** overlay draws only here (`regional` on the
 projector; see [realm_towns.md](realm_towns.md)), and cities are drawn to stand
 apart from the towns: 1.5× their world-map size (and at least twice the
 largest town dot), opaque, and ringed dark-then-white.
@@ -262,5 +321,7 @@ features keep their global positions.
 
 ## Not yet implemented
 
-Hydrology, resources, cost surfaces and realmgen inside a region; region
+Lakes as a regional hydrology product (the lake overlay is still the world's
+polygons; the refined lake mask is drawn by the layers), resources, cost
+surfaces and realmgen inside a region; region
 serialization; locals. See the design doc's phase list.

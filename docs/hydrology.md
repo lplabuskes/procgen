@@ -43,6 +43,10 @@ End-to-end pipeline:
 
 `extract_rivers_graph` is the live extractor; the earlier bilinear-gradient tracer has been removed.
 
+`main_stem_paths(receiver, accum, is_channel, is_stop, min_nodes)` is that decomposition as a module-level function over any single-receiver tree; the region tier reuses it for its tributaries (`region/rivers.py`).
+
+`routing.priority_flood_tree` is a *carving* Priority-Flood: flooding in raw-elevation order, it returns each node's flooding parent (the drainage tree) and settle rank (reversed = topological order). It breaches depressions along their lowest route rather than filling them. The global stage does not use it; the region tier does.
+
 Rivers route continuously through exorheic lakes (`in_lake` flags let the renderer hide those segments); endorheic basins are true sinks.
 
 Outputs: `generate() → list[River]`, `get_lake_polygons()`, `get_filled_height_texture()`, `get_lake_mask_texture()`.
