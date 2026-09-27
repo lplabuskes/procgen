@@ -173,11 +173,11 @@ class DangerBuilder(Stage):
     ) -> None:
         if not debug:
             return
-        from worldgen.danger.display import danger_color, danger_legend_entries
+        from worldgen.danger.display import DANGER_RECIPE, danger_color, danger_legend_entries
 
         reg.add_scheme(
             "Danger", danger_color,
-            legend=("gradient", danger_legend_entries()),
+            legend=("gradient", danger_legend_entries()), recipe=DANGER_RECIPE,
         )
 
         if world.has_feature("danger_sources"):

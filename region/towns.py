@@ -11,7 +11,9 @@ saved with the world):
   site, and stays on dry land in its own face;
 - the site weight is the stage's own (:func:`site_log_weight_and_kind`), with the
   river and confluence flags taken from the region's re-routed stream network
-  (:mod:`region.rivers`) and the coast from the refined shoreline;
+  (:mod:`region.rivers`), the route flag from its re-routed roads
+  (:mod:`region.roads`), the coast from the refined shoreline and the rural
+  density from the refined one;
 - a town keeps its kind, and a river town (on a river or stream) or port lands on
   the drawn river or the refined coast whenever one is in reach;
 - spacing to every other town and city is kept, against wherever they stand now.
@@ -37,6 +39,7 @@ from realmgen.towns.placement import SPACING_EXPONENT, site_log_weight_and_kind
 from realmgen.towns.types import TOWN_PORT, TOWN_RIVER, Towns
 from region.geometry import ecef_to_cell
 from region.rivers import RegionRivers
+from region.roads import RegionRoads
 from region.sampling import GlobalSampler
 from region.upsample import RegionFields
 
@@ -103,8 +106,16 @@ class _Sites:
     mine: np.ndarray         # (P,) bool
 
 
+def _route_points(roads: RegionRoads, step: float) -> Optional[np.ndarray]:
+    """Points along the region's roads — re-routed or straight — for the route flag."""
+    straight = [np.stack([np.asarray(a), np.asarray(b)]) for a, b, _ in roads.undrawn]
+    sea = [np.stack([np.asarray(a), np.asarray(b)]) for a, b, _ in roads.sea]
+    return densify_polylines([*roads.polylines, *sea, *straight], step)
+
+
 def _region_sites(
     fields: RegionFields, rivers: RegionRivers, globe: "World", sc, river_threshold_factor: float,
+    roads: Optional[RegionRoads] = None,
 ) -> _Sites:
     ocean = fields.textures.get("ocean_mask")
     lake = fields.textures.get("lake_mask")
@@ -115,7 +126,9 @@ def _region_sites(
     pos = fields.positions[dry]
     face = fields.faces[dry]
     mesh = globe.mesh
-    if RURAL_DENSITY_TEXTURE in mesh.face_textures:
+    if RURAL_DENSITY_TEXTURE in fields.textures:
+        rho = fields.textures[RURAL_DENSITY_TEXTURE][..., 0][dry].astype(np.float64)
+    elif RURAL_DENSITY_TEXTURE in mesh.face_textures:
         uv = fields.face_uv[dry]
         rho = GlobalSampler(mesh).sample(mesh.face_textures[RURAL_DENSITY_TEXTURE], face, uv[:, 0], uv[:, 1])[:, 0]
     else:
@@ -128,7 +141,8 @@ def _region_sites(
         coast=(~water & _neighbour_any(water))[dry],
         river=_near(_tree(_river_points(rivers, 0.5 * spacing)), pos, snap) & ~conf,
         confluence=conf,
-        route=_near(_tree(sc.route_points), pos, sc.route_radius),
+        route=_near(_tree(sc.route_points if roads is None else _route_points(roads, 0.5 * sc.route_radius)),
+                    pos, sc.route_radius),
         mine=_near(_tree(sc.mineral_points), pos, sc.mining_radius),
     )
 
@@ -141,6 +155,7 @@ def refine_region_towns(
     population_params: Optional[PopulationParams] = None,
     river_threshold_factor: float = 1.5,
     params: Optional[RegionTownParams] = None,
+    roads: Optional[RegionRoads] = None,
 ) -> int:
     """Refine the not-yet-refined towns whose site lies in this region, in place.
 
@@ -148,7 +163,8 @@ def refine_region_towns(
     flag; returns how many towns were refined (0 without towns).
     ``river_threshold_factor`` × the regional texel spacing is how close a site
     must be to a river or confluence to count as on it — the town stage's rule at
-    the finer spacing.
+    the finer spacing.  With ``roads`` the route flag reads the region's roads
+    instead of the world's straight routes.
     """
     towns: Optional[Towns] = globe.get_feature("towns")
     if towns is None or len(towns) == 0:
@@ -164,7 +180,7 @@ def refine_region_towns(
     mesh = globe.mesh
     seed = int(globe.seed or 0)
     sc = town_site_context(globe, p, pp)
-    sites = _region_sites(fields, rivers, globe, sc, river_threshold_factor)
+    sites = _region_sites(fields, rivers, globe, sc, river_threshold_factor, roads)
     gw = mesh.face_textures["elevation"].shape[2]
     reach = float(params.refine_radius_global_texels) * float(np.sqrt(np.mean(mesh.face_areas))) / max(gw - 1, 1)
 

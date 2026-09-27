@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from core.mesh import PolygonMesh
     from core.world import World
     from realmgen.builder import RealmParams
+    from worldgen.builder import GlobeParams
     from region.params import RegionParams
 
 
@@ -894,6 +895,11 @@ class MapWindow(QMainWindow):
     def set_realm_params(self, params: "RealmParams") -> None:
         """The realm tuning the world was built with; the region view re-sites towns with it."""
         self._region_view.set_realm_params(params)
+
+    def set_world_params(self, params: "GlobeParams") -> None:
+        """The physical tuning the world was built with; the region view refines
+        resources and re-routes roads with it."""
+        self._region_view.set_world_params(params)
 
     def set_region_params(self, params: "RegionParams") -> None:
         """Tune the region tier; the region on screen (if any) is refined again."""

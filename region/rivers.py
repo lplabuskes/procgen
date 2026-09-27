@@ -31,14 +31,18 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
-from scipy.ndimage import distance_transform_edt
-from scipy.sparse import csr_matrix
-from scipy.sparse.csgraph import dijkstra
 from scipy.spatial import KDTree
 
 from core.params import param_field as _f, paramclass
-from region.grid import RegionHexGrid
-from region.sampling import GlobalSampler
+from region.corridor import (
+    EdgeCost,
+    Raster,
+    corridor_reach,
+    node_spacing_rad,
+    raster_frame,
+    route_corridor,
+    sample_raster,
+)
 from region.upsample import EARTH_RADIUS_KM, RegionFields
 from worldgen.hydrology.rivers import main_stem_paths
 from worldgen.hydrology.types import StreamNetwork, laplacian_smooth_sphere
@@ -53,9 +57,6 @@ RiverPath = tuple[np.ndarray, np.ndarray, np.ndarray]
 # shoreline; land runs this short between water along a path count as water, so
 # the crossing is hidden whole rather than drawn as dashes.
 _SPECKLE_NODES = 2
-
-# D8 steps, (drow, dcol).
-_D8 = ((-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1))
 
 
 @paramclass
@@ -90,129 +91,37 @@ class RegionRivers:
     paths: list[RiverPath]
     # (K, 3) where a path ends on another one — the confluences town siting rewards.
     confluences: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))
-
-
-# ── the raster ───────────────────────────────────────────────────────────────
-
-
-@dataclass
-class _Raster:
-    """A uniform ``n × n`` node grid over local ``[lo, lo + (n-1)·step]²``.
-
-    Row 0 is the smallest ``t``.  All per-node arrays are flat ``(n²,)``, but
-    only the ``sampled`` nodes hold data — the ones a corridor can reach.
-    """
-
-    lo: float
-    step: float
-    n: int
-    sampled: np.ndarray          # (P,) bool
-    positions: np.ndarray        # (P, 3) unit sphere
-    anomaly: np.ndarray          # (P,) refined − coarse elevation, km
-    ocean: np.ndarray            # (P,) bool
-    lake: np.ndarray             # (P,) bool
-
-    def index(self, s: np.ndarray, t: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """Nearest ``(flat node, inside)`` for local points."""
-        col = np.rint((np.asarray(s) - self.lo) / self.step).astype(np.int64)
-        row = np.rint((np.asarray(t) - self.lo) / self.step).astype(np.int64)
-        inside = (col >= 0) & (col < self.n) & (row >= 0) & (row < self.n)
-        return np.where(inside, row * self.n + col, -1), inside
-
-
-def _hex_texel_lookup(
-    grid: RegionHexGrid, tex_size: int, s: np.ndarray, t: np.ndarray
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """``(hex, row, col, covered)`` of the nearest hex texel to each local point.
-
-    Unlike :meth:`RegionHexGrid.texels_at` this reaches past the cell edge,
-    through the hexagons' over-hanging textures; ``covered`` is False only where
-    no texture reaches.
-    """
-    _, hexes = KDTree(grid.centers).query(np.column_stack([s, t]), k=1, workers=-1)
-    hexes = np.asarray(hexes, dtype=np.int64)
-    half = grid.radius
-    ds = s - (grid.centers[hexes, 0] - half)
-    dt = (grid.centers[hexes, 1] + half) - t
-    covered = (ds >= 0.0) & (ds <= 2.0 * half) & (dt >= 0.0) & (dt <= 2.0 * half)
-    cols = np.clip((ds / (2.0 * half) * tex_size).astype(np.int64), 0, tex_size - 1)
-    rows = np.clip((dt / (2.0 * half) * tex_size).astype(np.int64), 0, tex_size - 1)
-    return hexes, rows, cols, covered
-
-
-def _raster_frame(fields: RegionFields, params: RegionRiverParams) -> tuple[float, float, int]:
-    """``(lo, step, n)`` of the raster: regional texel spacing, ``margin`` past the cell."""
-    step = float(params.raster_texels) * 2.0 * fields.grid.radius / fields.tex_size
-    lo = -float(params.margin)
-    return lo, step, int(np.ceil((1.0 - 2.0 * lo) / step)) + 1
-
-
-def _sample_raster(
-    fields: RegionFields, globe: "World", lo: float, step: float, n: int, sampled: np.ndarray,
-) -> _Raster:
-    """Read the refined relief and water onto the ``sampled`` raster nodes."""
-    grid, tex = fields.grid, fields.tex_size
-    idx = np.flatnonzero(sampled)
-    rows, cols = np.divmod(idx, n)
-    s, t = lo + step * cols, lo + step * rows
-    pts = fields.geometry.local_to_ecef(s, t)
-
-    mesh = globe.mesh
-    sampler = GlobalSampler(mesh)
-    faces, u, v = sampler.locate(pts)
-    hexes, hrows, hcols, covered = _hex_texel_lookup(grid, tex, s, t)
-
-    def read(key: str) -> Optional[np.ndarray]:
-        """Refined value where a hex texture covers the node, else the global one."""
-        if key not in mesh.face_textures:
-            return None
-        out = sampler.sample(mesh.face_textures[key], faces, u, v)[:, 0]
-        if key in fields.textures:
-            fine = fields.textures[key][hexes, hrows, hcols, 0].astype(np.float64)
-            out = np.where(covered, fine, out)
-        return out
-
-    coarse = sampler.sample(mesh.face_textures["elevation"], faces, u, v)[:, 0]
-    elevation = read("elevation")
-    assert elevation is not None
-    ocean_r, lake_r = read("ocean_mask"), read("lake_mask")
-
-    size = n * n
-    positions = np.zeros((size, 3))
-    positions[idx] = pts
-    anomaly = np.zeros(size)
-    anomaly[idx] = elevation - coarse
-    ocean = np.zeros(size, dtype=bool)
-    ocean[idx] = ocean_r > 0.5 if ocean_r is not None else elevation <= 0.0
-    lake = np.zeros(size, dtype=bool)
-    if lake_r is not None:
-        lake[idx] = lake_r > 0.5
-    return _Raster(lo=lo, step=step, n=n, sampled=sampled, positions=positions,
-                   anomaly=anomaly, ocean=ocean, lake=lake)
+    # (J, 3) where a path ends on the refined sea, and the flow it arrives with.
+    mouths: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))
+    mouth_flows: np.ndarray = field(default_factory=lambda: np.zeros(0))
 
 
 # ── re-routing ───────────────────────────────────────────────────────────────
 
 
-def _centreline(
-    lo: float, step: float, n: int, s: np.ndarray, t: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Grid ``(rows, cols)`` of a local polyline, densified to one sample per node."""
-    x = (s - lo) / step
-    y = (t - lo) / step
-    seg = np.hypot(np.diff(x), np.diff(y))
-    steps = np.maximum(np.ceil(seg * 2.0).astype(np.int64), 1)
-    frac = np.concatenate([np.arange(k) / k for k in steps] + [np.zeros(1)])
-    base = np.concatenate([np.full(k, i) for i, k in enumerate(steps)] + [np.array([len(x) - 1])])
-    nxt = np.minimum(base + 1, len(x) - 1)
-    xs = x[base] + frac * (x[nxt] - x[base])
-    ys = y[base] + frac * (y[nxt] - y[base])
-    return (np.clip(np.rint(ys), 0, n - 1).astype(np.int64),
-            np.clip(np.rint(xs), 0, n - 1).astype(np.int64))
+def _valley_cost(raster: Raster, valley_seeking: float) -> EdgeCost:
+    """Edge cost that seeks the refined valley floor.
+
+    Node cost is exponential in the sub-grid anomaly, normalised by its spread in
+    the corridor, so a river seeks the valley on a plain as much as in the
+    mountains.
+    """
+    cache: dict = {}
+
+    def edge_cost(sub: np.ndarray, a: np.ndarray, b: np.ndarray, length: np.ndarray) -> np.ndarray:
+        if cache.get("sub") is not sub:
+            anomaly = raster.anomaly[sub]
+            spread = max(float(anomaly.std()), 1e-6)
+            cache["sub"] = sub
+            cache["cost"] = np.exp(np.clip(valley_seeking * (anomaly - anomaly.mean()) / spread, -20.0, 20.0))
+        cost = cache["cost"]
+        return length * 0.5 * (cost[a] + cost[b])
+
+    return edge_cost
 
 
 def _route_run(
-    raster: _Raster,
+    raster: Raster,
     s: np.ndarray,
     t: np.ndarray,
     radius_nodes: float,
@@ -226,82 +135,18 @@ def _route_run(
     It starts at the stretch's first vertex and ends at its last — or, when the
     stream's world mouth is in this stretch (``ends_here``), at the cheapest
     ``sinks`` node near that mouth (its re-routed stem, a lake, the refined sea).
+    The stem this river joins was re-routed within its own corridor, so it can
+    sit up to a corridor width off the world confluence: the search widens to
+    twice the corridor around the mouth.
     """
-    n = raster.n
-    rows, cols = _centreline(raster.lo, raster.step, n, s, t)
-    mouth_radius = 2.0 * radius_nodes
-    pad = int(np.ceil(mouth_radius)) + 1
-    r0, r1 = max(rows.min() - pad, 0), min(rows.max() + pad + 1, n)
-    c0, c1 = max(cols.min() - pad, 0), min(cols.max() + pad + 1, n)
-    h, w = r1 - r0, c1 - c0
-
-    line = np.ones((h, w), dtype=bool)
-    line[rows - r0, cols - c0] = False
-    corridor = np.asarray(distance_transform_edt(line)) <= radius_nodes
-    # The stem this river joins was re-routed within its own corridor, so it can
-    # sit up to a corridor width off the world confluence: widen around the mouth.
-    gr, gc = np.mgrid[r0:r1, c0:c1]
-    near_mouth = np.hypot(gr - rows[-1], gc - cols[-1]) <= mouth_radius
-    if ends_here:
-        corridor |= near_mouth
-    rr, cc = np.nonzero(corridor)
-    sub = (rr + r0) * n + (cc + c0)                       # corridor → raster node
-    local = np.full((h, w), -1, dtype=np.int64)
-    local[rr, cc] = np.arange(len(sub))
-
-    # Node cost: exponential in the sub-grid anomaly, normalised by its spread
-    # here, so the river seeks the valley on a plain as much as in the mountains.
-    anomaly = raster.anomaly[sub]
-    spread = max(float(anomaly.std()), 1e-6)
-    cost = np.exp(np.clip(float(params.valley_seeking) * (anomaly - anomaly.mean()) / spread, -20.0, 20.0))
-
-    srcs, dsts, lens = [], [], []
-    for dr, dc in _D8:
-        rr2, cc2 = rr + dr, cc + dc
-        ok = (rr2 >= 0) & (rr2 < h) & (cc2 >= 0) & (cc2 < w)
-        ok[ok] = corridor[rr2[ok], cc2[ok]]
-        a = local[rr[ok], cc[ok]]
-        b = local[rr2[ok], cc2[ok]]
-        srcs.append(a)
-        dsts.append(b)
-        lens.append(np.hypot(dr, dc) * 0.5 * (cost[a] + cost[b]))
-    graph = csr_matrix(
-        (np.concatenate(lens), (np.concatenate(srcs), np.concatenate(dsts))), shape=(len(sub), len(sub))
+    return route_corridor(
+        raster, s, t, radius_nodes, _valley_cost(raster, float(params.valley_seeking)),
+        sinks=sinks if ends_here else None, mouth_radius=2.0 * radius_nodes,
     )
-
-    start = local[rows[0] - r0, cols[0] - c0]
-    end = local[rows[-1] - r0, cols[-1] - c0]
-    dist_to, pred = dijkstra(graph, indices=int(start), return_predecessors=True)
-    # A river whose world mouth is here ends on whatever it drains into near
-    # that mouth; only when nothing is in reach does it stop at the world point.
-    targets = np.flatnonzero(near_mouth[rr, cc] & sinks[sub]) if ends_here else np.empty(0, np.int64)
-    targets = targets[np.isfinite(dist_to[targets])]
-    if targets.size == 0:
-        targets = np.array([end])
-    goal = int(targets[np.argmin(dist_to[targets])])
-    if not np.isfinite(dist_to[goal]):
-        return None
-
-    path = [goal]
-    while path[-1] != start:
-        prev = int(pred[path[-1]])
-        if prev < 0:
-            return None
-        path.append(prev)
-    path.reverse()
-    local_path = np.asarray(path, dtype=np.int64)
-    nodes = sub[local_path]
-    # Stop at the first sink the path touches near its mouth, however it got
-    # there; a lake or stem passed upstream of that is flowed through.
-    if ends_here:
-        hit = np.flatnonzero((sinks[nodes] & near_mouth[rr[local_path], cc[local_path]])[1:])
-        if hit.size:
-            nodes = nodes[:hit[0] + 2]
-    return nodes
 
 
 def _run_flows(
-    raster: _Raster, nodes: np.ndarray, s: np.ndarray, t: np.ndarray, flows: np.ndarray
+    raster: Raster, nodes: np.ndarray, s: np.ndarray, t: np.ndarray, flows: np.ndarray
 ) -> np.ndarray:
     """Per-edge flow for a re-routed path: the world flow at the nearest world vertex."""
     x = (s - raster.lo) / raster.step
@@ -353,19 +198,6 @@ def _stream_paths(
     return out
 
 
-def _corridor_reach(
-    paths: list[_StreamPath], lo: float, step: float, n: int, radius_nodes: float,
-) -> np.ndarray:
-    """``(n²,)`` mask of the raster nodes any path's corridor or mouth disc can use."""
-    far = np.ones((n, n), dtype=bool)
-    for p in paths:
-        rows, cols = _centreline(lo, step, n, p.s, p.t)
-        far[rows, cols] = False
-    if far.all():
-        return np.zeros(n * n, dtype=bool)
-    return (np.asarray(distance_transform_edt(far)) <= 2.0 * radius_nodes + 2.0).ravel()
-
-
 # ── entry point ──────────────────────────────────────────────────────────────
 
 
@@ -379,7 +211,7 @@ def _fill_short_gaps(flags: np.ndarray, max_gap: int) -> np.ndarray:
     return out
 
 
-def _to_path(raster: _Raster, nodes: np.ndarray, flows: np.ndarray, params: RegionRiverParams) -> RiverPath:
+def _to_path(raster: Raster, nodes: np.ndarray, flows: np.ndarray, params: RegionRiverParams) -> RiverPath:
     pts = [raster.positions[k] for k in nodes]
     smooth = laplacian_smooth_sphere(pts, iterations=int(params.smoothing_iterations), alpha=0.5)
     water = _fill_short_gaps(raster.ocean[nodes] | raster.lake[nodes], _SPECKLE_NODES)
@@ -402,18 +234,17 @@ def build_region_rivers(
     streams = globe.get_feature("streams")
     if streams is None or len(streams) == 0:
         return RegionRivers(region_id=fields.region_id, paths=[])
-    lo, step, n = _raster_frame(fields, params)
+    lo, step, n = raster_frame(fields, params.raster_texels, params.margin)
 
     # Corridor half-width in raster nodes: global texel spacing over node spacing.
     mesh = globe.mesh
     gw = mesh.face_textures["elevation"].shape[2]
     global_spacing = float(np.sqrt(np.mean(mesh.face_areas))) / max(gw - 1, 1)
-    pair = fields.geometry.local_to_ecef(np.array([0.5, 0.5 + step]), np.array([0.5, 0.5]))
-    node_spacing = float(np.linalg.norm(pair[1] - pair[0]))
-    radius_nodes = max(float(params.corridor_global_texels) * global_spacing / node_spacing, 1.5)
+    radius_nodes = max(float(params.corridor_global_texels) * global_spacing / node_spacing_rad(fields, step), 1.5)
 
     paths = _stream_paths(streams, fields, lo, step, n, int(params.min_global_nodes))
-    raster = _sample_raster(fields, globe, lo, step, n, _corridor_reach(paths, lo, step, n, radius_nodes))
+    reach = corridor_reach([(p.s, p.t) for p in paths], lo, step, n, 2.0 * radius_nodes + 2.0)
+    raster = sample_raster(fields, globe, lo, step, n, reach)
 
     occupied = np.zeros(n * n, dtype=bool)
     on_path = np.zeros(n * n, dtype=np.int64)
@@ -430,11 +261,33 @@ def build_region_rivers(
     # A path ending on another one (not on water) is a confluence.
     water = raster.ocean | raster.lake
     ends = [int(nodes[-1]) for nodes, _ in routed if on_path[nodes[-1]] > 1 and not water[nodes[-1]]]
+    drawn = [_to_path(raster, nodes, flows, params) for nodes, flows in routed]
+    at_sea = [i for i, (nodes, _) in enumerate(routed) if raster.ocean[nodes[-1]]]
     return RegionRivers(
         region_id=fields.region_id,
-        paths=[_to_path(raster, nodes, flows, params) for nodes, flows in routed],
+        paths=drawn,
         confluences=raster.positions[ends].reshape(-1, 3),
+        mouths=np.array([drawn[i][0][-1] for i in at_sea], dtype=np.float64).reshape(-1, 3),
+        mouth_flows=np.array([float(drawn[i][1][-1]) for i in at_sea], dtype=np.float64),
     )
+
+
+def snap_deltas(deltas: np.ndarray, rivers: RegionRivers, reach: float) -> np.ndarray:
+    """Move each world delta onto the mouth of its re-routed river.
+
+    A delta sits on a world river's mouth, which the region re-routed onto the
+    refined coast.  Each delta moves to the largest-flow regional mouth within
+    ``reach`` (chord on the unit sphere) — the river itself rather than a stream
+    that happens to reach the sea closer by; one with no mouth that near stays.
+    """
+    out = np.array(deltas, dtype=np.float64).reshape(-1, 3)
+    if len(rivers.mouths) == 0 or len(out) == 0:
+        return out
+    tree = KDTree(rivers.mouths)
+    for i, near in enumerate(tree.query_ball_point(out, reach)):
+        if near:
+            out[i] = rivers.mouths[max(near, key=lambda j: rivers.mouth_flows[j])]
+    return out
 
 
 def river_length_km(path: RiverPath) -> float:

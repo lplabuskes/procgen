@@ -47,7 +47,11 @@ from worldgen.climate.display import (  # noqa: E402
     ANNUAL_TEMPERATURE_RECIPE, BIOME_RECIPE, PRECIPITATION_RECIPE,
     SUMMER_TEMPERATURE_RECIPE, WINTER_TEMPERATURE_RECIPE,
 )
+from worldgen.danger.display import DANGER_RECIPE  # noqa: E402
 from worldgen.geology.display import ELEVATION_RECIPE  # noqa: E402
+from worldgen.resources.display import (  # noqa: E402
+    DOMINANT_CROP_RECIPE, FERTILITY_RECIPE, FOREST_DENSITY_RECIPE,
+)
 from _common import get_physical_world  # noqa: E402
 
 # The world-map layers a region refines, by their scheme names — the same recipe
@@ -59,6 +63,10 @@ LAYERS: dict[str, TextureRecipe] = {
     "Summer Temperature": SUMMER_TEMPERATURE_RECIPE,
     "Winter Temperature": WINTER_TEMPERATURE_RECIPE,
     "Annual Precipitation": PRECIPITATION_RECIPE,
+    "Fertility": FERTILITY_RECIPE,
+    "Forest Density": FOREST_DENSITY_RECIPE,
+    "Dominant Crop": DOMINANT_CROP_RECIPE,
+    "Danger": DANGER_RECIPE,
 }
 
 RESULTS_DIR = Path(__file__).parent / "results"
@@ -157,6 +165,9 @@ def main() -> None:
 
     refined = build_region_fields(world, region_id, params)
     coarse = build_region_fields(world, region_id, coarse_params)
+    missing = [k for k in LAYERS[args.layer].sources if k not in refined.textures]
+    if missing:
+        raise SystemExit(f"{args.layer}: the cached world has no {', '.join(missing)} — try --rebuild-cache")
 
     delta = (refined.textures["elevation"] - coarse.textures["elevation"])[..., 0]
     land = refined.textures.get("ocean_mask")

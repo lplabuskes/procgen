@@ -78,6 +78,7 @@ def main() -> None:
         current_params[0] = params
         window.set_region_params(params.region)
         window.set_realm_params(params.realm)
+        window.set_world_params(params.globe)
 
         world = World(globe_params.mesh, seed=globe_params.seed, progress=_progress)
         ctx = BuildContext(world=world, progress=_progress)
@@ -106,6 +107,7 @@ def main() -> None:
         current_pipeline[0] = pipeline
         window.set_region_params(params.region)
         window.set_realm_params(params.realm)
+        window.set_world_params(params.globe)
 
         window.set_globe(world)
         pipeline.apply_display(window, debug=debug)

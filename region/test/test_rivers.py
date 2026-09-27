@@ -100,3 +100,24 @@ def test_no_stream_network_no_rivers(fields, synthetic_globe):
     finally:
         synthetic_globe.add_feature("streams", streams)
     assert result.paths == [] and len(result.confluences) == 0
+
+
+def test_mouths_are_where_paths_reach_the_refined_sea(region_rivers, fields):
+    assert len(region_rivers.mouths) > 0
+    assert len(region_rivers.mouths) == len(region_rivers.mouth_flows)
+    ends = np.stack([np.asarray(p[0][-1], dtype=np.float64) for p in region_rivers.paths])
+    assert _chord_to(region_rivers.mouths, ends).max() < 1e-9
+    ocean = fields.positions[fields.textures["ocean_mask"][..., 0] > 0.5]
+    spacing = fields.grid.texel_spacing_rad(fields.tex_size)
+    assert _chord_to(region_rivers.mouths, ocean).max() < 2.0 * spacing
+
+
+def test_deltas_snap_to_the_biggest_mouth_in_reach(region_rivers):
+    from region.rivers import snap_deltas
+    mouths, flows = region_rivers.mouths, region_rivers.mouth_flows
+    big = int(np.argmax(flows))
+    near = mouths[big] + np.array([1e-4, 0.0, 0.0])
+    far = -mouths[big]
+    moved = snap_deltas(np.stack([near, far]), region_rivers, reach=1e-3)
+    assert np.allclose(moved[0], mouths[big])
+    assert np.allclose(moved[1], far)

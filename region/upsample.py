@@ -57,12 +57,14 @@ import numpy as np
 from core.params import param_field as _f, paramclass
 from region.geometry import N_REGIONS, RegionGeometry
 from region.grid import RegionHexGrid
+from region.resources import RefineContext, refine_resources, refined_slope
 from region.sampling import GlobalSampler, anchor_means
 from utils.simplex import fbm_sum, make_perm
 
 if TYPE_CHECKING:
     from core.mesh import PolygonMesh
     from core.world import World
+    from worldgen.resources.builder import ResourcesParams
 
 EARTH_RADIUS_KM = 6371.0
 
@@ -123,6 +125,26 @@ class RegionUpsampleParams:
     lacunarity: float = _f(2.0, label="Detail lacunarity", min=1.1, max=4.0)
     persistence: float = _f(0.5, label="Detail persistence", min=0.1, max=0.95)
     nyquist_safety: float = _f(0.5, label="Nyquist safety factor", min=0.1, max=1.0)
+    # ── resources, population and danger (region/resources.py) ──
+    # Refined slope (km/km) at which the slope-driven terms saturate.  Sub-grid
+    # relief is tens to hundreds of metres over ~5-15 km, hence the small value.
+    slope_saturation: float = _f(
+        0.02, label="Slope saturation, resources (km/km)", min=0.002, max=0.2, step=0.002
+    )
+    # Fertility gained per km the ground lies below the coarse surface (alluvial
+    # valley floors), lost per km above it.
+    fertility_valley_gain: float = _f(
+        2.0, label="Fertility valley gain (/km)", min=0.0, max=10.0, step=0.25
+    )
+    # Fraction of fertility lost on saturated slopes.
+    fertility_slope_penalty: float = _f(
+        0.5, label="Fertility slope penalty", min=0.0, max=1.0, step=0.05
+    )
+    # Danger is multiplied by exp(gain · (slope + forest)) before renormalising
+    # per global texel: rugged, forested ground more dangerous, open flats less.
+    danger_terrain_gain: float = _f(
+        1.0, label="Danger terrain gain", min=0.0, max=4.0, step=0.1
+    )
 
 
 @dataclass
@@ -131,7 +153,9 @@ class RegionFields:
 
     ``textures`` maps the same keys the globe uses (``"elevation"``,
     ``"temperature"``, ``"precipitation"``, ``"biome"``, ``"ocean_mask"``,
-    ``"lake_mask"``) to ``(M, T, T, C)`` arrays over the region's ``M`` hexagons.
+    ``"lake_mask"``, ``"forest_density"``, ``"fertility"``, ``"dominant_crop"``,
+    ``"rural_density"``) to ``(M, T, T, C)`` arrays over the region's ``M``
+    hexagons, plus ``"danger"`` — per face on the globe, a texture only here.
     """
 
     region_id: int
@@ -447,11 +471,16 @@ def build_region_fields(
     globe: "World",
     region_id: int,
     params: Optional[RegionUpsampleParams] = None,
+    *,
+    resources: Optional["ResourcesParams"] = None,
+    fertility_exponent: float = 2.0,
 ) -> RegionFields:
     """Refine the global fields inside one region onto its hex-texture grid.
 
     Deterministic: the noise streams are seeded with ``world.seed XOR region_id``,
-    so the same region always regenerates identically.
+    so the same region always regenerates identically.  ``resources`` and
+    ``fertility_exponent`` (the population model's γ) are the world's own tuning,
+    which the resource and rural-density refinement reuse.
     """
     params = params or RegionUpsampleParams()
     mesh = globe.mesh
@@ -561,6 +590,26 @@ def build_region_fields(
 
     region_area_km2 = 4.0 * np.pi * EARTH_RADIUS_KM ** 2 / N_REGIONS
     covering = int(in_hex.sum())
+    texel_area_km2 = float(region_area_km2 / max(covering, 1))
+
+    # ── resources, rural density and danger (region/resources.py) ────────────
+    shape = (m, tex_size, tex_size)
+    water_now = np.zeros(len(flat_pos), dtype=bool)
+    for key in ("ocean_mask", "lake_mask"):
+        if key in textures:
+            water_now |= textures[key].reshape(-1) > 0.5
+    danger = globe.get_feature("danger")
+    textures.update(refine_resources(
+        RefineContext(
+            mesh=mesh, sampler=sampler, faces=faces, u=u, v=v, anchors=anchors,
+            weights=weights, n_anchors=n_anchors, shape=shape, positions=flat_pos,
+            elevation=elevation[:, 0], elev_coarse=elev_coarse[:, 0],
+            slope=refined_slope(elevation[:, 0].reshape(shape), np.sqrt(texel_area_km2)).reshape(-1),
+            land=~water_now, anchor_land=~(water.ocean | water.lake),
+        ),
+        textures, params, resources, fertility_exponent,
+        None if danger is None else np.asarray(danger, dtype=np.float64),
+    ))
     return RegionFields(
         region_id=int(region_id),
         geometry=geometry,
@@ -573,7 +622,7 @@ def build_region_fields(
         face_uv=np.stack([u, v], axis=-1).reshape(m, tex_size, tex_size, 2),
         textures=textures,
         detail_octaves=int(freqs.size),
-        texel_area_km2=float(region_area_km2 / max(covering, 1)),
+        texel_area_km2=texel_area_km2,
     )
 
 
@@ -582,13 +631,26 @@ def conservation_report(fields: RegionFields, globe: "World") -> dict[str, dict[
 
     For every global texel that received in-hexagon regional samples, compare the
     regional mean against the global value.  Returns ``{field: {"max": …, "mean": …,
-    "n_anchors": …}}`` in each field's own units.
+    "n_anchors": …}}`` in each field's own units.  Rural density is an areal
+    total like the physical fields; fertility and forest density are densities
+    of land, so they are compared over the texels dry on both maps.
     """
     mesh = globe.mesh
     anchors = fields.anchors.reshape(-1)
-    weights = fields.in_hex.reshape(-1).astype(np.float64)
+    in_hex = fields.in_hex.reshape(-1).astype(np.float64)
+    water = np.zeros(len(anchors), dtype=bool)
+    anchor_water = np.zeros(len(anchors), dtype=bool)
+    for key in ("ocean_mask", "lake_mask"):
+        if key in fields.textures:
+            water |= fields.textures[key].reshape(-1) > 0.5
+        if key in mesh.face_textures:
+            anchor_water |= GlobalSampler.anchor_values(mesh.face_textures[key], anchors)[:, 0] > 0.5
+    dry = in_hex * (~water & ~anchor_water)
     report: dict[str, dict[str, float]] = {}
-    for key in ("elevation", "temperature", "precipitation"):
+    for key, weights in (
+        ("elevation", in_hex), ("temperature", in_hex), ("precipitation", in_hex), ("rural_density", in_hex),
+        ("fertility", dry), ("forest_density", dry),
+    ):
         if key not in fields.textures or key not in mesh.face_textures:
             continue
         global_tex = np.asarray(mesh.face_textures[key], dtype=np.float64)

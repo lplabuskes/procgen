@@ -24,9 +24,9 @@ from worldgen.hydrology.channels import LAKE_MASK, RIVER_OBJECTS
 from worldgen.resources.channels import FERTILITY_MEAN, MINERALS, RARE_BIO
 from worldgen.resources.crops import classify_crops
 from worldgen.resources.display import (
-    build_dominant_crop_display_texture,
-    build_fertility_display_texture,
-    build_forest_density_display_texture,
+    DOMINANT_CROP_RECIPE,
+    FERTILITY_RECIPE,
+    FOREST_DENSITY_RECIPE,
     crop_color,
     crop_legend_entries,
     fertility_color,
@@ -353,46 +353,18 @@ class ResourcesBuilder(Stage):
         self, world: World, reg: DisplayRegistry, *, debug: bool = False
     ) -> None:
         mesh = world.mesh
-        ocean_mask_tex = mesh.face_textures.get("ocean_mask")
-        lake_mask_tex = mesh.face_textures.get("lake_mask")
-        elev_tex = mesh.face_textures.get("elevation")
 
-        if debug and "fertility" in mesh.face_textures:
-            mesh.set_face_textures(
-                "fertility_rgba",
-                build_fertility_display_texture(
-                    mesh.face_textures["fertility"],
-                    elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex, lake_mask_tex=lake_mask_tex,
-                ),
-            )
-            reg.add_scheme(
-                "Fertility", fertility_color,
-                texture="fertility_rgba", legend=("gradient", fertility_legend_entries()),
-            )
-        if debug and "forest_density" in mesh.face_textures:
-            mesh.set_face_textures(
-                "forest_density_rgba",
-                build_forest_density_display_texture(
-                    mesh.face_textures["forest_density"],
-                    elevation_tex=elev_tex, ocean_mask_tex=ocean_mask_tex, lake_mask_tex=lake_mask_tex,
-                ),
-            )
-            reg.add_scheme(
-                "Forest Density", forest_density_color,
-                texture="forest_density_rgba", legend=("gradient", forest_density_legend_entries()),
-            )
-        if debug and "dominant_crop" in mesh.face_textures:
-            mesh.set_face_textures(
-                "dominant_crop_rgba",
-                build_dominant_crop_display_texture(
-                    mesh.face_textures["dominant_crop"],
-                    ocean_mask_tex=ocean_mask_tex, lake_mask_tex=lake_mask_tex,
-                ),
-            )
-            reg.add_scheme(
-                "Dominant Crop", crop_color,
-                texture="dominant_crop_rgba", legend=("categorical", crop_legend_entries()),
-            )
+        for name, key, recipe, fn, legend in (
+            ("Fertility", "fertility", FERTILITY_RECIPE, fertility_color,
+             ("gradient", fertility_legend_entries())),
+            ("Forest Density", "forest_density", FOREST_DENSITY_RECIPE, forest_density_color,
+             ("gradient", forest_density_legend_entries())),
+            ("Dominant Crop", "dominant_crop", DOMINANT_CROP_RECIPE, crop_color,
+             ("categorical", crop_legend_entries())),
+        ):
+            if debug and key in mesh.face_textures:
+                mesh.set_face_textures(f"{key}_rgba", recipe(mesh.face_textures))
+                reg.add_scheme(name, fn, texture=f"{key}_rgba", legend=legend, recipe=recipe)
 
         if debug:
             # Resource → face lookups (built once, closed over by the hover fns).

@@ -13,7 +13,7 @@ map zoom that would show the same ground at the same pixel size.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Protocol, Sequence
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt
@@ -75,14 +75,18 @@ def draw_overlays(
     """Draw every visible overlay the globe has data for, in a fixed stacking order.
 
     ``refined`` holds a view's own finer version of a feature, in the world
-    feature's form, drawn in its place (the region view's rivers).
+    feature's form, drawn in its place (the region view's rivers, roads and
+    deltas). Widths and thresholds still come from the world feature, so a
+    refined feature is drawn exactly as heavily as the world's.
     """
+    refined = refined or {}
+
     def on(name: str) -> bool:
         return bool(visible.get(name)) and globe.has_feature(name)
 
     if on("rivers"):
         world_rivers = globe.get_feature("rivers") or []
-        paths = (refined or {}).get("rivers", world_rivers)
+        paths = refined.get("rivers", world_rivers)
         _draw_rivers(painter, paths, _max_river_flow(world_rivers), proj)
     if on("lakes"):
         _draw_lakes(painter, globe, proj)
@@ -95,7 +99,7 @@ def draw_overlays(
     if on("deltas"):
         _draw_points(
             painter, globe, proj, "deltas", QColor(0, 100, 0, 220), QColor(0, 200, 80, 200),
-            max(3.0, 5.0 * proj.zoom ** 0.3),
+            max(3.0, 5.0 * proj.zoom ** 0.3), positions=refined.get("deltas"),
         )
     if on("volcanoes"):
         _draw_points(
@@ -109,9 +113,9 @@ def draw_overlays(
     if on("danger_sources"):
         _draw_danger_sources(painter, globe, proj)
     if on("trade_routes"):
-        _draw_trade_routes(painter, globe, proj)
+        _draw_trade_routes(painter, globe, proj, refined.get("trade_routes"))
     if on("towns"):
-        _draw_towns(painter, (refined or {}).get("towns", globe.get_feature("towns")), proj)
+        _draw_towns(painter, refined.get("towns", globe.get_feature("towns")), proj)
     if on("settlements"):
         _draw_settlements(painter, globe, proj)
     if on("polity_borders"):
@@ -126,10 +130,12 @@ def _line(painter: QPainter, x0: float, y0: float, x1: float, y1: float) -> None
 
 def _draw_points(
     painter: QPainter, globe: "World", proj: OverlayProjector, feature_name: str,
-    pen_color: QColor, brush_color: QColor, base_r: float,
+    pen_color: QColor, brush_color: QColor, base_r: float, positions: Optional[np.ndarray] = None,
 ) -> None:
-    """A uniformly-styled circle at each position of a point feature."""
-    positions = globe.get_feature(feature_name)
+    """A uniformly-styled circle at each position of a point feature (or at
+    ``positions``, a view's refined version of it)."""
+    if positions is None:
+        positions = globe.get_feature(feature_name)
     if positions is None or len(positions) == 0:
         return
     sx, sy, keep = proj.points(np.asarray(positions))
@@ -452,11 +458,16 @@ def _moved_settlements(globe: "World", proj: OverlayProjector) -> dict:
     }
 
 
-def _draw_trade_routes(painter: QPainter, globe: "World", proj: OverlayProjector) -> None:
-    routes = globe.get_feature("trade_routes")
-    if not routes:
+def _draw_trade_routes(
+    painter: QPainter, globe: "World", proj: OverlayProjector, refined: Optional[list] = None,
+) -> None:
+    """Route hops, width by flow. ``refined`` (a view's re-routed roads, already
+    ending on the settlements' drawn markers) replaces the world's hops; the
+    width scale and the drawing threshold are the world's either way."""
+    world_routes = globe.get_feature("trade_routes")
+    if not world_routes:
         return
-    all_flows = np.array([r[2] for r in routes], dtype=np.float64)
+    all_flows = np.array([r[2] for r in world_routes], dtype=np.float64)
     max_flow = float(all_flows.max()) if all_flows.size > 0 else 0.0
     if max_flow <= 0.0:
         return
@@ -464,7 +475,8 @@ def _draw_trade_routes(painter: QPainter, globe: "World", proj: OverlayProjector
     flow_threshold = float(np.median(all_flows))
     min_width, max_width = 0.4, 4.0
     zoom_scale = proj.zoom ** 0.4
-    moved = _moved_settlements(globe, proj)
+    routes = world_routes if refined is None else refined
+    moved = _moved_settlements(globe, proj) if refined is None else {}
     painter.setBrush(Qt.BrushStyle.NoBrush)
     active_pen: QPen | None = None
     for start_pos, end_pos, flow in routes:

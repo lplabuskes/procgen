@@ -169,3 +169,18 @@ def test_refinement_round_trips_through_pack(fields, rivers, synthetic_globe, wo
 def test_no_towns_nothing_to_refine(fields, rivers, synthetic_globe):
     assert not synthetic_globe.has_feature("towns")
     assert refine_region_towns(fields, rivers, synthetic_globe) == 0
+
+
+def test_the_route_flag_reads_the_regional_roads():
+    """Re-routed roads, sea legs and the undrawn world hops all count as routes."""
+    from region.roads import RegionRoads
+    from region.towns import _route_points
+    a, b = np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0])
+    c = np.array([0.0, 0.0, 1.0])
+    roads = RegionRoads(
+        region_id=0, segments=[], polylines=[np.stack([a, b])], sea=[(b, c, 1.0)], undrawn=[(c, a, 1.0)],
+    )
+    pts = _route_points(roads, 0.5)
+    assert pts is not None
+    for p in (a, b, c, (a + b) / 2):
+        assert np.linalg.norm(pts - p, axis=1).min() < 0.3

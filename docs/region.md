@@ -11,10 +11,14 @@ replaced.
 - `region/grid.py` — `RegionHexGrid`: hexagons + their over-hanging textures inside one cell
 - `region/sampling.py` — `GlobalSampler`: read global face textures at arbitrary sphere points; anchor assignment
 - `region/upsample.py` — `build_region_fields`: the refinement itself, plus `conservation_report`
+- `region/resources.py` — `refine_resources`: forest, fertility, crops, rural density and danger, run inside `build_region_fields`
+- `region/smooth.py` — `FaceFanField`: a continuous, non-negative surface with exact per-face means through per-face values (danger)
 - `region/display.py` — RGBA layer textures for the viewer (reuses the world map's palettes)
-- `region/rivers.py` — `build_region_rivers`: the world's stream network (rivers and sub-threshold streams) re-routed over the refined relief
-- `region/towns.py` — `refine_region_towns`: the world's towns moved within their global texel onto the regional streams, in place (cities stay put)
-- `region/params.py` — `RegionParams`: `upsample` (`RegionUpsampleParams`), `rivers` (`RegionRiverParams`) and `towns` (`RegionTownParams`), the **Region** section of the params dialog
+- `region/corridor.py` — the raster + least-cost corridor router the rivers and roads share
+- `region/rivers.py` — `build_region_rivers`: the world's stream network (rivers and sub-threshold streams) re-routed over the refined relief; `snap_deltas`
+- `region/roads.py` — `build_region_roads`: the world's trade routes re-routed over the refined terrain with the world's land-cost model
+- `region/towns.py` — `refine_region_towns`: the world's towns moved within their global texel onto the regional streams and roads, in place (cities stay put)
+- `region/params.py` — `RegionParams`: `upsample` (`RegionUpsampleParams`), `rivers` (`RegionRiverParams`), `roads` (`RegionRoadParams`) and `towns` (`RegionTownParams`), the **Region** section of the params dialog
 - `viz/mapview/regionview.py` — `RegionView`, the zoomed-in widget
 
 ---
@@ -115,6 +119,14 @@ bands on the contours instead.
 | `precipitation` | orographic response to the refined relief (`orographic_gain`, per km) | multiplicatively (stays positive) |
 | `biome` | reclassified from the **area-averaged** refined climate | derived |
 | `ocean_mask`, `lake_mask` | re-flooded to the global water surface over the refined relief | surface exact; shoreline refined |
+| `forest_density` | treeline on the refined elevation | multiplicatively, over land |
+| `fertility` | valley floors richer, steep slopes poorer, forest penalty on the refined forest | multiplicatively, over land |
+| `dominant_crop` | reclassified from the refined fields (climate area-averaged, as for `biome`) | derived |
+| `rural_density` | each global texel's people over its refined land by `fertility ** γ` | **total exact** |
+| `danger` | per face on the globe: made continuous (`FaceFanField`), then nudged by terrain | per face (smooth base); nudge per global texel |
+
+The last five need the world's resource / town / danger stages; a world without
+them gets none (`region/resources.py`, see **Resources, population and danger**).
 
 **Why biome averages.** The refined temperature swings ~1 °C between adjacent
 ~4 km texels (mean \|Laplacian\| 0.63 °C vs the coarse field's 0.068 °C), which is
@@ -170,22 +182,64 @@ Residuals are at float32 rounding (~1e-7 km) by construction, because the last
 step of each field is exactly that correction. `region/test/test_upsample.py`
 pins it.
 
+### Resources, population and danger (`region/resources.py`)
+
+Same rule as the physical fields — no noise of their own; all sub-grid variation
+comes from the refined relief (slope, the relief anomaly, the treeline, the
+refined shoreline), so the layers line up with each other and the terrain. The
+world's own tuning is reused: `build_region_fields(..., resources=ResourcesParams,
+fertility_exponent=γ)` (the viewer passes the world's `GlobeParams.resources`
+and `PopulationParams.fertility_exponent`).
+
+- **Refined slope** (`refined_slope`) is the gradient of the refined elevation
+  inside each hex texture, normalised by `slope_saturation` (sub-grid slopes run
+  ~0.003–0.035 km/km on seed 4).
+- **Forest** is the coarse forest × the ratio of the treeline factor at the
+  refined vs. coarse elevation. **Fertility** is the coarse fertility ×
+  `(1 − fertility_valley_gain · anomaly)` × `(1 − fertility_slope_penalty ·
+  slope)` × the forest penalty's change. Both are densities of *land*: conserved
+  over the texels dry on both maps, with conservation and the `[0, 1]` clip
+  alternated (`conserve_unit`). Residuals: fertility at float noise; forest
+  ~1e-4 mean, a few hundredths at worst on coastal texels whose bilinear read
+  crossed the water. Water keeps the globe's aquatic fertility; water the
+  refined shoreline added takes it from the neighbouring water.
+- **Rural density** redistributes each global texel's people over its refined
+  land by the rural model's own weight `fertility ** γ` — the design doc's hard
+  constraint: the regional sum equals the global one to float noise, and nobody
+  stands on refined water unless the global texel has no dry ground left. Town
+  refinement reads it (below).
+- **Danger** is one value per face on the globe. `FaceFanField` makes it a
+  continuous surface: piecewise linear over each face's fan triangles (centroid,
+  vertex i, vertex i+1), with vertex values shared between faces and each face's
+  area mean an exact equality constraint. A non-negative field with exact means
+  must be 0 on every 0-danger face, edges included, so danger fades out *inside*
+  the faces carrying it; within that, the node values are the smoothest
+  (least-squares over the fan edges) solution — one sparse KKT solve (~0.08 s),
+  cached per world. Uniform blocks become domes with slightly raised rims; an
+  isolated face is a cone up to 3× its value (the layer clamps at "lethal").
+  The smooth base is then multiplied by `exp(danger_terrain_gain · score)`,
+  score = area-averaged (slope + forest) on land, 0 on water, and renormalised
+  per global texel — rugged, forested ground more dangerous, open flats less,
+  each global texel's (and so each face's) mean unchanged.
+
 ### `RegionUpsampleParams`
 `n_cols`, `tex_size`, `relief_factor`, `slope_reference`, `slope_floor`,
 `max_relief_km`, `orographic_gain`, `lapse_rate_c_per_km`,
 `water_relief_depth_km`, `refine_water_masks`, `water_spread_texels`,
-`biome_smoothing`, `octaves`, `lacunarity`, `persistence`, `nyquist_safety`.
+`biome_smoothing`, `octaves`, `lacunarity`, `persistence`, `nyquist_safety`,
+`slope_saturation`, `fertility_valley_gain`, `fertility_slope_penalty`,
+`danger_terrain_gain`.
 
 ### `RegionParams` (`region/params.py`)
 Groups the region tuning — `upsample` ("Detail refinement"), `rivers`
-("Rivers") and `towns` ("Towns") — as `AppParams.region`, the **Region** section
-of the params dialog. It never rebuilds the world: `main.py` hands it to
+("Rivers"), `roads` ("Roads") and `towns` ("Towns") — as `AppParams.region`, the
+**Region** section of the params dialog. It never rebuilds the world: `main.py` hands it to
 `MapWindow.set_region_params` → `RegionView.set_params`, and a dialog edit that
 changes nothing but `region` stops there. Any change makes every refined town
 stale, so all of them go back to their stage sites (`Towns.reset_refinement`)
 and are refined again as their regions are visited. On screen, a new `upsample`
-re-refines the region (keeping zoom and pan); a new `rivers` or `towns` only
-rebuilds the rivers and re-refines the region's towns.
+re-refines the region (keeping zoom and pan); a new `rivers`, `roads` or `towns`
+only rebuilds the rivers and roads and re-refines the region's towns.
 
 ### `RegionFields`
 `region_id`, `geometry`, `grid`, `tex_size`, `positions (M,T,T,3)`,
@@ -195,8 +249,10 @@ rebuilds the rivers and re-refines the region's towns.
 ## Rivers (`region/rivers.py`)
 
 `build_region_rivers(fields, globe, params) → RegionRivers` (`paths`,
-`confluences`), each path a `(positions, flows, in_lake)` polyline in the world
-`"rivers"` feature's form. Qt-free and deterministic; ~0.2 s per region at
+`confluences`, `mouths` + `mouth_flows`), each path a `(positions, flows,
+in_lake)` polyline in the world `"rivers"` feature's form. The raster and the
+corridor router live in `region/corridor.py`, shared with the roads; the rivers
+supply only their valley-seeking edge cost. Qt-free and deterministic; ~0.2 s per region at
 defaults (0.05 s on a mostly-ocean one).
 
 **Source: the world's stream network.** The hydrology stage saves its
@@ -230,6 +286,12 @@ some corridor or mouth disc are sampled (refined elevation / masks from the
 nearest hex texel through the over-hang, global fields beyond the textures) —
 most of a region is never read. Paths leaving the raster are cut at its edge.
 
+**Deltas.** `mouths` are where paths end on the refined sea. `snap_deltas`
+moves each world delta (a world river's mouth) to the largest-flow regional
+mouth within reach — two river corridors plus the settlement snap reach, since a
+re-routed stem can end that far from its world mouth — so a delta marker sits on
+its drawn river; one with no mouth in reach stays.
+
 Paths are Laplacian-smoothed (`smoothing_iterations`); a segment is flagged
 `in_lake` (hidden) when both its ends are on refined water, with land runs of up
 to 2 nodes between water treated as water so a lake crossing is not drawn as
@@ -239,6 +301,45 @@ shared edge independently (each is shown alone, so no seam is visible).
 ### `RegionRiverParams`
 `raster_texels`, `margin`, `corridor_global_texels`, `valley_seeking`,
 `min_global_nodes`, `smoothing_iterations`.
+
+## Roads (`region/roads.py`)
+
+`build_region_roads(fields, globe, rivers, params, land, danger_scale,
+land_reach) → RegionRoads` (`segments` in the world `"trade_routes"` feature's
+`(start, end, flow)` form, `polylines`, `sea`, `undrawn`). ~0.2 s per region.
+
+The trade stage routes over the face graph, so a world route is a chain of
+straight hops between face centroids (~225 km). Which places trade, over which
+faces and how much are world facts; a region refines where the road runs.
+
+- **Which hops.** Only those the map draws — flow ≥ the world median, the
+  renderer's threshold — near the raster. The rest go to `undrawn`, straight,
+  for town siting.
+- **Chains.** A hop is land when both ends' faces are `land_passable` in the
+  world's `cost_surfaces`. Land hops are chained at their junctions (`_chains`;
+  loops are cut). A port hop (land → water face) is split at the first refined
+  water along it: its land part joins the chain, the rest is a straight `sea`
+  leg. Pure sea hops stay straight. Chains leaving the raster are cut at its edge.
+- **Cost** — the world's land-cost model per raster node, in the same units (a
+  face-width step of base cost 1 costs 1): base = `biome_cost_scale ·
+  BIOME_TRAVERSAL_COST[biome] + forest_cost_strength · forest + danger_scale ·
+  danger` (the realm's `movement_scale`), charged per face-width travelled;
+  climbing costs `ruggedness_cost_per_km` per km of refined relief (the world's
+  per-face relief term, made explicit); entering a regional river costs the
+  world's ford penalty (`min(ford_strength · w, max_mult − 1)` × base, `w` =
+  flow / `river_flow_reference` capped at 1) and travelling along one gets its
+  corridor discount. Rivers are rasterised 4-connected so a road cannot slip
+  between diagonal river nodes. Refined water is impassable.
+- **Routing** through a corridor `corridor_face_fraction` of a face spacing
+  either side of the world chain (`route_corridor`), on a raster
+  `raster_texels` regional texels apart. A chain end at a settlement lands
+  exactly on its marker (moved off refined water with `snap_to_land`, `land_reach`
+  — the view's own reach); the path is Laplacian-smoothed; each hop's flow is
+  carried onto the stretch between the path points nearest its two ends. A
+  stretch with no dry way through keeps the world line.
+
+### `RegionRoadParams`
+`raster_texels`, `margin`, `corridor_face_fraction`, `smoothing_iterations`.
 
 ## Towns (`region/towns.py`)
 
@@ -254,11 +355,14 @@ town's actual position from then on and is saved with the world;
   region is visited first or on neighbouring regions' overlap.
 - **Where.** Among the dry in-hexagon regional texels of the town's own face
   within `refine_radius_global_texels` (1 global texel, ~15 km) of its site,
-  scored with the stage's own `site_log_weight_and_kind`: rural density, trade
-  routes and minerals as the stage reads them (`town_site_context`); coast from
-  the refined shoreline; river and confluence from the regional paths and
-  `RegionRivers.confluences`, within `river_threshold_factor` × the regional
-  texel spacing (~6 km). Gumbel noise is seeded `(seed, town, 3)`.
+  scored with the stage's own `site_log_weight_and_kind`: the refined rural
+  density; trade routes from the regional roads (re-routed polylines, sea legs
+  and the undrawn world hops, within the stage's `route_radius_km`) — or the
+  world's straight routes when no roads are given; minerals as the stage reads
+  them (`town_site_context`); coast from the refined shoreline; river and
+  confluence from the regional paths and `RegionRivers.confluences`, within
+  `river_threshold_factor` × the regional texel spacing (~6 km). Gumbel noise is
+  seeded `(seed, town, 3)`.
 - **Kind is kept**, and honoured: a river town (on a river or stream) lands on a
   drawn path, and a port on the refined coast, whenever one is in reach.
 - **Spacing** to every other town (wherever it stands now) and city is kept, by
@@ -281,8 +385,11 @@ is the world map's `SchemeSpec`. There is no region-side list of layers or
 palettes: a scheme with a `TextureRecipe` whose `sources` the region has refined
 (`has_refined_layer`) is drawn by running that recipe — the stage's own
 function — on `fields.textures`. Today that is Elevation, Biome,
-Annual/Summer/Winter Temperature, Annual Precipitation and Polities; a new stage
-layer with a recipe over refined keys appears refined automatically. Besides the
+Annual/Summer/Winter Temperature, Annual Precipitation and Polities, and (debug)
+Fertility, Forest Density, Dominant Crop, Rural Density and Danger; a new stage
+layer with a recipe over refined keys appears refined automatically. Danger's
+recipe exists only for the region: the globe has no danger texture, so the world
+map draws the per-face colour function. Besides the
 refined textures, a recipe may read the region's texel positions under
 `core.display.POSITIONS_KEY` (`recipe_inputs`). Polities uses that: the polity is a
 function of position (`realmgen.refine.fill.PolityLabelField`), so its fill is
@@ -290,15 +397,15 @@ evaluated at the region's own texels, with the refined shoreline, and lines up
 with the border overlay instead of stepping at the global texel size. Recipes with
 `relief=True` (Elevation, Biome) are then `hillshade(...)`d on land from the
 refined elevation — without it a 100 m bump is invisible at ~16 km²/texel;
-water stays flat. Every other layer goes through
+water stays flat. The resource layers ask for it too. Every other layer goes through
 `sample_global_layer`: the scheme's per-face RGBA texture read at each texel's
 anchor, or else the scheme's color function applied to each texel's owning face
 — the globe's own two rendering paths, with no detail invented.
 
 ## Viewer (`viz/mapview/regionview.py`)
 
-`RegionView.set_region(geometry, globe)` refines synchronously (~0.8 s for a
-region at defaults) and caches a `QImage` per hexagon. Local `(s, t)` → screen is
+`RegionView.set_region(geometry, globe)` refines synchronously (~1.0–1.4 s for
+a region at defaults, a third of it the resource/danger refinement) and caches a `QImage` per hexagon. Local `(s, t)` → screen is
 a flip-and-scale, so each hex texture is an axis-aligned blit clipped to its
 hexagon (drawn 0.75 px proud so antialiased neighbours leave no seam), wrapped
 in a whole-cell rotation from `geometry.up_direction()` so the rendered map is
@@ -317,8 +424,9 @@ beside it. Hover maps the cursor back through the rotation to a texel
 texel's owning face and UV, except that contributors registered with
 `add_hover(..., refined=keys)` are replaced in place by the refined values when
 the region has all of those keys (`describe_texel`: elevation → `[px: …]`,
-biome/temperature/precipitation → water-or-biome, T, P). Everything not refined
-regionally (fertility, danger, polity, settlements, …) is the world value.
+biome/temperature/precipitation → water-or-biome, T, P). Everything else in the
+hover text (fertility, danger, polity, settlements, …) is the world value, even
+where the layer drawn is refined.
 Leaving the cell restores the summary.
 
 Scroll zooms (1×–`RegionView.MAX_ZOOM` = 20×, anchored to the cursor) and drag
@@ -338,15 +446,18 @@ screen space (upright markers, pixel widths) and clipped to the rotated cell.
 They size themselves by the *equivalent world zoom* — the world-map zoom that
 would show this ground at the same pixel scale — so a region looks like the
 world map zoomed to the same place. Overlays are world-resolution data — borders
-follow the global paths rather than the refined terrain — except **rivers** and
-**towns**. Entering a region runs `build_region_rivers` and then
-`refine_region_towns` (with the realm params `main.py` passes to
-`MapWindow.set_realm_params`), ~0.5 s on top of the field refinement. The rivers'
-paths are handed to `draw_overlays(..., refined={"rivers": …})` in place of the
-world feature; the towns need no override, as their refined positions are in the
-world feature itself. River widths still scale against the *world's* largest
-flow, so a re-routed river is drawn as wide as on the world map and streams at
-the thin end. The **Towns** overlay draws only here (`regional` on the
+follow the global paths rather than the refined terrain — except **rivers**,
+**trade routes**, **deltas** and **towns**. Entering a region runs
+`build_region_rivers`, `build_region_roads`, `snap_deltas` and then
+`refine_region_towns` (with the world and realm params `main.py` passes to
+`MapWindow.set_world_params` / `set_realm_params`), ~0.8 s on top of the field
+refinement. Rivers, roads and deltas are handed to `draw_overlays(...,
+refined={"rivers": …, "trade_routes": …, "deltas": …})` in place of the world
+features; the towns need no override, as their refined positions are in the
+world feature itself. Widths and thresholds still come from the *world*
+feature — river width against the world's largest flow, route width against the
+world's largest route flow and the world's median as the drawing cut — so a
+re-routed river or road is drawn exactly as heavily as on the world map. The **Towns** overlay draws only here (`regional` on the
 projector; see [realm_towns.md](realm_towns.md)), and cities are drawn to stand
 apart from the towns: 1.5× their world-map size (and at least twice the
 largest town dot), opaque, and ringed dark-then-white.
@@ -362,7 +473,9 @@ features keep their global positions.
 
 ## Not yet implemented
 
-Lakes as a regional hydrology product (the lake overlay is still the world's
-polygons; the refined lake mask is drawn by the layers), resources, cost
-surfaces and realmgen inside a region; region
-serialization; locals. See the design doc's phase list.
+Lakes as a regional hydrology product (the refined lake mask is drawn by the
+layers; there is no lake-polygon overlay in the menus), minerals / rare
+resources and the cost *layers* inside a region (the roads evaluate the land
+cost model themselves), the rest of realmgen inside a region; region
+serialization; locals. Non-refined layers are still sampled per global texel,
+so their coast and lakes are the globe's. See the design doc's phase list.

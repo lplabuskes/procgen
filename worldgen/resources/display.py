@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from core.display import TextureRecipe
 from viz.color_stops import gradient_texture, categorical_texture, interp_stops_scalar, palette_legend_entries
 from worldgen.geology.display import apply_water_masks, is_ocean_face, ocean_gradient_scheme, ocean_categorical_scheme
 from worldgen.resources.crops import CROP_NAMES, N_CROPS
@@ -132,3 +133,27 @@ def build_dominant_crop_display_texture(
     """Convert (N, H, W, 1) uint8 crop texture to (N, H, W, 4) RGBA."""
     rgba = categorical_texture(crop_tex, _CROP_PALETTE, N_CROPS)
     return apply_water_masks(rgba, ocean_mask_tex=ocean_mask_tex, lake_mask_tex=lake_mask_tex)
+
+
+# The resource layers as recipes, for the world map and (from refined data)
+# regions alike.
+def _water(tex) -> dict:
+    return dict(
+        elevation_tex=tex.get("elevation"), ocean_mask_tex=tex.get("ocean_mask"),
+        lake_mask_tex=tex.get("lake_mask"),
+    )
+
+
+FERTILITY_RECIPE = TextureRecipe(
+    lambda tex: build_fertility_display_texture(tex["fertility"], **_water(tex)), sources=("fertility",), relief=True,
+)
+FOREST_DENSITY_RECIPE = TextureRecipe(
+    lambda tex: build_forest_density_display_texture(tex["forest_density"], **_water(tex)),
+    sources=("forest_density",), relief=True,
+)
+DOMINANT_CROP_RECIPE = TextureRecipe(
+    lambda tex: build_dominant_crop_display_texture(
+        tex["dominant_crop"], ocean_mask_tex=tex.get("ocean_mask"), lake_mask_tex=tex.get("lake_mask"),
+    ),
+    sources=("dominant_crop",), relief=True,
+)

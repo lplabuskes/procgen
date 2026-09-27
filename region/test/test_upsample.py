@@ -39,6 +39,12 @@ def test_shapes_and_keys(fields):
     assert fields.textures["biome"].shape == (m, t, t, 1)
 
 
+def test_a_world_without_resources_refines_none(fields):
+    """The synthetic globe has no resource layers or danger: none are invented."""
+    for key in ("fertility", "forest_density", "dominant_crop", "rural_density", "danger"):
+        assert key not in fields.textures, key
+
+
 def test_downsampling_recovers_the_global_map(fields, synthetic_globe):
     """Averaging each global texel's regional samples must return its value."""
     report = conservation_report(fields, synthetic_globe)

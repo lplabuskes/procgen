@@ -27,7 +27,7 @@ from typing import Optional
 
 import numpy as np
 
-from core.display import DisplayRegistry
+from core.display import DisplayRegistry, TextureRecipe
 from core.params import param_field as _f, paramclass
 from core.pipeline import BuildContext, Stage
 from realmgen.channels import HINTERLAND_ID, RURAL_POPULATION, TOWN_POPULATION
@@ -96,6 +96,17 @@ def build_rural_density_texture(
     rgba = gradient_texture(s[..., None], _DENSITY_STOPS)
     rgba[water] = OCEAN_COLOR
     return rgba.astype(np.float16)
+
+
+def rural_density_recipe(d_max: float) -> TextureRecipe:
+    """The Rural Density layer, scaled to the world's ``d_max``, over any texture
+    set holding ``rural_density`` (the globe's, or a region's refined one)."""
+    def fn(tex) -> np.ndarray:
+        water = np.asarray(tex["ocean_mask"])[..., 0] > 0.5
+        if "lake_mask" in tex:
+            water = water | (np.asarray(tex["lake_mask"])[..., 0] > 0.5)
+        return build_rural_density_texture(np.asarray(tex[RURAL_DENSITY_TEXTURE], dtype=np.float32), water, d_max)
+    return TextureRecipe(fn, sources=(RURAL_DENSITY_TEXTURE, "ocean_mask"))
 
 
 def _density_legend(d_max: float) -> list[tuple[str, tuple]]:
@@ -294,11 +305,11 @@ class TownStage(Stage):
                 water |= mesh.face_textures["lake_mask"][..., 0] > 0.5
             land_vals = density[..., 0][~water]
             d_max = float(np.percentile(land_vals, 99)) if land_vals.size else 1.0
-            mesh.set_face_textures(
-                "rural_density_rgba", build_rural_density_texture(density, water, d_max))
+            recipe = rural_density_recipe(d_max)
+            mesh.set_face_textures("rural_density_rgba", recipe(mesh.face_textures))
             reg.add_scheme(
                 "Rural Density", lambda meta: OCEAN_COLOR,
-                texture="rural_density_rgba", legend=("gradient", _density_legend(d_max)),
+                texture="rural_density_rgba", legend=("gradient", _density_legend(d_max)), recipe=recipe,
             )
 
     # ── Persistence ───────────────────────────────────────────────────────────

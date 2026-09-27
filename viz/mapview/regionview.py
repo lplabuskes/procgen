@@ -16,13 +16,15 @@ from viz.mapview.overlays import draw_overlays
 from region.geometry import RegionGeometry
 from region.grid import RegionHexGrid
 from region.params import RegionParams
-from region.rivers import RegionRivers, build_region_rivers
+from region.rivers import RegionRivers, build_region_rivers, snap_deltas
+from region.roads import RegionRoads, build_region_roads
 from region.towns import refine_region_towns
 from region.upsample import RegionFields, build_region_fields
 
 if TYPE_CHECKING:
     from core.world import World
     from realmgen.builder import RealmParams
+    from worldgen.builder import GlobeParams
 
 
 class RegionView(QWidget):
@@ -53,11 +55,17 @@ class RegionView(QWidget):
         self._grid: Optional[RegionHexGrid] = None
         self._fields: Optional[RegionFields] = None
         self._region_params = RegionParams()
-        # The world's realm tuning: the town weights and radii towns are refined with.
+        # The world's realm tuning: the town weights and radii towns are refined
+        # with, the population γ and the danger movement scale.
         self._realm_params: Optional["RealmParams"] = None
-        # The world's stream network re-routed over this region's relief; built
-        # with the region, since refining the towns needs it.
+        # The world's physical tuning: the resource and land-cost models reused here.
+        self._world_params: Optional["GlobeParams"] = None
+        # The world's stream network and trade routes re-routed over this region's
+        # relief; built with the region, since refining the towns needs them.
         self._rivers: Optional[RegionRivers] = None
+        self._roads: Optional[RegionRoads] = None
+        # World deltas moved onto the re-routed rivers' mouths.
+        self._deltas: Optional[np.ndarray] = None
         self._globe: Optional["World"] = None
         # The world map's active scheme: its name and spec (colour fn, texture, recipe).
         self._layer: Optional[str] = None
@@ -91,30 +99,53 @@ class RegionView(QWidget):
         self._grid = RegionHexGrid(geometry, int(self._region_params.upsample.n_cols))
         self._fields = None
         self._rivers = None
+        self._roads = None
+        self._deltas = None
         self._hex_images = []
         self._land_positions = {}
         self._zoom = 1.0
         self._pan[:] = 0.0
         if globe is not None and "elevation" in globe.mesh.face_textures:
-            self._fields = build_region_fields(globe, geometry.region_id, self._region_params.upsample)
+            realm, world = self._realm_params, self._world_params
+            self._fields = build_region_fields(
+                globe, geometry.region_id, self._region_params.upsample,
+                resources=world.resources if world is not None else None,
+                fertility_exponent=float(realm.population.fertility_exponent) if realm is not None else 2.0,
+            )
             self._grid = self._fields.grid
             self._rebuild_images()
             self._refine_features()
         self.update()
 
     def _refine_features(self) -> None:
-        """Re-route the streams over the refined relief and refine the positions of
-        the towns this region owns — into the world's ``towns`` feature, so they
-        stay refined (and are saved) after the region is left."""
+        """Re-route the streams and trade routes over the refined terrain, move the
+        deltas onto the new river mouths, and refine the positions of the towns
+        this region owns — into the world's ``towns`` feature, so they stay
+        refined (and are saved) after the region is left."""
         assert self._fields is not None and self._globe is not None
-        self._rivers = build_region_rivers(self._fields, self._globe, self._region_params.rivers)
-        realm = self._realm_params
+        f, globe, rp = self._fields, self._globe, self._region_params
+        self._rivers = build_region_rivers(f, globe, rp.rivers)
+        realm, world = self._realm_params, self._world_params
+        self._roads = build_region_roads(
+            f, globe, self._rivers, rp.roads,
+            land=world.cost.land if world is not None else None,
+            danger_scale=float(realm.danger.movement_scale) if realm is not None else 2.0,
+            land_reach=self._land_reach(),
+        )
+        deltas = globe.get_feature("deltas")
+        self._deltas = None
+        if deltas is not None and len(deltas):
+            # A re-routed stem ends up to two corridors from its world mouth.
+            texel = float(np.sqrt(np.mean(globe.mesh.face_areas))) / max(
+                globe.mesh.face_textures["elevation"].shape[2] - 1, 1)
+            reach = 2.0 * float(rp.rivers.corridor_global_texels) * texel + 2.0 * self._land_reach()
+            self._deltas = snap_deltas(np.asarray(deltas), self._rivers, reach)
         refine_region_towns(
-            self._fields, self._rivers, self._globe,
+            f, self._rivers, globe,
             realm.towns if realm is not None else None,
             realm.population if realm is not None else None,
             realm.refine.river_threshold_factor if realm is not None else 1.5,
-            self._region_params.towns,
+            rp.towns, roads=self._roads,
         )
 
     def set_params(self, params: RegionParams, globe: Optional["World"] = None) -> None:
@@ -144,10 +175,15 @@ class RegionView(QWidget):
         self.update()
 
     def set_realm_params(self, params: Optional["RealmParams"]) -> None:
-        """The realm tuning the world was built with (town weights and radii),
-        used when refining towns. A change comes with a rebuilt world, so there
-        is nothing to redo here."""
+        """The realm tuning the world was built with (town weights and radii, the
+        population γ, the danger movement scale), used when refining. A change
+        comes with a rebuilt world, so there is nothing to redo here."""
         self._realm_params = params
+
+    def set_world_params(self, params: Optional["GlobeParams"]) -> None:
+        """The physical tuning the world was built with (the resource and land-cost
+        models), used when refining. A change comes with a rebuilt world."""
+        self._world_params = params
 
     def clear_region(self) -> None:
         """Drop the current region (and its refined fields) until the next ``set_region``."""
@@ -156,6 +192,8 @@ class RegionView(QWidget):
         self._grid = None
         self._fields = None
         self._rivers = None
+        self._roads = None
+        self._deltas = None
         self._hex_images = []
         self._land_positions = {}
         self._cell_layout = None
@@ -322,27 +360,36 @@ class RegionView(QWidget):
 
     def _refined_features(self) -> dict:
         """Overlay features this region draws finer than the world map: the
-        rivers — the stream network re-routed over the refined relief. (Towns need
-        no override: their refined positions are in the world feature.)"""
-        if self._rivers is None or not self._overlay_visible.get("rivers"):
-            return {}
-        return {"rivers": self._rivers.paths}
+        rivers and roads re-routed over the refined terrain, and the deltas on the
+        new river mouths. (Towns need no override: their refined positions are in
+        the world feature.)"""
+        out: dict = {}
+        if self._rivers is not None:
+            out["rivers"] = self._rivers.paths
+        if self._roads is not None:
+            out["trade_routes"] = self._roads.segments
+        if self._deltas is not None:
+            out["deltas"] = self._deltas
+        return out
+
+    def _land_reach(self) -> float:
+        """How far (chord) a settlement on refined water is moved onto land: the
+        farthest the refinement lets water spread onto land the globe called dry,
+        plus a couple of texels of slack."""
+        f = self._fields
+        if f is None:
+            return 0.0
+        return (int(self._region_params.upsample.water_spread_texels) + 2) * f.grid.texel_spacing_rad(f.tex_size)
 
     def _on_land(self, key: str, ecef: np.ndarray) -> np.ndarray:
-        """``ecef`` moved off the refined water (``snap_to_land``), cached per feature.
-
-        The reach is the farthest the refinement lets water spread onto land the
-        globe called dry, plus a couple of texels of slack.
-        """
+        """``ecef`` moved off the refined water (``snap_to_land``), cached per feature."""
         if self._fields is None:
             return ecef
         ecef = np.asarray(ecef, dtype=np.float64).reshape(-1, 3)
         cached = self._land_positions.get(key)
         if cached is not None and np.array_equal(cached[0], ecef):
             return cached[1]
-        f = self._fields
-        reach = (int(self._region_params.upsample.water_spread_texels) + 2) * f.grid.texel_spacing_rad(f.tex_size)
-        moved = snap_to_land(f, ecef, reach)
+        moved = snap_to_land(self._fields, ecef, self._land_reach())
         self._land_positions[key] = (ecef.copy(), moved)
         return moved
 
