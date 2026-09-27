@@ -50,6 +50,10 @@ from worldgen.resources.channels import FERTILITY_MEAN, MINERALS, RARE_BIO
 class TradeParams:
     port_cost: float = _f(5.0, label="Port cost", min=0.0, max=50.0)
     river_switch_cost: float = _f(0.0, label="River switch cost", min=0.0, max=10.0)
+    # Goods move between land and water only at a settlement.  While the
+    # settlements relax, a landing anywhere else costs this much; where trade
+    # still pays it, a port town is founded.  The final network has no landings.
+    landing_cost: float = _f(12.0, label="Fallback landing cost", min=0.0, max=200.0)
     flow_decay: float = _f(0.05, label="Flow decay", min=0.001, max=1.0)
     hub_display_quantile: float = _f(0.90, label="Hub display quantile", min=0.5, max=0.99)
 
@@ -62,6 +66,9 @@ class TradeSpawnParams:
     waypoint_min_cost: float = _f(30.0, label="Waypoint min cost dist", min=5.0, max=200.0)
     waypoint_min_suitability: float = _f(0.10, label="Waypoint min suitability", min=0.0, max=0.5)
     waypoint_exclusion: float = _f(3.0, label="Waypoint exclusion radius", min=1.0, max=20.0)
+    port_spawn_quantile: float = _f(0.50, label="Port spawn quantile", min=0.0, max=1.00)
+    port_min_suitability: float = _f(0.05, label="Port min suitability", min=0.0, max=0.5)
+    port_exclusion: float = _f(2.0, label="Port exclusion radius", min=0.0, max=20.0)
 
 
 @paramclass
@@ -287,12 +294,13 @@ class PopulationStage(Stage):
             (sp.tier3.exclusion_radius, sp.tier3.score_threshold, sp.tier3.initial_population),
         ]
 
-        def _compute_trade(settlements, settlement_demands=None):
+        def _compute_trade(settlements, settlement_demands=None, landings=True):
             return compute_trade_network(
                 mesh, settlements, good_sources,
                 edge_costs, ~is_water, sea_edge_costs, sea_passable,
                 port_cost=tp.port_cost,
                 river_switch_cost=tp.river_switch_cost,
+                landing_cost=tp.landing_cost if landings else np.inf,
                 flow_decay=tp.flow_decay,
                 hub_display_quantile=tp.hub_display_quantile,
                 settlement_demands=settlement_demands,
@@ -332,6 +340,10 @@ class PopulationStage(Stage):
                 waypoint_min_cost=tsp.waypoint_min_cost,
                 waypoint_min_suitability=tsp.waypoint_min_suitability,
                 waypoint_exclusion=tsp.waypoint_exclusion,
+                landing_flow=self.trade_result.landing_flow,
+                port_spawn_quantile=tsp.port_spawn_quantile,
+                port_min_suitability=tsp.port_min_suitability,
+                port_exclusion=tsp.port_exclusion,
             )
             if new_settlements:
                 self.settlements = self.settlements + new_settlements
@@ -413,7 +425,8 @@ class PopulationStage(Stage):
             reach_scale=pp.hinterland_reach_scale,
         )
         if self.settlements:
-            self.trade_result = _compute_trade(self.settlements, settlement_demands=population)
+            # No landings now: every land↔water hop is at a settlement.
+            self.trade_result = _compute_trade(self.settlements, settlement_demands=population, landings=False)
 
         # ── Write per-face metadata ──────────────────────────────────────────
         TRADE_FLOW.write(mesh, self.trade_result.face_flow)

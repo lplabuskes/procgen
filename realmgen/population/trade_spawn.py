@@ -1,6 +1,6 @@
 """Trade-driven settlement spawning.
 
-Two mechanisms add settlements during the population relaxation phase:
+Three mechanisms add settlements during the population relaxation phase:
 
 1. **Hub spawning** — faces with very high trade flow and no nearby settlement.
    Represents natural chokepoints or junctions where commerce concentrates.
@@ -10,6 +10,11 @@ Two mechanisms add settlements during the population relaxation phase:
    When the cost-distance between two settlements exceeds ``waypoint_min_cost``,
    the highest-scoring eligible face in the middle 60% of that route gets a
    village (tier 3).
+
+3. **Port spawning** — goods move between land and water only at settlements,
+   but while the settlements relax, trade may land anywhere at a steep cost.
+   Where a lot of it still does, a port town (tier 2) is founded, and on the
+   next pass that landing is an ordinary port.
 
 Returned settlements are added to the settlement list *before* the relaxation
 loop runs, so they participate in all subsequent trade and population passes.
@@ -69,6 +74,10 @@ def spawn_trade_settlements(
     waypoint_min_cost: float = 30.0,
     waypoint_min_suitability: float = 0.10,
     waypoint_exclusion: float = 3.0,
+    landing_flow: np.ndarray | None = None,
+    port_spawn_quantile: float = 0.80,
+    port_min_suitability: float = 0.05,
+    port_exclusion: float = 2.0,
 ) -> List[Settlement]:
     """Return newly spawned trade-driven settlements (caller merges the list).
 
@@ -93,6 +102,12 @@ def spawn_trade_settlements(
         waypoint_min_suitability: minimum suitability for waypoint placement.
         waypoint_exclusion: minimum cost-distance from any settlement for a
             waypoint.
+        landing_flow: ``(N,)`` float — trade flow over fallback landings (land
+            faces that are not ports); ``None`` spawns no ports.
+        port_spawn_quantile: a landing founds a port when its flow reaches this
+            quantile of the positive face flows.
+        port_min_suitability: minimum suitability for a port.
+        port_exclusion: minimum cost-distance from any settlement for a port.
 
     Returns:
         New :class:`~realmgen.placement.types.Settlement` objects to merge.
@@ -149,6 +164,33 @@ def spawn_trade_settlements(
                 indices=[int(face_id)], return_predecessors=False,
             )[0]
             forbidden |= d_from_hub < hub_exclusion
+
+    # ── Port spawning ─────────────────────────────────────────────────────────
+
+    if landing_flow is not None and positive_flow.size > 0:
+        landing = np.asarray(landing_flow, dtype=np.float64)
+        port_threshold = max(float(np.quantile(positive_flow, port_spawn_quantile)), 1e-12)
+        forbidden = water | (min_dist < port_exclusion)
+        for s in spawned:
+            forbidden[s.face_id] = True
+        candidates = np.where(
+            (landing >= port_threshold) & (suit >= port_min_suitability) & ~forbidden
+        )[0]
+        for face_id in candidates[np.argsort(-landing[candidates])]:
+            if forbidden[int(face_id)]:
+                continue
+            spawned.append(Settlement(
+                face_id=int(face_id),
+                position=centroids[int(face_id)].copy(),
+                tier=2,
+                score=float(landing[int(face_id)]),
+                population=hub_initial_pop,
+            ))
+            d_from_port = sp_dijkstra(
+                cost_graph, directed=False,
+                indices=[int(face_id)], return_predecessors=False,
+            )[0]
+            forbidden |= d_from_port < port_exclusion
 
     # ── Waypoint spawning ─────────────────────────────────────────────────────
 

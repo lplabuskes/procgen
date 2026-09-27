@@ -15,9 +15,9 @@ All populations are **real people**, anchored to a medieval-tech Earth (~300–4
 
 ## Params
 
-**`TradeParams`**: `port_cost`, `river_switch_cost`, `flow_decay`, `hub_display_quantile`.
+**`TradeParams`**: `port_cost`, `river_switch_cost`, `landing_cost` (fallback land↔water transition away from a settlement, relaxation passes only — see [Ports](#ports)), `flow_decay`, `hub_display_quantile`.
 
-**`TradeSpawnParams`**: `hub_spawn_quantile`, `hub_min_suitability`, `hub_exclusion`, `waypoint_min_cost`, `waypoint_min_suitability`, `waypoint_exclusion`.
+**`TradeSpawnParams`**: `hub_spawn_quantile`, `hub_min_suitability`, `hub_exclusion`, `waypoint_min_cost`, `waypoint_min_suitability`, `waypoint_exclusion`, `port_spawn_quantile`, `port_min_suitability`, `port_exclusion`.
 
 **`PopulationParams`**: `relaxation_passes`, `rural_density_max` (D_max, people/km² at fertility 1), `fertility_exponent` (γ ≈ 2 — restores density contrast), `surplus_rate` (s — regional agricultural surplus), `city_surplus_share` (major city's slice of `s·cap`; remainder reserved for the future town pipeline), `trade_food_weight` (β — people fed per unit trade flow), `city_min` (urban-formation floor in people), `hinterland_max_distance`, `hinterland_influence_scale`, `hinterland_reach_scale`, `hinterland_water_cost`, `trade_spawn: TradeSpawnParams`.
 
@@ -25,13 +25,19 @@ All populations are **real people**, anchored to a medieval-tech Earth (~300–4
 
 **`trade/network.py`**: `compute_trade_network` — routes trade flows from resource deposits (minerals + rare bio) to settlements over the combined land + sea graph. Returns `face_flow` (per-face scalar), `routes` (polylines for rendering), `hub_mask` (top-flow faces), and `pair_flow` (the `(S, S)` directional inter-settlement trade matrix — `pair_flow[i, j]` = volume exporter *i* sends to importer *j*, index-aligned with `settlements`). Called at the start and after each relaxation pass with population-weighted demands.
 
+### Ports
+
+Goods move between land and water **only at a settlement's face** (`settlement_ports=True`, the default): a coastal settlement is a port (port edges to its sea neighbours at `port_cost`), a settlement on a navigable river is a river port (land↔water switch at `river_switch_cost`). Navigable rivers are water all the way to their mouths, so an inland river city ships straight down the river and out to sea — the only other place a route crosses between land and water on the map is a river mouth (a water hop from a river face to the sea). The polity stage's sea-authority graph (`build_base_hybrid_graph`) still allows transitions everywhere.
+
+A strict rule would strand coasts with no settlement, so during the relaxation passes every other coastal/river face gets a fallback *landing* at `landing_cost` (≈2.4× the port cost). `TradeResult.landing_flow` reports the flow each landing carries; where it reaches `port_spawn_quantile` of the positive face flows (the median — the map's drawing threshold), `spawn_trade_settlements` founds a port town there, and on the next pass it is an ordinary port. The **final** trade network is built without landings. Seed 4: land/sea hops away from a settlement went from 205 of 402 to 0 (the 14 left are river mouths); ~7 ports founded.
+
 The final-pass `pair_flow` is published by `PopulationStage` as the `trade_attribution` world feature (aligned with the `settlements` feature). It is per-settlement trade-route provenance — column *j* = settlement *j*'s imports by source, row *i* = its exports by destination — consumed by the polity stage's economic-grip / peripheral-wealth secession levers (a settlement whose trade is dominated by intra-polity partners has stronger economic incentive to stay).
 
 ## PopulationStage
 
 Runs third in `RealmPipeline`. Reads `IS_WATER`, `COST_SURFACES`, `MINERALS`, `RARE_BIO`, `FERTILITY_MEAN`, `SUITABILITY`. Danger (`DangerInfluenceParams.movement_scale`) is added to land base cost in the cost graphs.
 
-Computes the per-face food base and rural population up front (written to `RURAL_POPULATION`, with `TOWN_POPULATION` zeroed — the town stage later moves its towns from one to the other), then runs a relaxation loop for `relaxation_passes` iterations: each pass spawns trade-hub and waypoint settlements (`trade_spawn.py`), recomputes hinterland shares, carrying capacity, trade wealth, urban population, culls cities below `city_min`, then reruns the trade network with population-weighted demands.
+Computes the per-face food base and rural population up front (written to `RURAL_POPULATION`, with `TOWN_POPULATION` zeroed — the town stage later moves its towns from one to the other), then runs a relaxation loop for `relaxation_passes` iterations: each pass spawns trade-hub and waypoint settlements (`trade_spawn.py`), recomputes hinterland shares, carrying capacity, trade wealth, urban population, culls cities below `city_min`, then reruns the trade network with population-weighted demands. The trade network after the loop is rebuilt without fallback landings.
 
 After the relaxation loop, **defensibility is computed per settlement** and stamped onto the `Settlement` objects — see [Defensibility](#defensibility) below. Stores final per-settlement diagnostics (`carrying_cap`, `trade_wealth`) aligned with `settlements`/`population`. 
 
@@ -49,7 +55,7 @@ Pure functions:
 
 ## trade_spawn.py
 
-`spawn_trade_settlements` — identifies high-flow hub faces and remote waypoint faces and seeds additional `Settlement` objects there; called once per relaxation pass.
+`spawn_trade_settlements` — identifies high-flow hub faces, remote waypoint faces, and busy fallback landings (port towns, see [Ports](#ports)) and seeds additional `Settlement` objects there; called once per relaxation pass.
 
 ## Defensibility
 

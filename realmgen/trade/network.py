@@ -65,6 +65,9 @@ class TradeResult:
     routes: list            # [(start_3d, end_3d, flow)] segments above display threshold
     # (S, S) float32 — Phase-2 flow from settlement i (exporter) to j (importer); index-aligned with settlements arg
     pair_flow: np.ndarray = field(default_factory=lambda: np.zeros((0, 0), dtype=np.float32))
+    # (N,) float32 — flow crossing between land and water at each land face that
+    # is not a port (the fallback landings); all zero without landings.
+    landing_flow: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.float32))
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -79,11 +82,18 @@ def _collect_hybrid_edges(
     sea_passable: np.ndarray,
     port_cost: float,
     river_switch_cost: float,
+    ports: np.ndarray | None = None,
+    landing_cost: float = np.inf,
 ) -> tuple[list, list, list]:
     """Return (rows, cols, data) for all hybrid graph edges.
 
     Builds the base (2N, 2N) graph — land surface, sea surface, amphibious
     river switches, and port transitions.  Virtual-source edges are NOT included.
+
+    ``ports`` (``(N,)`` bool) limits the land↔water transitions — port edges and
+    river switches — to those faces at their usual cost; every other coastal or
+    river face gets them at ``landing_cost`` instead, or not at all when it is
+    infinite.  ``None`` allows them everywhere.
     """
     rows: List[int] = []
     cols: List[int] = []
@@ -107,15 +117,23 @@ def _collect_hybrid_edges(
                 cols.append(n + j)
                 data.append(float(c))
 
+    port = np.ones(n, dtype=bool) if ports is None else np.asarray(ports, dtype=bool)
+    landing = max(float(landing_cost), 0.0)
+
+    def transition(i: int, j: int, cost: float) -> None:
+        c = cost if port[i] else landing
+        if not np.isfinite(c):
+            return
+        rows.append(i)
+        cols.append(n + j)
+        data.append(c)
+        rows.append(n + j)
+        cols.append(i)
+        data.append(c)
+
     sc = max(float(river_switch_cost), 0.0)
     for raw_i in np.where(amphibious)[0]:
-        fi = int(raw_i)
-        rows.append(fi)
-        cols.append(n + fi)
-        data.append(sc)
-        rows.append(n + fi)
-        cols.append(fi)
-        data.append(sc)
+        transition(int(raw_i), int(raw_i), sc)
 
     pc = max(float(port_cost), 0.0)
     for i, adj in enumerate(face_adjacency):
@@ -123,12 +141,7 @@ def _collect_hybrid_edges(
             continue
         for j in adj:
             if sea_p[j] and not land_p[j]:
-                rows.append(i)
-                cols.append(n + j)
-                data.append(pc)
-                rows.append(n + j)
-                cols.append(i)
-                data.append(pc)
+                transition(i, j, pc)
 
     return rows, cols, data
 
@@ -265,6 +278,8 @@ def compute_trade_network(
     *,
     port_cost: float = 5.0,
     river_switch_cost: float = 0.0,
+    settlement_ports: bool = True,
+    landing_cost: float = np.inf,
     settlement_demands: np.ndarray | None = None,
     flow_decay: float = 0.05,
     hub_display_quantile: float = 0.90,
@@ -304,6 +319,14 @@ def compute_trade_network(
         sea_passable: ``(N,)`` bool.
         port_cost: one-time loading/unloading cost at a coastal transition.
         river_switch_cost: cost to switch surfaces at a navigable river face.
+        settlement_ports: goods move between land and water only at a
+            settlement's face — a coastal settlement is a port, one on a
+            navigable river a river port.  Rivers are water all the way to their
+            mouths, so an inland river city ships straight out to sea.
+            ``False`` allows the transition at every coastal and river face.
+        landing_cost: with ``settlement_ports``, the cost of a fallback landing
+            anywhere else (``inf`` = none).  The relaxation loop uses it to find
+            where trade wants a port that does not exist yet.
         settlement_demands: optional ``(S,)`` per-settlement demand weights.
             When provided, overrides each settlement's ``demand`` field — used
             by the population relaxation loop to substitute population-
@@ -329,6 +352,7 @@ def compute_trade_network(
         hub_mask=np.zeros(n, dtype=bool),
         routes=[],
         pair_flow=np.zeros((s, s), dtype=np.float32),
+        landing_flow=np.zeros(n, dtype=np.float32),
     )
     if not settlements or not good_sources:
         return empty
@@ -350,11 +374,15 @@ def compute_trade_network(
 
     # Build (2N, 2N) hybrid graph (no virtual source)
     size = 2 * n
+    ports = None
+    if settlement_ports:
+        ports = np.zeros(n, dtype=bool)
+        ports[settlement_nodes] = True
     rows, cols, data = _collect_hybrid_edges(
         n, mesh.face_adjacency,
         land_edge_costs, np.asarray(land_passable, dtype=bool),
         sea_edge_costs, np.asarray(sea_passable, dtype=bool),
-        port_cost, river_switch_cost,
+        port_cost, river_switch_cost, ports, landing_cost,
     )
     if data:
         graph = csr_matrix(
@@ -450,6 +478,13 @@ def compute_trade_network(
         face_flow[a % n] += flow
         face_flow[b % n] += flow
 
+    # Flow over the fallback landings (land node ↔ water node at a non-port).
+    landing_flow = np.zeros(n, dtype=np.float64)
+    if ports is not None:
+        for (a, b), flow in edge_flow.items():
+            if a < n <= b and not ports[a]:
+                landing_flow[a] += flow
+
     # Hub detection
     positive = face_flow[face_flow > 0.0]
     hub_threshold = float(np.quantile(positive, hub_display_quantile)) if positive.size > 0 else np.inf
@@ -471,4 +506,5 @@ def compute_trade_network(
         hub_mask=hub_mask,
         routes=routes,
         pair_flow=pair_flow.astype(np.float32),
+        landing_flow=landing_flow.astype(np.float32),
     )

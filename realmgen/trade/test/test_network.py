@@ -302,45 +302,91 @@ class TestComputeTradeNetwork:
         assert end.shape == (3,)
         assert flow > 0.0
 
-    def test_sea_route_via_port(self):
-        # Topology: land face 0 (settlement), sea face 1 (ocean), land face 2 (source).
-        # The only connection between 0 and 2 is via a port→sea→port path.
-        # Adjacency: 0—1—2 where 0 and 2 are land, 1 is sea.
+    @staticmethod
+    def _strait():
+        """Land 0 — sea 1 — land 2: the only way between the shores is by sea."""
         n = 3
         adj = [[1], [0, 2], [1]]
         angles = np.array([0.0, np.pi / 2, np.pi])
         centroids = np.column_stack([np.cos(angles), np.sin(angles), np.zeros(n)])
-        mesh = _Mesh(adj, centroids)
-
         land_p = np.array([True, False, True])
         sea_p = np.array([False, True, False])
+        land_ec = [np.array([np.inf]), np.array([np.inf, np.inf]), np.array([np.inf])]
+        sea_ec = [np.array([np.inf]), np.array([np.inf, np.inf]), np.array([np.inf])]
+        return _Mesh(adj, centroids), land_ec, land_p, sea_ec, sea_p
 
-        # Land edges: only 0↔1 and 1↔2 but 1 is water so land costs are inf
-        land_ec = [
-            np.array([np.inf]),   # face 0 → face 1: inf (water neighbor)
-            np.array([np.inf, np.inf]),  # face 1 → 0, 2: inf (water face)
-            np.array([np.inf]),   # face 2 → face 1: inf
-        ]
-        # Sea edges: 1↔0 and 1↔2 are inf (0 and 2 are land), but 1 connects internally
-        sea_ec = [
-            np.array([np.inf]),   # sea node 0 not passable
-            np.array([np.inf, np.inf]),  # sea node 1 → sea 0, sea 2 (land = not sea_passable)
-            np.array([np.inf]),   # sea node 2 not passable
-        ]
-
-        settlements = [_settlement(0, tier=0)]
+    def test_sea_route_via_port(self):
+        # A deposit on a shore with no settlement ships across when ports are
+        # allowed everywhere.
+        mesh, land_ec, land_p, sea_ec, sea_p = self._strait()
         result = compute_trade_network(
-            mesh, settlements, [(2, 5.0, 0)],
-            land_ec, land_p,
-            sea_ec, sea_p,
-            port_cost=1.0,
-            flow_decay=0.0,
+            mesh, [_settlement(0, tier=0)], [(2, 5.0, 0)],
+            land_ec, land_p, sea_ec, sea_p,
+            port_cost=1.0, flow_decay=0.0, settlement_ports=False,
         )
-        # Flow should reach face 2 via port—sea—port route
-        # (whether it actually routes depends on path cost being finite)
-        # The route: virtual→land0 (cost 0) → port → sea1 (cost 1.0) → port → land2 (cost 1.0)
-        # Total dist to land2 = 2.0 (two ports). Flow should be nonzero.
-        assert result.face_flow[2] > 0.0 or result.face_flow[0] > 0.0
+        assert result.face_flow[2] > 0.0
+
+    def test_no_port_without_a_settlement(self):
+        # With settlement ports, the settlement-less shore cannot reach the sea.
+        mesh, land_ec, land_p, sea_ec, sea_p = self._strait()
+        result = compute_trade_network(
+            mesh, [_settlement(0, tier=0)], [(2, 5.0, 0)],
+            land_ec, land_p, sea_ec, sea_p,
+            port_cost=1.0, flow_decay=0.0,
+        )
+        assert result.face_flow.sum() == 0.0
+
+    def test_settlements_on_both_shores_trade_by_sea(self):
+        mesh, land_ec, land_p, sea_ec, sea_p = self._strait()
+        result = compute_trade_network(
+            mesh, [_settlement(0, tier=0), _settlement(2, tier=0)], [(2, 5.0, 0)],
+            land_ec, land_p, sea_ec, sea_p,
+            port_cost=1.0, flow_decay=0.0,
+        )
+        assert result.pair_flow[1, 0] > 0.0
+        assert result.landing_flow.sum() == 0.0
+
+    def test_fallback_landing_carries_and_reports_flow(self):
+        mesh, land_ec, land_p, sea_ec, sea_p = self._strait()
+        result = compute_trade_network(
+            mesh, [_settlement(0, tier=0)], [(2, 5.0, 0)],
+            land_ec, land_p, sea_ec, sea_p,
+            port_cost=1.0, flow_decay=0.0, landing_cost=10.0,
+        )
+        assert result.face_flow[2] > 0.0
+        assert result.landing_flow[2] > 0.0
+        assert result.landing_flow[0] == 0.0     # the settlement is a real port
+
+    def test_river_port_ships_down_the_river(self):
+        """Faces 0-3 are a navigable river (land and water) reaching the sea at 4.
+        A city at 1 ships downstream by water; nowhere else may goods board."""
+        n = 6
+        mesh = _line_mesh(n)
+        land_p = np.array([True, True, True, True, False, True])
+        sea_p = np.array([True, True, True, True, True, False])
+        # Land is dear, water cheap: goods want to board as early as possible.
+        land_ec = _uniform_edge_costs(mesh, cost=10.0)
+        land_ec = [np.where(land_p[i] & land_p[np.array(mesh.face_adjacency[i])], c, np.inf)
+                   for i, c in enumerate(land_ec)]
+        sea_ec = [np.where(sea_p[i] & sea_p[np.array(mesh.face_adjacency[i])], 1.0, np.inf)
+                  for i in range(n)]
+        # A deposit upriver at 0 and a port across the sea at 5.
+        settlements = [_settlement(1, tier=0), _settlement(5, tier=0)]
+        strict = compute_trade_network(
+            mesh, settlements, [(0, 5.0, 0)],
+            land_ec, land_p, sea_ec, sea_p, port_cost=1.0, flow_decay=0.1,
+        )
+        loose = compute_trade_network(
+            mesh, settlements, [(0, 5.0, 0)],
+            land_ec, land_p, sea_ec, sea_p, port_cost=1.0, flow_decay=0.1,
+            settlement_ports=False,
+        )
+        # The city ships its goods down the river and over the sea to the other port.
+        assert strict.pair_flow[0, 1] > 0.0
+        # Loose boards at the deposit (cost 1 to the city); strict carries it
+        # overland (cost 10), so less of it arrives.
+        assert strict.face_flow[1] < loose.face_flow[1]
+        assert strict.landing_flow.sum() == 0.0
 
     def test_deterministic(self):
         mesh = _line_mesh(8)

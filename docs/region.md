@@ -319,7 +319,12 @@ faces and how much are world facts; a region refines where the road runs.
   world's `cost_surfaces`. Land hops are chained at their junctions (`_chains`;
   loops are cut). A port hop (land → water face) is split at the first refined
   water along it: its land part joins the chain, the rest is a straight `sea`
-  leg. Pure sea hops stay straight. Chains leaving the raster are cut at its edge.
+  leg. The world only puts land↔water hops at settlements (ports) and river
+  mouths (see [realm_population.md](realm_population.md#ports)), so the land part
+  is the short road from the port town to its shore. A river face counts as land
+  here, so trade carried on a river is drawn as a road, which the along-river
+  discount keeps in the valley. Pure sea hops stay straight. Chains leaving the
+  raster are cut at its edge.
 - **Cost** — the world's land-cost model per raster node, in the same units (a
   face-width step of base cost 1 costs 1): base = `biome_cost_scale ·
   BIOME_TRAVERSAL_COST[biome] + forest_cost_strength · forest + danger_scale ·
