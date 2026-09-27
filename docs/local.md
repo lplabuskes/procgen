@@ -208,4 +208,5 @@ is left, pulling the mean size to ~330–370.
 (~195 km²) holds fewer than 200 people and cannot afford a village, so its people
 all stay dispersed — and on seed 4 the *median* land face is that sparse
 (0.4/km²). This is the per-(global texel ∩ map) conservation rule meeting the
-200-person floor, the same effect as the edge slivers above.
+200-person floor, the same effect as the edge slivers above. Kept deliberately: thin
+land shows its people dispersed rather than pooling budgets or lowering the floor.

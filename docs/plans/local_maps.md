@@ -37,7 +37,7 @@ The detail band gains ~3–4 octaves (a 12× refinement, against the region's 3�
 
 ## Phases
 
-Status: all six phases done (2026-09-27). Open: sparse land and budget slivers get no villages under the per-global-texel budget (see docs/local.md, Diagnostics).
+Status: all six phases done (2026-09-27). Sparse land (< ~1 person/km²) and budget slivers get no villages under the per-global-texel budget (see docs/local.md, Diagnostics); kept as is by decision — pooling budgets or a lower floor were considered and declined.
 
 1. **Geometry and grid** — `localmap/geometry.py`: `LocalGeometry(region
    geometry, hex index)` maps local `[0, 1]²` affinely onto the parent hex's
