@@ -98,14 +98,14 @@ def test_rural_density_spreads_evenly_over_barren_land(dual):
 # ── siting ───────────────────────────────────────────────────────────────────
 
 
-def _place(dual, requests, *, spacing_km=20.0, city=None, params=None):
+def _place(dual, requests, *, spacing_km=20.0, city=None, params=None, streams=None):
     pos, ocean, fert = _fields(dual)
     owner, _ = _owned(dual, pos)
     n = len(dual.faces)
     land = ocean[..., 0] < 0.5
     density = compute_rural_density(
         np.full(n, 1e5), np.full(n, 1e5), fert[..., 0].astype(np.float64), land, owner, 2.0)
-    sites = SiteField(dual, ocean, None, fert, None, positions=pos)
+    sites = SiteField(dual, ocean, None, fert, None, positions=pos, streams=streams)
     cp = np.zeros((0, 3)) if city is None else np.asarray(city[0])[None, :]
     return place_towns(
         requests, sites=sites, density=density, adjacency=dual.face_adjacency,
@@ -134,6 +134,34 @@ def test_town_with_no_room_stays_rural(dual):
     (towns, unplaced), _ = _place(
         dual, [(f, np.array([2_000.0]))], city=(dual.face_centroids[f], f, 1.0))
     assert len(towns) == 0 and unplaced[f] == 2_000.0
+
+
+def _column_streams(dual):
+    """A stream network whose channels are texel column 3 of every face."""
+    from worldgen.hydrology.types import StreamNetwork
+    n = len(dual.faces)
+    nodes = (np.arange(n)[:, None] * TEX * TEX + np.arange(TEX)[None, :] * TEX + 3).ravel()
+    k = nodes.size
+    pos = dual.face_texture_positions(TEX, TEX).reshape(-1, 3)[nodes]
+    return StreamNetwork(
+        nodes=nodes.astype(np.int64), positions=pos.astype(np.float32),
+        receiver=np.full(k, -1, dtype=np.int64), flow=np.full(k, 100.0, dtype=np.float32),
+        channel=np.ones(k, dtype=bool), stop=np.zeros(k, dtype=bool), resolution=TEX,
+    )
+
+
+def test_streams_draw_river_towns(dual):
+    """Stream texels earn the stream bonus and make river towns; without the
+    network (city siting's case) nothing changes."""
+    from realmgen.towns.types import TOWN_RIVER
+    faces = [f for f in range(len(dual.faces)) if dual.face_centroids[f][2] > 0.3][:8]
+    requests = [(f, np.array([1_000.0])) for f in faces]
+    strong = TownParams(stream_bonus=1e6, route_bonus=0.0, mining_bonus=0.0, port_bonus=0.0)
+    (towns, _), sites = _place(dual, requests, params=strong, streams=_column_streams(dual))
+    assert len(towns) == len(faces) and np.all(towns.kind == TOWN_RIVER)
+    (plain, _), plain_sites = _place(dual, requests, params=strong)
+    assert not np.any(plain.kind == TOWN_RIVER)
+    assert not plain_sites.face(faces[0]).stream.any() and sites.face(faces[0]).stream.any()
 
 
 def test_siting_is_deterministic(dual):

@@ -22,6 +22,7 @@ town is the same whichever neighbouring region the view entered from.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
@@ -66,6 +67,9 @@ class TownParams:
     port_bonus: float = _f(2.0, label="Site bonus: harbour", min=0.0, max=10.0)
     confluence_bonus: float = _f(2.0, label="Site bonus: river confluence", min=0.0, max=10.0)
     river_bonus: float = _f(1.0, label="Site bonus: river", min=0.0, max=10.0)
+    # A stream: a channel of the hydrology stream network, too small for the
+    # world map's rivers (a region draws it as a tributary).
+    stream_bonus: float = _f(1.0, label="Site bonus: stream", min=0.0, max=10.0)
     route_bonus: float = _f(1.0, label="Site bonus: trade route", min=0.0, max=10.0)
     mining_bonus: float = _f(1.5, label="Site bonus: mineral deposit", min=0.0, max=10.0)
     route_radius_km: float = _f(15.0, label="Trade-route reach (km)", min=1.0, max=60.0)
@@ -97,6 +101,46 @@ def build_rural_density_texture(
 def _density_legend(d_max: float) -> list[tuple[str, tuple]]:
     labels = ["0", f"{0.35 ** 2 * d_max:.1f}", f"{0.7 ** 2 * d_max:.1f}", f"{d_max:.0f}/km²"]
     return [(lbl, c) for lbl, (_, c) in zip(labels, _DENSITY_STOPS)]
+
+
+@dataclass
+class TownSiteContext:
+    """What town siting reads from the rest of the world, in unit-sphere chords:
+    the cities' exclusion discs, trade-route and mineral points, and the radii."""
+
+    city_positions: np.ndarray       # (C, 3)
+    city_faces: np.ndarray           # (C,)
+    city_radii: np.ndarray           # (C,)
+    route_points: Optional[np.ndarray]
+    mineral_points: Optional[np.ndarray]
+    town_spacing: float
+    route_radius: float
+    mining_radius: float
+
+
+def town_site_context(world, p: TownParams, pp: PopulationParams) -> TownSiteContext:
+    """The :class:`TownSiteContext` of ``world`` — shared by the stage and the
+    region view's re-siting (``region/towns.py``)."""
+    settlements = world.get_feature("settlements") or []
+    city_pop = np.array([s.population for s in settlements], dtype=np.float64)
+    minerals = world.get_feature("minerals")
+    routes = world.get_feature("trade_routes") or []
+    route_radius = float(p.route_radius_km) / EARTH_RADIUS_KM
+    return TownSiteContext(
+        city_positions=np.array([s.position for s in settlements], dtype=np.float64).reshape(-1, 3),
+        city_faces=np.array([s.face_id for s in settlements], dtype=np.int32),
+        city_radii=(
+            float(p.city_clearance_km) / EARTH_RADIUS_KM
+            * (np.maximum(city_pop, 1.0) / float(pp.city_min)) ** SPACING_EXPONENT
+        ),
+        route_points=densify_polylines(
+            [np.stack([np.asarray(a), np.asarray(b)]) for a, b, _ in routes], 0.5 * route_radius,
+        ),
+        mineral_points=None if minerals is None else np.asarray(minerals[0], dtype=np.float64),
+        town_spacing=float(p.town_spacing_km) / EARTH_RADIUS_KM,
+        route_radius=route_radius,
+        mining_radius=float(p.mining_radius_km) / EARTH_RADIUS_KM,
+    )
 
 
 # ── TownStage ─────────────────────────────────────────────────────────────────
@@ -172,19 +216,9 @@ class TownStage(Stage):
             mesh, ocean_tex, lake_tex, fert_tex, world.get_feature("rivers"),
             river_threshold_factor=float(self.refine_params.river_threshold_factor),
             positions=positions,
+            streams=world.get_feature("streams"),
         )
-        settlements = world.get_feature("settlements") or []
-        city_pop = np.array([s.population for s in settlements], dtype=np.float64)
-        city_radii = (
-            float(p.city_clearance_km) / EARTH_RADIUS_KM
-            * (np.maximum(city_pop, 1.0) / float(pp.city_min)) ** SPACING_EXPONENT
-        )
-        minerals = world.get_feature("minerals")
-        routes = world.get_feature("trade_routes") or []
-        route_radius = float(p.route_radius_km) / EARTH_RADIUS_KM
-        route_points = densify_polylines(
-            [np.stack([np.asarray(a), np.asarray(b)]) for a, b, _ in routes], 0.5 * route_radius,
-        )
+        sc = town_site_context(world, p, pp)
 
         ctx.report(f"Siting {sum(len(s) for _, s in requests)} towns…")
         towns, unplaced = place_towns(
@@ -192,16 +226,16 @@ class TownStage(Stage):
             sites=sites,
             density=density,
             adjacency=mesh.face_adjacency,
-            city_positions=np.array([s.position for s in settlements], dtype=np.float64).reshape(-1, 3),
-            city_faces=np.array([s.face_id for s in settlements], dtype=np.int32),
-            city_radii=city_radii,
+            city_positions=sc.city_positions,
+            city_faces=sc.city_faces,
+            city_radii=sc.city_radii,
             hinterland=hinterland,
             params=p,
-            town_spacing=float(p.town_spacing_km) / EARTH_RADIUS_KM,
-            mining_radius=float(p.mining_radius_km) / EARTH_RADIUS_KM,
-            route_radius=route_radius,
-            mineral_points=None if minerals is None else np.asarray(minerals[0], dtype=np.float64),
-            route_points=route_points,
+            town_spacing=sc.town_spacing,
+            mining_radius=sc.mining_radius,
+            route_radius=sc.route_radius,
+            mineral_points=sc.mineral_points,
+            route_points=sc.route_points,
             seed=seed,
         )
 

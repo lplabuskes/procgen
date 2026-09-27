@@ -34,6 +34,7 @@ HoverPartsFn = Callable[[int, Optional[np.ndarray], Optional[LocalHoverFn]], lis
 if TYPE_CHECKING:
     from core.mesh import PolygonMesh
     from core.world import World
+    from realmgen.builder import RealmParams
     from region.params import RegionParams
 
 
@@ -836,6 +837,10 @@ class MapWindow(QMainWindow):
             self._exit_region()
         self._map.set_globe(globe)
 
+    def set_realm_params(self, params: "RealmParams") -> None:
+        """The realm tuning the world was built with; the region view re-sites towns with it."""
+        self._region_view.set_realm_params(params)
+
     def set_region_params(self, params: "RegionParams") -> None:
         """Tune the region tier; the region on screen (if any) is refined again."""
         showing = self._stack.currentWidget() is self._region_view
@@ -843,7 +848,7 @@ class MapWindow(QMainWindow):
             self.set_status("Refining region…")
             QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
         try:
-            self._region_view.set_params(params)
+            self._region_view.set_params(params, self._map.globe)
         finally:
             if showing:
                 QApplication.restoreOverrideCursor()

@@ -19,6 +19,7 @@ import pytest
 from core.mesh import Mesh
 from core.world import World
 from region.geometry import ecef_to_cell
+from worldgen.hydrology.rivers import RiverGenerator
 
 # Deliberately coarse: the tests need a *global* grid that a small test-sized
 # region grid can genuinely refine, so each global texel collects many regional
@@ -40,6 +41,9 @@ LAKE_FREEBOARD_KM = 0.55
 # to the crater.  Far outside it the terrain is thirty-odd regional texels away —
 # much further than the shoreline is ever allowed to travel.
 LAKE_CAP_RAD = 0.15
+# Stream threshold for the synthetic stream network (upstream texels at mean
+# rain): low enough for a few dozen channels in the test region.
+STREAM_THRESHOLD = 8.0
 
 
 @pytest.fixture(scope="session")
@@ -81,4 +85,13 @@ def synthetic_globe() -> World:
     globe = World.from_mesh(dual)
     globe.seed = 7
     globe.antimeridian = float(np.pi)
+
+    # The stream network, from the real generator over these fields.
+    rivers = RiverGenerator(
+        dual, elevation[..., None], min_flow=STREAM_THRESHOLD, sea_level=0.0,
+        precipitation_textures=precipitation, temperature_textures=temperature,
+        ocean_mask_textures=ocean[..., None],
+    )
+    rivers.generate()
+    globe.add_feature("streams", rivers.stream_network(STREAM_THRESHOLD))
     return globe

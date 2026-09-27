@@ -111,7 +111,7 @@ def draw_overlays(
     if on("trade_routes"):
         _draw_trade_routes(painter, globe, proj)
     if on("towns"):
-        _draw_towns(painter, globe, proj)
+        _draw_towns(painter, (refined or {}).get("towns", globe.get_feature("towns")), proj)
     if on("settlements"):
         _draw_settlements(painter, globe, proj)
     if on("polity_borders"):
@@ -279,10 +279,9 @@ def _draw_settlements(painter: QPainter, globe: "World", proj: OverlayProjector)
     painter.restore()
 
 
-def _draw_towns(painter: QPainter, globe: "World", proj: OverlayProjector) -> None:
+def _draw_towns(painter: QPainter, towns, proj: OverlayProjector) -> None:
     """Small kind-coloured dots, sized by population; only in the region view."""
     from realmgen.towns.types import TOWN_KIND_COLORS
-    towns = globe.get_feature("towns")
     if towns is None or len(towns) == 0 or not proj.regional:
         return
     sx, sy, keep = proj.points(proj.on_land("towns", towns.positions))

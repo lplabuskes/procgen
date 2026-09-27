@@ -415,3 +415,60 @@ class TestRiverMouthTermination:
             f"unknown={len(unknown)}. "
             f"Unknown river indices: {unknown[:10]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Stream network
+# ---------------------------------------------------------------------------
+
+_STREAM_THRESHOLD = 20.0
+
+
+@pytest.fixture(scope="module")
+def gen_with_streams():
+    mesh = Mesh.icosphere(3).mesh_dual()
+    rng = np.random.default_rng(3)
+    z = mesh.face_centroids[:, 2]
+    textures = compute_elevation_textures(mesh, 4.0 * z + 0.5 * rng.standard_normal(len(mesh.faces)), tex_size=8)
+    gen = RiverGenerator(mesh, textures, min_flow=100.0, sea_level=0.0)
+    rivers = gen.generate()
+    return gen, rivers, gen.stream_network(_STREAM_THRESHOLD)
+
+
+class TestStreamNetwork:
+    def test_channels_carry_the_threshold(self, gen_with_streams):
+        _, _, streams = gen_with_streams
+        assert streams.channel.sum() > 0
+        assert np.all(streams.flow[streams.channel] >= _STREAM_THRESHOLD)
+
+    def test_every_channel_drains_to_an_end(self, gen_with_streams):
+        _, _, streams = gen_with_streams
+        for start in np.flatnonzero(streams.channel)[::7].tolist():
+            node, steps = start, 0
+            while streams.receiver[node] >= 0 and not streams.stop[node]:
+                nxt = int(streams.receiver[node])
+                assert streams.flow[nxt] >= streams.flow[node] - 1e-3     # flow never drops downstream
+                node, steps = nxt, steps + 1
+                assert steps < len(streams)
+
+    def test_rivers_run_along_the_network(self, gen_with_streams):
+        """The rivers are the network's high-flow part: every river source is a channel."""
+        gen, rivers, streams = gen_with_streams
+        res = streams.resolution
+        for river in rivers:
+            u, v = river.source.uv
+            node = river.source.face_id * res * res + round(v * (res - 1)) * res + round(u * (res - 1))
+            k = np.searchsorted(streams.nodes, node)
+            assert streams.nodes[k] == node and streams.channel[k]
+
+    def test_positions_are_the_texel_centres(self, gen_with_streams):
+        gen, _, streams = gen_with_streams
+        np.testing.assert_allclose(streams.positions, gen.positions[streams.nodes], atol=1e-6)
+
+    def test_pack_round_trip(self, gen_with_streams):
+        from worldgen.hydrology.types import StreamNetwork
+        _, _, streams = gen_with_streams
+        back = StreamNetwork.unpack(streams.pack())
+        for name in ("nodes", "receiver", "flow", "channel", "stop"):
+            np.testing.assert_array_equal(getattr(back, name), getattr(streams, name))
+        assert back.resolution == streams.resolution

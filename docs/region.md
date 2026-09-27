@@ -12,8 +12,9 @@ replaced.
 - `region/sampling.py` — `GlobalSampler`: read global face textures at arbitrary sphere points; anchor assignment
 - `region/upsample.py` — `build_region_fields`: the refinement itself, plus `conservation_report`
 - `region/display.py` — RGBA layer textures for the viewer (reuses the world map's palettes)
-- `region/rivers.py` — `build_region_rivers`: the world's rivers re-routed over the refined relief, plus sub-threshold tributaries
-- `region/params.py` — `RegionParams`: `upsample` (`RegionUpsampleParams`) + `rivers` (`RegionRiverParams`), the **Region** section of the params dialog
+- `region/rivers.py` — `build_region_rivers`: the world's stream network (rivers and sub-threshold streams) re-routed over the refined relief
+- `region/towns.py` — `refine_region_towns`: the world's towns moved within their global texel onto the regional streams, in place (cities stay put)
+- `region/params.py` — `RegionParams`: `upsample` (`RegionUpsampleParams`), `rivers` (`RegionRiverParams`) and `towns` (`RegionTownParams`), the **Region** section of the params dialog
 - `viz/mapview/regionview.py` — `RegionView`, the zoomed-in widget
 
 ---
@@ -176,13 +177,15 @@ pins it.
 `biome_smoothing`, `octaves`, `lacunarity`, `persistence`, `nyquist_safety`.
 
 ### `RegionParams` (`region/params.py`)
-Groups both tiers of region tuning — `upsample` ("Detail refinement") and
-`rivers` ("Rivers") — as `AppParams.region`, the **Region** section of the params
-dialog. It is view-side only: `main.py` hands it to
+Groups the region tuning — `upsample` ("Detail refinement"), `rivers`
+("Rivers") and `towns` ("Towns") — as `AppParams.region`, the **Region** section
+of the params dialog. It never rebuilds the world: `main.py` hands it to
 `MapWindow.set_region_params` → `RegionView.set_params`, and a dialog edit that
-changes nothing but `region` never rebuilds the world. On screen, a new
-`upsample` re-refines the region (keeping zoom and pan); a new `rivers` only
-drops the cached rivers, which rebuild on the next paint.
+changes nothing but `region` stops there. Any change makes every refined town
+stale, so all of them go back to their stage sites (`Towns.reset_refinement`)
+and are refined again as their regions are visited. On screen, a new `upsample`
+re-refines the region (keeping zoom and pan); a new `rivers` or `towns` only
+rebuilds the rivers and re-refines the region's towns.
 
 ### `RegionFields`
 `region_id`, `geometry`, `grid`, `tex_size`, `positions (M,T,T,3)`,
@@ -191,57 +194,83 @@ drops the cached rivers, which rebuild on the next paint.
 
 ## Rivers (`region/rivers.py`)
 
-`build_region_rivers(fields, globe, params) → RegionRivers` (`rivers`,
-`tributaries`, `paths` = both), each a `(positions, flows, in_lake)` polyline in
-the world `"rivers"` feature's form. Qt-free and deterministic; ~0.6–0.9 s per
-region at defaults.
+`build_region_rivers(fields, globe, params) → RegionRivers` (`paths`,
+`confluences`), each path a `(positions, flows, in_lake)` polyline in the world
+`"rivers"` feature's form. Qt-free and deterministic; ~0.2 s per region at
+defaults (0.05 s on a mostly-ocean one).
 
-Everything runs on one uniform raster over the local frame, at the regional
-texel spacing (`raster_texels`) and `margin` past the cell. It reads the refined
-elevation / masks / precipitation from the nearest hex texel (reaching through
-the over-hang), and the global fields bilinearly beyond the textures.
+**Source: the world's stream network.** The hydrology stage saves its
+single-receiver drainage tree down to `HydrologyParams.stream_flow_threshold`
+(the `"streams"` feature, a `StreamNetwork`; see
+[hydrology.md](hydrology.md)). The world's rivers are its part above
+`river_flow_threshold`; the rest are streams too small for the world map. The
+region takes the network nodes on its raster and cuts them into main stems with
+the global stage's own `main_stem_paths`, so rivers, streams and their
+confluences are the world's — a region never invents a channel, and the town
+stage (which favours stream texels) and the region agree on where streams are.
+Stems shorter than `min_global_nodes` are dropped as stubs. How far down the
+network goes is a *world* param, since towns are sited on it.
 
-**World rivers are re-routed, not replaced.** Each stretch of a world river on
-the raster becomes the least-cost 8-connected path through a *corridor* of
-`corridor_global_texels` (1 global texel) either side of the world polyline —
-the positional uncertainty the global grid leaves. A node costs
-`exp(valley_seeking · anomaly / σ)`, the anomaly being refined minus coarse
-elevation and σ its spread in the corridor, so the river takes the refined
-valley floor on a plain as much as in the mountains, but can never change
-valley or basin. Stems are routed first (descending flow). A river whose world
-mouth is on the raster ends on the cheapest sink near that mouth — its
-re-routed stem, a lake, or the *refined* sea — found in a widened disc of two
-corridors around the mouth, since the stem itself moved by up to a corridor.
-Flow is copied from the nearest world vertex (running max, so monotonic).
+**Re-routing.** Each stem becomes the least-cost 8-connected path through a
+*corridor* of `corridor_global_texels` (1 global texel) either side of its
+world centreline — the positional uncertainty the global grid leaves. A node
+costs `exp(valley_seeking · anomaly / σ)`, the anomaly being refined minus
+coarse elevation and σ its spread in the corridor, so the path takes the refined
+valley floor on a plain as much as in the mountains but can never change valley
+or basin. Stems are routed first (descending flow). A path whose world mouth is
+on the raster ends on the cheapest sink near that mouth — its re-routed stem, a
+lake, or the *refined* sea — found in a widened disc of two corridors around
+the mouth, since the stem itself moved by up to a corridor. A path that ends on
+another one (not on water) is recorded in `confluences`. Flow is the network's
+tree accumulation (running max along the stem, so monotonic).
 
-**Tributaries.** The refined relief is drained by a *carving* Priority-Flood
-(`worldgen.hydrology.routing.priority_flood_tree`) whose outlets are the sea,
-lakes, the re-routed rivers and the raster rim: each node drains to the node
-that flooded it. The ordinary filled-DEM + steepest-descent routing drew
-dead-straight lines across every filled depression in the sub-grid noise (the
-epsilon tilt picks the route, not the terrain); carving drains a depression
-down its lowest route instead. Flow is accumulated precipitation-weighted **in
-the world's flow units** (a node weighs `precip / global mean precip ×` its
-share of a global texel's area), so `tributary_min_flow` (default 40) reads on
-the scale of the world's `river_flow_threshold` (default 500). Channels are cut
-into main stems with the global stage's own
-`worldgen.hydrology.rivers.main_stem_paths`, each ending on the river, lake or
-coast it drains into; stubs under `tributary_min_nodes` are dropped.
+**The raster** is uniform over the local frame, at the regional texel spacing
+(`raster_texels`) and `margin` past the cell, but only the nodes within reach of
+some corridor or mouth disc are sampled (refined elevation / masks from the
+nearest hex texel through the over-hang, global fields beyond the textures) —
+most of a region is never read. Paths leaving the raster are cut at its edge.
 
-Both kinds are Laplacian-smoothed (`smoothing_iterations`); a segment is flagged
+Paths are Laplacian-smoothed (`smoothing_iterations`); a segment is flagged
 `in_lake` (hidden) when both its ends are on refined water, with land runs of up
 to 2 nodes between water treated as water so a lake crossing is not drawn as
-dashes over the refined shoreline's speckle.
-
-Known limits: a tributary flowing in across the raster rim only has the
-catchment inside the raster behind it; neighbouring regions route their shared
-edge independently (each is shown alone, so no seam is visible); and a
-tributary's accumulated flow can occasionally exceed the world threshold where
-the world's D-infinity split sent that water elsewhere.
+dashes over the refined shoreline's speckle. Neighbouring regions route their
+shared edge independently (each is shown alone, so no seam is visible).
 
 ### `RegionRiverParams`
 `raster_texels`, `margin`, `corridor_global_texels`, `valley_seeking`,
-`tributary_min_flow`, `tributary_min_nodes`, `smoothing_iterations`.
+`min_global_nodes`, `smoothing_iterations`.
+
+## Towns (`region/towns.py`)
+
+`refine_region_towns(fields, rivers, globe, town_params, population_params,
+river_threshold_factor, params) → int` moves the world's towns, **in place in
+the `towns` feature**, from the global texel the town stage chose to a spot on
+the region's finer terrain, and flags them `refined`. The refined position is the
+town's actual position from then on and is saved with the world;
+`Towns.site_positions` keeps the stage's site.
+
+- **Which towns.** Each town is refined by exactly one region — the one
+  containing its *site* — and only once, so the result does not depend on which
+  region is visited first or on neighbouring regions' overlap.
+- **Where.** Among the dry in-hexagon regional texels of the town's own face
+  within `refine_radius_global_texels` (1 global texel, ~15 km) of its site,
+  scored with the stage's own `site_log_weight_and_kind`: rural density, trade
+  routes and minerals as the stage reads them (`town_site_context`); coast from
+  the refined shoreline; river and confluence from the regional paths and
+  `RegionRivers.confluences`, within `river_threshold_factor` × the regional
+  texel spacing (~6 km). Gumbel noise is seeded `(seed, town, 3)`.
+- **Kind is kept**, and honoured: a river town (on a river or stream) lands on a
+  drawn path, and a port on the refined coast, whenever one is in reach.
+- **Spacing** to every other town (wherever it stands now) and city is kept, by
+  the stage's radii. A town with no legal spot stays on its site.
+- **Cities never move.**
+
+On seed 4 (regions 16/25/34/48), 73–100% of river towns end up on a drawn stream
+against 30–46% at their sites; towns move a median ~10 km; no spacing is broken;
+~0.15–0.4 s per region.
+
+### `RegionTownParams`
+`refine_radius_global_texels`.
 
 ## Display (`region/display.py`)
 
@@ -309,12 +338,15 @@ screen space (upright markers, pixel widths) and clipped to the rotated cell.
 They size themselves by the *equivalent world zoom* — the world-map zoom that
 would show this ground at the same pixel scale — so a region looks like the
 world map zoomed to the same place. Overlays are world-resolution data — borders
-follow the global paths rather than the refined terrain — except **rivers**:
-the first time the Rivers overlay is shown in a region, `build_region_rivers`
-runs and its paths are handed to `draw_overlays(..., refined={"rivers": …})` in
-place of the world feature (cached until the region changes). Widths still
-scale against the *world's* largest flow, so a re-routed river is drawn as wide
-as on the world map and tributaries at the thin end. The **Towns** overlay draws only here (`regional` on the
+follow the global paths rather than the refined terrain — except **rivers** and
+**towns**. Entering a region runs `build_region_rivers` and then
+`refine_region_towns` (with the realm params `main.py` passes to
+`MapWindow.set_realm_params`), ~0.5 s on top of the field refinement. The rivers'
+paths are handed to `draw_overlays(..., refined={"rivers": …})` in place of the
+world feature; the towns need no override, as their refined positions are in the
+world feature itself. River widths still scale against the *world's* largest
+flow, so a re-routed river is drawn as wide as on the world map and streams at
+the thin end. The **Towns** overlay draws only here (`regional` on the
 projector; see [realm_towns.md](realm_towns.md)), and cities are drawn to stand
 apart from the towns: 1.5× their world-map size (and at least twice the
 largest town dot), opaque, and ringed dark-then-white.

@@ -124,11 +124,6 @@ class _StubTowns:
         return 1
 
 
-class _StubGlobe:
-    def get_feature(self, name):
-        return _StubTowns() if name == "towns" else None
-
-
 class _CountingProjector:
     zoom = 50.0
 
@@ -151,32 +146,54 @@ def test_towns_draw_only_in_the_region_view(app):
     image = QImage(10, 10, QImage.Format.Format_RGBA8888)
     painter = QPainter(image)
     world_proj, region_proj = _CountingProjector(False), _CountingProjector(True)
-    _draw_towns(painter, _StubGlobe(), world_proj)      # type: ignore[arg-type]
-    _draw_towns(painter, _StubGlobe(), region_proj)     # type: ignore[arg-type]
+    _draw_towns(painter, _StubTowns(), world_proj)      # type: ignore[arg-type]
+    _draw_towns(painter, _StubTowns(), region_proj)     # type: ignore[arg-type]
     painter.end()
     assert world_proj.on_land_calls == 0 and region_proj.on_land_calls == 1
 
 
 def test_new_params_refine_the_region_again(app, synthetic_globe):  # noqa: F811
-    """Refinement params rebuild the fields (keeping the view); river params
-    only drop the cached rivers."""
+    """Entering a region refines its towns into the world feature. New params
+    re-refine it: upsample params rebuild the fields (keeping the view), river
+    and town params only the rivers and towns — and every town refined before
+    goes back to its site, wherever it is."""
     import dataclasses
+    from realmgen.towns.types import TOWN_MARKET, Towns
+    from region.geometry import ecef_to_cell
     from region.params import RegionParams
 
-    view = RegionView()
-    view.resize(600, 400)
-    view.set_region(RegionGeometry(40, synthetic_globe.antimeridian), synthetic_globe)
-    view.set_overlay_visible("rivers", True)
-    view._refined_features()
-    fields = view.fields
-    assert fields is not None and view._rivers is not None
-    _painted(view).zoom_toward(300.0, 200.0, 3.0)
+    centroids = np.asarray(synthetic_globe.mesh.face_centroids, dtype=np.float64)
+    centroids /= np.linalg.norm(centroids, axis=1, keepdims=True)
+    land = np.flatnonzero(synthetic_globe.mesh.face_textures["ocean_mask"][:, 3, 3, 0] < 0.5)
+    towns = Towns(
+        positions=centroids[land].copy(), population=np.full(land.size, 1_000.0),
+        face_id=land.astype(np.int32), parent=np.full(land.size, -1, dtype=np.int32),
+        kind=np.full(land.size, TOWN_MARKET, dtype=np.int8),
+    )
+    here = ecef_to_cell(towns.site_positions, synthetic_globe.antimeridian) == 40
+    elsewhere = int(np.flatnonzero(~here)[0])
+    towns.refined[elsewhere] = True            # as if refined in another region
+    towns.positions[elsewhere] *= -1.0
+    synthetic_globe.add_feature("towns", towns)
+    try:
+        view = RegionView()
+        view.resize(600, 400)
+        view.set_region(RegionGeometry(40, synthetic_globe.antimeridian), synthetic_globe)
+        fields, rivers = view.fields, view._rivers
+        assert fields is not None and rivers is not None
+        assert towns.refined[here].all()
+        _painted(view).zoom_toward(300.0, 200.0, 3.0)
 
-    base = RegionParams()
-    view.set_params(dataclasses.replace(base, rivers=dataclasses.replace(base.rivers, tributary_min_flow=10.0)))
-    assert view.fields is fields and view._rivers is None
+        base = RegionParams()
+        view.set_params(dataclasses.replace(base, rivers=dataclasses.replace(base.rivers, valley_seeking=1.0)))
+        assert view.fields is fields and view._rivers is not rivers
+        assert towns.refined[here].all() and not towns.refined[elsewhere]
+        np.testing.assert_array_equal(towns.positions[elsewhere], towns.site_positions[elsewhere])
 
-    view.set_params(dataclasses.replace(base, upsample=dataclasses.replace(base.upsample, n_cols=6)))
-    assert view.fields is not fields and view.fields is not None
-    assert view.fields.grid.n_cols == 6
-    assert view.zoom == pytest.approx(3.0)
+        view.set_params(dataclasses.replace(base, upsample=dataclasses.replace(base.upsample, n_cols=6)))
+        assert view.fields is not fields and view.fields is not None
+        assert view.fields.grid.n_cols == 6
+        assert view.zoom == pytest.approx(3.0)
+        assert towns.refined[here].all()
+    finally:
+        synthetic_globe.remove_feature("towns")

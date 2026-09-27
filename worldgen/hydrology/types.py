@@ -25,6 +25,53 @@ class RiverSegment:
 
 
 @dataclass
+class StreamNetwork:
+    """The drainage network down to a stream threshold far below the rivers'.
+
+    A sparse view of the single-receiver accumulation tree the rivers are cut
+    from: every texel carrying at least the stream threshold of flow (a
+    *channel*), plus the texels those drain into (sea, endorheic lakes), as flat
+    node ids ``face·H·W + row·W + col`` of the face texture grid. ``receiver`` is
+    an index into these arrays (-1 at an outlet or where the tree leaves the
+    network). The rivers are the part of it above the river threshold.
+    """
+
+    nodes: np.ndarray        # (K,) int64 flat texel id
+    positions: np.ndarray    # (K, 3) float32 texel centre, unit sphere
+    receiver: np.ndarray     # (K,) int64 index into these arrays, or -1
+    flow: np.ndarray         # (K,) float32 tree accumulation (river flow units)
+    channel: np.ndarray      # (K,) bool: at or above the threshold, not sea
+    stop: np.ndarray         # (K,) bool: sea or endorheic lake — a path ends here
+    resolution: int          # face texture side H (= W)
+
+    def __len__(self) -> int:
+        return int(self.nodes.shape[0])
+
+    def pack(self) -> dict:
+        return {
+            "stream_nodes": self.nodes.astype(np.int64),
+            "stream_positions": self.positions.astype(np.float32),
+            "stream_receiver": self.receiver.astype(np.int64),
+            "stream_flow": self.flow.astype(np.float32),
+            "stream_channel": self.channel.astype(np.bool_),
+            "stream_stop": self.stop.astype(np.bool_),
+            "stream_resolution": np.array(self.resolution, dtype=np.int64),
+        }
+
+    @classmethod
+    def unpack(cls, arrays) -> "StreamNetwork":
+        return cls(
+            nodes=np.asarray(arrays["stream_nodes"], dtype=np.int64),
+            positions=np.asarray(arrays["stream_positions"], dtype=np.float32).reshape(-1, 3),
+            receiver=np.asarray(arrays["stream_receiver"], dtype=np.int64),
+            flow=np.asarray(arrays["stream_flow"], dtype=np.float32),
+            channel=np.asarray(arrays["stream_channel"], dtype=bool),
+            stop=np.asarray(arrays["stream_stop"], dtype=bool),
+            resolution=int(arrays["stream_resolution"]),
+        )
+
+
+@dataclass
 class River:
     segments: List[RiverSegment] = field(default_factory=list)
     source: Optional[RiverNode] = None

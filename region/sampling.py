@@ -49,7 +49,7 @@ class GlobalSampler:
         """
         pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
         pts = pts / np.maximum(np.linalg.norm(pts, axis=1, keepdims=True), 1e-15)
-        _, faces = self._tree.query(pts, k=1)
+        _, faces = self._tree.query(pts, k=1, workers=-1)
         faces = np.asarray(faces, dtype=np.int64)
         offset = pts - self._tangent_centroids[faces]
         u_local = np.einsum("ij,ij->i", offset, self._u_axes[faces])

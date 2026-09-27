@@ -107,8 +107,37 @@ def _jitter(pos: np.ndarray, radius: float, rng: np.random.Generator) -> np.ndar
     return out / np.linalg.norm(out, axis=1, keepdims=True)
 
 
-class _FaceCandidates:
-    """One face's town sites: jittered positions, log site weight, and kind."""
+def site_log_weight_and_kind(
+    rho: np.ndarray, coast: np.ndarray, confluence: np.ndarray, river: np.ndarray,
+    stream: np.ndarray, route: np.ndarray, mine: np.ndarray, params: "TownParams",
+) -> tuple[np.ndarray, np.ndarray]:
+    """Log site weight and town kind of one face's candidate sites.
+
+    ``rho`` is rural density, normalised here by the face mean; the flags are
+    what each site offers. The water ones do not stack: pass ``river`` without
+    the confluences and ``stream`` without either. A stream site makes a river
+    town, like a river site.
+    """
+    mean = float(rho.mean()) if rho.size else 0.0
+    rho_n = rho / mean if mean > 0 else np.ones_like(rho)
+    weight = (
+        (rho_n + _DENSITY_FLOOR) * (
+            1.0 + params.port_bonus * coast + params.confluence_bonus * confluence
+            + params.river_bonus * river + params.stream_bonus * stream + params.route_bonus * route
+        )
+        + params.mining_bonus * mine
+    )
+    # What the site offered, most distinctive first.
+    kind = np.select(
+        [coast, mine, confluence | river | stream, route],
+        [TOWN_PORT, TOWN_MINING, TOWN_RIVER, TOWN_ROUTE],
+        default=TOWN_MARKET,
+    ).astype(np.int8)
+    return np.log(weight), kind
+
+
+class FaceCandidates:
+    """One face's town sites: positions, log site weight, and kind."""
 
     def __init__(self, positions: np.ndarray, log_weight: np.ndarray, kind: np.ndarray) -> None:
         self.positions = positions
@@ -120,7 +149,7 @@ def _build_candidates(
     faces: Sequence[int], sites: SiteField, density: np.ndarray, params: "TownParams",
     mineral_tree: Optional[KDTree], route_tree: Optional[KDTree],
     mining_radius: float, route_radius: float, seed: int,
-) -> tuple[dict[int, _FaceCandidates], dict[int, np.random.Generator]]:
+) -> tuple[dict[int, FaceCandidates], dict[int, np.random.Generator]]:
     """Candidates for every face in ``faces``, with each face's site RNG (the
     same stream then draws that face's Gumbel noise)."""
     sites.prefetch(faces)
@@ -147,7 +176,7 @@ def _build_candidates(
             if mineral_tree is not None and n_all else np.zeros(n_all, dtype=bool))
     owner = sites.owner(all_jit) if n_all else np.zeros(0, dtype=np.int64)
 
-    out: dict[int, _FaceCandidates] = {}
+    out: dict[int, FaceCandidates] = {}
     start = 0
     for f, fs, idx, pos, jittered in per_face:
         sl = slice(start, start + idx.size)
@@ -155,26 +184,13 @@ def _build_candidates(
         # A jitter must not carry a site out of its face.
         positions = np.where((owner[sl] == f)[:, None] | ~fs.owned[idx][:, None], jittered, pos)
 
-        rho = density[f].reshape(-1)[idx]
-        mean = float(rho.mean()) if rho.size else 0.0
-        rho_n = rho / mean if mean > 0 else np.ones_like(rho)
-        coast = fs.coast[idx]
         conf = fs.confluence[idx]
         river = fs.river[idx] & ~conf
-        weight = (
-            (rho_n + _DENSITY_FLOOR) * (
-                1.0 + params.port_bonus * coast + params.confluence_bonus * conf
-                + params.river_bonus * river + params.route_bonus * route[sl]
-            )
-            + params.mining_bonus * mine[sl]
+        log_weight, kind = site_log_weight_and_kind(
+            density[f].reshape(-1)[idx], fs.coast[idx], conf, river, fs.stream[idx] & ~conf & ~river,
+            route[sl], mine[sl], params,
         )
-        # What the site offered, most distinctive first.
-        kind = np.select(
-            [coast, mine[sl], conf | river, route[sl]],
-            [TOWN_PORT, TOWN_MINING, TOWN_RIVER, TOWN_ROUTE],
-            default=TOWN_MARKET,
-        ).astype(np.int8)
-        out[f] = _FaceCandidates(positions, np.log(weight), kind)
+        out[f] = FaceCandidates(positions, log_weight, kind)
     return out, rngs
 
 
@@ -210,24 +226,58 @@ def place_towns(
     Exclusion is only checked against the face and its neighbours, which is exact
     while every radius is shorter than a face's width.
     """
+    mineral_tree = KDTree(mineral_points) if mineral_points is not None and len(mineral_points) else None
+    route_tree = KDTree(route_points) if route_points is not None and len(route_points) else None
+    candidates, rngs = _build_candidates(
+        [int(f) for f, _ in requests], sites, density, params,
+        mineral_tree, route_tree, mining_radius, route_radius, seed,
+    )
+    placed, unplaced = site_largest_first(
+        requests, candidates, rngs,
+        adjacency=adjacency,
+        disc_positions=city_positions, disc_faces=city_faces, disc_radii=city_radii,
+        town_spacing=town_spacing, town_min=float(params.town_min),
+    )
+    return _towns_from(placed, hinterland), unplaced
+
+
+def site_largest_first(
+    requests: Sequence[tuple[int, np.ndarray]],
+    candidates: dict[int, FaceCandidates],
+    rngs: dict[int, np.random.Generator],
+    *,
+    adjacency: Sequence[Sequence[int]],
+    disc_positions: np.ndarray,
+    disc_faces: np.ndarray,
+    disc_radii: np.ndarray,
+    town_spacing: float,
+    town_min: float,
+) -> tuple[list[tuple[int, float, np.ndarray, int]], np.ndarray]:
+    """Site ``requests`` (``(face, sizes)``) on their faces' ``candidates``, globally
+    largest first; returns ``([(face, size, position, kind)], unplaced_per_face)``.
+
+    Each town takes the Gumbel-max of its face's log site weights (noise drawn
+    from ``rngs[face]``) over the sites clear of every exclusion disc already
+    placed — the fixed ``disc_*`` ones (cities) and earlier towns. A town of
+    ``size`` claims ``town_spacing · (size / town_min)^0.25``; a pair must be the
+    larger of their two radii apart. Only the face and its neighbours are
+    checked, which is exact while every radius is shorter than a face's width.
+    """
     n = len(adjacency)
-    town_min = float(params.town_min)
     order = sorted(
         ((float(size), int(f), j) for f, sizes in requests for j, size in enumerate(sizes)),
         key=lambda t: (-t[0], t[1], t[2]),
     )
-    mineral_tree = KDTree(mineral_points) if mineral_points is not None and len(mineral_points) else None
-    route_tree = KDTree(route_points) if route_points is not None and len(route_points) else None
 
-    # Per face: exclusion discs already placed (cities, then towns), in
+    # Per face: exclusion discs already placed (fixed ones, then towns), in
     # preallocated buffers — ``disc_pos[f][:n_disc[f]]`` are live.
     n_towns = np.zeros(n, dtype=np.int64)
     for f, sizes in requests:
         n_towns[int(f)] += len(sizes)
-    city_faces = np.asarray(city_faces, dtype=np.int64)
-    n_cities = np.bincount(city_faces, minlength=n) if city_faces.size else np.zeros(n, dtype=np.int64)
-    disc_pos = [np.empty((int(c), 3)) for c in n_towns + n_cities]
-    disc_rad = [np.empty(int(c)) for c in n_towns + n_cities]
+    disc_faces = np.asarray(disc_faces, dtype=np.int64)
+    n_fixed = np.bincount(disc_faces, minlength=n) if disc_faces.size else np.zeros(n, dtype=np.int64)
+    disc_pos = [np.empty((int(c), 3)) for c in n_towns + n_fixed]
+    disc_rad = [np.empty(int(c)) for c in n_towns + n_fixed]
     n_disc = np.zeros(n, dtype=np.int64)
 
     def _add_disc(f: int, p: np.ndarray, r: float) -> None:
@@ -236,22 +286,15 @@ def place_towns(
         disc_rad[f][k] = r
         n_disc[f] = k + 1
 
-    for p, f, r in zip(city_positions, city_faces, city_radii):
+    for p, f, r in zip(disc_positions, disc_faces, disc_radii):
         _add_disc(int(f), np.asarray(p, dtype=np.float64), float(r))
 
-    candidates, rngs = _build_candidates(
-        [int(f) for f, _ in requests], sites, density, params,
-        mineral_tree, route_tree, mining_radius, route_radius, seed,
-    )
     gumbel = {
         int(f): rngs[int(f)].gumbel(size=(len(sizes), candidates[int(f)].positions.shape[0]))
         for f, sizes in requests
     }
 
-    out_pos: list[np.ndarray] = []
-    out_pop: list[float] = []
-    out_face: list[int] = []
-    out_kind: list[int] = []
+    placed: list[tuple[int, float, np.ndarray, int]] = []
     unplaced = np.zeros(n, dtype=np.float64)
 
     for size, f, j in order:
@@ -276,19 +319,18 @@ def place_towns(
 
         p = cand.positions[best]
         _add_disc(f, p, radius)
-        out_pos.append(p)
-        out_pop.append(size)
-        out_face.append(f)
-        out_kind.append(int(cand.kind[best]))
+        placed.append((f, size, p, int(cand.kind[best])))
+    return placed, unplaced
 
-    if not out_pop:
-        return Towns.empty(), unplaced
-    faces = np.asarray(out_face, dtype=np.int32)
-    towns = Towns(
-        positions=np.stack(out_pos),
-        population=np.asarray(out_pop, dtype=np.float64),
+
+def _towns_from(placed: list[tuple[int, float, np.ndarray, int]], hinterland: np.ndarray) -> Towns:
+    if not placed:
+        return Towns.empty()
+    faces = np.asarray([f for f, *_ in placed], dtype=np.int32)
+    return Towns(
+        positions=np.stack([p for _, _, p, _ in placed]),
+        population=np.asarray([size for _, size, _, _ in placed], dtype=np.float64),
         face_id=faces,
         parent=np.asarray(hinterland, dtype=np.int32)[faces],
-        kind=np.asarray(out_kind, dtype=np.int8),
+        kind=np.asarray([k for *_, k in placed], dtype=np.int8),
     )
-    return towns, unplaced

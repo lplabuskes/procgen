@@ -132,6 +132,7 @@ class FaceSites:
     coast_lake: np.ndarray     # (T,) land, 4-adjacent to lake
     river: np.ndarray          # (T,) land within the river snap distance of a river
     confluence: np.ndarray     # (T,) land within the river snap distance of a confluence
+    stream: np.ndarray         # (T,) land texel on a channel of the stream network
     fertility: np.ndarray      # (T,) 3×3 land-mean fertility in [0, 1]
     spacing: float             # texel spacing (chord)
 
@@ -169,6 +170,7 @@ class SiteField:
         river_threshold_factor: float = 1.5,
         confluence_search_radius: float = 0.01,
         positions: Optional[np.ndarray] = None,
+        streams=None,
     ) -> None:
         self.n, self.h, self.w = int(ocean_tex.shape[0]), int(ocean_tex.shape[1]), int(ocean_tex.shape[2])
         self._positions = (
@@ -188,6 +190,11 @@ class SiteField:
         river_pts = densify_polylines([entry[0] for entry in rivers], 0.5 * spacing)
         self._river_tree = KDTree(river_pts) if river_pts is not None else None
         self._confluence_tree = _build_confluence_tree(rivers, search_radius=confluence_search_radius)
+        # Texels on a channel of the stream network (``streams``, a hydrology
+        # ``StreamNetwork``); only town siting passes one.
+        self._stream = np.zeros(self._ocean.shape, dtype=bool)
+        if streams is not None and len(streams):
+            self._stream.reshape(-1)[streams.nodes[streams.channel]] = True
         self._cache: dict[int, FaceSites] = {}
 
     def owner(self, points: np.ndarray) -> np.ndarray:
@@ -234,6 +241,7 @@ class SiteField:
             fert = np.zeros(land.shape, dtype=np.float64)
         coast_ocean = (land2d & _neighbor_any(ocean)).reshape(n_f, t)
         coast_lake = (land2d & _neighbor_any(lake)).reshape(n_f, t)
+        stream = (land2d & self._stream[faces]).reshape(n_f, t)
 
         for k, f in enumerate(faces.tolist()):
             self._cache[f] = FaceSites(
@@ -245,6 +253,7 @@ class SiteField:
                 coast_lake=coast_lake[k],
                 river=river[k],
                 confluence=confluence[k],
+                stream=stream[k],
                 fertility=np.where(land[k], fert[k], 0.0),
                 spacing=float(spacing[k]),
             )

@@ -21,6 +21,7 @@ from worldgen.hydrology.types import (
     River,
     RiverNode,
     RiverSegment,
+    StreamNetwork,
     laplacian_smooth_sphere,
 )
 from core.mesh import PolygonMesh
@@ -385,6 +386,10 @@ class RiverGenerator:
             self._precip_weights,
         )
 
+        # Kept for stream_network (the same tree, cut at a lower threshold).
+        self._tree_receiver = prx
+        self._tree_accum = tree_accum
+
         # Channel nodes: enough tree flow, not open sea. Lake interiors stay in
         # (rivers route through exorheic lakes, flagged in_lake downstream).
         is_channel = (tree_accum >= threshold) & ~ocean
@@ -438,6 +443,32 @@ class RiverGenerator:
         rivers = self.extract_rivers_graph(r1, r2, f1, f2, accum)
         rivers = resolve_self_crossings(rivers)
         return rivers
+
+    def stream_network(self, threshold: float) -> StreamNetwork:
+        """The accumulation tree down to ``threshold`` — the rivers' own tree
+        (same receivers, same flow), cut far lower. Call after generate()."""
+        ocean = self._ocean_mask
+        stop = ocean | self._endorheic_mask
+        channel = (self._tree_accum >= threshold) & ~ocean
+        ch = np.flatnonzero(channel)
+        downstream = self._tree_receiver[ch]
+        nodes = np.union1d(ch, downstream[downstream >= 0])
+        index = np.full(self.n_nodes, -1, dtype=np.int64)
+        index[nodes] = np.arange(len(nodes))
+        receiver = np.full(len(nodes), -1, dtype=np.int64)
+        is_ch = channel[nodes]
+        receiver[is_ch] = index[self._tree_receiver[nodes[is_ch]]]
+        # Terminal (non-channel) nodes and stops drain nowhere in the network.
+        receiver[stop[nodes] & ~is_ch] = -1
+        return StreamNetwork(
+            nodes=nodes.astype(np.int64),
+            positions=self.positions[nodes].astype(np.float32),
+            receiver=receiver,
+            flow=self._tree_accum[nodes].astype(np.float32),
+            channel=is_ch,
+            stop=stop[nodes],
+            resolution=self.resolution,
+        )
 
     def get_lake_polygons(self) -> List[np.ndarray]:
         """Lake boundary polygons as ordered unit-sphere positions. Call after generate()."""

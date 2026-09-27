@@ -13,6 +13,7 @@ See also: `docs/plans/river_generation_spec.md` for the original design.
 ## `builder.py`
 
 **`HydrologyParams`** (dataclass):
+- `stream_flow_threshold` (default `100.0`) — the same tree accumulation cut much lower: the saved stream network (towns favour its texels; a region draws it as its tributaries)
 - `river_flow_threshold` (default `500.0`) — minimum upstream accumulation for a river headwater; a user-tunable dial for how dense the river network is (higher = fewer, larger rivers). Applied to the single-receiver **tree accumulation** (the network actually drawn), not the multi-receiver D-inf field — single-receiver flow concentrates more, so this threshold's scale differs from a D-inf threshold.
 - `min_lake_pixels` (default `50`) — minimum flooded-component size to keep as a lake
 - `pet_baseline_mm_yr` / `pet_per_degree_mm_yr` / `pet_max_mm_yr` — clamped-linear PET model for water-balance lake shrinking (`PET = clamp(baseline + slope·max(0,T), 0, max)`)
@@ -25,9 +26,11 @@ See also: `docs/plans/river_generation_spec.md` for the original design.
 - `"filled_height"` — Priority-Flood filled DEM, rewritten over endorheic basins to reflect equilibrium lake surface and exposed dry bed
 - `"lake_mask"` — 1.0 where pixel is inside post-shrinking lake footprint, 0.0 otherwise
 
-Stored attributes: `rivers` (`List[River]`), `lake_polygons` (`List[np.ndarray]`).
+Stored attributes: `rivers` (`List[River]`), `lake_polygons` (`List[np.ndarray]`), `streams` (`StreamNetwork`).
 
-Registered features: `"rivers"` (flattened polylines), `"river_objects"` (rich `River` objects consumed by Resources/Cost), `"lakes"`, `"deltas"`.
+Registered features: `"rivers"` (flattened polylines), `"river_objects"` (rich `River` objects consumed by Resources/Cost), `"streams"` (the `StreamNetwork`), `"lakes"`, `"deltas"`.
+
+**`StreamNetwork`** (`types.py`, from `RiverGenerator.stream_network(threshold)`): the single-receiver accumulation tree the rivers are cut from, kept down to `stream_flow_threshold` — every channel texel plus the sea / endorheic texels they drain into, as sparse parallel arrays: flat texel id `nodes` (`face·H·W + row·W + col`), `positions`, `receiver` (index into the arrays, -1 at an end), `flow` (tree accumulation, river flow units), `channel`, `stop` (sea or endorheic: a path ends there). Rivers are exactly its part above `river_flow_threshold`. Saved with the world (`stream_*` arrays; ~27k nodes on seed 4). Consumers: the town stage's stream bonus, and the region tier's rivers (`region/rivers.py`).
 
 ## `rivers.py` — RiverGenerator
 
@@ -43,9 +46,7 @@ End-to-end pipeline:
 
 `extract_rivers_graph` is the live extractor; the earlier bilinear-gradient tracer has been removed.
 
-`main_stem_paths(receiver, accum, is_channel, is_stop, min_nodes)` is that decomposition as a module-level function over any single-receiver tree; the region tier reuses it for its tributaries (`region/rivers.py`).
-
-`routing.priority_flood_tree` is a *carving* Priority-Flood: flooding in raw-elevation order, it returns each node's flooding parent (the drainage tree) and settle rank (reversed = topological order). It breaches depressions along their lowest route rather than filling them. The global stage does not use it; the region tier does.
+`main_stem_paths(receiver, accum, is_channel, is_stop, min_nodes)` is that decomposition as a module-level function over any single-receiver tree; the region tier runs it over the stream network (`region/rivers.py`).
 
 Rivers route continuously through exorheic lakes (`in_lake` flags let the renderer hide those segments); endorheic basins are true sinks.
 

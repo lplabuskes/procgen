@@ -6,8 +6,9 @@ import numpy as np
 
 from worldgen.climate.channels import PRECIPITATION, TEMPERATURE
 from worldgen.geology.channels import ELEVATION, OCEAN_MASK
-from worldgen.hydrology.channels import LAKE_MASK, RIVER_OBJECTS, RIVERS
+from worldgen.hydrology.channels import LAKE_MASK, RIVER_OBJECTS, RIVERS, STREAMS
 from worldgen.hydrology.rivers import River, RiverGenerator
+from worldgen.hydrology.types import StreamNetwork
 from core.display import DisplayRegistry
 from core.params import param_field as _f, paramclass
 from core.pipeline import BuildContext, Stage
@@ -20,6 +21,10 @@ LAKE_COLOR = np.array([0.28, 0.65, 0.90, 1.0], dtype=np.float32)
 @paramclass
 class HydrologyParams:
     river_flow_threshold: float = _f(500.0, label="Flow threshold (faces)", min=1.0, max=1000.0)
+    # The streams below the rivers: the same accumulation tree cut this low. Towns
+    # favour them, and a region draws them as its tributaries. Same units as the
+    # river threshold (≈ upstream texels at mean rainfall).
+    stream_flow_threshold: float = _f(100.0, label="Stream threshold (faces)", min=1.0, max=1000.0)
     min_lake_pixels: int = _f(50, label="Min lake pixels", min=1, max=500)
     pet_baseline_mm_yr: float = _f(100.0, label="PET baseline (mm/yr)", min=0.0, max=500.0)
     pet_per_degree_mm_yr: float = _f(60.0, label="PET slope (mm/yr/°C)", min=0.0, max=200.0)
@@ -46,6 +51,7 @@ class HydrologyBuilder(Stage):
         self.rivers: Optional[List[River]] = None
         self.lake_polygons: Optional[List[np.ndarray]] = None
         self.delta_positions: Optional[np.ndarray] = None  # (M, 3) mouth positions reaching the ocean
+        self.streams: Optional[StreamNetwork] = None
         # The flattened ``(positions, flows, in_lake)`` polyline tuples registered
         # as the "rivers" feature. Cached here because ``serialize`` (no world
         # access) must reproduce it from either a fresh build (River objects) or a
@@ -77,6 +83,8 @@ class HydrologyBuilder(Stage):
         )
         self.rivers = river_gen.generate()
         self.lake_polygons = river_gen.get_lake_polygons()
+        self.streams = river_gen.stream_network(self.params.stream_flow_threshold)
+        STREAMS.write(ctx.world, self.streams)
 
         filled_height = river_gen.get_filled_height_texture()  # (N, H, W, 1)
         lake_mask = river_gen.get_lake_mask_texture()          # (N, H, W, 1)
@@ -179,6 +187,8 @@ class HydrologyBuilder(Stage):
             arrays["lake_poly_offsets"] = np.array(lake_offsets, dtype=np.int64)
         if self.delta_positions is not None and len(self.delta_positions) > 0:
             arrays["hb_delta_positions"] = self.delta_positions.astype(np.float32)
+        if self.streams is not None:
+            arrays.update(self.streams.pack())
         return arrays
 
     def load(self, arrays: Mapping[str, np.ndarray], ctx: BuildContext) -> None:
@@ -209,6 +219,9 @@ class HydrologyBuilder(Stage):
                 for i in range(len(poly_offs) - 1)
             ]
             ctx.world.add_feature("lakes", self.lake_polygons)
+        if "stream_nodes" in arrays:
+            self.streams = StreamNetwork.unpack(arrays)
+            STREAMS.write(ctx.world, self.streams)
         if "hb_delta_positions" in arrays:
             self.delta_positions = arrays["hb_delta_positions"]
             ctx.world.add_feature("deltas", self.delta_positions)

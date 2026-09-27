@@ -12,3 +12,6 @@ RIVER_OBJECTS = FeatureChannel("river_objects")
 # Flattened ``(positions, flows, in_lake)`` polyline tuples consumed by realmgen
 # (and used for rendering/serialization).
 RIVERS = FeatureChannel("rivers")
+# The ``StreamNetwork``: the rivers' accumulation tree cut at the (much lower)
+# stream threshold — town siting and the region tier's tributaries.
+STREAMS = FeatureChannel("streams")

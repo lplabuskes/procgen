@@ -17,10 +17,12 @@ from region.geometry import RegionGeometry
 from region.grid import RegionHexGrid
 from region.params import RegionParams
 from region.rivers import RegionRivers, build_region_rivers
+from region.towns import refine_region_towns
 from region.upsample import RegionFields, build_region_fields
 
 if TYPE_CHECKING:
     from core.world import World
+    from realmgen.builder import RealmParams
 
 
 class RegionView(QWidget):
@@ -51,8 +53,10 @@ class RegionView(QWidget):
         self._grid: Optional[RegionHexGrid] = None
         self._fields: Optional[RegionFields] = None
         self._region_params = RegionParams()
-        # Rivers refined over this region's relief; built the first time the
-        # Rivers overlay is shown here.
+        # The world's realm tuning: the town weights and radii towns are refined with.
+        self._realm_params: Optional["RealmParams"] = None
+        # The world's stream network re-routed over this region's relief; built
+        # with the region, since refining the towns needs it.
         self._rivers: Optional[RegionRivers] = None
         self._globe: Optional["World"] = None
         # The world map's active scheme: its name and spec (colour fn, texture, recipe).
@@ -95,25 +99,55 @@ class RegionView(QWidget):
             self._fields = build_region_fields(globe, geometry.region_id, self._region_params.upsample)
             self._grid = self._fields.grid
             self._rebuild_images()
+            self._refine_features()
         self.update()
 
-    def set_params(self, params: RegionParams) -> None:
+    def _refine_features(self) -> None:
+        """Re-route the streams over the refined relief and refine the positions of
+        the towns this region owns — into the world's ``towns`` feature, so they
+        stay refined (and are saved) after the region is left."""
+        assert self._fields is not None and self._globe is not None
+        self._rivers = build_region_rivers(self._fields, self._globe, self._region_params.rivers)
+        realm = self._realm_params
+        refine_region_towns(
+            self._fields, self._rivers, self._globe,
+            realm.towns if realm is not None else None,
+            realm.population if realm is not None else None,
+            realm.refine.river_threshold_factor if realm is not None else 1.5,
+            self._region_params.towns,
+        )
+
+    def set_params(self, params: RegionParams, globe: Optional["World"] = None) -> None:
         """Replace the region tuning; a region on screen is refined again with it.
 
-        Only what changed is rebuilt: new river params keep the refined fields.
+        Every town refined under the old tuning is stale, wherever it is, so all
+        of ``globe``'s (default: the shown one's) go back to their stage sites and
+        are refined again as their regions are visited. Only what changed is
+        rebuilt: new river or town params keep the refined fields.
         """
         if params == self._region_params:
             return
         old, self._region_params = self._region_params, params
-        if self._geometry is None:
+        globe = globe if globe is not None else self._globe
+        towns = globe.get_feature("towns") if globe is not None else None
+        if towns is not None:
+            towns.reset_refinement()
+            self._land_positions.pop("towns", None)
+        if self._geometry is None or self._fields is None:
             return
         if params.upsample != old.upsample:
             zoom, pan = self._zoom, self._pan.copy()
             self.set_region(self._geometry, self._globe)
             self._zoom, self._pan = zoom, pan
         else:
-            self._rivers = None
+            self._refine_features()
         self.update()
+
+    def set_realm_params(self, params: Optional["RealmParams"]) -> None:
+        """The realm tuning the world was built with (town weights and radii),
+        used when refining towns. A change comes with a rebuilt world, so there
+        is nothing to redo here."""
+        self._realm_params = params
 
     def clear_region(self) -> None:
         """Drop the current region (and its refined fields) until the next ``set_region``."""
@@ -287,12 +321,11 @@ class RegionView(QWidget):
             )
 
     def _refined_features(self) -> dict:
-        """Overlay features this region draws finer than the world map: the rivers,
-        re-routed over the refined relief with their sub-threshold tributaries."""
-        if self._fields is None or self._globe is None or not self._overlay_visible.get("rivers"):
+        """Overlay features this region draws finer than the world map: the
+        rivers — the stream network re-routed over the refined relief. (Towns need
+        no override: their refined positions are in the world feature.)"""
+        if self._rivers is None or not self._overlay_visible.get("rivers"):
             return {}
-        if self._rivers is None:
-            self._rivers = build_region_rivers(self._fields, self._globe, self._region_params.rivers)
         return {"rivers": self._rivers.paths}
 
     def _on_land(self, key: str, ecef: np.ndarray) -> np.ndarray:
