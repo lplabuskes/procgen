@@ -83,7 +83,7 @@ city whose hinterland holds it.
 
 ## `TownParams`
 
-`town_fraction` (0.10), `town_min` (1000), `size_exponent` (1.0),
+`town_fraction` (0.12), `town_min` (1000), `size_exponent` (1.0),
 `town_spacing_km` (20), `city_clearance_km` (25), the site bonuses `port_bonus`
 (2), `confluence_bonus` (2), `river_bonus` (1), `stream_bonus` (1), `route_bonus` (1),
 `mining_bonus` (1.5), `route_radius_km` (15), `mining_radius_km` (25), and

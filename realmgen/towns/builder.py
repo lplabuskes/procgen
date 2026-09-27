@@ -57,7 +57,7 @@ _SIZE_STREAM = 1   # RNG stream tag for town sizes (sites use the bare (seed, fa
 @paramclass
 class TownParams:
     town_fraction: float = _f(
-        0.10, label="Share of rural people living in towns", min=0.0, max=0.5, step=0.01)
+        0.12, label="Share of rural people living in towns", min=0.0, max=0.5, step=0.01)
     town_min: float = _f(1_000.0, label="Smallest town (people)", min=100.0, max=5_000.0, step=100.0)
     size_exponent: float = _f(1.0, label="Town size exponent α (1 = rank-size)", min=0.3, max=3.0)
     town_spacing_km: float = _f(
