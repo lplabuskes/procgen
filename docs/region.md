@@ -18,8 +18,9 @@ replaced.
 - `region/corridor.py` — the raster + least-cost corridor router the rivers and roads share
 - `region/rivers.py` — `build_region_rivers`: the world's stream network (rivers and sub-threshold streams) re-routed over the refined relief; `snap_deltas`
 - `region/roads.py` — `build_region_roads`: the world's trade routes re-routed over the refined terrain with the world's land-cost model
-- `region/towns.py` — `refine_region_towns`: the world's towns moved within their global texel onto the regional streams and roads, in place (cities stay put)
-- `region/params.py` — `RegionParams`: `upsample` (`RegionUpsampleParams`), `rivers` (`RegionRiverParams`), `roads` (`RegionRoadParams`) and `towns` (`RegionTownParams`), the **Region** section of the params dialog
+- `region/towns.py` — `refine_region_towns` / `refine_towns`: the world's towns moved within their global texel onto the regional streams and roads, in place; `tier_sites`, the site features both tiers and the cities read
+- `region/cities.py` — `refine_region_cities` / `refine_cities`: the world's cities moved within their global texel onto the refined coast and rivers their site had, in place
+- `region/params.py` — `RegionParams`: `upsample` (`RegionUpsampleParams`), `rivers` (`RegionRiverParams`), `roads` (`RegionRoadParams`) and `settlements` (`RegionSettlementParams`), the **Region** section of the params dialog
 - `viz/mapview/regionview.py` — `RegionView`, the zoomed-in widget
 
 ---
@@ -259,14 +260,16 @@ and `PopulationParams.fertility_exponent`).
 
 ### `RegionParams` (`region/params.py`)
 Groups the region tuning — `upsample` ("Detail refinement"), `rivers`
-("Rivers"), `roads` ("Roads") and `towns` ("Towns") — as `AppParams.region`, the
+("Rivers"), `roads` ("Roads") and `settlements` ("Towns and cities") — as `AppParams.region`, the
 **Region** section of the params dialog. It never rebuilds the world: `main.py` hands it to
 `MapWindow.set_region_params` → `RegionView.set_params`, and a dialog edit that
 changes nothing but `region` stops there. Any change makes every refined town
-stale, so all of them go back to their stage sites (`Towns.reset_refinement`)
-and are refined again as their regions are visited. On screen, a new `upsample`
-re-refines the region (keeping zoom and pan); a new `rivers`, `roads` or `towns`
-only rebuilds the rivers and roads and re-refines the region's towns.
+and city stale — at the local tier too, which refines from the region's
+positions — so all of them go back to their stage sites
+(`Towns.reset_refinement`, `Settlement.reset_refinement`) and are refined again
+as their regions are visited. On screen, a new `upsample` re-refines the region
+(keeping zoom and pan); a new `rivers`, `roads` or `settlements` only rebuilds
+the rivers and roads and re-refines the region's cities and towns.
 
 ### `RegionFields`
 `region_id`, `geometry`, `grid`, `tex_size`, `positions (M,T,T,3)`,
@@ -335,7 +338,7 @@ shared edge independently (each is shown alone, so no seam is visible).
 ## Roads (`region/roads.py`)
 
 `build_region_roads(fields, globe, rivers, params, land, danger_scale,
-land_reach) → RegionRoads` (`segments` in the world `"trade_routes"` feature's
+land_reach, moved) → RegionRoads` (`segments` in the world `"trade_routes"` feature's
 `(start, end, flow)` form, `polylines` with their per-edge `polyline_flows`, `sea`,
 `undrawn`). ~0.2 s per region. Each chain is re-routed by `route_polyline`, which a
 local map also runs over the region's own polylines (see [local.md](local.md)).
@@ -370,15 +373,17 @@ faces and how much are world facts; a region refines where the road runs.
 - **Routing** through a corridor `corridor_face_fraction` of a face spacing
   either side of the world chain (`route_corridor`), on a raster
   `raster_texels` regional texels apart. A chain end at a settlement lands
-  exactly on its marker (moved off refined water with `snap_to_land`, `land_reach`
-  — the view's own reach); the path is Laplacian-smoothed; each hop's flow is
+  exactly on its marker: a hop end at a city's world site is first moved to
+  where the city now stands (`moved = (site positions, positions)`, matched
+  within float32 round-off by `move_points`), then off refined water with
+  `snap_to_land` (`land_reach` — the view's own reach); the path is Laplacian-smoothed; each hop's flow is
   carried onto the stretch between the path points nearest its two ends. A
   stretch with no dry way through keeps the world line.
 
 ### `RegionRoadParams`
 `raster_texels`, `margin`, `corridor_face_fraction`, `smoothing_iterations`.
 
-## Towns (`region/towns.py`)
+## Towns and cities (`region/towns.py`, `region/cities.py`)
 
 `refine_region_towns(fields, rivers, globe, town_params, population_params,
 river_threshold_factor, params) → int` moves the world's towns, **in place in
@@ -404,14 +409,44 @@ town's actual position from then on and is saved with the world;
   drawn path, and a port on the refined coast, whenever one is in reach.
 - **Spacing** to every other town (wherever it stands now) and city is kept, by
   the stage's radii. A town with no legal spot stays on its site.
-- **Cities never move.**
 
 On seed 4 (regions 16/25/34/48), 73–100% of river towns end up on a drawn stream
 against 30–46% at their sites; towns move a median ~10 km; no spacing is broken;
 ~0.15–0.4 s per region.
 
-### `RegionTownParams`
-`refine_radius_global_texels`.
+**Cities** (`refine_region_cities(fields, rivers, globe, river_threshold_factor,
+params) → int`) are refined the same way, first — before the roads are routed,
+so the roads end on them, and before the towns, so the towns keep clear of where
+they now stand. The refine stage placed each on a global texel and recorded what
+that texel offered (`Settlement.site_kind`: `SITE_KIND_OCEAN_COAST`,
+`_LAKE_COAST`, `_RIVER`, `_CONFLUENCE`; see
+[realm_refine.md](realm_refine.md#city-siting-settlementspy)). The region
+re-floods the shoreline and re-routes the rivers, so without this a harbour city
+stands wherever its global texel's centre fell — on seed 4 a median 2.3 km and up
+to 17 km from the refined coast, 70% more than 1 km off.
+
+- **Which cities, where.** As for towns: the region containing the site, once;
+  the dry in-hexagon texels of the city's own face within
+  `refine_radius_global_texels` of its site.
+- **Kind is kept.** A harbour city lands on the refined coast (ocean, or lake for
+  a lake port), then among those on a drawn river or confluence if it had one;
+  a river city on a drawn river or confluence — whenever one is in reach.
+- **Score.** The refine stage's weights (`SITE_OCEAN` 3, `SITE_LAKE` 2,
+  `SITE_CONFLUENCE` 2, `SITE_RIVER` 1.5, `SITE_FERTILITY` 1 on the refined
+  fertility, `SITE_JITTER` 0.3 seeded `(seed, city, 11, tier)`), with the pull
+  toward the face centre replaced by one back toward the site (`SITE_CENTRE` 0.5
+  at the reach). Only features the site had earn their bonus, so an inland city
+  does not wander onto a stream or a shore the region revealed.
+- The result is `Settlement.position` and `region_position`, flagged `refined`;
+  `site_position` keeps the stage's site. All are saved.
+
+On seed 4, 75 of 77 harbour cities in 20 regions end up on the refined coast
+(moving a median ~5 km). The other two have no coast in reach in their own face:
+one's shoreline moved more than a global texel, the other's nearest shore is in
+the neighbouring face.
+
+### `RegionSettlementParams`
+`refine_radius_global_texels` (towns and cities).
 
 ## Display (`region/display.py`)
 
@@ -484,14 +519,14 @@ They size themselves by the *equivalent world zoom* — the world-map zoom that
 would show this ground at the same pixel scale — so a region looks like the
 world map zoomed to the same place. Overlays are world-resolution data — borders
 follow the global paths rather than the refined terrain — except **rivers**,
-**trade routes**, **deltas** and **towns**. Entering a region runs
-`build_region_rivers`, `build_region_roads`, `snap_deltas` and then
-`refine_region_towns` (with the world and realm params `main.py` passes to
+**trade routes**, **deltas**, **towns** and **cities**. Entering a region runs
+`build_region_rivers`, `refine_region_cities`, `build_region_roads`,
+`snap_deltas` and then `refine_region_towns` (with the world and realm params `main.py` passes to
 `MapWindow.set_world_params` / `set_realm_params`), ~0.8 s on top of the field
 refinement. Rivers, roads and deltas are handed to `draw_overlays(...,
 refined={"rivers": …, "trade_routes": …, "deltas": …})` in place of the world
-features; the towns need no override, as their refined positions are in the
-world feature itself. Widths and thresholds still come from the *world*
+features; the towns and cities need no override, as their refined positions
+are in the world features themselves. Widths and thresholds still come from the *world*
 feature — river width against the world's largest flow, route width against the
 world's largest route flow and the world's median as the drawing cut — so a
 re-routed road is drawn exactly as heavily as on the world map. **River widths
@@ -503,14 +538,14 @@ projector; see [realm_towns.md](realm_towns.md)), and cities are drawn to stand
 apart from the towns: 1.5× their world-map size (and at least twice the
 largest town dot), opaque, and ringed dark-then-white.
 
-**Settlements onto land.** Towns and cities are sited on global texels, so the
-refined shoreline can flood one (~1% of towns, a few coastal cities). The
-projector's `on_land` runs `region.display.snap_to_land`: a marker on refined
-water moves to the nearest in-hexagon land texel within
+**Settlements onto land.** A town or city the region refines lands on its dry
+texels, but one it does not own (sited in a neighbouring region, which has not
+been visited) still stands on its global texel, which the refined shoreline can
+flood. The projector's `on_land` runs `region.display.snap_to_land`: a marker
+on refined water moves to the nearest in-hexagon land texel within
 `water_spread_texels + 2` regional texels (the farthest the refinement lets water
-advance), typically 3–6 km. Trade-route endpoints at a moved city follow it.
-`RegionView` caches the result per feature. It is display-only, and the world
-features keep their global positions.
+advance), typically 3–6 km. `RegionView` caches the result per feature. It is
+display-only.
 
 ## Not yet implemented
 

@@ -23,7 +23,9 @@ road runs* between them:
 - Only routes the world map draws are re-routed (flow at or above the world's
   median, the renderer's threshold); the rest are kept as they are, for town
   siting.  Ends at a settlement land exactly on its marker (moved onto the
-  refined land when the refined shoreline flooded it).
+  refined land when the refined shoreline flooded it): ``moved`` carries the
+  cities the region has re-sited (``region/cities.py``) from their world
+  position to their refined one.
 
 Everything is deterministic.  Routes leaving the raster are cut at its edge.
 """
@@ -33,6 +35,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
+from scipy.spatial import KDTree
 
 from core.params import param_field as _f, paramclass
 from region.corridor import (
@@ -89,6 +92,24 @@ class RegionRoads:
     sea: list[RouteSegment] = field(default_factory=list)
     # (K - 1,) per-edge flow of each of ``polylines``, for the tier below.
     polyline_flows: list[np.ndarray] = field(default_factory=list)
+
+
+# How close (chord) a road end must be to a settlement's old position to follow
+# it: float32 round-off of a saved world, far below a texel.
+_MOVE_TOLERANCE = 1e-6
+
+
+def move_points(points: np.ndarray, moved: Optional[tuple[np.ndarray, np.ndarray]]) -> np.ndarray:
+    """``points`` with each one at an ``old`` position of ``moved = (old, new)``
+    replaced by the matching ``new`` one."""
+    if moved is None or len(moved[0]) == 0 or len(points) == 0:
+        return points
+    old, new = (np.asarray(a, dtype=np.float64).reshape(-1, 3) for a in moved)
+    dist, near = KDTree(old).query(points, workers=-1)
+    hit = dist < _MOVE_TOLERANCE
+    out = points.copy()
+    out[hit] = new[np.asarray(near)[hit]]
+    return out
 
 
 def _key(p: np.ndarray) -> tuple[float, float, float]:
@@ -337,12 +358,15 @@ def build_region_roads(
     land: Optional["LandCostParams"] = None,
     danger_scale: float = 2.0,
     land_reach: Optional[float] = None,
+    moved: Optional[tuple[np.ndarray, np.ndarray]] = None,
 ) -> RegionRoads:
     """Re-route the world's trade routes over ``fields``' refined terrain.
 
     ``land`` and ``danger_scale`` are the world's land-cost tuning and the realm's
     danger movement scale; ``land_reach`` is how far (chord) a settlement on the
     refined water is moved onto land (default: six regional texels).
+    ``moved = (old, new)`` moves every route end at an ``old`` position (a
+    settlement's world site) to the matching ``new`` one (where it now stands).
     """
     from worldgen.cost.builder import LandCostParams
     params = params or RegionRoadParams()
@@ -360,8 +384,8 @@ def build_region_roads(
     # Only what the map draws is re-routed; the rest is kept for the towns.
     flows = np.array([float(r[2]) for r in routes])
     threshold = float(np.median(flows))
-    starts = np.array([np.asarray(r[0], dtype=np.float64) for r in routes])
-    ends = np.array([np.asarray(r[1], dtype=np.float64) for r in routes])
+    starts = move_points(np.array([np.asarray(r[0], dtype=np.float64) for r in routes]), moved)
+    ends = move_points(np.array([np.asarray(r[1], dtype=np.float64) for r in routes]), moved)
     s0, t0, v0 = fields.geometry.ecef_to_local(starts)
     s1, t1, v1 = fields.geometry.ecef_to_local(ends)
     face_rad = float(np.sqrt(np.mean(mesh.face_areas)))

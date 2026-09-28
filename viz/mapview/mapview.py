@@ -950,7 +950,7 @@ class MapWindow(QMainWindow):
 
     def set_local_params(self, params: "LocalParams") -> None:
         """Tune the local tier; the local map on screen (if any) is rebuilt."""
-        self._local_view.set_local_params(params)
+        self._local_view.set_local_params(params, self._map.globe)
         if self._stack.currentWidget() is self._local_view:
             self.set_status("Building local map…")
             QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)

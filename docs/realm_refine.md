@@ -81,6 +81,12 @@ site is crowded, the least crowded one). On seeds 4/31/35 no two cities end up
 closer than 150 km, with or without the constraint — it is a guard for the
 unlucky coast, not something the scores routinely fight.
 
+**Site kind.** The chosen texel's features are kept as `Settlement.site_kind`
+(`SITE_KIND_OCEAN_COAST | _LAKE_COAST | _RIVER | _CONFLUENCE` bit flags), and
+the texel as `site_position` (`Settlement.set_site`). The region and local tiers
+re-site the city on their finer coast and rivers from there, keeping what the
+site offered (see [region.md](region.md#towns-and-cities-regiontownspy-regioncitiespy)).
+
 The function returns `{old_position_key: new_position}` for moved settlements.
 `remap_routes` then rewrites any trade-route endpoint matching a moved settlement's
 old centroid to its refined position — same connections, adjusted geometry. (Route
@@ -168,7 +174,7 @@ lies within one lattice edge of water.
 
 ## Outputs
 
-Mutates in place: `settlements` (`.position`), `trade_routes` (endpoint geometry),
+Mutates in place: `settlements` (`.position`, `.site_position`, `.site_kind`), `trade_routes` (endpoint geometry),
 `polity_borders` (`{depth: (M, 6)}` smoothed segments). Adds one face texture,
 `polity_fill`, consumed by the "Polities" scheme, and one in-memory feature,
 `polity_label_field`, which the scheme's recipe reads. No new overlays.

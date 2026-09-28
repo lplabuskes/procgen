@@ -1,13 +1,18 @@
 """Settlement data types and display constants."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
 # Every modeled settlement is city-class at this mesh resolution (a face is
 # province-scale); the tiers are rank *within* the set of major cities.
 TIER_NAMES = ["Great City", "Major City", "City", "Minor City"]
+
+# What a city's site offered when the refine stage chose it (bit flags), kept so
+# the finer tiers can re-site it without losing it: a harbour city stays on the
+# coast, a river city on its river.
+SITE_KIND_OCEAN_COAST, SITE_KIND_LAKE_COAST, SITE_KIND_RIVER, SITE_KIND_CONFLUENCE = 1, 2, 4, 8
 
 
 def format_population(population: float) -> str:
@@ -63,13 +68,47 @@ class Settlement:
     ``defensibility``, ``has_walls``, and ``wall_strength`` are set by
     PopulationStage after final populations are known (danger + wealth inform
     walls; ruggedness + situational value + rivers contribute to terrain defense).
+
+    ``position`` is where the city is at the finest tier that has refined it.
+    ``site_position`` is the refine stage's global-texel site, ``region_position``
+    the region tier's refinement of it (``refined``), and a local map refines that
+    in turn (``local_refined``); see ``region/cities.py``.
     """
 
     face_id: int
-    position: np.ndarray   # (3,) unit-sphere centroid of the face
+    position: np.ndarray   # (3,) unit-sphere, current (finest refinement)
     tier: int              # seeding label: 0=capital, 1=city, 2=town, 3=village
     score: float           # combined placement score at seeding time
     population: float = 0.0    # seeded from tier initial_population; updated by PopulationStage
     defensibility: float = 1.0  # composite multiplier used by PolityStage; set by PopulationStage
     has_walls: bool = False     # whether the settlement has defensive walls
     wall_strength: float = 0.0  # wall contribution to defensibility (0 if no walls)
+    site_kind: int = 0          # SITE_KIND_* flags of the refine stage's site
+    site_position: np.ndarray = field(default_factory=lambda: np.zeros(0))    # (3,)
+    region_position: np.ndarray = field(default_factory=lambda: np.zeros(0))  # (3,)
+    refined: bool = False           # re-sited by its region
+    local_refined: bool = False     # re-sited by its local map
+
+    def __post_init__(self) -> None:
+        self.position = np.asarray(self.position, dtype=np.float64)
+        if self.site_position.shape != (3,):
+            self.site_position = self.position.copy()
+        if self.region_position.shape != (3,):
+            self.region_position = self.position.copy()
+
+    def set_site(self, position: np.ndarray, kind: int = 0) -> None:
+        """Put the city on a new stage site, dropping any finer refinement."""
+        self.site_position = np.asarray(position, dtype=np.float64).copy()
+        self.site_kind = int(kind)
+        self.reset_refinement()
+
+    def reset_refinement(self) -> None:
+        """Back to the stage site (the region refinement is stale)."""
+        self.position = self.site_position.copy()
+        self.region_position = self.site_position.copy()
+        self.refined = self.local_refined = False
+
+    def reset_local_refinement(self) -> None:
+        """Back to the region's refinement (the local refinement is stale)."""
+        self.position = self.region_position.copy()
+        self.local_refined = False

@@ -1,4 +1,4 @@
-"""Refining the world's towns onto a region's finer terrain and streams.
+"""Refining the world's towns onto a region's (or a local map's) finer terrain and streams.
 
 The town stage sites every town on a global texel (~14 km), favouring rivers,
 the smaller streams of the hydrology stream network, coasts, routes and mines
@@ -18,10 +18,17 @@ saved with the world):
   the drawn river or the refined coast whenever one is in reach;
 - spacing to every other town and city is kept, against wherever they stand now.
 
-**Cities never move.**  Each town is refined by exactly one region — the one
-containing its site — and only once, so the result does not depend on which
-region was visited first or on the overlap between neighbouring regions.  Site
-noise is seeded per town.
+Each town is refined by exactly one region — the one containing its site — and
+only once, so the result does not depend on which region was visited first or
+on the overlap between neighbouring regions.  Site noise is seeded per town.
+Cities are refined the same way, before the towns (``region/cities.py``).
+
+**The local tier** refines again, from the region's position, with the same
+rules at the local map's spacing (:func:`refine_towns` with ``LOCAL_TIER``; the
+local map that owns a town is chosen in ``localmap/settlements.py``).  Spacing
+there is kept against the others' *region* positions, so the result does not
+depend on which local maps were opened first either.  The site features here
+(:func:`tier_sites`) serve both tiers and the cities.
 """
 from __future__ import annotations
 
@@ -46,17 +53,20 @@ from region.upsample import RegionFields
 if TYPE_CHECKING:
     from core.world import World
 
-# RNG stream tag for a town's refinement noise, seeded (seed, town, tag).
+# RNG stream tag for a town's refinement noise, seeded (seed, town, tag[, tier]).
 _REFINE_STREAM = 3
+
+# The tiers below the world that refine settlement positions.
+REGION_TIER, LOCAL_TIER = 1, 2
 
 
 @paramclass
-class RegionTownParams:
-    """Tuning for refining town positions in a region."""
+class RegionSettlementParams:
+    """Tuning for refining town and city positions in a region."""
 
-    # How far a town may move from the site the world gave it, in global texels.
+    # How far a town or city may move from the site the world gave it, in global texels.
     refine_radius_global_texels: float = _f(
-        1.0, label="Town refinement radius (global texels)", min=0.0, max=2.0, step=0.25)
+        1.0, label="Refinement radius (global texels)", min=0.0, max=2.0, step=0.25)
 
 
 def _neighbour_any(mask: np.ndarray) -> np.ndarray:
@@ -99,7 +109,10 @@ class _Sites:
     positions: np.ndarray    # (P, 3)
     face: np.ndarray         # (P,)
     rho: np.ndarray          # (P,) rural density
-    coast: np.ndarray        # (P,) bool
+    fertility: np.ndarray    # (P,) 0–1
+    coast: np.ndarray        # (P,) bool — ocean or lake
+    coast_ocean: np.ndarray  # (P,) bool
+    coast_lake: np.ndarray   # (P,) bool
     river: np.ndarray        # (P,) bool — on a drawn river or stream, not a confluence
     confluence: np.ndarray   # (P,) bool
     route: np.ndarray        # (P,) bool
@@ -113,10 +126,13 @@ def _route_points(roads: RegionRoads, step: float) -> Optional[np.ndarray]:
     return densify_polylines([*roads.polylines, *sea, *straight], step)
 
 
-def _region_sites(
+def tier_sites(
     fields: RegionFields, rivers: RegionRivers, globe: "World", sc, river_threshold_factor: float,
     roads: Optional[RegionRoads] = None,
 ) -> _Sites:
+    """The dry in-hexagon texels of ``fields`` (a region or a local map) and what
+    each offers.  Without ``sc`` (a town site context) no texel is on a route or
+    by a mine."""
     ocean = fields.textures.get("ocean_mask")
     lake = fields.textures.get("lake_mask")
     ocean = ocean[..., 0] > 0.5 if ocean is not None else np.zeros(fields.in_hex.shape, dtype=bool)
@@ -133,18 +149,32 @@ def _region_sites(
         rho = GlobalSampler(mesh).sample(mesh.face_textures[RURAL_DENSITY_TEXTURE], face, uv[:, 0], uv[:, 1])[:, 0]
     else:
         rho = np.ones(len(pos))
+    fert = fields.textures.get("fertility")
+    fertility = (np.clip(fert[..., 0][dry].astype(np.float64), 0.0, 1.0) if fert is not None
+                 else np.zeros(len(pos)))
     spacing = fields.grid.texel_spacing_rad(fields.tex_size)
     snap = float(river_threshold_factor) * spacing
     conf = _near(_tree(rivers.confluences), pos, snap)
+    coast_ocean = _neighbour_any(ocean)[dry]
+    coast_lake = _neighbour_any(lake)[dry]
+    no = np.zeros(len(pos), dtype=bool)
     return _Sites(
-        positions=pos, face=face, rho=rho,
-        coast=(~water & _neighbour_any(water))[dry],
+        positions=pos, face=face, rho=rho, fertility=fertility,
+        coast=coast_ocean | coast_lake, coast_ocean=coast_ocean, coast_lake=coast_lake,
         river=_near(_tree(_river_points(rivers, 0.5 * spacing)), pos, snap) & ~conf,
         confluence=conf,
-        route=_near(_tree(sc.route_points if roads is None else _route_points(roads, 0.5 * sc.route_radius)),
-                    pos, sc.route_radius),
-        mine=_near(_tree(sc.mineral_points), pos, sc.mining_radius),
+        route=no if sc is None else _near(
+            _tree(sc.route_points if roads is None else _route_points(roads, 0.5 * sc.route_radius)),
+            pos, sc.route_radius),
+        mine=no if sc is None else _near(_tree(sc.mineral_points), pos, sc.mining_radius),
     )
+
+
+def global_texel_rad(globe: "World") -> float:
+    """The side of a global texel, as a chord on the unit sphere."""
+    mesh = globe.mesh
+    gw = mesh.face_textures["elevation"].shape[2]
+    return float(np.sqrt(np.mean(mesh.face_areas))) / max(gw - 1, 1)
 
 
 def refine_region_towns(
@@ -154,7 +184,7 @@ def refine_region_towns(
     town_params: Optional[TownParams] = None,
     population_params: Optional[PopulationParams] = None,
     river_threshold_factor: float = 1.5,
-    params: Optional[RegionTownParams] = None,
+    params: Optional[RegionSettlementParams] = None,
     roads: Optional[RegionRoads] = None,
 ) -> int:
     """Refine the not-yet-refined towns whose site lies in this region, in place.
@@ -169,33 +199,66 @@ def refine_region_towns(
     towns: Optional[Towns] = globe.get_feature("towns")
     if towns is None or len(towns) == 0:
         return 0
-    params = params or RegionTownParams()
-    p = town_params or TownParams()
-    pp = population_params or PopulationParams()
+    params = params or RegionSettlementParams()
     owned = (ecef_to_cell(towns.site_positions, globe.antimeridian) == fields.region_id) & ~towns.refined
     todo = np.flatnonzero(owned)
-    if todo.size == 0:
-        return 0
+    reach = float(params.refine_radius_global_texels) * global_texel_rad(globe)
+    refine_towns(
+        fields, rivers, globe, todo, REGION_TIER, reach,
+        town_params, population_params, river_threshold_factor, roads,
+    )
+    return int(todo.size)
 
-    mesh = globe.mesh
+
+def refine_towns(
+    fields: RegionFields,
+    rivers: RegionRivers,
+    globe: "World",
+    todo: np.ndarray,
+    tier: int,
+    reach: float,
+    town_params: Optional[TownParams] = None,
+    population_params: Optional[PopulationParams] = None,
+    river_threshold_factor: float = 1.5,
+    roads: Optional[RegionRoads] = None,
+) -> None:
+    """Re-site towns ``todo`` on ``fields`` at ``tier``, in place: each moves at
+    most ``reach`` (chord) from its position at the tier above, staying on dry
+    land in its own face, and is flagged refined at ``tier``."""
+    towns: Optional[Towns] = globe.get_feature("towns")
+    if towns is None or len(todo) == 0:
+        return
+    region = tier == REGION_TIER
+    p = town_params or TownParams()
+    pp = population_params or PopulationParams()
     seed = int(globe.seed or 0)
     sc = town_site_context(globe, p, pp)
-    sites = _region_sites(fields, rivers, globe, sc, river_threshold_factor, roads)
-    gw = mesh.face_textures["elevation"].shape[2]
-    reach = float(params.refine_radius_global_texels) * float(np.sqrt(np.mean(mesh.face_areas))) / max(gw - 1, 1)
+    sites = tier_sites(fields, rivers, globe, sc, river_threshold_factor, roads)
+    # Where each settlement stood at the tier above (what a town refines from),
+    # and where its neighbours are held to count for spacing: wherever they stand
+    # now in a region; at their region positions on a local map, so a local map's
+    # result does not depend on which others were opened first.
+    parents = towns.site_positions if region else towns.region_positions
+    neighbours = towns.positions if region else towns.region_positions
+    settlements = globe.get_feature("settlements") or []
+    city_pos = sc.city_positions if region else np.array(
+        [s.region_position for s in settlements], dtype=np.float64).reshape(-1, 3)
 
     town_radii = sc.town_spacing * (towns.population / float(p.town_min)) ** SPACING_EXPONENT
     max_pair = max(float(town_radii.max()), float(sc.city_radii.max()) if len(sc.city_radii) else 0.0)
-    site_tree = KDTree(towns.site_positions)
-    city_tree = _tree(sc.city_positions)
+    parent_tree = KDTree(parents)
+    city_tree = _tree(city_pos)
     candidate_tree = KDTree(sites.positions) if len(sites.positions) else None
 
     # Largest first, like the stage: the biggest towns take the best spots.
     for i in todo[np.argsort(-towns.population[todo], kind="stable")].tolist():
-        towns.refined[i] = True
+        if region:
+            towns.refined[i] = True
+        else:
+            towns.local_refined[i] = True
         if candidate_tree is None:
             continue
-        cand = np.asarray(candidate_tree.query_ball_point(towns.site_positions[i], reach), dtype=np.int64)
+        cand = np.asarray(candidate_tree.query_ball_point(parents[i], reach), dtype=np.int64)
         cand = cand[sites.face[cand] == towns.face_id[i]]
         if cand.size == 0:
             continue
@@ -207,21 +270,21 @@ def refine_region_towns(
             sites.rho[cand], coast, conf, river, np.zeros_like(river),
             sites.route[cand], sites.mine[cand], p,
         )
-        # Keep what the world chose the site for, where the region can show it.
+        # Keep what the world chose the site for, where this tier can show it.
         if towns.kind[i] == TOWN_RIVER and (river | conf).any():
             log_w = np.where(river | conf, log_w, -np.inf)
         elif towns.kind[i] == TOWN_PORT and coast.any():
             log_w = np.where(coast, log_w, -np.inf)
 
-        # Spacing against every town and city near the site, wherever it stands now.
+        # Spacing against every town and city near it.
         radius = town_radii[i]
-        near = np.asarray(site_tree.query_ball_point(towns.site_positions[i], max_pair + 2.0 * reach), dtype=np.int64)
+        near = np.asarray(parent_tree.query_ball_point(parents[i], max_pair + 2.0 * reach), dtype=np.int64)
         near = near[near != i]
-        disc_pos = [towns.positions[near]]
+        disc_pos = [neighbours[near]]
         disc_rad = [np.maximum(town_radii[near], radius)]
         if city_tree is not None:
-            c = np.asarray(city_tree.query_ball_point(towns.site_positions[i], max_pair + reach), dtype=np.int64)
-            disc_pos.append(sc.city_positions[c])
+            c = np.asarray(city_tree.query_ball_point(parents[i], max_pair + reach), dtype=np.int64)
+            disc_pos.append(city_pos[c])
             disc_rad.append(np.maximum(sc.city_radii[c], radius))
         dpos, drad = np.concatenate(disc_pos), np.concatenate(disc_rad)
         cpos = sites.positions[cand]
@@ -229,8 +292,10 @@ def refine_region_towns(
             ok = (cpos @ dpos.T <= 1.0 - 0.5 * drad ** 2).all(axis=1)
             log_w = np.where(ok, log_w, -np.inf)
 
-        score = log_w + np.random.default_rng([seed, i, _REFINE_STREAM]).gumbel(size=cand.size)
+        stream = [seed, i, _REFINE_STREAM] if region else [seed, i, _REFINE_STREAM, tier]
+        score = log_w + np.random.default_rng(stream).gumbel(size=cand.size)
         best = int(np.argmax(score))
         if np.isfinite(score[best]):
             towns.positions[i] = cpos[best]
-    return int(todo.size)
+            if region:
+                towns.region_positions[i] = cpos[best]

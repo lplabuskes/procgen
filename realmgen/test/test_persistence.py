@@ -20,6 +20,8 @@ def test_settlements_round_trip():
         Settlement(
             face_id=3, position=np.array([0.0, 0.0, 1.0]), tier=0, score=0.9,
             population=12000.0, defensibility=1.4, has_walls=True, wall_strength=0.8,
+            site_kind=5, site_position=np.array([0.0, 0.6, 0.8]), region_position=np.array([0.0, 0.8, 0.6]),
+            refined=True, local_refined=True,
         ),
         Settlement(
             face_id=7, position=np.array([1.0, 0.0, 0.0]), tier=2, score=0.3,
@@ -37,6 +39,22 @@ def test_settlements_round_trip():
         assert a.has_walls == b.has_walls
         assert a.wall_strength == b.wall_strength
         assert np.allclose(a.position, b.position)
+        assert a.site_kind == b.site_kind
+        assert np.allclose(a.site_position, b.site_position)
+        assert np.allclose(a.region_position, b.region_position)
+        assert (a.refined, a.local_refined) == (b.refined, b.local_refined)
+
+
+def test_a_new_site_drops_the_finer_refinement():
+    s = Settlement(face_id=0, position=np.array([1.0, 0.0, 0.0]), tier=0, score=1.0)
+    np.testing.assert_array_equal(s.site_position, s.position)
+    np.testing.assert_array_equal(s.region_position, s.position)
+    s.position = s.region_position = np.array([0.0, 1.0, 0.0])
+    s.refined = s.local_refined = True
+    s.set_site(np.array([0.0, 0.0, 1.0]), kind=3)
+    assert s.site_kind == 3 and not s.refined and not s.local_refined
+    np.testing.assert_array_equal(s.position, [0.0, 0.0, 1.0])
+    np.testing.assert_array_equal(s.region_position, [0.0, 0.0, 1.0])
 
 
 def test_polities_round_trip_preserves_tree_and_lists():

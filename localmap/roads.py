@@ -21,7 +21,7 @@ from core.params import param_field as _f, paramclass
 from region.corridor import corridor_reach, node_spacing_rad, raster_frame, sample_raster
 from region.display import snap_to_land
 from region.rivers import RegionRivers
-from region.roads import RegionRoads, RouteSegment, _river_nodes, _road_cost, route_polyline
+from region.roads import RegionRoads, RouteSegment, _river_nodes, _road_cost, move_points, route_polyline
 from region.upsample import EARTH_RADIUS_KM, RegionFields
 
 if TYPE_CHECKING:
@@ -70,12 +70,14 @@ def build_local_roads(
     land: Optional["LandCostParams"] = None,
     danger_scale: float = 2.0,
     land_reach: Optional[float] = None,
+    moved: Optional[tuple[np.ndarray, np.ndarray]] = None,
 ) -> RegionRoads:
     """Re-route ``region_roads``' land roads over the local map ``local`` of ``region``.
 
     ``land``, ``danger_scale`` and ``land_reach`` are as for
     :func:`region.roads.build_region_roads` (``land_reach`` defaulting to six
-    local texels).
+    local texels); ``moved = (old, new)`` moves a road end at a city's region
+    position to where the local map re-sited it.
     """
     from worldgen.cost.builder import LandCostParams
     params = params or LocalRoadParams()
@@ -116,7 +118,7 @@ def build_local_roads(
         # A road's ends are settlements (or the region's coast points): moved off
         # the local water, like the region moves them off its own.
         verts = verts.copy()
-        verts[[0, -1]] = snap_to_land(local, verts[[0, -1]], land_reach)
+        verts[[0, -1]] = snap_to_land(local, move_points(verts[[0, -1]], moved), land_reach)
         for path, edge_flows in route_polyline(
             local, raster, verts, flows, radius_nodes, edge_cost, int(params.smoothing_iterations),
         ):

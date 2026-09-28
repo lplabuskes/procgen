@@ -24,6 +24,7 @@ from region.grid import RegionHexGrid
 from region.params import RegionParams
 from region.rivers import RegionRivers, build_region_rivers, snap_deltas
 from region.roads import RegionRoads, build_region_roads
+from region.cities import refine_region_cities
 from region.towns import refine_region_towns
 from realmgen.towns.types import Towns
 from region.upsample import RegionFields, build_region_fields
@@ -153,19 +154,26 @@ class RegionView(QWidget):
         self.update()
 
     def _refine_features(self) -> None:
-        """Re-route the streams and trade routes over the refined terrain, move the
-        deltas onto the new river mouths, and refine the positions of the towns
-        this region owns — into the world's ``towns`` feature, so they stay
-        refined (and are saved) after the region is left."""
+        """Re-route the streams over the refined terrain, refine the positions of
+        the cities this region owns, re-route the trade routes (ending on those
+        cities), move the deltas onto the new river mouths, and refine the
+        positions of the towns this region owns.  Cities and towns are refined in
+        the world's features, so they stay refined (and are saved) after the
+        region is left."""
         assert self._fields is not None and self._globe is not None
         f, globe, rp = self._fields, self._globe, self._region_params
         self._rivers = build_region_rivers(f, globe, rp.rivers)
         realm, world = self._realm_params, self._world_params
+        factor = realm.refine.river_threshold_factor if realm is not None else 1.5
+        refine_region_cities(f, self._rivers, globe, factor, rp.settlements)
+        cities = globe.get_feature("settlements") or []
+        moved = (np.array([c.site_position for c in cities]).reshape(-1, 3),
+                 np.array([c.position for c in cities]).reshape(-1, 3))
         self._roads = build_region_roads(
             f, globe, self._rivers, rp.roads,
             land=world.cost.land if world is not None else None,
             danger_scale=float(realm.danger.movement_scale) if realm is not None else 2.0,
-            land_reach=self._land_reach(),
+            land_reach=self._land_reach(), moved=moved,
         )
         deltas = globe.get_feature("deltas")
         self._deltas = None
@@ -179,8 +187,7 @@ class RegionView(QWidget):
             f, self._rivers, globe,
             realm.towns if realm is not None else None,
             realm.population if realm is not None else None,
-            realm.refine.river_threshold_factor if realm is not None else 1.5,
-            rp.towns, roads=self._roads,
+            factor, rp.settlements, roads=self._roads,
         )
 
     # ── local maps ───────────────────────────────────────────────────────────
@@ -210,6 +217,9 @@ class RegionView(QWidget):
                 fertility_exponent=float(realm.population.fertility_exponent) if realm is not None else 2.0,
                 land=world.cost.land if world is not None else None,
                 danger_scale=float(realm.danger.movement_scale) if realm is not None else 2.0,
+                town_params=realm.towns if realm is not None else None,
+                population_params=realm.population if realm is not None else None,
+                river_threshold_factor=realm.refine.river_threshold_factor if realm is not None else 1.5,
             )
         self._local_cache[key] = local
         while len(self._local_cache) > self.LOCAL_CACHE_SIZE:
@@ -232,13 +242,23 @@ class RegionView(QWidget):
         self._rebuild_images()
         self.update()
 
-    def set_local_params(self, params: LocalParams) -> None:
+    def set_local_params(self, params: LocalParams, globe: Optional["World"] = None) -> None:
         """Replace the local tuning; cached local maps are dropped (the caller
-        re-opens the one on screen)."""
+        re-opens the one on screen).  Every town and city a local map refined
+        under the old tuning goes back to where its region put it — ``globe``'s
+        (default: the shown one's) — to be refined again by its local map."""
         if params == self._local_params:
             return
         self._local_params = params
         self._local_cache.clear()
+        globe = globe if globe is not None else self._globe
+        if globe is not None:
+            towns = globe.get_feature("towns")
+            if towns is not None:
+                towns.reset_local_refinement()
+            for city in globe.get_feature("settlements") or []:
+                city.reset_local_refinement()
+            self._land_positions = {}
 
     def clear_local_cache(self) -> None:
         self._local_cache.clear()
@@ -262,19 +282,23 @@ class RegionView(QWidget):
     def set_params(self, params: RegionParams, globe: Optional["World"] = None) -> None:
         """Replace the region tuning; a region on screen is refined again with it.
 
-        Every town refined under the old tuning is stale, wherever it is, so all
-        of ``globe``'s (default: the shown one's) go back to their stage sites and
-        are refined again as their regions are visited. Only what changed is
-        rebuilt: new river or town params keep the refined fields.
+        Every town and city refined under the old tuning (by a region or a local
+        map) is stale, wherever it is, so all of ``globe``'s (default: the shown
+        one's) go back to their stage sites and are refined again as their
+        regions are visited. Only what changed is rebuilt: new river or
+        settlement params keep the refined fields.
         """
         if params == self._region_params:
             return
         old, self._region_params = self._region_params, params
         globe = globe if globe is not None else self._globe
-        towns = globe.get_feature("towns") if globe is not None else None
-        if towns is not None:
-            towns.reset_refinement()
-            self._land_positions.pop("towns", None)
+        if globe is not None:
+            towns = globe.get_feature("towns")
+            if towns is not None:
+                towns.reset_refinement()
+            for city in globe.get_feature("settlements") or []:
+                city.reset_refinement()
+            self._land_positions = {}
         if self._geometry is None or self._fields is None:
             return
         if params.upsample != old.upsample:
@@ -491,9 +515,9 @@ class RegionView(QWidget):
     def _refined_features(self) -> dict:
         """Overlay features this region draws finer than the world map: the
         rivers and roads re-routed over the refined terrain, and the deltas on the
-        new river mouths. (Towns need no override: their refined positions are in
-        the world feature.)  A local map adds its villages, its towns at local
-        positions and its cities' footprints."""
+        new river mouths. (Towns and cities need no override: their refined
+        positions are in the world features.)  A local map adds its villages, its
+        towns moved off its water and its cities' footprints."""
         out: dict = {}
         if self._local is not None:
             out["villages"] = self._local.villages

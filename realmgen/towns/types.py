@@ -26,10 +26,11 @@ class Towns:
     hinterland holds the town's face (``-1`` outside every hinterland).
 
     ``site_positions`` is where the town stage put each town, on a global texel.
-    ``positions`` is where the town actually is: the same, until a region view
-    refines it onto the region's finer terrain and streams (``refined``), which
-    only ever moves it within about one global texel of its site
-    (``region/towns.py``).
+    ``positions`` is where the town actually is, at the finest tier that has
+    refined it: the same as the site, until a region view refines it onto the
+    region's finer terrain and streams (``refined``, ``region_positions``) — within
+    about one global texel of its site (``region/towns.py``) — and then its local
+    map refines that in turn (``local_refined``; ``localmap/settlements.py``).
     """
 
     positions: np.ndarray    # (K, 3) unit-sphere, current (refined where ``refined``)
@@ -39,12 +40,19 @@ class Towns:
     kind: np.ndarray         # (K,) TOWN_* code
     site_positions: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))   # (K, 3)
     refined: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=bool))   # (K,)
+    region_positions: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))  # (K, 3)
+    local_refined: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=bool))  # (K,)
 
     def __post_init__(self) -> None:
-        if self.site_positions.shape[0] != self.positions.shape[0]:
+        n = self.positions.shape[0]
+        if self.site_positions.shape[0] != n:
             self.site_positions = self.positions.copy()
-        if self.refined.shape[0] != self.positions.shape[0]:
-            self.refined = np.zeros(self.positions.shape[0], dtype=bool)
+        if self.region_positions.shape[0] != n:
+            self.region_positions = self.positions.copy()
+        if self.refined.shape[0] != n:
+            self.refined = np.zeros(n, dtype=bool)
+        if self.local_refined.shape[0] != n:
+            self.local_refined = np.zeros(n, dtype=bool)
 
     def __len__(self) -> int:
         return int(self.population.shape[0])
@@ -52,7 +60,14 @@ class Towns:
     def reset_refinement(self) -> None:
         """Put every town back on its stage site (region refinement is stale)."""
         self.positions[:] = self.site_positions
+        self.region_positions[:] = self.site_positions
         self.refined[:] = False
+        self.local_refined[:] = False
+
+    def reset_local_refinement(self) -> None:
+        """Put every town back on its region's refinement (local refinement is stale)."""
+        self.positions[:] = self.region_positions
+        self.local_refined[:] = False
 
     @classmethod
     def empty(cls) -> "Towns":
@@ -69,6 +84,8 @@ class Towns:
             "town_position": self.positions.astype(np.float32),
             "town_site_position": self.site_positions.astype(np.float32),
             "town_refined": self.refined.astype(np.bool_),
+            "town_region_position": self.region_positions.astype(np.float32),
+            "town_local_refined": self.local_refined.astype(np.bool_),
             "town_population": self.population.astype(np.float64),
             "town_face_id": self.face_id.astype(np.int32),
             "town_parent": self.parent.astype(np.int32),
@@ -85,4 +102,6 @@ class Towns:
             kind=np.asarray(arrays["town_kind"], dtype=np.int8),
             site_positions=np.asarray(arrays["town_site_position"], dtype=np.float64).reshape(-1, 3),
             refined=np.asarray(arrays["town_refined"], dtype=bool),
+            region_positions=np.asarray(arrays["town_region_position"], dtype=np.float64).reshape(-1, 3),
+            local_refined=np.asarray(arrays["town_local_refined"], dtype=bool),
         )

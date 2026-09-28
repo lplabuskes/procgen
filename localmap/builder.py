@@ -6,16 +6,19 @@ hex, from the region's own refined fields, rivers and roads:
 1. the fields (:func:`localmap.upsample.build_local_fields`);
 2. the rivers (:func:`localmap.rivers.build_local_rivers`), and the region's
    deltas moved onto the local river mouths;
-3. the roads (:func:`localmap.roads.build_local_roads`), fording the local rivers;
-4. the towns and cities in and around the map, at *local* positions — moved off
-   the local water, a river town onto its local river and a port onto the local
-   coast when one is in reach.  Display-only: the world's ``towns`` feature
-   keeps the region's refinement;
-5. the villages (:func:`localmap.villages.place_villages`), clear of those
+3. the cities this map owns re-sited on its coast and rivers
+   (:func:`localmap.settlements.refine_local_cities`, saved on the world);
+4. the roads (:func:`localmap.roads.build_local_roads`), fording the local
+   rivers and ending on the re-sited cities;
+5. the towns this map owns re-sited on its coast, rivers and roads
+   (:func:`localmap.settlements.refine_local_towns`, saved on the world); every
+   town and city in and around the map is then drawn where it stands, moved off
+   the local water if it is not this map's to refine;
+6. the villages (:func:`localmap.villages.place_villages`), clear of those
    towns and cities;
-6. the cities' built-up footprints (:func:`localmap.cities.city_footprints`).
+7. the cities' built-up footprints (:func:`localmap.cities.city_footprints`).
 
-Qt-free and deterministic.
+Qt-free.  Deterministic, given which settlements earlier local maps re-sited.
 """
 from __future__ import annotations
 
@@ -23,23 +26,23 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
-from scipy.spatial import KDTree
 
 from localmap.cities import CityFootprints, city_footprints
 from localmap.params import LocalParams
 from localmap.rivers import build_local_rivers
 from localmap.roads import build_local_roads
+from localmap.settlements import refine_local_cities, refine_local_towns
 from localmap.upsample import build_local_fields
 from localmap.villages import Villages, place_villages
-from realmgen.towns.types import TOWN_PORT, TOWN_RIVER
 from region.display import snap_to_land
 from region.rivers import RegionRivers, snap_deltas
 from region.roads import RegionRoads
-from region.towns import _neighbour_any, _river_points
 from region.upsample import RegionFields
 
 if TYPE_CHECKING:
     from core.world import World
+    from realmgen.population.builder import PopulationParams
+    from realmgen.towns.builder import TownParams
     from worldgen.cost.builder import LandCostParams
     from worldgen.resources.builder import ResourcesParams
 
@@ -76,25 +79,12 @@ def _in_box(local: RegionFields, positions: np.ndarray, margin: float) -> np.nda
     return valid & (s >= -margin) & (s <= 1.0 + margin) & (t >= -margin) & (t <= 1.0 + margin)
 
 
-def _snap_to(points: np.ndarray, targets: Optional[np.ndarray], reach: float, which: np.ndarray) -> np.ndarray:
-    """``points[which]`` moved onto their nearest ``targets`` point within ``reach``."""
-    out = points.copy()
-    if targets is None or len(targets) == 0 or not which.any():
-        return out
-    dist, near = KDTree(targets).query(points[which], workers=-1)
-    near = np.asarray(near, dtype=np.int64)
-    moved = out[which]
-    ok = dist < reach
-    moved[ok] = targets[near[ok]]
-    out[which] = moved
-    return out
-
-
 def _local_settlements(
-    local: RegionFields, rivers: RegionRivers, globe: "World", land_reach: float, parent_spacing: float,
+    local: RegionFields, globe: "World", land_reach: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """``(town_index, town_positions, town_pops, city_index, city_positions, city_pops)``
-    for the towns and cities in and around the map, at local positions."""
+    for the towns and cities in and around the map, where they stand (moved off
+    the local water: those another local map owns may not be refined yet)."""
     towns = globe.get_feature("towns")
     t_idx = np.zeros(0, dtype=np.int64)
     t_pos, t_pop = np.zeros((0, 3)), np.zeros(0)
@@ -102,17 +92,6 @@ def _local_settlements(
         t_idx = np.flatnonzero(_in_box(local, np.asarray(towns.positions, dtype=np.float64), _SETTLEMENT_MARGIN))
         t_pos = snap_to_land(local, np.asarray(towns.positions, dtype=np.float64)[t_idx], land_reach)
         t_pop = np.asarray(towns.population, dtype=np.float64)[t_idx]
-        kind = np.asarray(towns.kind)[t_idx]
-        # A river town sat within ~1.5 regional texels of its regional river,
-        # which the local map moved by up to a corridor: reach both.
-        spacing = local.grid.texel_spacing_rad(local.tex_size)
-        t_pos = _snap_to(t_pos, _river_points(rivers, 0.5 * spacing), 2.5 * parent_spacing, kind == TOWN_RIVER)
-        water = np.zeros(local.in_hex.shape, dtype=bool)
-        for key in ("ocean_mask", "lake_mask"):
-            if key in local.textures:
-                water |= local.textures[key][..., 0] > 0.5
-        coast = local.positions[local.in_hex & ~water & _neighbour_any(water)]
-        t_pos = _snap_to(t_pos, coast, 2.0 * parent_spacing, kind == TOWN_PORT)
     settlements = globe.get_feature("settlements") or []
     c_idx = np.zeros(0, dtype=np.int64)
     c_pos, c_pop = np.zeros((0, 3)), np.zeros(0)
@@ -137,12 +116,16 @@ def build_local_map(
     fertility_exponent: float = 2.0,
     land: Optional["LandCostParams"] = None,
     danger_scale: float = 2.0,
+    town_params: Optional["TownParams"] = None,
+    population_params: Optional["PopulationParams"] = None,
+    river_threshold_factor: float = 1.5,
 ) -> LocalMap:
     """Build the local map of regional hex ``hex_index``.  See the module docstring.
 
     ``region_rivers`` / ``region_roads`` / ``region_deltas`` are the region's
     (as the region view holds them); without them the map has none.  The rest
-    is the world's and realm's tuning, as for the region.
+    is the world's and realm's tuning, as for the region.  Re-sites the towns
+    and cities this map owns in ``globe``'s features, in place.
     """
     params = params or LocalParams()
     local = build_local_fields(
@@ -161,11 +144,17 @@ def build_local_map(
         inside = _in_box(local, np.asarray(region_deltas, dtype=np.float64), _SETTLEMENT_MARGIN)
         reach = 2.0 * float(params.rivers.corridor_parent_texels) * parent_spacing + 2.0 * land_reach
         deltas = snap_deltas(np.asarray(region_deltas, dtype=np.float64)[inside], rivers, reach)
+    moved = refine_local_cities(
+        local, region, hex_index, rivers, globe, params.settlements, river_threshold_factor)
     roads = (build_local_roads(local, region, region_roads, globe, rivers, params.roads,
-                               land=land, danger_scale=danger_scale, land_reach=land_reach)
+                               land=land, danger_scale=danger_scale, land_reach=land_reach, moved=moved)
              if region_roads is not None else RegionRoads(region_id=local.region_id, segments=[]))
+    refine_local_towns(
+        local, region, hex_index, rivers, globe, params.settlements,
+        town_params, population_params, river_threshold_factor, roads,
+    )
 
-    t_idx, t_pos, t_pop, c_idx, c_pos, c_pop = _local_settlements(local, rivers, globe, land_reach, parent_spacing)
+    t_idx, t_pos, t_pop, c_idx, c_pos, c_pop = _local_settlements(local, globe, land_reach)
     # One village stream per (world, region, hex); non-negative for SeedSequence.
     seed = (int(globe.seed or 0) & 0xFFFFFFFF) * 1_000_003 + int(region.region_id) * 4_099 + int(hex_index)
     villages = place_villages(

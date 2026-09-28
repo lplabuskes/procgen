@@ -21,7 +21,9 @@ faces cannot crowd the shared edge. The bigger city gets its pick; the smaller
 one takes its best remaining site. If every site is too close, it takes the one
 farthest from its neighbours.
 
-Positions are mutated in place on the ``Settlement`` objects.  The function
+Positions are mutated in place on the ``Settlement`` objects, which also keep
+what the chosen site offered (``Settlement.site_kind``) so the region and local
+tiers can re-site the city without losing its harbour or river.  The function
 returns the ``{old_position_key: new_position}`` map so dependent geometry (trade
 routes) can be remapped without re-deriving which settlement moved.
 """
@@ -29,6 +31,9 @@ from __future__ import annotations
 
 import numpy as np
 
+from realmgen.placement.types import (
+    SITE_KIND_CONFLUENCE, SITE_KIND_LAKE_COAST, SITE_KIND_OCEAN_COAST, SITE_KIND_RIVER,
+)
 from realmgen.refine.sites import SiteField
 
 SITE_OCEAN = 3.0
@@ -44,6 +49,14 @@ def position_key(pos: np.ndarray) -> tuple[float, float, float]:
     """Hashable key for a unit-sphere position, stable for centroid-derived points."""
     p = np.asarray(pos, dtype=np.float64).ravel()
     return (round(float(p[0]), 9), round(float(p[1]), 9), round(float(p[2]), 9))
+
+
+def site_kind(sites, i: int) -> int:
+    """The ``SITE_KIND_*`` flags of texel ``i`` of one face's sites."""
+    return (
+        SITE_KIND_OCEAN_COAST * bool(sites.coast_ocean[i]) | SITE_KIND_LAKE_COAST * bool(sites.coast_lake[i])
+        | SITE_KIND_RIVER * bool(sites.river[i]) | SITE_KIND_CONFLUENCE * bool(sites.confluence[i])
+    )
 
 
 def city_site_scores(sites, idx: np.ndarray, centroid: np.ndarray, rng: np.random.Generator) -> np.ndarray:
@@ -110,7 +123,7 @@ def refine_settlement_positions(
 
         if not np.array_equal(new_pos, np.asarray(s.position, dtype=np.float64)):
             moved[position_key(s.position)] = new_pos
-            s.position = new_pos
+        s.set_site(new_pos, site_kind(face, int(best)))
 
     return moved
 

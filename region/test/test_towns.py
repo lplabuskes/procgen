@@ -1,4 +1,4 @@
-"""Refining the world's towns onto a region's terrain and streams; cities stay put."""
+"""Refining the world's towns onto a region's terrain and streams."""
 import numpy as np
 import pytest
 
@@ -8,7 +8,7 @@ from realmgen.towns.placement import SPACING_EXPONENT
 from realmgen.towns.types import TOWN_MARKET, TOWN_RIVER, Towns
 from region.geometry import ecef_to_cell
 from region.rivers import build_region_rivers
-from region.towns import RegionTownParams, _river_points, refine_region_towns
+from region.towns import RegionSettlementParams, _river_points, refine_region_towns
 from region.upsample import RegionUpsampleParams, build_region_fields
 from worldgen.cost.surfaces import EARTH_RADIUS_KM
 
@@ -58,7 +58,7 @@ def world(fields, synthetic_globe):
 def _reach(globe) -> float:
     gw = globe.mesh.face_textures["elevation"].shape[2]
     texel = float(np.sqrt(np.mean(globe.mesh.face_areas))) / (gw - 1)
-    return RegionTownParams().refine_radius_global_texels * texel
+    return RegionSettlementParams().refine_radius_global_texels * texel
 
 
 def _radii(towns: Towns) -> np.ndarray:

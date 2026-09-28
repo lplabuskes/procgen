@@ -97,9 +97,12 @@ so towns and cities do not overlap in size.
   river town onto the drawn river or stream, a port onto the refined coast —
   and writes the result into this feature: `positions` is the town's actual
   position, `site_positions` the stage's site, `refined` which towns have been
-  refined (all three saved). Cities never move. It shares the stage's weights
-  (`site_log_weight_and_kind`) and `town_site_context`. See
-  [region.md](region.md#towns-regiontownspy).
+  refined, `region_positions` the region's result (all saved). It shares the
+  stage's weights (`site_log_weight_and_kind`) and `town_site_context`. See
+  [region.md](region.md#towns-and-cities-regiontownspy-regioncitiespy). A local
+  map then refines the town again from its region position
+  (`local_refined`; [local.md](local.md#towns-and-cities-localmapsettlementspy)),
+  and cities are refined at both tiers too.
 - **Towns overlay** (checked by default). Small dots coloured by kind and sized
   by population (`_draw_towns` in `viz/mapview/overlays.py`), with a categorical
   legend. Drawn **only in the region view** (the overlay projector's

@@ -56,6 +56,15 @@ def pack_settlements(settlements: List[Settlement]) -> Dict[str, np.ndarray]:
         "settle_defensibility": np.array([s.defensibility for s in settlements], dtype=np.float64),
         "settle_has_walls": np.array([s.has_walls for s in settlements], dtype=np.bool_),
         "settle_wall_strength": np.array([s.wall_strength for s in settlements], dtype=np.float64),
+        "settle_site_kind": np.array([s.site_kind for s in settlements], dtype=np.int8),
+        "settle_site_position": np.array(
+            [s.site_position for s in settlements], dtype=np.float32
+        ).reshape(-1, 3),
+        "settle_region_position": np.array(
+            [s.region_position for s in settlements], dtype=np.float32
+        ).reshape(-1, 3),
+        "settle_refined": np.array([s.refined for s in settlements], dtype=np.bool_),
+        "settle_local_refined": np.array([s.local_refined for s in settlements], dtype=np.bool_),
     }
 
 
@@ -78,6 +87,11 @@ def unpack_settlements(arrays: Mapping[str, np.ndarray]) -> List[Settlement]:
             defensibility=float(defens[i]),
             has_walls=bool(walls[i]),
             wall_strength=float(wall_strength[i]),
+            site_kind=int(arrays["settle_site_kind"][i]),
+            site_position=np.asarray(arrays["settle_site_position"][i], dtype=np.float64),
+            region_position=np.asarray(arrays["settle_region_position"][i], dtype=np.float64),
+            refined=bool(arrays["settle_refined"][i]),
+            local_refined=bool(arrays["settle_local_refined"][i]),
         )
         for i in range(len(fid))
     ]
