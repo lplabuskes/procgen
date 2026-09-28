@@ -15,7 +15,8 @@ geometry, grid and field refinement, rivers, roads, settlements and villages
 - `localmap/settlements.py` — `LocalSettlementParams`, `local_owned`, `refine_local_cities`, `refine_local_towns`: towns and cities re-sited on the local coast, rivers and roads, saved on the world
 - `localmap/villages.py` — `VillageParams`, `Villages`, `place_villages`, `village_budget_report`
 - `localmap/cities.py` — `CityParams`, `CityFootprints`, `city_footprints`: each city's built-up texels
-- `localmap/params.py` — `LocalParams`: `upsample`, `rivers`, `roads`, `settlements`, `villages`, `cities`
+- `localmap/farmland.py` — `FarmlandParams`, `Farmland`, `place_farmland`, `farmland_rgba`: the fields and gardens around the settlements
+- `localmap/params.py` — `LocalParams`: `upsample`, `rivers`, `roads`, `settlements`, `villages`, `cities`, `farmland`
 - `localmap/builder.py` — `LocalMap`, `build_local_map`: everything above for one regional hex
 
 ## Scale (defaults)
@@ -152,6 +153,31 @@ are vector lines, so a city spans its river. Larger cities claim first; no texel
 is shared. Seed 4's largest city (~540k) covers ~27 km² (~225 texels, ~6 km
 across); a 19k city ~1 km² (8 texels). Rural density is not carved out.
 
+**Farmland** (`localmap/farmland.py`, display-only). How much ground each
+settlement farms follows medieval rules of thumb:
+
+| | Farmland | Default |
+|---|---|---|
+| Village | every villager × `ha_per_farmer` (cropland under three-field rotation, fallow, meadow and pasture) | 1.5 ha |
+| Town | the share who farm (`town_farming_share`) × `ha_per_farmer`; the rest eat from the villages around | 0.5 |
+| City | fed by its trade hinterland: a ring of market gardens and orchards `city_garden_ring_km` wide outside its footprint | 1.5 km |
+
+Fields are claimed texel by texel, outward from the settlement like a
+footprint, but a texel's distance is stretched by `1 + fertility_weight·(1 −
+fertility) + slope_weight·slope/slope_saturation + forest_weight·forest` (1, 2,
+1; 0.15 km/km) and jittered by `edge_roughness` (0.25), so fields fill valleys
+and skip steep or wooded ground. The garden rings go first (measured against
+the map's median stretch, so the ring is its nominal width on typical ground);
+then towns and villages claim together, cheapest (settlement, texel) pair first
+(a numba loop), each until its quota is met, so neighbours share the ground
+between them. Water and built-up texels are never farmed; the hamlets and
+farmsteads of the leftover rural density get no fields.
+
+Seed 4, the densest land: 940 villages farm ~5,100 km² and 59 towns ~700 km²
+(every town inside the map gets its full quota; towns just outside it lose the
+part that falls off the map), the one 67k city ~15 km² of gardens — ~11% of the
+land, ~0.2 s. At the 90th-percentile density ~5%.
+
 ## Villages (`localmap/villages.py`)
 
 `place_villages(local, rivers, roads, settlement_positions,
@@ -207,6 +233,8 @@ maps (see [viz.md](viz.md)).
   footprints (`refined["cities"]`), or as a floor marker twice the largest
   town's radius while the footprint is smaller than that on screen, walled
   (dark, white, dark rings, a dark centre dot) so it stands apart from the towns.
+  Farmland is drawn over the terrain and under all of these, each kind with its
+  settlements' overlay (see [viz.md](viz.md)).
 - **Hover.** The status bar leads with the village under the cursor (within
   6 px: "Farming village · 340 people"), then the usual texel readout. Texels
   outside the parent hexagon report nothing.

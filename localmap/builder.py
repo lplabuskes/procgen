@@ -16,7 +16,9 @@ hex, from the region's own refined fields, rivers and roads:
    the local water if it is not this map's to refine;
 6. the villages (:func:`localmap.villages.place_villages`), clear of those
    towns and cities;
-7. the cities' built-up footprints (:func:`localmap.cities.city_footprints`).
+7. the cities' built-up footprints (:func:`localmap.cities.city_footprints`);
+8. the farmland around the villages, towns and cities
+   (:func:`localmap.farmland.place_farmland`).
 
 Qt-free.  Deterministic, given which settlements earlier local maps re-sited.
 """
@@ -28,6 +30,7 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 
 from localmap.cities import CityFootprints, city_footprints
+from localmap.farmland import Farmland, place_farmland
 from localmap.params import LocalParams
 from localmap.rivers import build_local_rivers
 from localmap.roads import build_local_roads
@@ -66,6 +69,7 @@ class LocalMap:
     city_positions: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))
     deltas: Optional[np.ndarray] = None
     city_footprints: Optional[CityFootprints] = None
+    farmland: Optional[Farmland] = None
 
     @property
     def hex_index(self) -> int:
@@ -161,8 +165,11 @@ def build_local_map(
         local, rivers, roads, np.concatenate([t_pos, c_pos]), np.concatenate([t_pop, c_pop]), seed, params.villages,
     )
     footprints = city_footprints(local, c_pos, c_pop, seed, params.cities)
+    farmland = place_farmland(
+        local, villages.positions, villages.population, t_pos, t_pop, footprints, seed, params.farmland,
+    )
     return LocalMap(
         fields=local, rivers=rivers, roads=roads, villages=villages,
         town_index=t_idx, town_positions=t_pos, city_index=c_idx, city_positions=c_pos, deltas=deltas,
-        city_footprints=footprints,
+        city_footprints=footprints, farmland=farmland,
     )

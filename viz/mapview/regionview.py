@@ -15,6 +15,7 @@ from core.display import SchemeSpec
 from localmap.builder import LocalMap, build_local_map
 from localmap.geometry import PARENT_CENTER, PARENT_RADIUS
 from localmap.params import LocalParams
+from localmap.farmland import farmland_rgba
 from localmap.villages import VILLAGE_KIND_NAMES
 from region.display import build_layer_texture, snap_to_land
 from viz.mapview.legend import draw_legend, legend_size
@@ -34,6 +35,9 @@ if TYPE_CHECKING:
     from core.world import World
     from realmgen.builder import RealmParams
     from worldgen.builder import GlobeParams
+
+# The overlays a local map's farmland follows: village fields, town fields, market gardens.
+_FARM_OVERLAYS = ("villages", "towns", "settlements")
 
 
 class RegionView(QWidget):
@@ -94,6 +98,8 @@ class RegionView(QWidget):
         self._legend: Optional[tuple[str, list]] = None
         self._overlay_visible: dict[str, bool] = {}
         self._hex_images: list[QImage] = []
+        # A local map's farmland, one translucent image per hexagon (empty: none shown).
+        self._farm_images: list[QImage] = []
         # Per feature: (source positions, positions moved onto the refined land).
         self._land_positions: dict[str, tuple[np.ndarray, np.ndarray]] = {}
         # (x0, y0, size, rotation) of the cell as last painted — hover hit-tests against it.
@@ -138,6 +144,7 @@ class RegionView(QWidget):
         self._roads = None
         self._deltas = None
         self._hex_images = []
+        self._farm_images = []
         self._land_positions = {}
         self._zoom = 1.0
         self._pan[:] = 0.0
@@ -235,11 +242,13 @@ class RegionView(QWidget):
         )
         self._rivers, self._roads, self._deltas = local.rivers, local.roads, local.deltas
         self._hex_images = []
+        self._farm_images = []
         self._land_positions = {}
         if not keep_view:
             self._zoom = 1.0
             self._pan[:] = 0.0
         self._rebuild_images()
+        self._rebuild_farm_images()
         self.update()
 
     def set_local_params(self, params: LocalParams, globe: Optional["World"] = None) -> None:
@@ -332,6 +341,7 @@ class RegionView(QWidget):
         self._roads = None
         self._deltas = None
         self._hex_images = []
+        self._farm_images = []
         self._land_positions = {}
         self._cell_layout = None
         self._view_frame = None
@@ -349,6 +359,8 @@ class RegionView(QWidget):
     def set_overlay_visible(self, name: str, visible: bool) -> None:
         """Toggle one of the world map's feature overlays (same names, same styling)."""
         self._overlay_visible[name] = visible
+        if name in _FARM_OVERLAYS and self._local is not None:
+            self._rebuild_farm_images()
         self.update()
 
     def set_legend(self, legend: Optional[tuple[str, list]]) -> None:
@@ -418,6 +430,30 @@ class RegionView(QWidget):
         for i in range(m):
             plane = np.ascontiguousarray(data[i])
             self._hex_images.append(
+                QImage(plane.data, w, h, w * 4, QImage.Format.Format_RGBA8888).copy()
+            )
+
+    def _rebuild_farm_images(self) -> None:
+        """A local map's farmland as one image per hexagon, of the kinds whose
+        settlements' overlay is on: village fields with the villages, town fields
+        with the towns, market gardens with the cities."""
+        self._farm_images = []
+        farmland = self._local.farmland if self._local is not None else None
+        if farmland is None:
+            return
+        show = (
+            bool(self._overlay_visible.get("villages", True)),
+            bool(self._overlay_visible.get("towns")),
+            bool(self._overlay_visible.get("settlements")),
+        )
+        rgba = farmland_rgba(farmland, show)
+        if not rgba[..., 3].any():
+            return
+        data = np.ascontiguousarray((rgba * 255.0).clip(0, 255).astype(np.uint8))
+        m, h, w, _ = data.shape
+        for i in range(m):
+            plane = np.ascontiguousarray(data[i])
+            self._farm_images.append(
                 QImage(plane.data, w, h, w * 4, QImage.Format.Format_RGBA8888).copy()
             )
 
@@ -794,6 +830,15 @@ class RegionView(QWidget):
             )
             painter.setBrush(brush)
             painter.drawPolygon(self._hex_polygon(cx, cy, r_draw))
+        # A local map's farmland, over the terrain and under the overlays.  Only
+        # the hexagon itself: the farmland lies on its own texels.
+        for i, (s, t) in enumerate(self._grid.centers if self._farm_images else []):
+            cx = x0 + s * size
+            cy = y0 + (1.0 - t) * size
+            brush = QBrush(self._farm_images[i])
+            brush.setTransform(QTransform(scale, 0.0, 0.0, scale, cx - r_px, cy - r_px))
+            painter.setBrush(brush)
+            painter.drawPolygon(self._hex_polygon(cx, cy, r_px))
 
         # Faint outlines: the hexagons are the scaffolding for local maps, so
         # they stay legible without competing with the terrain.

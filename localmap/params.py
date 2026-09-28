@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from core.params import field, paramclass
 from localmap.cities import CityParams
+from localmap.farmland import FarmlandParams
 from localmap.rivers import LocalRiverParams
 from localmap.roads import LocalRoadParams
 from localmap.settlements import LocalSettlementParams
@@ -13,7 +14,7 @@ from localmap.villages import VillageParams
 @paramclass
 class LocalParams:
     """Local-tier params: the field refinement, the local rivers and roads, town
-    and city refinement, and the villages and the cities' footprints.  None of it
+    and city refinement, and the villages, the cities' footprints and the farmland.  None of it
     touches the world build or the region; changing it puts every town and city
     back where its region put it, to be refined again by its local map."""
 
@@ -26,3 +27,4 @@ class LocalParams:
         default_factory=LocalSettlementParams, metadata={"label": "Towns and cities"})
     villages: VillageParams = field(default_factory=VillageParams, metadata={"label": "Villages"})
     cities: CityParams = field(default_factory=CityParams, metadata={"label": "Cities"})
+    farmland: FarmlandParams = field(default_factory=FarmlandParams, metadata={"label": "Farmland"})

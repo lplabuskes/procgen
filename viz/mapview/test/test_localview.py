@@ -167,3 +167,22 @@ def test_the_window_steps_back_one_tier_at_a_time(app, globe):  # noqa: F811
     assert window._region_view.fields is not None          # the region is kept as it was
     window._go_back()
     assert window._stack.currentWidget() is window._map
+
+
+def test_farmland_follows_its_settlements_overlays(app, globe):  # noqa: F811
+    region = _region_view(globe)
+    view = _local_view()
+    view.set_local(region, _land_hex(region))
+    _painted(view)
+    local = view.local_map
+    assert local is not None and local.farmland is not None
+    assert (local.farmland.kind == 0).any()
+    # Village fields show with the villages (on by default)…
+    assert len(view._farm_images) == local.fields.n_hexes
+    for name in ("villages", "towns", "settlements"):
+        view.set_overlay_visible(name, False)
+    assert view._farm_images == []
+    # …and come back with them.
+    view.set_overlay_visible("villages", True)
+    assert len(view._farm_images) == local.fields.n_hexes
+    _painted(view)
