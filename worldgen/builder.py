@@ -9,6 +9,7 @@ from core.persistence import load_world, save_world
 from core.pipeline import BuildContext, Pipeline
 from core.world import World
 from worldgen.climate.builder import ClimateBuilder, ClimateParams
+from worldgen.coast.builder import CoastBuilder, CoastParams
 from worldgen.cost.builder import CostBuilder, CostParams
 from worldgen.danger.builder import DangerBuilder, DangerParams
 from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams
@@ -29,6 +30,7 @@ class GlobeParams:
     elevation: ElevationParams = field(default_factory=ElevationParams)
     climate: ClimateParams = field(default_factory=ClimateParams, metadata={"label": "Climate"})
     hydrology: HydrologyParams = field(default_factory=HydrologyParams, metadata={"label": "Hydrology"})
+    coast: CoastParams = field(default_factory=CoastParams, metadata={"label": "Coast style"})
     resources: ResourcesParams = field(default_factory=ResourcesParams, metadata={"label": "Resources"})
     danger: DangerParams = field(default_factory=DangerParams, metadata={"label": "Danger"})
     cost: CostParams = field(default_factory=CostParams, metadata={"label": "Cost"})
@@ -46,6 +48,7 @@ class GlobePipeline(Pipeline):
         )
         self.climate_builder: ClimateBuilder = ClimateBuilder(self.params.climate)
         self.hydrology_builder: HydrologyBuilder = HydrologyBuilder(self.params.hydrology)
+        self.coast_builder: CoastBuilder = CoastBuilder(self.params.coast)
         self.resources_builder: ResourcesBuilder = ResourcesBuilder(self.params.resources)
         self.danger_builder: DangerBuilder = DangerBuilder(self.params.danger)
         self.cost_builder: CostBuilder = CostBuilder(self.params.cost)
@@ -56,6 +59,7 @@ class GlobePipeline(Pipeline):
             self.climate_builder,
             self.hydrology_builder,
             self.climate_builder.lake_feedback_stage(),
+            self.coast_builder,
             self.resources_builder,
             self.danger_builder,
             self.cost_builder,

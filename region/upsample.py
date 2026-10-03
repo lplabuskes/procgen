@@ -26,7 +26,11 @@ Field-by-field:
 - **Elevation** — slope-proportional fBm.  Amplitude follows the local gradient
   of the coarse field (flat plains stay flat, mountains get rugged), with a floor
   so nowhere is glassy, and fades out under shallow water so a lake bed cannot
-  poke back through its own surface.  Conserved additively.
+  poke back through its own surface.  Near water, the globe's coast smoothness
+  sets the fBm's persistence and how far the shoreline wanders
+  (:func:`coast_style`), so shores range from sweeping beaches to crenellated,
+  rugged coasts.  Conserved
+  additively.
 - **Temperature** — no noise: the refined elevation drives a lapse-rate
   correction, which is exactly the physical signal a finer grid should reveal.
   Conserved additively.
@@ -126,6 +130,22 @@ class RegionUpsampleParams:
     lacunarity: float = _f(2.0, label="Detail lacunarity", min=1.1, max=4.0)
     persistence: float = _f(0.5, label="Detail persistence", min=0.1, max=0.95)
     nyquist_safety: float = _f(0.5, label="Nyquist safety factor", min=0.1, max=1.0)
+    # ── coast style: the globe's ``coast_smoothness`` restyles the detail near
+    # water.  Coasts are nearly flat at the parent's scale (metres of elevation
+    # over a parent texel), so a slope-saturated amplitude swamps them and the
+    # shore just takes the sign of the noise out to the spread cap.  Near water
+    # the amplitude is instead ``wander × detail wavelength × parent slope``: the
+    # shoreline moves about ``wander`` wavelengths whatever the gradient.  Smooth
+    # coasts (1) wander little with a low persistence — long sweeping shores;
+    # rugged ones (0) wander far with a high persistence — headlands, coves and,
+    # since the underwater fade is lifted over the sea here, skerries.  The style
+    # blends in over the parent texels either side of the shore (a parent water
+    # fraction within ``coast_band`` of all-water or all-land fades it out).
+    coast_band: float = _f(0.25, label="Coast style band (water fraction)", min=0.01, max=0.5, step=0.01)
+    coast_persistence_smooth: float = _f(0.25, label="Smooth-coast persistence", min=0.05, max=0.95, step=0.05)
+    coast_persistence_rugged: float = _f(0.8, label="Rugged-coast persistence", min=0.05, max=0.95, step=0.05)
+    coast_wander_smooth: float = _f(0.03, label="Smooth-coast wander (wavelengths)", min=0.0, max=2.0, step=0.01)
+    coast_wander_rugged: float = _f(0.5, label="Rugged-coast wander (wavelengths)", min=0.0, max=2.0, step=0.01)
     # ── resources, population and danger (region/resources.py) ──
     # Refined slope (km/km) at which the slope-driven terms saturate.  Sub-grid
     # relief is tens to hundreds of metres over ~5-15 km, hence the small value.
@@ -220,6 +240,65 @@ def _normalized_fbm(
         return np.zeros(len(points), dtype=np.float64)
     total = float(amps.sum()) or 1.0
     return fbm_sum(points, make_perm(seed), freqs, amps) / total
+
+
+def _varying_persistence_fbm(
+    points: np.ndarray, seed: int, freqs: np.ndarray, persistence: np.ndarray
+) -> np.ndarray:
+    """:func:`_normalized_fbm` with a per-point persistence: octave ``k`` weighs
+    ``persistence ** k``, normalised per point by the weights' sum."""
+    if freqs.size == 0:
+        return np.zeros(len(points), dtype=np.float64)
+    perm = make_perm(seed)
+    total = np.zeros(len(points), dtype=np.float64)
+    weight = np.ones(len(points), dtype=np.float64)
+    norm = np.zeros(len(points), dtype=np.float64)
+    for freq in freqs:
+        total += weight * fbm_sum(points, perm, np.array([freq]), np.array([1.0]))
+        norm += weight
+        weight = weight * persistence
+    return total / norm
+
+
+@dataclass
+class CoastStyle:
+    """Per-texel detail style near water, from the parent's coast smoothness."""
+
+    near: np.ndarray         # (P,) blend weight: 1 at the shore, 0 away from it
+    smooth: np.ndarray       # (P,) the parent's coast smoothness
+    persistence: np.ndarray  # (P,) fBm persistence
+    wander: np.ndarray       # (P,) shoreline wander, in detail wavelengths
+
+
+def coast_style(
+    source: ParentSource, loc: Located, params: RegionUpsampleParams
+) -> Optional[CoastStyle]:
+    """The near-shore detail style, or None when the parent has no
+    ``coast_smoothness`` (an older world) — the detail is then the plain fBm.
+
+    ``near`` is a tent on the parent's bilinear water fraction: full where the
+    parent's texels are mixed, faded to nothing within ``coast_band`` of
+    all-land or all-water.
+    """
+    if not source.has("coast_smoothness"):
+        return None
+    water = np.zeros(len(loc.anchors), dtype=np.float64)
+    for key in ("ocean_mask", "lake_mask"):
+        if source.has(key):
+            water += source.coarse(key, loc)[:, 0]
+    water = np.clip(water, 0.0, 1.0)
+    near = np.clip(np.minimum(water, 1.0 - water) / max(float(params.coast_band), 1e-6), 0.0, 1.0)
+    smooth = np.clip(source.coarse("coast_smoothness", loc)[:, 0], 0.0, 1.0)
+    p_rugged, p_smooth = float(params.coast_persistence_rugged), float(params.coast_persistence_smooth)
+    w_rugged, w_smooth = float(params.coast_wander_rugged), float(params.coast_wander_smooth)
+    coast_persistence = p_rugged + (p_smooth - p_rugged) * smooth
+    base = float(params.persistence)
+    return CoastStyle(
+        near=near,
+        smooth=smooth,
+        persistence=base + (coast_persistence - base) * near,
+        wander=w_rugged + (w_smooth - w_rugged) * smooth,
+    )
 
 
 def _box_filter(texture: np.ndarray, size: int) -> np.ndarray:
@@ -567,18 +646,31 @@ def refine_fields(
     freqs, amps = _octave_bands(base_frequency, max_frequency, params)
     feature_length_km = EARTH_RADIUS_KM / base_frequency
 
-    eff_slope = _effective_slope(source.slope(loc), params)
+    slope = source.slope(loc)
+    eff_slope = _effective_slope(slope, params)
     water = _anchor_water(source, loc)
 
     textures: dict[str, np.ndarray] = {}
 
     # ── elevation ────────────────────────────────────────────────────────────
     elev_coarse = source.coarse("elevation", loc)                            # (P, 1)
-    noise = _normalized_fbm(flat_pos, seed ^ _SEED_SALT_ELEVATION, freqs, amps)
+    style = coast_style(source, loc, params)
+    damping = _shallow_water_damping(water.depth(elev_coarse[:, 0]), params)
     amplitude = np.clip(
-        float(params.relief_factor) * feature_length_km * eff_slope,
-        0.0, float(params.max_relief_km),
-    ) * _shallow_water_damping(water.depth(elev_coarse[:, 0]), params)
+        float(params.relief_factor) * feature_length_km * eff_slope, 0.0, float(params.max_relief_km),
+    ) * damping
+    # Near water the globe's coast smoothness restyles the detail: its
+    # persistence (how crenellated) and an amplitude set by how far the shore
+    # should wander.  Over the sea the underwater fade is lifted, so rugged
+    # coasts can raise islands; a lake keeps it (see _shallow_water_damping).
+    if style is None:
+        noise = _normalized_fbm(flat_pos, seed ^ _SEED_SALT_ELEVATION, freqs, amps)
+    else:
+        noise = _varying_persistence_fbm(flat_pos, seed ^ _SEED_SALT_ELEVATION, freqs, style.persistence)
+        coast_amplitude = np.clip(
+            style.wander * feature_length_km * slope, 0.0, float(params.max_relief_km),
+        ) * np.where(water.lake, damping, 1.0)
+        amplitude = amplitude + (coast_amplitude - amplitude) * style.near
     elevation = elev_coarse + (noise * amplitude)[:, None]
     elevation = conserve_smooth(elevation, source, loc, source.anchor_values("elevation", loc), weights)
     textures["elevation"] = elevation.reshape(m, tex_size, tex_size, 1).astype(np.float32)
@@ -593,6 +685,13 @@ def refine_fields(
             water, elevation[:, 0].reshape(m, tex_size, tex_size), params
         )
     )
+
+    # The style field itself is copied (bilinear, not conserved) so the tier below
+    # styles its shores the same way.
+    if style is not None:
+        textures["coast_smoothness"] = source.coarse("coast_smoothness", loc).reshape(
+            m, tex_size, tex_size, 1
+        ).astype(np.float32)
 
     # ── temperature: lapse rate on the refined relief ────────────────────────
     if source.has("temperature"):
