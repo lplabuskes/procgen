@@ -112,6 +112,9 @@ A `RegionUpsampleParams` subclass with local defaults: `n_cols=16`,
 (about one regional texel, so biome edges follow the region's pattern), and
 `slope_saturation=0.1`. The relief numbers are a first cut and not yet tuned
 (seed 4 region 34: ~50 m std of land relief against the parent texel).
+The coast-style and shore-reshaping params keep the region's defaults; they
+read the `coast_smoothness` the region copies down, and the band, blur and
+bays scale with the region's texels ([region_fields.md](region_fields.md#coast-style)).
 
 ## Rivers (`localmap/rivers.py`)
 

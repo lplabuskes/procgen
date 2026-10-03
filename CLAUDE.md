@@ -76,7 +76,7 @@ python3 scripts/measure_villages.py       [seeds…|--random N|--hexes N|--rebui
 
 ## Architecture
 
-Pipeline: mesh → deregularize → dual → **elevation/tectonics** → **climate** → **hydrology** → **climate lake-feedback** → **resources** → **danger** → **cost** → *(optional)* **realmgen**
+Pipeline: mesh → deregularize → dual → **elevation/tectonics** → **climate** → **hydrology** → **climate lake-feedback** → **coast** → **resources** → **danger** → **cost** → *(optional)* **realmgen**
 
 Top-level orchestrator: `GlobePipeline` in `worldgen/builder.py`. Each stage is a `Stage` that reads from and writes to a `BuildContext`. Realmgen is a separate `RealmPipeline` with sub-stages: scoring → placement → population (incl. trade) → polity → refine → towns. Both pipelines are wired together in `main.py` (`AppPipeline` + `AppParams`). The region and local tiers (`region/`, `localmap/`) are view-side: built on demand when a region or hex is opened, never part of the world build.
 
@@ -86,7 +86,7 @@ Stage reference docs (read the relevant one before working on a stage):
 - [docs/viz.md](docs/viz.md) — `viz/` layer (MapWidget, MapWindow, overlay renderers, projections, registry adapter, MeshViewer, ParamsDialog, color_stops)
 - [docs/viz_regionview.md](docs/viz_regionview.md) — `RegionView`, the zoomed region / local-map viewer (wiring, drawing, hover, refined overlays)
 - [docs/region.md](docs/region.md) — `region/` regional maps overview (cubed-sphere cells, hex grid, global sampling, parent sources, params, display)
-- [docs/region_fields.md](docs/region_fields.md) — `region/upsample.py`, `region/resources.py`: the conserving field refinement (elevation, climate, water, resources, rural density, danger)
+- [docs/region_fields.md](docs/region_fields.md) — `region/upsample.py`, `region/resources.py`: the conserving field refinement (elevation, climate, water, coast style and shore reshaping, resources, rural density, danger)
 - [docs/region_features.md](docs/region_features.md) — `region/corridor.py`, `rivers.py`, `streams.py`, `roads.py`, `towns.py`, `cities.py`: rivers, roads, towns and cities re-sited on refined terrain; the region's own streams for the local maps
 - [docs/local.md](docs/local.md) — `localmap/` local maps (one regional hex refined onto its own hex grid: geometry, fields, rivers, roads)
 - [docs/local_settlements.md](docs/local_settlements.md) — local-map towns and cities, city footprints, farmland, villages
@@ -94,6 +94,7 @@ Stage reference docs (read the relevant one before working on a stage):
 - [docs/elevation.md](docs/elevation.md) — `worldgen/geology/`
 - [docs/climate.md](docs/climate.md) — `worldgen/climate/`
 - [docs/hydrology.md](docs/hydrology.md) — `worldgen/hydrology/`
+- [docs/coast.md](docs/coast.md) — `worldgen/coast/` (coast smoothness: the shore style the region/local tiers draw)
 - [docs/resources.md](docs/resources.md) — `worldgen/resources/`
 - [docs/danger.md](docs/danger.md) — `worldgen/danger/`
 - [docs/cost.md](docs/cost.md) — `worldgen/cost/`
