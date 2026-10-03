@@ -149,7 +149,7 @@ maps are dropped either way.
 `in_hex (M,T,T)`, `anchors (M,T,T)` (global texel), `faces (M,T,T)` (owning
 global face), `face_uv (M,T,T,2)` (texture coords on it), `textures {name:
 (M,T,T,C)}` (the globe's keys plus `danger`), `detail_octaves`,
-`texel_area_km2`; local maps only: `parent_anchors` (the regional texel each
+`texel_area_km2` (cell area × the texel's share of the equal-area local square; not cell area ÷ in-hex count, since the hexes spill past the cell); local maps only: `parent_anchors` (the regional texel each
 texel conserves) and `in_map` (inside the parent hexagon). `domain` = `in_hex`
 (∩ `in_map` on a local map) is the aggregation weight.
 

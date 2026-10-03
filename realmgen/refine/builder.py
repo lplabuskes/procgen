@@ -1,6 +1,6 @@
 """Stage 6 — texel-level refinement of realm geometry.
 
-Runs last in :class:`~realmgen.builder.RealmPipeline`.  Purely a geometric
+Runs after polity and before towns in :class:`~realmgen.builder.RealmPipeline`.  Purely a geometric
 refinement pass over render outputs (no population/polity recomputation):
 
 1. **Settlements** — site each settlement on the best texel of its face (harbour,
@@ -66,8 +66,8 @@ class RefineStage(Stage):
 
     def __init__(self, params: RefineParams | None = None) -> None:
         self.params = params or RefineParams()
-        # Final realm geometry, cached for serialization (refine is the last stage,
-        # so these are the post-refine route/border features).
+        # Final realm geometry, cached for serialization (refine is the last stage
+        # to touch routes and borders, so these are the final features).
         self._routes: list | None = None
         self._borders: dict | None = None
 

@@ -105,6 +105,28 @@ def test_rng_unseeded_varies_but_self_consistent():
     assert ctx.rng("x").random() == ctx.rng("x").random()
 
 
+def test_unseeded_context_falls_back_to_the_world_seed():
+    world = World.from_mesh(_FakeMesh(1))
+    world.seed = 7
+    a = BuildContext(world=world)
+    b = BuildContext(world=World.from_mesh(_FakeMesh(1)), seed=7)
+    assert a.seed == 7
+    assert a.rng("danger").random() == b.rng("danger").random()
+
+
+def test_saved_world_keeps_its_seed(tmp_path):
+    from core.persistence import load_world, save_world
+    from core.mesh_cache import MeshParams
+
+    mesh = PolygonMesh(np.eye(3, dtype=np.float32), [(0, 1, 2)])
+    world = World.from_mesh(mesh)
+    world.seed = 1234
+    path = tmp_path / "w.npz"
+    save_world(world, MeshParams(), [], path)
+    _, loaded, _ = load_world(path, MeshParams)
+    assert loaded.seed == 1234
+
+
 def test_progress_callback():
     seen = []
     ctx = BuildContext(world=World.from_mesh(_FakeMesh(1)), progress=seen.append)

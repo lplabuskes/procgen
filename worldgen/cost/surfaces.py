@@ -1,6 +1,6 @@
 """Physical base cost surfaces for overland and maritime movement.
 
-Two surfaces, per the realmgen design (docs/settlement_generation_design.md):
+Two surfaces, per the realmgen design (docs/plans/settlement_generation_design.md):
 
   * **Land surface** — an isotropic per-face cost (biome difficulty + ruggedness)
     plus an *anisotropic* river term (cheap to travel *along* a navigable valley,

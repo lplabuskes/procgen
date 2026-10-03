@@ -124,6 +124,8 @@ def save_world(world: World, params, stages: Iterable, path: Union[str, Path]) -
     arrays["params_json"] = np.array(
         json.dumps(dataclasses.asdict(params), cls=NumpyEncoder)
     )
+    if world.seed is not None:
+        arrays["world_seed"] = np.array(world.seed, dtype=np.int64)
     _serialize_mesh(world.mesh, arrays)
     for stage in stages:
         arrays.update(stage.serialize())
@@ -141,4 +143,6 @@ def load_world(path: Union[str, Path], params_cls) -> Tuple[Any, World, Any]:
     data = np.load(Path(path), allow_pickle=False)
     params = deep_from_dict(params_cls, json.loads(str(data["params_json"])))
     world = World.from_mesh(_reconstruct_mesh(data))
+    if "world_seed" in data:
+        world.seed = int(data["world_seed"])
     return params, world, data

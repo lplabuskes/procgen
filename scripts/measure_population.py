@@ -9,7 +9,7 @@ Populations are urban headcounts in people, but every metric here is
 dimensionless shape — absolute calibration lives in
 ``measure_population_absolute.py``.
 
-The design spec (docs/settlement_generation_design.md) names the rank-size curve
+The design spec (docs/plans/settlement_generation_design.md) names the rank-size curve
 as the validation signal — "done when the population distribution roughly follows
 a rank-size curve without being enforced". So the headline numbers are the
 log-log rank-size **slope** (Zipf ≈ −1) and its **R²** (how straight the line is).

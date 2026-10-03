@@ -43,9 +43,10 @@ class BuildContext:
     Args:
         world:    The container stages read/write. It owns its ``mesh`` from
                   construction; stages decorate it and read it via ``ctx.mesh``.
-        seed:     Base seed for the per-stage RNG fan-out. ``None`` → a random
-                  base is drawn once at construction (reproducible within this
-                  context, random across runs).
+        seed:     Base seed for the per-stage RNG fan-out. ``None`` → the
+                  world's seed; if that is also ``None``, a random base is drawn
+                  once at construction (reproducible within this context,
+                  random across runs).
         progress: Optional status callback.
     """
     world: World
@@ -54,6 +55,8 @@ class BuildContext:
     _base: int = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if self.seed is None:
+            self.seed = self.world.seed
         self._base = self.seed if self.seed is not None else secrets.randbits(63)
 
     @property

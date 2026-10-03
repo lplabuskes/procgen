@@ -39,6 +39,18 @@ def test_shapes_and_keys(fields):
     assert fields.textures["biome"].shape == (m, t, t, 1)
 
 
+def test_texel_area_matches_the_cell_not_the_hex_overspill(fields):
+    # The hexes spill past the cell, so in-hex texels cover more than one cell:
+    # cell area / in-hex count would undercount each texel's area.
+    import math
+    from region.geometry import N_REGIONS
+    from region.upsample import EARTH_RADIUS_KM
+    cell_km2 = 4.0 * math.pi * EARTH_RADIUS_KM ** 2 / N_REGIONS
+    covered_km2 = fields.texel_area_km2 * fields.in_hex.sum()
+    assert covered_km2 > cell_km2
+    assert fields.texel_area_km2 == pytest.approx(cell_km2 * (2.0 * fields.grid.radius / TEX_SIZE) ** 2)
+
+
 def test_a_world_without_resources_refines_none(fields):
     """The synthetic globe has no resource layers or danger: none are invented."""
     for key in ("fertility", "forest_density", "dominant_crop", "rural_density", "danger"):

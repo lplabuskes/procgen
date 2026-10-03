@@ -13,7 +13,7 @@ optionally docked by a small per-pixel forest penalty:
   elevation range as a proxy for "is this a mountainous area". We deliberately
   avoid per-pixel slope from the elevation texture — at default resolution,
   pixel-spacing slope is dominated by the noise overlay rather than real
-  terrain (see docs/resources_generation_spec.md).
+  terrain (see docs/plans/resources_generation_spec.md).
 - `water` (per-face): floodplain bonus decayed by hop count on the face
   adjacency graph from river/lake faces.
 - `geology` (per-face): volcanic-soil bonus decayed by hop count from faces

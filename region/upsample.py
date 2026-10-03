@@ -680,8 +680,11 @@ def build_region_fields(
     in_hex = grid.texture_in_hexagon(tex_size)                   # (M, T, T)
     m = len(grid)
 
+    # The local frame is equal-area (the cell is the unit square), so a texel's
+    # area is its share of that square.  Dividing the cell area by the in-hex
+    # texel count would undercount: the hexes spill past the cell edge.
     region_area_km2 = 4.0 * np.pi * EARTH_RADIUS_KM ** 2 / N_REGIONS
-    texel_area_km2 = float(region_area_km2 / max(int(in_hex.sum()), 1))
+    texel_area_km2 = float(region_area_km2 * (2.0 * grid.radius / tex_size) ** 2)
 
     textures, loc, octaves = refine_fields(
         source, positions, in_hex, grid.texel_spacing_rad(tex_size), texel_area_km2,

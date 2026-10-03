@@ -6,7 +6,7 @@ Qt-free shared infrastructure every package builds on. The Qt viewers are in [vi
 
 **`BuildContext`** (dataclass): Shared state threaded through every stage's `build`.
 - `world: World` — the container all stages read/write
-- `seed: int | None` — base seed for per-stage RNG fan-out (random if omitted)
+- `seed: int | None` — base seed for per-stage RNG fan-out (defaults to `world.seed`; random if both are `None`)
 - `progress: ProgressFn` — optional status callback; called via `ctx.report(msg)`
 - `ctx.mesh` — shorthand property for `ctx.world.mesh`
 - `ctx.rng(name) → np.random.Generator` — deterministic per-name RNG; stable for a given `(seed, name)` pair and independent of call order across stages
@@ -33,7 +33,7 @@ Stages read and write shared world state through typed channel descriptors inste
 
 ## `core/world.py` — World container
 
-**`World`**: Container for a generated world: a mesh plus a named feature registry. The constructor `World(mesh_params, *, seed, progress)` loads a mesh from the shared cache (`core/mesh_cache.py`), building it on first run. Use `World.from_mesh(mesh)` to wrap an already-built mesh (e.g. when loading a saved world; `seed` is then `None`).
+**`World`**: Container for a generated world: a mesh plus a named feature registry. The constructor `World(mesh_params, *, seed, progress)` loads a mesh from the shared cache (`core/mesh_cache.py`), building it on first run. Use `World.from_mesh(mesh)` to wrap an already-built mesh (`seed` is then `None`; `load_world` restores it from the saved `world_seed`).
 
 Attributes: `mesh`, `seed` (kept so later stages can derive per-world-deterministic draws — polity scalars, region noise, …), `antimeridian` (the map cut longitude, set by `ElevationBuilder` via `core.antimeridian`).
 

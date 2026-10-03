@@ -3,7 +3,7 @@
 Reads the `biome` and `is_ocean` per-face metadata and the `elevation` +
 `lake_mask` face textures, plus the hydrology rivers, and produces the physical
 base land + sea cost layers. See `worldgen/cost/surfaces.py` for the model and
-docs/settlement_generation_design.md (Stage 0) for the rationale: these layers
+docs/plans/settlement_generation_design.md (Stage 0) for the rationale: these layers
 are consumed by realmgen, which adds the danger field on top.
 
 Lakes count as sailable water (impassable on land like the ocean), and navigable

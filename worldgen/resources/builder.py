@@ -7,7 +7,7 @@ textures plus the per-face `biome` and `volcanic_activity` metadata. Attaches
 per-face `fertility_mean` / `forest_density_mean` aggregates, and places mineral
 deposits (stored as `self.minerals` for the globe builder to register as a feature).
 
-See docs/resources_generation_spec.md for full design details.
+See docs/plans/resources_generation_spec.md for full design details.
 """
 from __future__ import annotations
 

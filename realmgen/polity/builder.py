@@ -6,7 +6,7 @@ faces, classify each settlement direct/vassal/independent, recurse for vassal
 sub-territories. The heavy lifting lives in :mod:`realmgen.polity.forest`; this
 stage handles IO, cost graphs, border tension, and display.
 
-Runs last in :class:`~realmgen.builder.RealmPipeline`.
+Runs after population and before refine in :class:`~realmgen.builder.RealmPipeline`.
 """
 from __future__ import annotations
 
