@@ -839,6 +839,13 @@ def refine_fields(
             m, tex_size, tex_size, 1
         ).astype(np.float32)
 
+    # The world's river deltas, copied the same way: the plain the
+    # distributaries are sited on (region.distributaries), and its marsh.
+    if source.has("delta"):
+        textures["delta"] = np.clip(source.coarse("delta", loc), 0.0, 1.0).reshape(
+            m, tex_size, tex_size, -1
+        ).astype(np.float32)
+
     # ── temperature: lapse rate on the refined relief ────────────────────────
     if source.has("temperature"):
         t_coarse = source.coarse("temperature", loc)                        # (P, K)

@@ -12,6 +12,7 @@ from worldgen.climate.builder import ClimateBuilder, ClimateParams
 from worldgen.coast.builder import CoastBuilder, CoastParams
 from worldgen.cost.builder import CostBuilder, CostParams
 from worldgen.danger.builder import DangerBuilder, DangerParams
+from worldgen.delta.builder import DeltaBuilder, DeltaParams
 from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams
 from worldgen.hydrology.builder import HydrologyBuilder, HydrologyParams
 from worldgen.resources.builder import ResourcesBuilder, ResourcesParams
@@ -30,6 +31,7 @@ class GlobeParams:
     elevation: ElevationParams = field(default_factory=ElevationParams)
     climate: ClimateParams = field(default_factory=ClimateParams, metadata={"label": "Climate"})
     hydrology: HydrologyParams = field(default_factory=HydrologyParams, metadata={"label": "Hydrology"})
+    delta: DeltaParams = field(default_factory=DeltaParams, metadata={"label": "River deltas"})
     coast: CoastParams = field(default_factory=CoastParams, metadata={"label": "Coast style"})
     resources: ResourcesParams = field(default_factory=ResourcesParams, metadata={"label": "Resources"})
     danger: DangerParams = field(default_factory=DangerParams, metadata={"label": "Danger"})
@@ -48,16 +50,20 @@ class GlobePipeline(Pipeline):
         )
         self.climate_builder: ClimateBuilder = ClimateBuilder(self.params.climate)
         self.hydrology_builder: HydrologyBuilder = HydrologyBuilder(self.params.hydrology)
+        self.delta_builder: DeltaBuilder = DeltaBuilder(self.params.delta)
         self.coast_builder: CoastBuilder = CoastBuilder(self.params.coast)
         self.resources_builder: ResourcesBuilder = ResourcesBuilder(self.params.resources)
         self.danger_builder: DangerBuilder = DangerBuilder(self.params.danger)
         self.cost_builder: CostBuilder = CostBuilder(self.params.cost)
 
-        # Lake-feedback second pass is placed after hydrology, sharing the climate builder.
+        # Lake-feedback second pass is placed after hydrology and the deltas (so
+        # the land they build gets its precipitation and biome), sharing the
+        # climate builder.
         super().__init__([
             self.elevation_builder,
             self.climate_builder,
             self.hydrology_builder,
+            self.delta_builder,
             self.climate_builder.lake_feedback_stage(),
             self.coast_builder,
             self.resources_builder,

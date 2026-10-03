@@ -1,6 +1,6 @@
 """Per-face static situational value scorer.
 
-Five independent components are combined into one [0, 1] situational-value
+Six independent components are combined into one [0, 1] situational-value
 scalar per land face.  Each component is a pure function that takes
 pre-extracted arrays, making them easy to test against a lightweight stub mesh.
 
@@ -15,6 +15,9 @@ Components:
   * **mountain passes** — faces whose land cost is substantially below the mean
     cost of their high-cost land neighbors (cheap corridor through hard terrain).
   * **strait adjacency** — land faces that border a strait-tagged ocean face.
+  * **delta apexes** — the face at the head of each river delta, where the
+    river starts to branch over its silt plain (Cairo, New Orleans): the last
+    firm, fertile ground before the marsh, commanding every distributary.
 
 Combination is a weighted sum normalized by total weight so individual weights
 need not sum to exactly 1; water faces are forced to 0.
@@ -261,6 +264,24 @@ def compute_strait_adjacency(
 # ── Combination ───────────────────────────────────────────────────────────────
 
 
+def compute_delta_apexes(apexes: np.ndarray | None, face_centroids: np.ndarray, n_faces: int) -> np.ndarray:
+    """Binary mask of the faces holding a river delta's apex.
+
+    Args:
+        apexes: (M, 3) apex positions (``DeltaFan.apex``), or None.
+        face_centroids: (N, 3) float — unit-sphere centroid of each face.
+        n_faces: total face count.
+
+    Returns:
+        (N,) float32 — 1.0 at each apex face, 0 elsewhere.
+    """
+    mask = np.zeros(n_faces, dtype=np.float32)
+    if apexes is None or len(apexes) == 0:
+        return mask
+    mask[_positions_to_face_ids(np.asarray(apexes, dtype=np.float64), face_centroids)] = 1.0
+    return mask
+
+
 def combine_situational_value(
     is_water: np.ndarray,
     harbor: np.ndarray,
@@ -270,6 +291,7 @@ def combine_situational_value(
     straits: np.ndarray,
     *,
     params: "SituationalValueWeightParams",
+    delta: np.ndarray | None = None,
 ) -> np.ndarray:
     """Weighted-average situational value in [0, 1]; water faces are forced to 0.
 
@@ -285,15 +307,18 @@ def combine_situational_value(
         nav_head:   (N,) float32 in [0, 1].
         passes:     (N,) float32 in [0, 1].
         straits:    (N,) float32 in [0, 1].
-        params: SituationalValueWeightParams — the five factor weights.
+        params: SituationalValueWeightParams — the factor weights.
+        delta:      (N,) float32 in [0, 1], or None (a world without deltas;
+            its weight is then left out of the normalization).
 
     Returns:
         (N,) float32 in [0, 1].
     """
     p = params
+    delta_w = float(p.delta_weight) if delta is not None else 0.0
     total_w = (
         p.harbor_weight + p.confluence_weight + p.nav_head_weight
-        + p.pass_weight + p.strait_weight
+        + p.pass_weight + p.strait_weight + delta_w
     )
     total_w = max(total_w, 1e-9)
 
@@ -303,6 +328,7 @@ def combine_situational_value(
         + p.nav_head_weight * np.asarray(nav_head, dtype=np.float64)
         + p.pass_weight * np.asarray(passes, dtype=np.float64)
         + p.strait_weight * np.asarray(straits, dtype=np.float64)
+        + (delta_w * np.asarray(delta, dtype=np.float64) if delta is not None else 0.0)
     ) / total_w
 
     score = np.where(np.asarray(is_water, dtype=bool), 0.0, score)

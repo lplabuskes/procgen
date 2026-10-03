@@ -65,6 +65,23 @@ BIOME_FERTILITY_MULT = np.array([
 ], dtype=np.float32)
 
 
+def _growing_season_temperature_pixel(temperature_tex: np.ndarray) -> np.ndarray:
+    """Per-pixel mean temperature over growing seasons (T > 5°C), else the annual mean.
+
+    Args:
+        temperature_tex: (N, H, W, K) float32 °C.
+
+    Returns:
+        (N, H, W) float32 °C.
+    """
+    t = temperature_tex.astype(np.float32)
+    mask = t > 5.0                                               # (N, H, W, K)
+    weight = mask.sum(axis=-1).astype(np.float32)               # (N, H, W)
+    safe = np.where(weight > 0, weight, t.shape[-1])
+    season_sum = np.where(mask, t, 0.0).sum(axis=-1)            # (N, H, W)
+    return np.where(weight > 0, season_sum / safe, t.mean(axis=-1)).astype(np.float32)
+
+
 def _growing_season_temperature_face(temperature_tex: np.ndarray) -> np.ndarray:
     """Per-face mean temperature over growing seasons (T > 5°C).
 
@@ -77,14 +94,7 @@ def _growing_season_temperature_face(temperature_tex: np.ndarray) -> np.ndarray:
     Returns:
         (N,) float32 °C.
     """
-    t = temperature_tex.astype(np.float32)
-    mask = t > 5.0                                               # (N, H, W, K)
-    weight = mask.sum(axis=-1).astype(np.float32)               # (N, H, W)
-    safe = np.where(weight > 0, weight, t.shape[-1])
-    season_sum = np.where(mask, t, 0.0).sum(axis=-1)            # (N, H, W)
-    annual_mean = t.mean(axis=-1)                               # (N, H, W)
-    t_grow_px = np.where(weight > 0, season_sum / safe, annual_mean)  # (N, H, W)
-    return t_grow_px.mean(axis=(1, 2)).astype(np.float32)       # (N,)
+    return _growing_season_temperature_pixel(temperature_tex).mean(axis=(1, 2)).astype(np.float32)
 
 
 def _climate_term_face(
@@ -297,3 +307,36 @@ def compute_fertility(
     fertility = np.where(ocean, 0.0, fertility).astype(np.float32)
 
     return fertility[..., None]
+
+
+def apply_delta_fertility(
+    fertility: np.ndarray,
+    delta_tex: np.ndarray,
+    temperature_tex: np.ndarray,
+    params: "FertilityParams",
+) -> np.ndarray:
+    """Raise the river deltas' silt plains toward ``delta_fertility``.
+
+    A delta is watered and re-silted by its river whatever the rain, so the
+    precipitation, biome and floodplain terms do not limit it; only the
+    growing-season temperature bell does (a polar delta stays poor).  Its
+    seaward marsh is docked by ``delta_marsh_penalty``.  Fertility is only
+    ever raised, by ``plain × (target − fertility)``.
+
+    Args:
+        fertility: (N, H, W, 1) float32 in [0, 1].
+        delta_tex: (N, H, W, 2) — plain membership, marsh (the delta stage's ``delta``).
+        temperature_tex: (N, H, W, K) °C.
+
+    Returns:
+        (N, H, W, 1) float32 in [0, 1].
+    """
+    p = params
+    plain = np.clip(delta_tex[..., 0].astype(np.float32), 0.0, 1.0)
+    marsh = np.clip(delta_tex[..., 1].astype(np.float32), 0.0, 1.0)
+    t_grow = _growing_season_temperature_pixel(temperature_tex)
+    t_term = np.exp(-0.5 * ((t_grow - p.optimal_temperature_c) / max(p.temperature_sigma_c, 1e-3)) ** 2)
+    target = p.delta_fertility * t_term * (1.0 - p.delta_marsh_penalty * marsh)
+    fert = fertility[..., 0]
+    out = fert + plain * np.maximum(target - fert, 0.0)
+    return np.clip(out, 0.0, 1.0).astype(np.float32)[..., None]

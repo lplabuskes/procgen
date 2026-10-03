@@ -43,6 +43,7 @@ from region.corridor import (
     route_corridor,
     sample_raster,
 )
+from region.distributaries import DistributaryParams, add_distributaries
 from region.upsample import EARTH_RADIUS_KM, RegionFields
 from worldgen.hydrology.rivers import main_stem_paths
 from worldgen.hydrology.types import StreamNetwork, laplacian_smooth_sphere
@@ -78,6 +79,10 @@ class RegionRiverParams:
     # threshold — a world param, since towns are sited on the same streams.)
     min_global_nodes: int = _f(3, label="Min stream length (global texels)", min=2, max=20)
     smoothing_iterations: int = _f(8, label="Path smoothing iterations", min=0, max=20)
+    # The channels a delta river fans out into (region.distributaries).
+    distributaries: DistributaryParams = field(
+        default_factory=DistributaryParams, metadata={"label": "Delta distributaries"}
+    )
 
 
 @dataclass
@@ -250,7 +255,8 @@ def build_region_rivers(
     radius_nodes = max(float(params.corridor_global_texels) * global_spacing / node_spacing_rad(fields, step), 1.5)
 
     paths = _stream_paths(streams, fields, lo, step, n, int(params.min_global_nodes))
-    return route_stream_paths(fields, globe, paths, lo, step, n, radius_nodes, params)
+    rivers = route_stream_paths(fields, globe, paths, lo, step, n, radius_nodes, params)
+    return add_distributaries(fields, globe, rivers, params)
 
 
 def route_stream_paths(

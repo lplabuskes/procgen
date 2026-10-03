@@ -36,7 +36,7 @@ Attaches face textures (K = 4 seasons):
 
 Writes per-face metadata: `temperature_annual/warmest/coldest`, `precipitation_annual`, `biome` (the mode of the face's biome texels), `distance_to_coast`, `humidity_annual`. Registers `"winds"` (per season: centroids + wind vectors) / `"currents"` features.
 
-**Lake-feedback second pass**: `lake_feedback_stage()` returns a `ClimateLakeFeedbackStage` (sharing the builder) placed after hydrology in the pipeline. Its `build(ctx)` calls `apply_lake_humidity_feedback(mesh, lake_mask_tex)`: lake evaporation (SST formula × lake area fraction × `lake_evap_scale`) is advected for `lake_feedback_iter` steps and added to the humidity, then humidity, precipitation, biome and their face aggregates are re-rasterised. Temperature is unchanged. A no-op when there are no lakes or either knob is 0.
+**Lake-feedback second pass**: `lake_feedback_stage()` returns a `ClimateLakeFeedbackStage` (sharing the builder) placed after hydrology and the delta stage in the pipeline, so its re-rasterisation also gives the land the deltas built its own precipitation and biome. Its `build(ctx)` calls `apply_lake_humidity_feedback(mesh, lake_mask_tex)`: lake evaporation (SST formula × lake area fraction × `lake_evap_scale`) is advected for `lake_feedback_iter` steps and added to the humidity, then humidity, precipitation, biome and their face aggregates are re-rasterised. Temperature is unchanged. A no-op when there are no lakes or either knob is 0.
 
 ## Individual modules
 

@@ -1,5 +1,5 @@
 import random
-from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -393,12 +393,13 @@ class PolygonMesh:
             "n_pairs": int(len(jumps)),
         }
 
-    def face_texture_positions(self, h: int, w: int) -> np.ndarray:
+    def face_texture_positions(self, h: int, w: int, faces: Optional[Sequence[int]] = None) -> np.ndarray:
         """Return float32 (N, H, W, 3) unit-sphere positions for each face's pixel grid.
 
         Adjacent faces share edge vertices, so shared-edge pixels map to the same 3D point
         in both faces (continuous across boundaries). Corner pixels outside the polygon are
         assigned to the nearest fan triangle by largest-minimum-barycentric extrapolation.
+        Given ``faces``, only those, in that order: ``(len(faces), H, W, 3)``.
         """
         u_coords = np.linspace(0.0, 1.0, w, dtype=np.float64)
         v_coords = np.linspace(0.0, 1.0, h, dtype=np.float64)
@@ -407,11 +408,11 @@ class PolygonMesh:
         n_pix = pixel_uv.shape[0]
         pix_idx = np.arange(n_pix)
 
-        n_faces = len(self.faces)
-        positions = np.zeros((n_faces, h, w, 3), dtype=np.float32)
+        which = range(len(self.faces)) if faces is None else [int(f) for f in faces]
+        positions = np.zeros((len(which), h, w, 3), dtype=np.float32)
 
-        for face_idx, face in enumerate(self.faces):
-            face_arr = np.array(face)
+        for slot, face_idx in enumerate(which):
+            face_arr = np.array(self.faces[face_idx])
             verts_3d = self.vertices[face_arr].astype(np.float64)         # (n_v, 3)
             verts_uv = self._face_vertex_uvs[face_idx].astype(np.float64)  # (n_v, 2)
 
@@ -449,17 +450,20 @@ class PolygonMesh:
                    + g_sel[:, None] * e2_3d[best_tri])
             norms = np.linalg.norm(pts, axis=1, keepdims=True)
             norms = np.where(norms < 1e-12, 1.0, norms)
-            positions[face_idx] = (pts / norms).astype(np.float32).reshape(h, w, 3)
+            positions[slot] = (pts / norms).astype(np.float32).reshape(h, w, 3)
 
         return positions
 
-    def face_texture_in_polygon(self, h: int, w: int, *, eps: float = 1e-9) -> np.ndarray:
+    def face_texture_in_polygon(
+        self, h: int, w: int, *, eps: float = 1e-9, faces: Optional[Sequence[int]] = None,
+    ) -> np.ndarray:
         """Return a bool ``(N, H, W)`` mask: which texels fall *inside* each face's
         rendered polygon (vs. the square texture's over-hanging corners).
 
         A texel is inside iff its center or any of its four corners lies within one
         of the face's fan triangles (all barycentric coords >= -eps).  This errs on
         the side of inclusion for texels that straddle the polygon boundary.
+        Given ``faces``, only those, in that order: ``(len(faces), H, W)``.
         """
         u_coords = np.linspace(0.0, 1.0, w, dtype=np.float64)
         v_coords = np.linspace(0.0, 1.0, h, dtype=np.float64)
@@ -472,11 +476,11 @@ class PolygonMesh:
         # (5*h*w, 2): center then 4 corners, all pixels stacked
         sample_uvs = (pixel_uv[None, :, :] + offsets[:, None, :]).reshape(-1, 2)
 
-        n_faces = len(self.faces)
+        which = range(len(self.faces)) if faces is None else [int(f) for f in faces]
         n_pix = h * w
-        mask = np.zeros((n_faces, h, w), dtype=bool)
+        mask = np.zeros((len(which), h, w), dtype=bool)
 
-        for face_idx in range(n_faces):
+        for slot, face_idx in enumerate(which):
             verts_uv = self._face_vertex_uvs[face_idx].astype(np.float64)  # (n_v, 2)
             v0_uv = verts_uv[0]
             e1_uv = verts_uv[1:-1] - v0_uv   # (n_tris, 2)
@@ -496,7 +500,7 @@ class PolygonMesh:
             min_bary = np.minimum(alpha, np.minimum(beta, gamma))  # (5*n_pix, n_tris)
             inside = (min_bary.max(axis=1) >= -eps)  # (5*n_pix,)
             inside_any = inside.reshape(5, n_pix).any(axis=0)
-            mask[face_idx] = inside_any.reshape(h, w)
+            mask[slot] = inside_any.reshape(h, w)
 
         return mask
 

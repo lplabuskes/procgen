@@ -8,6 +8,7 @@ down ([local.md](local.md), [local_settlements.md](local_settlements.md)).
 ## Files
 - `region/corridor.py` — `Raster`, `raster_frame`, `sample_raster`, `corridor_reach`, `route_corridor`: the raster + least-cost corridor router the rivers and roads share
 - `region/rivers.py` — `RegionRiverParams`, `RegionRivers`, `build_region_rivers`, `route_stream_paths`, `snap_deltas`, `river_length_km`
+- `region/distributaries.py` — `DistributaryParams`, `add_distributaries`, `mouth_count`: the channels a delta river fans out into
 - `region/streams.py` — `RegionStreamParams`, `build_region_streams`: the region's own streams below the world's network, for the local maps
 - `region/roads.py` — `RegionRoadParams`, `RegionRoads`, `build_region_roads`, `route_polyline`, `move_points`
 - `region/towns.py` — `RegionSettlementParams`, `refine_region_towns`, `refine_towns`, `tier_sites`, `REGION_TIER` / `LOCAL_TIER`
@@ -85,7 +86,51 @@ shared edge independently (each is shown alone, so no seam is visible).
 
 ### `RegionRiverParams`
 `raster_texels` (1.0), `margin` (0.08), `corridor_global_texels` (1.0),
-`valley_seeking` (2.0), `min_global_nodes` (3), `smoothing_iterations` (8).
+`valley_seeking` (2.0), `min_global_nodes` (3), `smoothing_iterations` (8),
+`distributaries` (`DistributaryParams`, below).
+
+## Delta distributaries (`region/distributaries.py`)
+
+The world's delta stage ([delta.md](delta.md)) builds each delta as a plain of
+global texels with one river carried across it. `build_region_rivers` ends with
+`add_distributaries`, which fans that river out for every delta whose apex
+(`"delta_fans"`) is on the region's raster. It needs the refined `delta`
+texture, which the refinement copies down from the globe.
+
+- **The stem.** The largest-flow re-routed path passing within two global
+  texels of the apex and ending on the refined sea. Its flow at the apex sets
+  everything below.
+- **Mouths.** `mouth_count(flow)` = `base_count` (3) + `per_decade` (2) ×
+  log10(flow / 1000), clipped to 1..`max_count` (8), the main stem's mouth
+  included. The delta front (refined sea beside the refined plain, on a disc of
+  1.5 fan radii around the apex) is split by bearing from the apex, within
+  `max_angle_deg` (70°) of the axis, into that many sectors. The stem's mouth
+  holds one sector, and each other sector gets the front node nearest its
+  (jittered) middle bearing, unless that is within 3 raster nodes of a mouth
+  already taken.
+- **Junctions.** On each side of the stem, mouths are taken outward from it.
+  Each branches off that side's outermost channel so far (the stem up to the
+  last junction, then the last branch), at the node whose distance from the
+  apex is nearest a random `junction_min`–`junction_max` (0.15–0.6) of the
+  mouth's. It is never within 2.5 nodes of another junction or on the trunk's
+  last 3 nodes. Outer branches thus leave further upstream and the fan nests.
+- **Routing.** `route_corridor` from junction to mouth through a corridor
+  `corridor` (0.3) × length wide around a guide bent sideways by up to `wander`
+  (0.15) × length at its middle. Node cost is valley-seeking over the plain
+  (`valley_seeking` 1.0), ×50 on water before the mouth, and × `1 + separation ·
+  exp(−d / 2)` within `d` nodes of an existing channel (`separation` 3.0, waived
+  within 3 nodes of the junction), so branches spread instead of doubling one
+  another. A route not ending on the sea is dropped.
+- **Flow.** Each branch carries `apex flow ×` (its mouth's share + the shares of
+  the branches leaving it downstream). The stem keeps `main_share` (0.5) and the
+  other mouths split the rest evenly. The stem's own path and flow are
+  unchanged: branches are added as extra paths, each starting exactly on its
+  parent's drawn line, and their mouths are added to `mouths` /
+  `mouth_flows` (not to `confluences`).
+- **Local maps** re-route each branch like any other regional river, so they
+  need nothing of their own.
+
+Deterministic: seeded by world seed, region and delta index. ~0.1 s per delta.
 
 ## Streams below the world's network (`region/streams.py`)
 

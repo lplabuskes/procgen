@@ -9,6 +9,7 @@ import pytest
 
 from realmgen.scoring.situational_value import (
     combine_situational_value,
+    compute_delta_apexes,
     compute_harbor_quality,
     compute_mountain_passes,
     compute_navigable_heads,
@@ -348,3 +349,28 @@ class TestRealmPipelineSituational:
         for i, m in enumerate(scoring_globe.mesh.face_metadata):
             if m.get("is_water", m.get("is_ocean", False)):
                 assert sv[i] == 0.0, f"face {i} is water but situational_value = {sv[i]}"
+
+
+# ── Delta apexes ──────────────────────────────────────────────────────────────
+
+
+class TestDeltaApexes:
+    def test_marks_the_apex_faces(self):
+        centroids = np.eye(3)
+        out = compute_delta_apexes(np.array([[0.9, 0.1, 0.0]]), centroids, 3)
+        assert out.tolist() == [1.0, 0.0, 0.0]
+        assert compute_delta_apexes(None, centroids, 3).tolist() == [0.0, 0.0, 0.0]
+
+    def test_weight_counts_only_with_deltas(self):
+        n = 2
+        ones, zeros = np.ones(n, dtype=np.float32), np.zeros(n, dtype=np.float32)
+        p = SituationalValueWeightParams()
+        without = combine_situational_value(np.zeros(n, dtype=bool), ones, ones, ones, ones, ones, params=p)
+        assert np.allclose(without, 1.0)
+        with_none = combine_situational_value(
+            np.zeros(n, dtype=bool), ones, ones, ones, ones, ones, params=p, delta=zeros)
+        total = p.harbor_weight + p.confluence_weight + p.nav_head_weight + p.pass_weight + p.strait_weight
+        assert np.allclose(with_none, total / (total + p.delta_weight))
+        apex = combine_situational_value(
+            np.zeros(n, dtype=bool), zeros, zeros, zeros, zeros, zeros, params=p, delta=ones)
+        assert np.allclose(apex, p.delta_weight / (total + p.delta_weight))

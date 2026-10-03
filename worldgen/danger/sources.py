@@ -47,6 +47,7 @@ GOBLIN_FOREST_MIN: float = 0.4
 WEREWOLF_FOREST_MIN: float = 0.3
 CURSED_FOREST_DENSITY_MIN: float = 0.6
 CURSED_FOREST_ISOLATION_MIN: int = 3
+LIZARDFOLK_MARSH_MIN: float = 0.05
 
 # Planar Intrusions
 AIR_RIFT_ELEV_MIN: float = 3.0
@@ -135,6 +136,10 @@ class DangerParams:
         default_factory=lambda: DangerSourceParams(count=6, hop_radius=2, intensity=0.6, decay_per_hop=0.2),
         metadata={"label": "Cursed Forests"},
     )
+    lizardfolk_fens: DangerSourceParams = field(
+        default_factory=lambda: DangerSourceParams(count=4, hop_radius=1, intensity=0.6, decay_per_hop=0.3),
+        metadata={"label": "Lizardfolk Fens"},
+    )
     # Planar Intrusions
     fire_rifts: DangerSourceParams = field(
         default_factory=lambda: DangerSourceParams(count=4, hop_radius=0, intensity=0.7, decay_per_hop=0.0),
@@ -207,6 +212,15 @@ class DangerTerrain:
     river_mask: np.ndarray
     boundary_type: np.ndarray
     plate_type: np.ndarray
+    # Share of the face in a river delta's marsh (0 without the delta stage).
+    marsh_fraction: np.ndarray | None = None
+
+
+def _marsh(t: DangerTerrain) -> np.ndarray:
+    """Faces with a river delta's marsh on them."""
+    if t.marsh_fraction is None:
+        return np.zeros(t.n, dtype=bool)
+    return np.asarray(t.marsh_fraction) >= LIZARDFOLK_MARSH_MIN
 
 
 # ── DangerSource and registry ─────────────────────────────────────────────────
@@ -294,6 +308,9 @@ _SOURCE_DEFS: list[tuple[str, tuple, _ParamFn, _MaskFn]] = [
             & (t.water_hops >= BARROW_ISOLATION_MIN) & ~t.is_water)),
     ("Haunt",                 _C_UND, lambda p: p.haunt_concentrations,
         lambda t: (t.coast_hops <= HAUNT_COAST_MAX) & (t.fertility_mean <= HAUNT_FERTILITY_MAX) & ~t.is_water),
+    # Wilderness, appended last so the other sources keep their kind indices and draws.
+    ("Lizardfolk Fen",        _C_FOR, lambda p: p.lizardfolk_fens,
+        lambda t: _marsh(t) & ~t.is_water),
 ]
 
 SOURCE_NAMES: list[str] = [d[0] for d in _SOURCE_DEFS]

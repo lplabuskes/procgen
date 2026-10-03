@@ -14,6 +14,7 @@ from core.pipeline import BuildContext, Stage
 from realmgen.channels import SITUATIONAL_VALUE, SUITABILITY
 from realmgen.scoring.situational_value import (
     combine_situational_value,
+    compute_delta_apexes,
     compute_harbor_quality,
     compute_mountain_passes,
     compute_navigable_heads,
@@ -35,6 +36,7 @@ from worldgen.climate.channels import (
     TEMPERATURE_WARMEST,
 )
 from worldgen.cost.channels import COST_SURFACES, IS_STRAIT, IS_WATER
+from worldgen.delta.channels import DELTA_FANS
 from worldgen.geology.channels import ELEVATION, IS_OCEAN
 from worldgen.geology.display import is_water_meta, water_gradient_scheme
 from worldgen.hydrology.channels import LAKE_MASK, RIVERS
@@ -100,6 +102,7 @@ class SituationalValueWeightParams:
     nav_head_weight: float = _f(0.20, label="Nav. river head weight", min=0.0, max=1.0)
     pass_weight: float = _f(0.20, label="Pass weight", min=0.0, max=1.0)
     strait_weight: float = _f(0.15, label="Strait weight", min=0.0, max=1.0)
+    delta_weight: float = _f(0.20, label="Delta apex weight", min=0.0, max=1.0)
 
 
 @paramclass
@@ -278,10 +281,17 @@ class ScoringStage(Stage):
         is_strait = IS_STRAIT.read(mesh)
         strait_score = compute_strait_adjacency(mesh, is_strait, is_water)
 
+        delta_score = None
+        if DELTA_FANS.present(world):
+            fans = DELTA_FANS.read(world)
+            delta_score = compute_delta_apexes(
+                np.stack([f.apex for f in fans]) if fans else None, centroids, n,
+            )
+
         situational_value = combine_situational_value(
             is_water, harbor_score, confluence_score,
             nav_head_score, pass_score, strait_score,
-            params=svp.weights,
+            params=svp.weights, delta=delta_score,
         )
         self.situational_value = situational_value
         SITUATIONAL_VALUE.write(mesh, situational_value)

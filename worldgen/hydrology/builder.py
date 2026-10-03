@@ -29,8 +29,6 @@ class HydrologyParams:
     pet_baseline_mm_yr: float = _f(100.0, label="PET baseline (mm/yr)", min=0.0, max=500.0)
     pet_per_degree_mm_yr: float = _f(60.0, label="PET slope (mm/yr/°C)", min=0.0, max=200.0)
     pet_max_mm_yr: float = _f(2500.0, label="PET cap (mm/yr)", min=500.0, max=5000.0)
-    delta_min_flow: float = _f(1000.0, label="Delta min flow", min=0.0, max=10000.0)
-    delta_min_length_km: float = _f(500.0, label="Delta min river length (km)", min=0.0, max=5000.0)
 
 
 class HydrologyBuilder(Stage):
@@ -40,8 +38,9 @@ class HydrologyBuilder(Stage):
     stores rivers / lake polygons, attaches `filled_height` and `lake_mask`
     single-channel face textures, and registers the ``"rivers"`` (flattened
     polylines for rendering/serialization), ``"river_objects"`` (the rich
-    ``River`` objects downstream stages consume), ``"lakes"``, and ``"deltas"``
-    features.
+    ``River`` objects downstream stages consume) and ``"lakes"`` features.  The
+    delta stage (``worldgen.delta``) runs next and extends the rivers and
+    streams in place over the land it deposits.
     """
 
     name = "hydrology"
@@ -50,7 +49,6 @@ class HydrologyBuilder(Stage):
         self.params: HydrologyParams = params or HydrologyParams()
         self.rivers: Optional[List[River]] = None
         self.lake_polygons: Optional[List[np.ndarray]] = None
-        self.delta_positions: Optional[np.ndarray] = None  # (M, 3) mouth positions reaching the ocean
         self.streams: Optional[StreamNetwork] = None
         # The flattened ``(positions, flows, in_lake)`` polyline tuples registered
         # as the "rivers" feature. Cached here because ``serialize`` (no world
@@ -91,35 +89,6 @@ class HydrologyBuilder(Stage):
         mesh.set_face_textures("filled_height", filled_height.astype(np.float16), n_channels=1)
         LAKE_MASK.write(mesh, lake_mask)
 
-        delta_pts: list[np.ndarray] = []
-        res = river_gen.resolution
-        for river in self.rivers:
-            if river.mouth is None or not river.segments:
-                continue
-            mouth_flow = river.segments[-1].flow_rate
-            if mouth_flow < self.params.delta_min_flow:
-                continue
-            polyline = river.as_polyline()
-            if len(polyline) >= 2:
-                pts = np.stack(polyline)
-                dots = np.clip(np.einsum("ij,ij->i", pts[:-1], pts[1:]), -1.0, 1.0)
-                length_km = float(np.arccos(dots).sum()) * 6371.0
-            else:
-                length_km = 0.0
-            if length_km < self.params.delta_min_length_km:
-                continue
-            face_id = river.mouth.face_id
-            u, v = river.mouth.uv
-            row = int(round(v * (res - 1)))
-            col = int(round(u * (res - 1)))
-            node_idx = river_gen._node_idx(face_id, row, col)
-            if river_gen._ocean_mask[node_idx]:
-                mesh.set_face_metadata(face_id, is_delta=True)
-                delta_pts.append(river.mouth.position)
-        self.delta_positions = (
-            np.stack(delta_pts, axis=0).astype(np.float32) if delta_pts else None
-        )
-
         if self.rivers:
             # Rich River objects for downstream stages (resources, cost); the
             # flattened polylines for rendering + serialization.
@@ -130,8 +99,6 @@ class HydrologyBuilder(Stage):
                 RIVERS.write(ctx.world, paths_with_flow)
         if self.lake_polygons:
             ctx.world.add_feature("lakes", self.lake_polygons)
-        if self.delta_positions is not None and len(self.delta_positions) > 0:
-            ctx.world.add_feature("deltas", self.delta_positions)
 
     def _flatten_rivers(self) -> list:
         """Flatten ``self.rivers`` (List[River]) into ``(positions, flows,
@@ -157,13 +124,14 @@ class HydrologyBuilder(Stage):
     ) -> None:
         if world.has_feature("rivers"):
             reg.add_overlay("rivers", "Rivers")
-        if debug and world.has_feature("deltas"):
-            reg.add_overlay("deltas", "River Deltas", checked=False)
 
     # ── Persistence ──────────────────────────────────────────────────────────
 
     def serialize(self) -> dict:
         arrays: dict = {}
+        # Re-flatten built rivers: the delta stage extends them after build.
+        if self.rivers and isinstance(self.rivers[0], River):
+            self._river_feature = self._flatten_rivers()
         if self._river_feature:
             all_pos, all_flows, all_in_lake = [], [], []
             pos_offsets, flow_offsets = [0], [0]
@@ -185,8 +153,6 @@ class HydrologyBuilder(Stage):
                 lake_offsets.append(lake_offsets[-1] + len(poly))
             arrays["lake_polys_flat"] = np.concatenate(all_verts).astype(np.float32)
             arrays["lake_poly_offsets"] = np.array(lake_offsets, dtype=np.int64)
-        if self.delta_positions is not None and len(self.delta_positions) > 0:
-            arrays["hb_delta_positions"] = self.delta_positions.astype(np.float32)
         if self.streams is not None:
             arrays.update(self.streams.pack())
         return arrays
@@ -222,6 +188,3 @@ class HydrologyBuilder(Stage):
         if "stream_nodes" in arrays:
             self.streams = StreamNetwork.unpack(arrays)
             STREAMS.write(ctx.world, self.streams)
-        if "hb_delta_positions" in arrays:
-            self.delta_positions = arrays["hb_delta_positions"]
-            ctx.world.add_feature("deltas", self.delta_positions)

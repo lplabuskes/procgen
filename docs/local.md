@@ -124,7 +124,10 @@ texels of the region's line, over the local relief, with the region's own
 routing loop (`region.rivers.route_stream_paths`) and valley-seeking cost. A
 path leaving and re-entering the raster is routed once per visit; a visit that
 holds the path's last vertex ends on whatever it drains into near there (its
-stem, a lake, the local coast). Flow is the region's.
+stem, a lake, the local coast). Flow is the region's. A delta's distributaries
+are ordinary region paths that start on their parent channel
+([region_features.md](region_features.md#delta-distributaries-regiondistributariespy)),
+so they are re-traced the same way.
 
 **Then the region's streams.** The world's network stops at its
 `stream_flow_threshold`, coarse for villages. `build_local_map` takes the

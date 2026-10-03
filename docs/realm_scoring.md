@@ -20,7 +20,7 @@ Danger influence (`DangerInfluenceParams.suitability_weight`, `block_threshold`)
 
 **`scoring/suitability.py`**: suitability in [0, 1] = the weighted mean (`combine_suitability`, weights normalised) of water proximity (`compute_water_proximity`: freshwater BFS + climate-stage distance to coast), climate habitability (`compute_climate_habitability`: T/P bell curves), `fertility_mean` and resource access (`compute_resource_proximity`: BFS from mineral / rare-bio deposit faces), × a ruggedness multiplier (`compute_ruggedness_penalty`, from the face elevation span). Water faces are 0.
 
-**`scoring/situational_value.py`**: Five situational-value components, weighted by `combine_situational_value` — harbor quality (coastal faces, depth-scaled), river confluences, navigable river heads, mountain passes (local cost contrast), strait adjacency.
+**`scoring/situational_value.py`**: Six situational-value components, weighted by `combine_situational_value` — harbor quality (coastal faces, depth-scaled), river confluences, navigable river heads, mountain passes (local cost contrast), strait adjacency, and delta apexes (`compute_delta_apexes`: 1 at the face holding each `"delta_fans"` apex, `delta_weight` 0.2; a world without deltas leaves the weight out of the normalization).
 
 ## ScoringStage
 

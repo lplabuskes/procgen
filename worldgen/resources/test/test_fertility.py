@@ -7,6 +7,7 @@ import numpy as np
 
 from worldgen.resources.fertility import (
     BIOME_FERTILITY_MULT,
+    apply_delta_fertility,
     compute_fertility,
 )
 from worldgen.resources.builder import FertilityParams
@@ -182,3 +183,36 @@ class TestComputeFertility:
         assert m[TEMPERATE] >= m[2]           # Temperate ≥ Taiga
         assert m[TROPICAL] >= m[5]            # Tropical ≥ Savannah
         assert m[0] == 0.0                    # Icecap is zero
+
+
+# ── River deltas ─────────────────────────────────────────────────────────────
+
+
+def _delta_case(t_c: float, base: float, plain: float = 1.0, marsh: float = 0.0):
+    fert = np.full((1, 2, 2, 1), base, dtype=np.float32)
+    delta = np.zeros((1, 2, 2, 2), dtype=np.float32)
+    delta[0, 0, 0] = (plain, marsh)                       # one texel on the delta
+    temp = np.full((1, 2, 2, 4), t_c, dtype=np.float32)
+    return apply_delta_fertility(fert, delta, temp, FertilityParams())
+
+
+def test_delta_plain_is_raised_toward_delta_fertility():
+    p = FertilityParams()
+    out = _delta_case(p.optimal_temperature_c, base=0.1)
+    assert np.isclose(out[0, 0, 0, 0], p.delta_fertility, atol=1e-5)
+    assert np.allclose(out[0, 1, :, 0], 0.1)              # off the delta: untouched
+
+
+def test_delta_fertility_never_lowers_and_cold_deltas_stay_poor():
+    p = FertilityParams()
+    assert np.isclose(_delta_case(p.optimal_temperature_c, base=0.95)[0, 0, 0, 0], 0.95)
+    cold = _delta_case(-15.0, base=0.05)[0, 0, 0, 0]
+    warm = _delta_case(p.optimal_temperature_c, base=0.05)[0, 0, 0, 0]
+    assert 0.05 <= cold < 0.3 < warm
+
+
+def test_delta_marsh_is_docked():
+    p = FertilityParams()
+    dry = _delta_case(p.optimal_temperature_c, base=0.0)[0, 0, 0, 0]
+    wet = _delta_case(p.optimal_temperature_c, base=0.0, marsh=1.0)[0, 0, 0, 0]
+    assert np.isclose(wet, dry * (1.0 - p.delta_marsh_penalty), atol=1e-5)

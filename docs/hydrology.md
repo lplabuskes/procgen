@@ -19,8 +19,6 @@ See also: `docs/plans/river_generation_spec.md` for the original design.
 - `stream_flow_threshold` (default `100.0`) — the same tree accumulation cut much lower: the saved stream network (towns favour its texels; a region draws it as its tributaries)
 - `min_lake_pixels` (default `50`) — minimum flooded-component size to keep as a lake
 - `pet_baseline_mm_yr` / `pet_per_degree_mm_yr` / `pet_max_mm_yr` — clamped-linear PET model for water-balance lake shrinking (`PET = clamp(baseline + slope·max(0,T), 0, max)`)
-- `delta_min_flow` (default `1000.0`) — minimum mouth flow for a river to be tagged as having a delta
-- `delta_min_length_km` (default `500.0`) — minimum river length for delta tagging
 
 **`HydrologyBuilder`**: A pipeline `Stage`. Runs after elevation **and** climate. Consumes `"precipitation"`, `"temperature"`, and optionally `"ocean_mask"` face textures.
 
@@ -28,13 +26,13 @@ See also: `docs/plans/river_generation_spec.md` for the original design.
 - `"filled_height"` (float16) — Priority-Flood filled DEM, rewritten over endorheic basins to reflect equilibrium lake surface and exposed dry bed; the region tier floods its lakes to it
 - `"lake_mask"` — 1.0 where pixel is inside post-shrinking lake footprint, 0.0 otherwise
 
-A river is tagged as having a delta when its mouth flow ≥ `delta_min_flow`, its length ≥ `delta_min_length_km`, and its mouth texel is ocean; its mouth face gets `is_delta` metadata.
+Deltas are the next stage's ([delta.md](delta.md)). It extends the rivers and the stream network in place over the land it deposits, so `serialize` re-flattens the `River` objects at save time rather than using the polylines from build time.
 
-Stored attributes: `rivers` (`List[River]`; after `load`, the flattened tuples), `lake_polygons` (`List[np.ndarray]`), `delta_positions`, `streams` (`StreamNetwork`).
+Stored attributes: `rivers` (`List[River]`; after `load`, the flattened tuples), `lake_polygons` (`List[np.ndarray]`), `streams` (`StreamNetwork`).
 
-Registered features: `"rivers"` (flattened `(positions, flows, in_lake)` polylines), `"river_objects"` (rich `River` objects consumed by Resources/Cost; build only, not restored on load), `"streams"` (the `StreamNetwork`), `"lakes"`, `"deltas"`.
+Registered features: `"rivers"` (flattened `(positions, flows, in_lake)` polylines), `"river_objects"` (rich `River` objects consumed by Resources/Cost; build only, not restored on load), `"streams"` (the `StreamNetwork`), `"lakes"`.
 
-Display: the **Rivers** overlay; with `--debug` also **River Deltas** (unchecked).
+Display: the **Rivers** overlay.
 
 **`StreamNetwork`** (`types.py`, from `RiverGenerator.stream_network(threshold)`): the single-receiver accumulation tree the rivers are cut from, kept down to `stream_flow_threshold` — every channel texel plus the sea / endorheic texels they drain into, as sparse parallel arrays: flat texel id `nodes` (`face·H·W + row·W + col`), `positions`, `receiver` (index into the arrays, -1 at an end), `flow` (tree accumulation, river flow units), `channel`, `stop` (sea or endorheic: a path ends there). Rivers are exactly its part above `river_flow_threshold`. Saved with the world (`stream_*` arrays; ~27k nodes on seed 4). Consumers: the town stage's stream bonus, and the region tier's rivers (`region/rivers.py`).
 

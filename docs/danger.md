@@ -14,7 +14,7 @@ A per-face **danger** scalar in [0, 1]: monster lairs, planar rifts, undead and 
 
 ## `DangerBuilder`
 
-`build(ctx)` reads `volcanic_activity`, `is_ocean`, `biome`, `boundary_type`, `plate_type`, `fertility_mean`, `forest_density_mean` metadata, the `elevation` and `lake_mask` textures and the `"river_objects"` feature, and packs the derived inputs into a `DangerTerrain`: water (ocean ∪ faces containing lake), mean elevation and elevation span, BFS hop counts for ocean depth (from coastal ocean), distance to coast (from coastal land) and distance to fresh water (from river and lake faces), and the river-face mask.
+`build(ctx)` reads `volcanic_activity`, `is_ocean`, `biome`, `boundary_type`, `plate_type`, `fertility_mean`, `forest_density_mean` metadata (and the delta stage's `marsh_fraction` when present), the `elevation` and `lake_mask` textures and the `"river_objects"` feature, and packs the derived inputs into a `DangerTerrain`: water (ocean ∪ faces containing lake), mean elevation and elevation span, BFS hop counts for ocean depth (from coastal ocean), distance to coast (from coastal land) and distance to fresh water (from river and lake faces), and the river-face mask.
 
 Each enabled source then:
 1. builds its candidate mask from the terrain (`DangerSource.mask`),
@@ -36,7 +36,7 @@ Outputs: per-face `danger` metadata and the `"danger"` feature (the same `(N,)` 
 | Volcanic | Dragon Lair (any land), Fire Elemental Rift (volcanic land) |
 | Ocean | Kraken Domain (deep ocean), Deadwater Zone (open ocean), Sea Serpent Territory (ocean near the coast) |
 | Highland | Harpy Peak (high, moderately rugged), Troll Hold (river faces), Giant Lair (high ground) |
-| Forest | Goblin Warband (forest), Werewolf Range (wooded steppe/savannah), Basilisk Territory (semi-arid/desert), Cursed Forest (dense forest far from fresh water) |
+| Forest | Goblin Warband (forest), Werewolf Range (wooded steppe/savannah), Basilisk Territory (semi-arid/desert), Cursed Forest (dense forest far from fresh water), Lizardfolk Fen (river-delta marsh: `marsh_fraction ≥ 0.05`; last in `_SOURCE_DEFS` so the others keep their kind indices) |
 | Planar Rift | Fire (volcanic), Earth (active continental boundaries), Air (very high), Water (open ocean) |
 | Undead | Lich Stronghold (high, barren, treeless), Barrow Field (low, flat, dry), Haunt (barren coast) |
 

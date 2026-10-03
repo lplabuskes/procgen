@@ -56,6 +56,7 @@ bands on the contours instead.
 | `biome` | reclassified from the **area-averaged** refined climate | derived |
 | `ocean_mask`, `lake_mask`, `filled_height` | re-flooded to the parent's water surface over the refined relief | surface exact; shoreline refined |
 | `coast_smoothness` | bilinear copy of the parent's (when it has one) | not conserved — a style, read by the tier below |
+| `delta` | bilinear copy of the parent's river-delta plain and marsh ([delta.md](delta.md)), clipped to [0, 1] | not conserved — where the distributaries go |
 | `forest_density` | treeline on the refined elevation | multiplicatively, over land |
 | `fertility` | valley floors richer, steep slopes poorer, forest penalty on the refined forest | multiplicatively, over land |
 | `dominant_crop` | reclassified from the refined fields (climate area-averaged, as for `biome`) | derived |

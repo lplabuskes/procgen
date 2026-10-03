@@ -34,6 +34,7 @@ from worldgen.geology.channels import (
     PLATE_TYPE,
     VOLCANIC_ACTIVITY,
 )
+from worldgen.delta.channels import MARSH_FRACTION
 from worldgen.hydrology.channels import LAKE_MASK, RIVER_OBJECTS
 from worldgen.resources.channels import FERTILITY_MEAN
 from worldgen.resources.terrain import (
@@ -123,6 +124,7 @@ class DangerBuilder(Stage):
             river_mask=river_traversed_faces(rivers, n_faces=n),
             boundary_type=boundary_type,
             plate_type=plate_type,
+            marsh_fraction=MARSH_FRACTION.read(mesh) if MARSH_FRACTION.present(mesh) else None,
         )
 
         ctx.report("Danger: seeding sources…")

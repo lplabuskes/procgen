@@ -19,6 +19,7 @@ from core.display import DisplayRegistry
 from core.pipeline import BuildContext, Stage
 from core.world import World
 from worldgen.climate.channels import BIOME, PRECIPITATION, TEMPERATURE
+from worldgen.delta.channels import DELTA
 from worldgen.geology.channels import ELEVATION, IS_OCEAN, OCEAN_MASK
 from worldgen.hydrology.channels import LAKE_MASK, RIVER_OBJECTS
 from worldgen.resources.channels import FERTILITY_MEAN, MINERALS, RARE_BIO
@@ -36,7 +37,7 @@ from worldgen.resources.display import (
     mineral_legend_entries,
     rare_bio_legend_entries,
 )
-from worldgen.resources.fertility import compute_aquatic_fertility, compute_fertility
+from worldgen.resources.fertility import apply_delta_fertility, compute_aquatic_fertility, compute_fertility
 from worldgen.resources.forest import compute_forest_density
 from worldgen.resources.minerals import place_mineral_deposits
 from worldgen.resources.rare_bio import place_rare_bio_resources
@@ -80,6 +81,10 @@ class FertilityParams:
     lake_river_max_hops: int = _f(6, label="Lake river max hops", min=0, max=16)
     lake_optimal_temperature_c: float = _f(15.0, label="Lake optimal T (°C)", min=-5.0, max=30.0)
     lake_temperature_sigma_c: float = _f(10.0, label="Lake T σ (°C)", min=1.0, max=30.0)
+    # River deltas: the silt plain is raised toward this (× the temperature
+    # bell), its seaward marsh docked by the penalty.
+    delta_fertility: float = _f(0.9, label="Delta fertility", min=0.0, max=1.0)
+    delta_marsh_penalty: float = _f(0.4, label="Delta marsh penalty", min=0.0, max=1.0)
 
 
 @paramclass
@@ -273,6 +278,9 @@ class ResourcesBuilder(Stage):
             forest_density_tex=forest,
             mesh=mesh,
         )                                                          # (N, H, W, 1)
+
+        if DELTA.present(mesh):
+            fertility = apply_delta_fertility(fertility, DELTA.read(mesh), temperature_tex, fp)
 
         _report("Computing aquatic fertility…")
         current_temp_delta: np.ndarray | None = None

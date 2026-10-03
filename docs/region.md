@@ -24,6 +24,7 @@ The rest of the tier:
 - `region/smooth.py` — `FaceFanField`: a continuous, non-negative surface with exact per-face means through per-face values (danger)
 - `region/corridor.py` — the raster + least-cost corridor router the rivers and roads share ([region_features.md](region_features.md))
 - `region/rivers.py` — `RegionRiverParams`, `build_region_rivers`, `route_stream_paths`, `snap_deltas`
+- `region/distributaries.py` — `DistributaryParams`, `add_distributaries`: delta distributaries
 - `region/roads.py` — `RegionRoadParams`, `build_region_roads`, `route_polyline`
 - `region/towns.py` — `RegionSettlementParams`, `refine_region_towns` / `refine_towns`, `tier_sites` (the site features both tiers and the cities read)
 - `region/cities.py` — `refine_region_cities` / `refine_cities`

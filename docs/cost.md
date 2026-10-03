@@ -14,11 +14,11 @@ Final physical stage. Converts already-computed data into **base** land + sea tr
 ## `builder.py`
 
 **`CostParams`** (dataclass): Nested `land: LandCostParams`, `sea: SeaCostParams`, `strait: StraitParams`.
-- Land knobs: `biome_cost_scale`, `ruggedness_cost_per_km`, `forest_cost_strength`, river term (`river_ford_strength`, `river_corridor_strength`, `river_flow_reference`, `river_min_mult` / `river_max_mult`), `navigable_ruggedness_km` (local-relief limit where a river stops being navigable — the fall line)
+- Land knobs: `biome_cost_scale`, `ruggedness_cost_per_km`, `forest_cost_strength`, `marsh_cost_strength` (river-delta marsh, see below), river term (`river_ford_strength`, `river_corridor_strength`, `river_flow_reference`, `river_min_mult` / `river_max_mult`), `navigable_ruggedness_km` (local-relief limit where a river stops being navigable — the fall line)
 - Sea knobs: `coastal_cost` / `open_ocean_cost`, `open_ocean_distance_km` ramp, `strait_discount`, `navigable_flow_min` (minimum river flow to float a boat), `ice_penalty_strength` / `ice_freeze_threshold` (sea-ice penalty), wind (`wind_optimal_speed`, `wind_speed_width`, `wind_penalty_strength`, `wind_direction_strength`, `wind_coast_blend_km`)
 - Strait knobs: `opposite_dot_threshold` + `min_water_neighbors`
 
-**`CostBuilder`**: A pipeline `Stage`. Runs last in the globe pipeline, after resources and danger (it does not read danger). Reads: `biome` and `is_ocean` per-face metadata, `forest_density_mean` (when present), `elevation` + `lake_mask` + `temperature` textures, the hydrology rivers via the `"river_objects"` world feature, and the climate `"winds"` feature.
+**`CostBuilder`**: A pipeline `Stage`. Runs last in the globe pipeline, after resources and danger (it does not read danger). Reads: `biome` and `is_ocean` per-face metadata, `forest_density_mean` and the delta stage's `marsh_fraction` (when present), `elevation` + `lake_mask` + `temperature` textures, the hydrology rivers via the `"river_objects"` world feature, and the climate `"winds"` feature.
 
 Derives `is_water = is_ocean | is_lake` (a face counts as lake when ≥50% of its pixels are lake).
 
@@ -38,7 +38,7 @@ Display (`--debug` only): **Land Cost** (normalised to the land 95th percentile)
 - `wind_dir (N,3)` — coast-blended mean wind direction for the directional sea term, or `None` without winds
 
 Key functions:
-- `compute_land_base_cost` — `biome_cost_scale · BIOME_TRAVERSAL_COST[biome] + ruggedness_cost_per_km · (pixel elevation span) + forest_cost_strength · forest_density_mean`; water is impassable (`land_passable = ~is_water`). Realmgen's hinterland stage is the only consumer that opts into a limited coastal-water band via its own permeable graph.
+- `compute_land_base_cost` — `biome_cost_scale · BIOME_TRAVERSAL_COST[biome] + ruggedness_cost_per_km · (pixel elevation span) + forest_cost_strength · forest_density_mean`, then × `(1 + marsh_cost_strength · marsh_fraction)` in the builder (the seaward marsh of a river delta, [delta.md](delta.md)); water is impassable (`land_passable = ~is_water`). Realmgen's hinterland stage is the only consumer that opts into a limited coastal-water band via its own permeable graph.
 - `compute_river_flow_field` — per-face downstream unit tangent + max flow; in-lake segments skipped; `exclude_mask` zeros river terms on water faces
 - `compute_river_navigability` — linear taper from placid→1 to `navigable_ruggedness_km` relief→0 (the fall line)
 - `navigable_river_mask` — flow ≥ `navigable_flow_min` ∧ navigability>0 ∧ not water

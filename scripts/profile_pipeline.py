@@ -7,7 +7,7 @@ builder code — the duration of a phase is simply the gap between its progress
 message and the next one (the final phase is closed when ``build()`` returns).
 
 Phases are rolled up into top-level stages by recognising each stage's first
-message: five worldgen stages (elevation, climate, hydrology, lake_feedback,
+message: six worldgen stages (elevation, climate, hydrology, delta, lake_feedback,
 resources) and four realmgen stages (scoring, placement, population, polity).
 
 Usage:
@@ -40,6 +40,7 @@ STAGE_MARKERS = [
     # worldgen
     ("insolation", "climate"),
     ("rivers and lakes", "hydrology"),
+    ("river deltas", "delta"),
     ("lake humidity feedback", "lake_feedback"),
     ("terrain ruggedness", "resources"),
     # realmgen
@@ -49,7 +50,7 @@ STAGE_MARKERS = [
     ("Seeding sovereign capitals", "polity"),
 ]
 STAGE_ORDER = [
-    "elevation", "climate", "hydrology", "lake_feedback", "resources",
+    "elevation", "climate", "hydrology", "delta", "lake_feedback", "resources",
     "scoring", "placement", "population", "polity",
 ]
 
