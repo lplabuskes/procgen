@@ -1,4 +1,6 @@
-# Core — Infrastructure, Mesh, and Visualization
+# Core — Infrastructure and Mesh
+
+Qt-free shared infrastructure every package builds on. The Qt viewers are in [viz.md](viz.md).
 
 ## `core/pipeline.py` — Stage contract and BuildContext
 
@@ -31,17 +33,32 @@ Stages read and write shared world state through typed channel descriptors inste
 
 ## `core/world.py` — World container
 
-**`World`**: Container for a generated world: a mesh plus a named feature registry. The constructor loads a mesh from the shared cache (`core/mesh_cache.py`), building it on first run. Use `World.from_mesh(mesh)` to wrap an already-built mesh (e.g. when loading a saved world).
+**`World`**: Container for a generated world: a mesh plus a named feature registry. The constructor `World(mesh_params, *, seed, progress)` loads a mesh from the shared cache (`core/mesh_cache.py`), building it on first run. Use `World.from_mesh(mesh)` to wrap an already-built mesh (e.g. when loading a saved world; `seed` is then `None`).
 
-Feature registry: `add_feature(name, data)`, `get_feature(name)`, `has_feature(name)`, `remove_feature(name)`, `feature_names()`.
+Attributes: `mesh`, `seed` (kept so later stages can derive per-world-deterministic draws — polity scalars, region noise, …), `antimeridian` (the map cut longitude, set by `ElevationBuilder` via `core.antimeridian`).
+
+Feature registry: `add_feature(name, data)`, `get_feature(name, default=None)`, `has_feature(name)`, `remove_feature(name)`, `feature_names()`.
 
 ## `core/mesh_cache.py` — Mesh cache
 
 **`MeshParams`** (`@paramclass`): `icosphere_depth`, `n_swaps`, `n_relax`, `stiffness`, `outer_iters` — same parameters as `Mesh.icosphere` + `deregularize` + `mesh_dual`. Exposed in `GlobeParams.mesh`.
 
-**`build(params, cache_dir, n, progress)`**: Generates `n` random deregularized dual meshes and writes them to `mesh_cache/`. Run once; subsequent runs load from cache. **`load_random(seed, cache_dir, n)`**: Loads one mesh deterministically by `seed % n`.
+**`build(params, cache_dir, n, progress)`**: Generates `n` (5) random deregularized dual meshes and writes them to `mesh_cache/` — the directory *beside* the repo (`core/../../mesh_cache`). Run once; subsequent runs load from cache. **`load_random(seed, cache_dir, n)`**: Loads one mesh deterministically by `seed % n` (a random one when `seed` is `None`). **`is_populated()`** checks the cache.
 
-`World.__init__` calls `mesh_cache.build` on first run, then `mesh_cache.load_random(seed)`.
+`World.__init__` calls `mesh_cache.build` when the cache is not populated, then `mesh_cache.load_random(seed)`. Changing `MeshParams` does not rebuild an existing cache.
+
+## `core/persistence.py` — Save / load
+
+Generic, numpy-only slice of persistence. A `.npz` holds `params_json` (the params dataclass tree), the mesh geometry (`mesh_vertices` / `mesh_face_sizes` / `mesh_face_data`), every face texture as `tex_<name>` except display-only `*_rgba` ones, `face_metadata_json`, and whatever each stage's `serialize()` adds.
+
+- `save_world(world, params, stages, path)` — `stages` is any iterable of `Stage` (normally the pipeline)
+- `load_world(path, params_cls) → (params, world, data)` — rebuilds the params (`deep_from_dict`) and a mesh-bearing `World`; the caller runs each stage's `load(data, ctx)`
+
+Used by `main.py` (whole app) and `worldgen.save_globe` / `load_globe` (physical world only). No backward compatibility with older saves is kept.
+
+## `core/antimeridian.py`
+
+**`find_ideal_antimeridian(mesh, n_samples=360) → float`**: the cut longitude (radians) that minimises land-face crossings when splitting polygons at the antimeridian. Samples 360 candidate longitudes in [−π, π); for each, counts land faces whose vertex longitude span exceeds π after shifting. Among candidates tied for fewest crossings, picks the one farthest from any land face centroid. Falls back to π when the mesh has no `is_ocean` metadata. Stored as `World.antimeridian`; the map views and the region cells all cut there.
 
 ## `core/params.py` — Params utilities
 
@@ -67,8 +84,10 @@ Qt-free surface that stages contribute visualization to. A viz adapter (`viz/map
   - `set_face_metadata(face_idx, **kw)`
   - `apply_metadata_channel(key, values)` — bulk-write one metadata key across all faces
   - `set_face_textures(name, textures, n_channels=4)` — attach `(N, H, W, C)` float32; use `n_channels=1` for data layers like elevation, 4 for RGBA display
-  - `face_texture_positions(h, w)` — unit-sphere 3D position of every texture pixel; starting point for any per-pixel geographic computation
-  - `face_tangent_frames()` — raw per-face tangent-plane data for projecting arbitrary 3D points into a face's UV space
+  - `face_texture_positions(h, w)` — unit-sphere 3D position of every texture pixel (grid endpoints, `linspace(0, 1, T)`); over-hanging corner pixels are extrapolated from the nearest fan triangle. Starting point for any per-pixel geographic computation
+  - `face_texture_in_polygon(h, w)` — `(N, H, W)` bool: texels inside the face polygon vs. the square texture's over-hanging corners
+  - `face_tangent_frames()` — raw per-face tangent-plane data for projecting arbitrary 3D points into a face's UV space; `face_uv_to_3d` / `face_3d_to_uv` for single points
+  - `boundary_pixel_pairs(tex_size)` — matched texel pairs across every shared face edge, cached per `tex_size` (seam smoothing, ocean flood, seam metrics); `measure_boundary_texture_jumps(texture)` summarises the jump across them
 
 - **`Mesh`** (subclass of `PolygonMesh`): Triangular mesh.
   - `icosphere(depth)` — generates a subdivided icosahedron; vertices sorted along the Z-axis for spatial locality
@@ -79,4 +98,4 @@ Qt-free surface that stages contribute visualization to. A viz adapter (`viz/map
 
 ## Tangent frame convention
 
-Per-face tangent-plane axes are `u_axis = cross(z, n)`, `v_axis = cross(n, u_axis)`, so the texture U-axis is geographic east and V-axis is geographic north for ~90% of faces. Any D4 grid-walk algorithm will produce N-S/E-W-biased output; `rivers.py` avoids this with D-infinity accumulation and Laplacian-smoothed polylines rather than grid-snapped steps.
+Per-face tangent-plane axes are `u_axis = cross(z, n)`, `v_axis = cross(n, u_axis)` (with `x` in place of `z` above ~64° latitude, `|n_z| ≥ 0.9`), so the texture U-axis is geographic east and V-axis is geographic north for ~90% of faces. Any D4 grid-walk algorithm will produce N-S/E-W-biased output; `rivers.py` avoids this with D-infinity accumulation and Laplacian-smoothed polylines rather than grid-snapped steps.

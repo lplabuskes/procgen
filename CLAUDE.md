@@ -69,28 +69,33 @@ python3 scripts/measure_villages.py       [seeds…|--random N|--hexes N|--rebui
 - `measure_polities.py` — polity-forest structure: sovereign/vassal counts, largest-domain face fraction (consolidation), max tree depth, and `corr(infrastructure, vassal_fraction)` (should be negative — high-infra realms hold directly, low-infra ones fragment). Caches the physical world; re-runs only the realm stage. Default seeds 4/31/35.
 - `profile_pipeline.py` — per-phase wall-clock breakdown of the full globe pipeline. Use `--cprofile` for function-level drill-down.
 - `debug_borders.py` — visual border-drawing troubleshooter. Renders a zoomed, faithful raster of one region: the texel polity fill as actual corner-quads (tiles at any orientation) with the border polylines overlaid, both from the current `fill.py`/`borders.py`. Draws **only visible (in-`face_texture_in_polygon`) texels** by default; `--show-overhang` reveals the clipped over-hang texels (faded, red-edged). `--seams`/`--vertices` overlay hexagon seams and border vertices. Prints open endpoints per depth (should all be coastal). Auto-picks a border-rich centre; `--face`/`--lat`/`--lon`/`--radius` aim it. Writes `scripts/results/borders_<seed>.png`.
-- `debug_region.py` — regional upsampling check. Renders one region's hex textures side by side — left with detail off and the water masks copied verbatim (the global field, upsampled only), right with the real params — and prints the added-relief statistics, how far the refined shoreline moved (flooded/dried), and the **conservation report** (per-global-texel residual after downsampling; must stay at float32 noise). Auto-picks the most land-rich region; `--region` aims it. Writes `scripts/results/region_<seed>_<region>_<layer>.png`. See [docs/region.md](docs/region.md).
-- `debug_local.py` — local-map check. Renders one regional hex's local map side by side — left the region's fields upsampled only, right the real local map with its rivers, roads, towns, cities and villages — and prints the added relief, shoreline movement, the **conservation report** against the region (per regional texel; float32 noise), and the **village budget report** (rural + villages per global texel ∩ map; exact) with village counts, sizes, spacing and kinds. Defaults to the hex of the densest land; `--layer "Rural Density"` shows the countryside net of villages. Writes `scripts/results/local_<seed>_<region>_<hex>_<layer>.png`. See [docs/local.md](docs/local.md).
+- `debug_region.py` — regional upsampling check. Renders one region's hex textures side by side — left with detail off and the water masks copied verbatim (the global field, upsampled only), right with the real params — and prints the added-relief statistics, how far the refined shoreline moved (flooded/dried), and the **conservation report** (per-global-texel residual after downsampling; must stay at float32 noise). Auto-picks the most land-rich region; `--region` aims it. Writes `scripts/results/region_<seed>_<region>_<layer>.png`. See [docs/region_fields.md](docs/region_fields.md).
+- `debug_local.py` — local-map check. Renders one regional hex's local map side by side — left the region's fields upsampled only, right the real local map with its rivers, roads, towns, cities and villages — and prints the added relief, shoreline movement, the **conservation report** against the region (per regional texel; float32 noise), and the **village budget report** (rural + villages per global texel ∩ map; exact) with village counts, sizes, spacing and kinds. Defaults to the hex of the densest land; `--layer "Rural Density"` shows the countryside net of villages. Writes `scripts/results/local_<seed>_<region>_<hex>_<layer>.png`. See [docs/local.md](docs/local.md) and [docs/local_settlements.md](docs/local_settlements.md).
 - `measure_villages.py` — village statistics on local maps of hexes sampled across the rural-density range (face-density quantiles 0.5–1.0): villages per 100 km² vs the budget's prediction, size, nearest-neighbour spacing, share of rural people in villages (target `village_fraction`), share stranded in no-village budgets, kinds, conservation residual. Default seeds 4/31/35 (~85 s). Results appended to `scripts/results/village_results.json`.
 
 
 ## Architecture
 
-Pipeline: mesh → deregularize → dual → **elevation/tectonics** → **climate** → **hydrology** → **climate lake-feedback** → **resources** → **cost** → *(optional)* **realmgen**
+Pipeline: mesh → deregularize → dual → **elevation/tectonics** → **climate** → **hydrology** → **climate lake-feedback** → **resources** → **danger** → **cost** → *(optional)* **realmgen**
 
-Top-level orchestrator: `GlobePipeline` in `worldgen/builder.py`. Each stage is a `Stage` that reads from and writes to a `BuildContext`. Realmgen is a separate `RealmPipeline` with sub-stages: scoring → placement → trade → population → polity → refine → towns. Both pipelines are wired together in `main.py` via `AppParams`.
+Top-level orchestrator: `GlobePipeline` in `worldgen/builder.py`. Each stage is a `Stage` that reads from and writes to a `BuildContext`. Realmgen is a separate `RealmPipeline` with sub-stages: scoring → placement → population (incl. trade) → polity → refine → towns. Both pipelines are wired together in `main.py` (`AppPipeline` + `AppParams`). The region and local tiers (`region/`, `localmap/`) are view-side: built on demand when a region or hex is opened, never part of the world build.
 
 Stage reference docs (read the relevant one before working on a stage):
 
 - [docs/core.md](docs/core.md) — `core/` infrastructure (pipeline, channels, params, display, mesh cache, mesh data structures)
-- [docs/viz.md](docs/viz.md) — `viz/` layer (MapWidget, MapWindow, projections, antimeridian, registry adapter, MeshViewer, ParamsDialog, color_stops)
-- [docs/region.md](docs/region.md) — `region/` regional maps (cubed-sphere cells, hex grid, global sampling, conserving upsample, RegionView)
-- [docs/local.md](docs/local.md) — `localmap/` local maps (one regional hex refined onto its own hex grid; villages planned)
+- [docs/viz.md](docs/viz.md) — `viz/` layer (MapWidget, MapWindow, overlay renderers, projections, registry adapter, MeshViewer, ParamsDialog, color_stops)
+- [docs/viz_regionview.md](docs/viz_regionview.md) — `RegionView`, the zoomed region / local-map viewer (wiring, drawing, hover, refined overlays)
+- [docs/region.md](docs/region.md) — `region/` regional maps overview (cubed-sphere cells, hex grid, global sampling, parent sources, params, display)
+- [docs/region_fields.md](docs/region_fields.md) — `region/upsample.py`, `region/resources.py`: the conserving field refinement (elevation, climate, water, resources, rural density, danger)
+- [docs/region_features.md](docs/region_features.md) — `region/corridor.py`, `rivers.py`, `roads.py`, `towns.py`, `cities.py`: rivers, roads, towns and cities re-sited on refined terrain
+- [docs/local.md](docs/local.md) — `localmap/` local maps (one regional hex refined onto its own hex grid: geometry, fields, rivers, roads)
+- [docs/local_settlements.md](docs/local_settlements.md) — local-map towns and cities, city footprints, farmland, villages
 - [docs/worldgen.md](docs/worldgen.md) — `worldgen/builder.py`, `main.py`, pipeline stage contract
 - [docs/elevation.md](docs/elevation.md) — `worldgen/geology/`
 - [docs/climate.md](docs/climate.md) — `worldgen/climate/`
 - [docs/hydrology.md](docs/hydrology.md) — `worldgen/hydrology/`
 - [docs/resources.md](docs/resources.md) — `worldgen/resources/`
+- [docs/danger.md](docs/danger.md) — `worldgen/danger/`
 - [docs/cost.md](docs/cost.md) — `worldgen/cost/`
 - [docs/realmgen.md](docs/realmgen.md) — `realmgen/` orchestration (`RealmParams`, `DangerInfluenceParams`, `RealmPipeline`)
 - [docs/realm_scoring.md](docs/realm_scoring.md) — `realmgen/scoring/`

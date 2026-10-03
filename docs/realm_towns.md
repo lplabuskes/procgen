@@ -8,7 +8,7 @@ The last realm stage. It adds the settlements below the city floor: **towns** of
 `town_min` (1k) up to `PopulationParams.city_min` (7k) people, the layer the
 population stage deliberately leaves unmodeled (see `city_surplus_share` in
 [realm_population.md](realm_population.md)). Towns are **display-only**: no
-stage reads them. They are drawn in the region view.
+stage reads them. They are drawn in the region and local views.
 
 Town people come **out of** the rural population. After this stage a face's
 `rural_population` is its countryside *net of* its towns and `town_population`
@@ -22,9 +22,9 @@ which region is viewed, since each town has exactly one owning region.
 
 ## Files
 
-- `realmgen/towns/builder.py` — `TownStage`, `TownParams`, the Rural Density display
-- `realmgen/towns/placement.py` — pure functions: `compute_rural_density`, `draw_town_sizes`, `place_towns`, `texel_owners`
-- `realmgen/towns/types.py` — `Towns` (the `towns` feature), kind codes, names and colours
+- `realmgen/towns/builder.py` — `TownStage`, `TownParams`, `town_site_context` (the cities' exclusion discs and the route / mineral points, shared with the region and local re-siting), the Rural Density display (`rural_density_recipe`)
+- `realmgen/towns/placement.py` — pure functions: `compute_rural_density`, `draw_town_sizes`, `site_log_weight_and_kind` (the site weight below, reused by the finer tiers), `place_towns`, `texel_owners`
+- `realmgen/towns/types.py` — `Towns` (the `towns` feature: parallel arrays plus the refinement fields and `reset_refinement` / `reset_local_refinement`), kind codes, names and colours
 - Reuses `realmgen/refine/sites.py` (`SiteField`) — see [realm_refine.md](realm_refine.md)
 
 ## Steps
@@ -99,20 +99,21 @@ so towns and cities do not overlap in size.
   position, `site_positions` the stage's site, `refined` which towns have been
   refined, `region_positions` the region's result (all saved). It shares the
   stage's weights (`site_log_weight_and_kind`) and `town_site_context`. See
-  [region.md](region.md#towns-and-cities-regiontownspy-regioncitiespy). A local
+  [region_features.md](region_features.md#towns-and-cities). A local
   map then refines the town again from its region position
-  (`local_refined`; [local.md](local.md#towns-and-cities-localmapsettlementspy)),
+  (`local_refined`; [local_settlements.md](local_settlements.md#towns-and-cities)),
   and cities are refined at both tiers too.
 - **Towns overlay** (checked by default). Small dots coloured by kind and sized
   by population (`_draw_towns` in `viz/mapview/overlays.py`), with a categorical
-  legend. Drawn **only in the region view** (the overlay projector's
+  legend. Drawn **only in the region and local views** (the overlay projector's
   `regional` flag), never on the world map. There, towns and cities that land
-  on the refined water are nudged onto land (see [region.md](region.md)).
+  on the refined water are nudged onto land (see [viz_regionview.md](viz_regionview.md)).
 - **Hover** (every view): `Towns: N (pop)` for the face, plus a breakdown by kind.
 - **Rural Density** (`--debug` layer). The `rural_density` texture,
-  sqrt-scaled to its 99th land percentile. It replaces the old per-face "Rural
-  Population" debug scheme. In a region it is read at each texel's anchor
-  (global resolution). Land inside faces the globe calls water shows as empty,
+  sqrt-scaled to its 99th land percentile (`rural_density_recipe`). A region
+  redraws it from its refined `rural_density` (see
+  [region_fields.md](region_fields.md)); a local map from the countryside net of
+  its villages. Land inside faces the globe calls water shows as empty,
   because the population model gives those faces no rural people.
 
 ## Numbers (seeds 4 / 31 / 35)

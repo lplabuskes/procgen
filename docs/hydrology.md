@@ -9,12 +9,14 @@ See also: `docs/plans/river_generation_spec.md` for the original design.
 - `worldgen/hydrology/routing.py` — Priority-Flood, D-infinity flow, accumulation
 - `worldgen/hydrology/stitching.py` — connected-component search
 - `worldgen/hydrology/crossings.py` — arc crossing detection, self-crossing removal
+- `worldgen/hydrology/discharge.py` — river flow → discharge (m³/s) → channel width, for drawing rivers at physical width on local maps
+- `worldgen/hydrology/channels.py` — `LAKE_MASK`, `RIVER_OBJECTS`, `RIVERS`, `STREAMS`
 
 ## `builder.py`
 
 **`HydrologyParams`** (dataclass):
+- `river_flow_threshold` (default `500.0`) — minimum upstream accumulation for a river headwater; a user-tunable dial for how dense the river network is (higher = fewer, larger rivers). Applied to the single-receiver **tree accumulation** (the network actually drawn), not the multi-receiver D-inf field — single-receiver flow concentrates more, so this threshold's scale differs from a D-inf threshold. Flow units: upstream texels weighted by their precipitation over the world mean.
 - `stream_flow_threshold` (default `100.0`) — the same tree accumulation cut much lower: the saved stream network (towns favour its texels; a region draws it as its tributaries)
-- `river_flow_threshold` (default `500.0`) — minimum upstream accumulation for a river headwater; a user-tunable dial for how dense the river network is (higher = fewer, larger rivers). Applied to the single-receiver **tree accumulation** (the network actually drawn), not the multi-receiver D-inf field — single-receiver flow concentrates more, so this threshold's scale differs from a D-inf threshold.
 - `min_lake_pixels` (default `50`) — minimum flooded-component size to keep as a lake
 - `pet_baseline_mm_yr` / `pet_per_degree_mm_yr` / `pet_max_mm_yr` — clamped-linear PET model for water-balance lake shrinking (`PET = clamp(baseline + slope·max(0,T), 0, max)`)
 - `delta_min_flow` (default `1000.0`) — minimum mouth flow for a river to be tagged as having a delta
@@ -23,12 +25,16 @@ See also: `docs/plans/river_generation_spec.md` for the original design.
 **`HydrologyBuilder`**: A pipeline `Stage`. Runs after elevation **and** climate. Consumes `"precipitation"`, `"temperature"`, and optionally `"ocean_mask"` face textures.
 
 `build(ctx)` runs `RiverGenerator` and attaches two new single-channel face textures:
-- `"filled_height"` — Priority-Flood filled DEM, rewritten over endorheic basins to reflect equilibrium lake surface and exposed dry bed
+- `"filled_height"` (float16) — Priority-Flood filled DEM, rewritten over endorheic basins to reflect equilibrium lake surface and exposed dry bed; the region tier floods its lakes to it
 - `"lake_mask"` — 1.0 where pixel is inside post-shrinking lake footprint, 0.0 otherwise
 
-Stored attributes: `rivers` (`List[River]`), `lake_polygons` (`List[np.ndarray]`), `streams` (`StreamNetwork`).
+A river is tagged as having a delta when its mouth flow ≥ `delta_min_flow`, its length ≥ `delta_min_length_km`, and its mouth texel is ocean; its mouth face gets `is_delta` metadata.
 
-Registered features: `"rivers"` (flattened polylines), `"river_objects"` (rich `River` objects consumed by Resources/Cost), `"streams"` (the `StreamNetwork`), `"lakes"`, `"deltas"`.
+Stored attributes: `rivers` (`List[River]`; after `load`, the flattened tuples), `lake_polygons` (`List[np.ndarray]`), `delta_positions`, `streams` (`StreamNetwork`).
+
+Registered features: `"rivers"` (flattened `(positions, flows, in_lake)` polylines), `"river_objects"` (rich `River` objects consumed by Resources/Cost; build only, not restored on load), `"streams"` (the `StreamNetwork`), `"lakes"`, `"deltas"`.
+
+Display: the **Rivers** overlay; with `--debug` also **River Deltas** (unchecked).
 
 **`StreamNetwork`** (`types.py`, from `RiverGenerator.stream_network(threshold)`): the single-receiver accumulation tree the rivers are cut from, kept down to `stream_flow_threshold` — every channel texel plus the sea / endorheic texels they drain into, as sparse parallel arrays: flat texel id `nodes` (`face·H·W + row·W + col`), `positions`, `receiver` (index into the arrays, -1 at an end), `flow` (tree accumulation, river flow units), `channel`, `stop` (sea or endorheic: a path ends there). Rivers are exactly its part above `river_flow_threshold`. Saved with the world (`stream_*` arrays; ~27k nodes on seed 4). Consumers: the town stage's stream bonus, and the region tier's rivers (`region/rivers.py`).
 
@@ -41,7 +47,7 @@ End-to-end pipeline:
 4. Water-balance lake shrinking (endorheic basins sized by PET vs inflow)
 5. Single-receiver **tree accumulation** along the primary-receiver graph — the network actually drawn
 6. Channel thresholding + main-stem (Hack) decomposition: each river is a chain from a channel headwater (a tree leaf) down to the sea, an endorheic sink, or the confluence where it meets a larger stem
-7. Receiver-graph routing + Laplacian smoothing of each chain
+7. Receiver-graph routing + Laplacian smoothing of each chain (8 iterations); flow along a chain is the running max of the tree accumulation, so it never decreases
 8. Self-crossing removal (loops a single river's own smoothing can introduce)
 
 `extract_rivers_graph` is the live extractor; the earlier bilinear-gradient tracer has been removed.

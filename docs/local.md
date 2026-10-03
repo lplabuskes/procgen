@@ -2,9 +2,13 @@
 
 Qt-free package for the finest tier: **each regional hexagon becomes a local
 map**, refined from the region exactly the way a region is refined from the
-globe. Plan and status: [plans/local_maps.md](plans/local_maps.md). Built so far:
-geometry, grid and field refinement, rivers, roads, settlements and villages
-(phases 1–4), the viewer (phase 5) and the diagnostic scripts (phase 6).
+globe ([region.md](region.md)). Plan and status:
+[plans/local_maps.md](plans/local_maps.md).
+
+This doc covers the frame, fields, rivers and roads. The rest of the tier:
+
+- [local_settlements.md](local_settlements.md) — towns and cities re-sited on the local map, city footprints, farmland and villages
+- [viz_regionview.md](viz_regionview.md) — the viewer (`RegionView` shows local maps too)
 
 ## Files
 - `localmap/geometry.py` — `LocalGeometry`: the parent hex's texture square, mapped affinely onto `[0, 1]²`
@@ -12,12 +16,34 @@ geometry, grid and field refinement, rivers, roads, settlements and villages
 - `localmap/upsample.py` — `LocalUpsampleParams`, `build_local_fields`, `local_conservation_report`
 - `localmap/rivers.py` — `LocalRiverParams`, `build_local_rivers`: the region's rivers re-routed over the local relief
 - `localmap/roads.py` — `LocalRoadParams`, `build_local_roads`: the region's roads re-routed over the local terrain
-- `localmap/settlements.py` — `LocalSettlementParams`, `local_owned`, `refine_local_cities`, `refine_local_towns`: towns and cities re-sited on the local coast, rivers and roads, saved on the world
-- `localmap/villages.py` — `VillageParams`, `Villages`, `place_villages`, `village_budget_report`
-- `localmap/cities.py` — `CityParams`, `CityFootprints`, `city_footprints`: each city's built-up texels
-- `localmap/farmland.py` — `FarmlandParams`, `Farmland`, `place_farmland`, `farmland_rgba`: the fields and gardens around the settlements
-- `localmap/params.py` — `LocalParams`: `upsample`, `rivers`, `roads`, `settlements`, `villages`, `cities`, `farmland`
+- `localmap/settlements.py` — `LocalSettlementParams`, `local_owned`, `refine_local_cities`, `refine_local_towns` ([local_settlements.md](local_settlements.md))
+- `localmap/villages.py` — `VillageParams`, `Villages`, `place_villages`, `village_budget_report` ([local_settlements.md](local_settlements.md))
+- `localmap/cities.py` — `CityParams`, `CityFootprints`, `city_footprints` ([local_settlements.md](local_settlements.md))
+- `localmap/farmland.py` — `FarmlandParams`, `Farmland`, `place_farmland`, `farmland_rgba` ([local_settlements.md](local_settlements.md))
+- `localmap/params.py` — `LocalParams`: `upsample`, `rivers`, `roads`, `settlements`, `villages`, `cities`, `farmland` (`AppParams.local`, the **Local map** dialog section; view-side only, like `region`)
 - `localmap/builder.py` — `LocalMap`, `build_local_map`: everything above for one regional hex
+
+## Pipeline (`localmap/builder.py`)
+
+`build_local_map(globe, region_fields, hex_index, params, *, region_rivers,
+region_roads, region_deltas, …world and realm tuning) → LocalMap` runs, in order:
+
+1. the fields (`build_local_fields`);
+2. the rivers (`build_local_rivers`), and the region's deltas snapped onto the local river mouths;
+3. the cities this map owns, re-sited (`refine_local_cities`, saved on the world);
+4. the roads (`build_local_roads`), fording the local rivers and ending on the re-sited cities;
+5. the towns this map owns, re-sited (`refine_local_towns`, saved on the world); every town and city in and around the map is then placed where it stands, moved off the local water with `snap_to_land` if it is not this map's to refine;
+6. the villages (`place_villages`), clear of those towns and cities;
+7. the cities' built-up footprints (`city_footprints`);
+8. the farmland (`place_farmland`).
+
+`LocalMap` holds `fields`, `rivers`, `roads`, `villages`, `deltas`,
+`town_index` / `town_positions`, `city_index` / `city_positions` (world indices
+and drawn positions of the settlements in and around the map),
+`city_footprints`, `farmland`, and `hex_index`. Without the region's rivers or
+roads the map has none. Deterministic, given which settlements earlier local
+maps re-sited. Villages, footprints and farmland share one seed per (world,
+region, hex).
 
 ## Scale (defaults)
 
@@ -25,8 +51,8 @@ geometry, grid and field refinement, rivers, roads, settlements and villages
 |---|---|---|
 | Map covers | ~3,070 km cell | one regional hex, ~286 km across (~53k km²) |
 | Hex | ~286 km | ~23 km (`n_cols=16`) |
-| Texel | ~4.5 km | ~330–365 m (`tex_size=64`) |
-| Hexes | ~250 | ~180 |
+| Texel | ~4.5 km | ~365 m (`tex_size=64`) |
+| Hexes | 216 | ~180 |
 | Detail octaves | 2 | 4 |
 
 About 1.5 s for the fields and ~2.1 s for a whole local map (fields, rivers, roads,
@@ -37,11 +63,11 @@ villages) on seed 4.
 `LocalGeometry(region_geometry, region_grid, hex_index)` is a `RegionGeometry`
 subclass whose `local_to_ecef` / `ecef_to_local` go through the parent region's
 `(s, t)` frame: local `(a, b)` ↦ `origin + 2R·(a, b)`, `origin` being the hex
-centre minus `R`. That frame extends smoothly past the region cell, so a hex
-hanging over the cell edge works, and handedness, `up_direction`,
+centre minus `R` (`to_region`). That frame extends smoothly past the region
+cell, so a hex hanging over the cell edge works, and handedness, `up_direction`,
 `local_to_lonlat` and `center_ecef` carry over unchanged. `region_id` is the
 parent region's. The parent hexagon is flat-top, circumradius 0.5, centred on
-`(0.5, 0.5)`.
+`(0.5, 0.5)` (`PARENT_CENTER`, `PARENT_RADIUS`).
 
 ## Grid (`localmap/grid.py`)
 
@@ -54,8 +80,8 @@ aggregation weight, so two neighbouring local maps never count a texel twice.
 ## Refinement (`localmap/upsample.py`)
 
 `build_local_fields(globe, region_fields, hex_index, params) → RegionFields`
-runs `region.upsample.refine_fields` with `RegionSource(region_fields)` as the
-parent:
+runs `region.upsample.refine_fields` ([region_fields.md](region_fields.md)) with
+`RegionSource(region_fields)` as the parent:
 
 - **Locating.** A point is placed in the region's `(s, t)` frame, owned by the
   regional hex with the nearest centre (a KD-tree over hex centres), and read
@@ -70,8 +96,9 @@ parent:
   world, so neighbouring local maps of one region agree where they meet.
 
 `local_conservation_report(local, region)` is `conservation_report` one tier
-down: per regional texel inside the parent hexagon, local mean vs regional
-value. On seed 4, every field is at float32 noise (elevation ~2e-8 km).
+down (`anchor_residuals` against the region's textures): per regional texel
+inside the parent hexagon, local mean vs regional value. On seed 4, every field
+is at float32 noise (elevation ~2e-8 km).
 
 Rural people in a local map match the parent hex's to ~0.03% at `T=64`; the
 two tiers count the regional texels on the parent hexagon's rim slightly
@@ -104,149 +131,25 @@ accumulation over the local relief) would add tributaries.
 On seed 4 the local rivers run ~1.1× the length of the regional ones over the
 same ground (median sinuosity 1.1–1.2), ~0.1 s per map.
 
+### `LocalRiverParams`
+`raster_texels` (1.0), `margin` (0.03), `corridor_parent_texels` (1.0),
+`valley_seeking` (2.0), `smoothing_iterations` (8).
+
 ## Roads (`localmap/roads.py`)
 
-`build_local_roads(local, region, region_roads, globe, rivers, …)` re-traces
-each of the region's road polylines (`RegionRoads.polylines`, with their
-`polyline_flows`) within `corridor_parent_texels` (2) regional texels, with the
-world's land-cost model per local raster node and the local rivers' fords
-(`region.roads.route_polyline`). Road ends are moved off the local water and
-land exactly on their points — a city's region position first moved to where
-the local map re-sited it (`moved`, below). Sea legs and undrawn routes that cross the local
-raster pass through straight. ~0.1 s per map.
+`build_local_roads(local, region, region_roads, globe, rivers, params, land,
+danger_scale, land_reach, moved)` re-traces each of the region's road polylines
+(`RegionRoads.polylines`, with their `polyline_flows`) within
+`corridor_parent_texels` (2) regional texels, with the world's land-cost model
+per local raster node and the local rivers' fords (`region.roads.route_polyline`).
+Road ends are moved off the local water and land exactly on their points — a
+city's region position first moved to where the local map re-sited it (`moved`;
+see [local_settlements.md](local_settlements.md#towns-and-cities)). Sea legs and
+undrawn routes that cross the local raster pass through straight. ~0.1 s per map.
 
-## Towns and cities (`localmap/settlements.py`)
-
-A local map re-sites towns and cities once more, from where the region put them,
-with the region's own rules (`region.towns.refine_towns`,
-`region.cities.refine_cities` at `LOCAL_TIER`) on its ~0.35 km texels and its own
-coast, rivers and roads, within `refine_radius_parent_texels` (1.5 regional
-texels, ~7 km). A harbour city or port town lands on the local shore, a river
-city or river town on the local river, whenever one is in reach. The result is
-**saved on the world** (`position`, flagged `local_refined`; `region_position`
-keeps the region's), so the settlement stands in the same place on every map.
-
-- **Ownership.** Each settlement is refined by one local map, once: the one of
-  the regional hex nearest its region position (`local_owned`), in the region
-  that refined it. A map that shows a settlement another map owns draws it where
-  it stands — at its region position, moved off the local water with
-  `snap_to_land`, until its own hex is opened.
-- **Order.** Cities first, so the local roads end on them (`build_local_roads`'
-  `moved = (region positions, positions)`); towns after the roads, since their
-  route flag reads them. Town spacing is kept against the others' *region*
-  positions, and city jitter and town noise are seeded per settlement and tier,
-  so a map's result does not depend on which maps were opened before it.
-- **Reset.** A local-params change puts every town and city back on its region
-  position (`Towns.reset_local_refinement`, `Settlement.reset_local_refinement`);
-  a region-params change back on its world site.
-
-On seed 4, the harbour cities stood a median 2.1 km (up to 3.7 km) from the
-local shore at their region position, and all 19 sampled land on it (moving a
-median ~2 km). Villages keep clear of the settlements' final positions.
-
-**City footprints** (`localmap/cities.py`, display-only). A city of `P` people
-covers `P / density_per_ha` (200 people/ha — a walled medieval city) of dry
-ground: that many local texels (~0.12 km² each, at least one), claimed outward
-from its local position by distance × `1 + edge_roughness · U[0,1)` (0.25, a
-ragged edge). Water is never claimed, so a coastal city wraps its shore; rivers
-are vector lines, so a city spans its river. Larger cities claim first; no texel
-is shared. Seed 4's largest city (~540k) covers ~27 km² (~225 texels, ~6 km
-across); a 19k city ~1 km² (8 texels). Rural density is not carved out.
-
-**Farmland** (`localmap/farmland.py`, display-only). How much ground each
-settlement farms follows medieval rules of thumb:
-
-| | Farmland | Default |
-|---|---|---|
-| Village | every villager × `ha_per_farmer` (cropland under three-field rotation, fallow, meadow and pasture) | 1.5 ha |
-| Town | the share who farm (`town_farming_share`) × `ha_per_farmer`; the rest eat from the villages around | 0.5 |
-| City | fed by its trade hinterland: a ring of market gardens and orchards `city_garden_ring_km` wide outside its footprint | 1.5 km |
-
-Fields are claimed texel by texel, outward from the settlement like a
-footprint, but a texel's distance is stretched by `1 + fertility_weight·(1 −
-fertility) + slope_weight·slope/slope_saturation + forest_weight·forest` (1, 2,
-1; 0.15 km/km) and jittered by `edge_roughness` (0.25), so fields fill valleys
-and skip steep or wooded ground. The garden rings go first (measured against
-the map's median stretch, so the ring is its nominal width on typical ground);
-then towns and villages claim together, cheapest (settlement, texel) pair first
-(a numba loop), each until its quota is met, so neighbours share the ground
-between them. Water and built-up texels are never farmed; the hamlets and
-farmsteads of the leftover rural density get no fields.
-
-Seed 4, the densest land: 940 villages farm ~5,100 km² and 59 towns ~700 km²
-(every town inside the map gets its full quota; towns just outside it lose the
-part that falls off the map), the one 67k city ~15 km² of gardens — ~11% of the
-land, ~0.2 s. At the 90th-percentile density ~5%.
-
-## Villages (`localmap/villages.py`)
-
-`place_villages(local, rivers, roads, settlement_positions,
-settlement_populations, seed, params) → Villages`.
-
-- **Budgets** are the people in each *global texel ∩ map* (local rural density
-  × texel area over the domain). `village_fraction` (0.7) of each is spent on
-  villages; the rest stays as rural density (hamlets, farmsteads).
-- **Sizes** are the town stage's truncated Pareto (`draw_town_sizes`) on
-  `[village_min, village_max]` = [200, 1000], α = `size_exponent` (1), with its
-  stochastic remainder.
-- **Sites**, largest first, among the budget's dry domain texels by Gumbel-max
-  over `log((ρ/ρ̄ + 0.05) · (1 + river·r + confluence·c + coast·k + road·d) ·
-  (1 − slope_penalty · slope))`. A village claims `spacing_km` (2 km) ×
-  `(pop/200)^0.25`; towns and cities claim `settlement_clearance_km` (3 km) ×
-  `(pop/1000)^0.25`. Kinds: farming, river, fishing (coast), roadside.
-- **Accounting.** A village with no free site stays rural; each budget's rural
-  density is scaled down by what its villages took, so rural + villages per
-  budget is unchanged (`village_budget_report`: ~1e-8 relative on seed 4).
-  `Villages.rural_density` is the countryside net of villages; the fields'
-  `rural_density` stays the pre-village one (it is what the region conserves).
-- Deterministic: one stream per budget, seeded by world, region, hex and global
-  texel.
-
-Seed 4, the densest land (~11 people/km²): ~940 villages per local map, mean
-~370 people, median nearest neighbour 4.2 km (p10 2.7, p90 6.4). Sparser land
-(~4/km²): ~350–400 villages, 6–7 km apart. Real high-medieval villages sat
-2–3 km apart at about twice that density; the population calibration, not
-this tier, sets the difference. Nearly all are farming villages: the world
-network gives a map only 0–6 rivers.
-
-## Viewer
-
-`RegionView` shows either tier; `MapWindow` stacks a second instance for local
-maps (see [viz.md](viz.md)).
-
-- **Opening.** In a region, the **Local maps** toggle highlights the hex under
-  the cursor; a click (a press and release under 4 px apart, so drags still
-  pan) opens its local map. **← Region** goes back to the region as it was.
-- **`RegionView.set_local(region_view, hex)`** builds the map with
-  `build_local_map` from the region view's fields, rivers, roads and deltas and
-  the world's tuning, or reuses it from an LRU cache (`LOCAL_CACHE_SIZE` = 6,
-  ~0.02 s), valid while the region's fields are the same object and the local
-  params are unchanged; a region-params change clears it.
-- **Drawing.** Everything is clipped to the parent hexagon (`_outline`). Layers
-  are the world map's recipes over the local fields, with `rural_density`
-  swapped for `Villages.rural_density` (the countryside net of villages).
-  Overlays get the local rivers, roads, deltas and a `Towns` at the positions
-  the map draws them as `refined` features; villages are drawn under the towns by
-  `overlays._draw_villages` (1.3–2.4 px dots coloured by kind: farming, river,
-  fishing, roadside), behind the **Villages** overlay toggle. Towns take the
-  dark-then-white ring cities have in a region; cities are drawn as their
-  footprints (`refined["cities"]`), or as a floor marker twice the largest
-  town's radius while the footprint is smaller than that on screen, walled
-  (dark, white, dark rings, a dark centre dot) so it stands apart from the towns.
-  Farmland is drawn over the terrain and under all of these, each kind with its
-  settlements' overlay (see [viz.md](viz.md)).
-- **Hover.** The status bar leads with the village under the cursor (within
-  6 px: "Farming village · 340 people"), then the usual texel readout. Texels
-  outside the parent hexagon report nothing.
-- **Params.** `AppParams.local` (`LocalParams`, "Local map" in the dialog) is
-  view-side only, like `region`. A change drops the cached maps and every
-  settlement's local refinement (`RegionView.set_local_params`).
-
-Known artefact: the Rural Density layer shows each budget (global texel ∩ map)
-as a faint block, since its countryside is scaled by its own realised village
-share (0.27–0.35 on seed 4), and budgets that are small slivers of a global
-texel (11% of budgets, 0.5% of the people) get no village and stay at full
-density, showing as bright slivers along the hexagon edge and face seams.
+### `LocalRoadParams`
+`raster_texels` (2.0), `margin` (0.03), `corridor_parent_texels` (2.0),
+`smoothing_iterations` (6).
 
 ## Diagnostics
 
@@ -256,24 +159,5 @@ density, showing as bright slivers along the hexagon edge and face seams.
   budget report. Defaults to the hex of the densest land.
 - **`scripts/measure_villages.py`** — village statistics on hexes sampled
   across the rural-density range, appended to
-  `scripts/results/village_results.json`.
-
-Seeds 4/31/35, five hexes each (2026-09-27):
-
-| rural density | villages / 100 km² | mean size | nearest neighbour (median) | in villages | stranded in no-village budgets |
-|---|---|---|---|---|---|
-| ~10/km² | 1.9–2.2 | 350–370 | 4.0–4.5 km | 69–70% | 0.2–0.6% |
-| ~5/km² | 1.0–1.1 | 320–335 | 5.8 km | 69% | 1% |
-| ~2/km² | 0.4 | ~300 | 9 km | 65% | 7% |
-| < 1/km² | 0–0.2 | ~200–235 | 11–12 km | 0–37% | 48–100% |
-
-Budgets balance to ≤ 7e-9 everywhere. Village counts run ~10% above the budget's
-prediction (`fraction · ρ / 402`) because each budget's last draw is cut to what
-is left, pulling the mean size to ~330–370.
-
-**Sparse land is nearly villageless.** Below ~1 person/km² a global texel
-(~195 km²) holds fewer than 200 people and cannot afford a village, so its people
-all stay dispersed — and on seed 4 the *median* land face is that sparse
-(0.4/km²). This is the per-(global texel ∩ map) conservation rule meeting the
-200-person floor, the same effect as the edge slivers above. Kept deliberately: thin
-land shows its people dispersed rather than pooling budgets or lowering the floor.
+  `scripts/results/village_results.json` (results in
+  [local_settlements.md](local_settlements.md#villages-localmapvillagespy)).

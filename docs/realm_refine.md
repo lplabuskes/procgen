@@ -4,7 +4,7 @@ Part of `realmgen/`. [Back to realmgen overview](realmgen.md)
 
 ## Overview
 
-The final realm stage. A **purely geometric** refinement pass that lifts realm
+The fifth realm stage (before `TownStage`). A **purely geometric** refinement pass that lifts realm
 render geometry from the face level to the texel level — it recomputes *positions
 and border curves only*, never population or polity structure (those already ran
 on the face graph). All outputs are **mutated in place** on the existing world
@@ -12,13 +12,17 @@ features, so the existing Settlements / Trade Routes / Polity Borders overlays
 render the refined geometry without any new display wiring.
 
 Runs after `PolityStage`; reads the textures attached by worldgen (`ocean_mask`,
-`lake_mask`) and the per-face `authority` channel written by `PolityStage`.
+`lake_mask`, `fertility`), the `rivers` feature, the per-face `polity_id`,
+`is_water` and `authority` channels written before it, and the `settlements`,
+`trade_routes`, `polities` and `polity_borders` features. Nothing runs without
+settlements and an ocean mask. The warp and city jitter are seeded from
+`World.seed`.
 
 ## Files
 
 - `realmgen/refine/builder.py` — `RefineStage`, `RefineParams`
 - `realmgen/refine/sites.py` — `SiteField`: per-texel site features (coast, river, confluence, local fertility, face ownership), shared with the town stage
-- `realmgen/refine/settlements.py` — city siting + trade-route remapping
+- `realmgen/refine/settlements.py` — city siting (`refine_settlement_positions`, `city_site_scores`, the `SITE_*` weights the region and local tiers reuse) + trade-route remapping (`remap_routes`)
 - `realmgen/refine/fill.py` — `PolityLabelField` (the polity at any point of the sphere, incl. domain-warp erosion), the texel labels sampled from it, the fill texture, and `polity_fill_recipe`
 - `realmgen/refine/borders.py` — border polylines contoured from the same field on a seamless icosphere lattice (marching triangles + bisection + Chaikin)
 
@@ -44,13 +48,14 @@ Runs after `PolityStage`; reads the textures attached by worldgen (`ocean_mask`,
 
 ## Site features (`sites.py`)
 
-`SiteField` reads the global face textures and answers, per texel of a face's
+`SiteField(mesh, ocean_tex, lake_tex, fertility_tex, rivers, *, river_threshold_factor, streams=None)` reads the global face textures and answers, per texel of a face's
 grid: is it land, is it **owned** by the face (its nearest face centroid — the
 rule `GlobalSampler` and the label field use, so faces partition the sphere),
 is it ocean- or lake-coast (4-adjacent to that water), is it on a river or at a
 confluence (within `river_threshold_factor × texel_spacing`), and how fertile is
-its 3×3 land neighbourhood. `FaceSites.sites()` is a face's candidate sites: its
-owned land texels. `prefetch(faces)` computes many faces in one batch (one
+its 3×3 land neighbourhood; with a `streams` network (only the town stage passes
+one), also whether it is a stream channel. `FaceSites.sites()` is a face's
+candidate sites: its owned land texels. `prefetch(faces)` computes many faces in one batch (one
 KD-tree query per feature), which is what both callers do.
 
 A confluence is a river mouth that lands within `confluence_search_radius` of an
@@ -85,9 +90,9 @@ unlucky coast, not something the scores routinely fight.
 (`SITE_KIND_OCEAN_COAST | _LAKE_COAST | _RIVER | _CONFLUENCE` bit flags), and
 the texel as `site_position` (`Settlement.set_site`). The region and local tiers
 re-site the city on their finer coast and rivers from there, keeping what the
-site offered (see [region.md](region.md#towns-and-cities-regiontownspy-regioncitiespy)).
+site offered (see [region_features.md](region_features.md#towns-and-cities)).
 
-The function returns `{old_position_key: new_position}` for moved settlements.
+`refine_settlement_positions` returns `{old_position_key: new_position}` for moved settlements.
 `remap_routes` then rewrites any trade-route endpoint matching a moved settlement's
 old centroid to its refined position — same connections, adjusted geometry. (Route
 endpoints are face centroids bit-identical to the pre-refine settlement positions,
@@ -134,7 +139,7 @@ their own blues. The refine stage stores the result as the `polity_fill` face
 texture (float16), which `PolityStage.register_display` attaches to the
 "Polities" scheme when present. It also attaches `polity_fill_recipe`, which
 colours any grid of texel positions, so the region view evaluates the fill at its
-own finer texels and with its refined shoreline (see [region.md](region.md)).
+own finer texels and with its refined shoreline (see [region.md](region.md#display-regiondisplaypy)).
 
 ## Border refinement (`borders.py`)
 
@@ -174,10 +179,13 @@ lies within one lattice edge of water.
 
 ## Outputs
 
-Mutates in place: `settlements` (`.position`, `.site_position`, `.site_kind`), `trade_routes` (endpoint geometry),
+Mutates in place: `settlements` (`Settlement.set_site`: `.position`, `.site_position`, `.region_position`, `.site_kind`), `trade_routes` (endpoint geometry),
 `polity_borders` (`{depth: (M, 6)}` smoothed segments). Adds one face texture,
 `polity_fill`, consumed by the "Polities" scheme, and one in-memory feature,
 `polity_label_field`, which the scheme's recipe reads. No new overlays.
+
+Persistence: `RefineStage` owns the final `trade_routes` and `polity_borders`
+(`pack_routes` / `pack_borders`); `polity_fill` persists as a mesh texture.
 
 ## Validation
 

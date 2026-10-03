@@ -11,6 +11,8 @@ See also: `docs/plans/climate_generation_spec.md` for the original design.
 - `worldgen/climate/precipitation.py`
 - `worldgen/climate/classification.py`
 - `worldgen/climate/currents.py`
+- `worldgen/climate/_gradient.py` — shared tangent frames + least-squares gradients
+- `worldgen/climate/channels.py` — the channels below
 - `worldgen/climate/display.py`
 
 ## `builder.py`
@@ -20,21 +22,21 @@ See also: `docs/plans/climate_generation_spec.md` for the original design.
 - `wind`: three-cell speeds, seasonal ITCZ shift, monsoon pressure-gradient scale (set to 0 to disable)
 - `precipitation`: global wetness multiplier, advection iterations, continental drying rate, orographic strength, hidden lake-feedback knobs
 - `currents`: enabled flag, β scale for western-boundary intensification, temperature/precipitation feedback scales, inland decay
-- `seed: Optional[int]`
+- `seed: Optional[int]` (not read by the builder; the climate model is deterministic)
 
 Each leaf field carries `metadata` consumed by the params dialog. `GlobeParams` exposes `climate: ClimateParams`.
 
-**`ClimateBuilder`**: A pipeline `Stage`. `build(ctx)` pipeline: insolation → coast distances → surface temperatures → zonal + pressure winds → SST-driven moisture advection → (if currents enabled) Stommel streamfunction, then second-pass temperatures and moisture with current ΔT/ΔP → per-pixel textures → biome classification.
+**`ClimateBuilder`**: A pipeline `Stage`. `build(ctx)` pipeline: insolation → coast distances (Dijkstra from ocean faces) → surface temperatures → zonal + pressure winds → SST-driven moisture advection + smoothing → (if currents enabled) Stommel streamfunction, then second-pass temperatures and moisture with current ΔT → per-pixel temperature (lapse rate) → current ΔP on humidity → per-pixel humidity → per-pixel precipitation (orographic) → biome classification.
 
-Attaches face textures:
-- `"temperature"` `(N,H,W,K) float32 °C`
-- `"precipitation"` `(N,H,W,K) float32 mm/season`
-- `"humidity"` `(N,H,W,K) float32`
+Attaches face textures (K = 4 seasons):
+- `"temperature"` `(N,H,W,K) float16 °C`
+- `"precipitation"` `(N,H,W,K) float16 mm/season`
+- `"humidity"` `(N,H,W,K) float16`
 - `"biome"` `(N,H,W,1) uint8`
 
-Writes per-face metadata: `temperature_annual/warmest/coldest`, `precipitation_annual`, `biome`, `distance_to_coast`, `humidity_annual`. Registers `"winds"` / `"currents"` features.
+Writes per-face metadata: `temperature_annual/warmest/coldest`, `precipitation_annual`, `biome` (the mode of the face's biome texels), `distance_to_coast`, `humidity_annual`. Registers `"winds"` (per season: centroids + wind vectors) / `"currents"` features.
 
-**Lake-feedback second pass**: `lake_feedback_stage()` returns a `ClimateLakeFeedbackStage` (sharing the builder) placed after hydrology in the pipeline. Its `build(ctx)` calls `apply_lake_humidity_feedback(mesh, lake_mask_tex)` to re-run moisture advection with lake evaporation as an extra source.
+**Lake-feedback second pass**: `lake_feedback_stage()` returns a `ClimateLakeFeedbackStage` (sharing the builder) placed after hydrology in the pipeline. Its `build(ctx)` calls `apply_lake_humidity_feedback(mesh, lake_mask_tex)`: lake evaporation (SST formula × lake area fraction × `lake_evap_scale`) is advected for `lake_feedback_iter` steps and added to the humidity, then humidity, precipitation, biome and their face aggregates are re-rasterised. Temperature is unchanged. A no-op when there are no lakes or either knob is 0.
 
 ## Individual modules
 
@@ -48,8 +50,10 @@ Writes per-face metadata: `temperature_annual/warmest/coldest`, `precipitation_a
 
 **`precipitation.py`**: Converts per-pixel humidity to precipitation with an orographic factor (wind dot elevation gradient, clamped to [0.3×, 2.0×]).
 
-**`classification.py`**: 9 biomes (Icecap → Desert); first-match-wins decision tree on T_warmest, T_coldest, P_annual, P_seasonality. Vectorised `classify_textures` mirrors the scalar `default_biome` exactly (pinned by a unit test). Calibrated thresholds documented in memory.
+**`classification.py`**: 9 biomes (Icecap → Desert); first-match-wins decision tree on T_warmest, T_coldest, P_annual, P_seasonality. Vectorised `classify_textures` mirrors the scalar `default_biome` exactly (pinned by a unit test). Thresholds are calibrated against Earth's tropical-zone fractions with `scripts/measure_zone_biomes.py`.
 
 **`currents.py`**: Barotropic Stommel streamfunction — solves `(L − β·D_east)·ψ = −curl(τ)` on the ocean face graph by GMRES (Voronoi-weighted Laplacian, Dirichlet BC at basin boundaries), recovers divergence-free currents as `u = k̂ × ∇ψ`, advects insolation as a thermal payload, decays ΔT inland exponentially. Produces additive temperature and multiplicative precipitation deltas applied in a second climate pass. `beta_scale=0` gives symmetric gyres; default adds mild western-boundary intensification.
 
-**`display.py`**: Per-face color schemes (temperature, log-scale precipitation, humidity, biome categorical) and the `TextureRecipe`s behind the textured layers — `BIOME_RECIPE`, `ANNUAL_/SUMMER_/WINTER_TEMPERATURE_RECIPE` (season 1 / 3), `PRECIPITATION_RECIPE` (annual sum, log scale). The builder runs each on `mesh.face_textures` and registers it with its scheme; the region view reruns it on refined data.
+**`display.py`**: Per-face color schemes (temperature, log-scale precipitation, humidity, biome categorical) and the `TextureRecipe`s behind the textured layers — `BIOME_RECIPE` (`relief=True`), `ANNUAL_/SUMMER_/WINTER_TEMPERATURE_RECIPE` (season 1 / 3), `PRECIPITATION_RECIPE` (annual sum, log scale). The builder runs each on `mesh.face_textures` and registers it with its scheme; the region view reruns it on refined data.
+
+Schemes: **Biome** always; with `--debug` also Annual / Summer / Winter Temperature, Annual Precipitation, Humidity, the four seasonal **Winds** overlays and **Currents** (all unchecked), and the biome / T / P hover (registered with `refined=("biome", "temperature", "precipitation")`, so a region shows its refined values).

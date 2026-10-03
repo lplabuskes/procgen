@@ -18,10 +18,12 @@ Danger influence (`DangerInfluenceParams.suitability_weight`, `block_threshold`)
 
 ## Pure functions
 
-**`scoring/suitability.py`**: Five suitability factors — water proximity (freshwater BFS + coastal distance), climate habitability (T/P bell curve), ruggedness penalty (elevation range), resource proximity (BFS from mineral/rare-bio deposit faces), weighted combination.
+**`scoring/suitability.py`**: suitability in [0, 1] = the weighted mean (`combine_suitability`, weights normalised) of water proximity (`compute_water_proximity`: freshwater BFS + climate-stage distance to coast), climate habitability (`compute_climate_habitability`: T/P bell curves), `fertility_mean` and resource access (`compute_resource_proximity`: BFS from mineral / rare-bio deposit faces), × a ruggedness multiplier (`compute_ruggedness_penalty`, from the face elevation span). Water faces are 0.
 
-**`scoring/situational_value.py`**: Five situational-value components — harbor quality (coastal faces, depth-scaled), river confluences, navigable river heads, mountain passes (local cost contrast), strait adjacency.
+**`scoring/situational_value.py`**: Five situational-value components, weighted by `combine_situational_value` — harbor quality (coastal faces, depth-scaled), river confluences, navigable river heads, mountain passes (local cost contrast), strait adjacency.
 
 ## ScoringStage
 
-Runs first in `RealmPipeline`. Writes per-face channels `SUITABILITY` and `SITUATIONAL_VALUE` to the mesh. Registers non-debug color schemes "Suitability" and "Situational Value".
+Runs first in `RealmPipeline`. Reads `IS_WATER`, `COST_SURFACES` (river faces, navigability, land base cost), `lake_mask`, climate aggregates, `fertility_mean`, `elevation`, the `rivers`, `minerals`, `rare_bio` and `danger` features. Danger lowers suitability by `× (1 − suitability_weight · danger)`. Writes per-face channels `SUITABILITY` and `SITUATIONAL_VALUE` to the mesh.
+
+Display (`--debug` only): "Suitability" and "Situational Value" schemes and a `Suit:` hover fragment.

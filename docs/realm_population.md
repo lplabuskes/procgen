@@ -23,7 +23,7 @@ All populations are **real people**, anchored to a medieval-tech Earth (~300–4
 
 ## Trade network
 
-**`trade/network.py`**: `compute_trade_network` — routes trade flows from resource deposits (minerals + rare bio) to settlements over the combined land + sea graph. Returns `face_flow` (per-face scalar), `routes` (polylines for rendering), `hub_mask` (top-flow faces), and `pair_flow` (the `(S, S)` directional inter-settlement trade matrix — `pair_flow[i, j]` = volume exporter *i* sends to importer *j*, index-aligned with `settlements`). Called at the start and after each relaxation pass with population-weighted demands.
+**`trade/network.py`**: `compute_trade_network` — two-phase flow over the hybrid land + sea graph (land node `i`, sea node `i + N`; one multi-source Dijkstra from all settlements): each resource deposit (minerals + rare bio, good types offset by `RARE_BIO_TYPE_OFFSET`) routes to its nearest settlement, then every settlement ships its goods to every other, weighted by `GOOD_RARITY_WEIGHTS`, the destination's lack of that good, its demand and `exp(−flow_decay · cost)`. Returns a `TradeResult`: `face_flow` (per-face scalar), `routes` (`(start, end, flow)` hops between face centroids above the display threshold), `hub_mask` (faces above `hub_display_quantile`), `landing_flow` (below), and `pair_flow` (the `(S, S)` directional inter-settlement trade matrix — `pair_flow[i, j]` = volume exporter *i* sends to importer *j*, index-aligned with `settlements`). Called at the start and after each relaxation pass with population-weighted demands.
 
 ### Ports
 
@@ -35,7 +35,7 @@ The final-pass `pair_flow` is published by `PopulationStage` as the `trade_attri
 
 ## PopulationStage
 
-Runs third in `RealmPipeline`. Reads `IS_WATER`, `COST_SURFACES`, `MINERALS`, `RARE_BIO`, `FERTILITY_MEAN`, `SUITABILITY`. Danger (`DangerInfluenceParams.movement_scale`) is added to land base cost in the cost graphs.
+Runs third in `RealmPipeline`. Reads `IS_WATER`, `COST_SURFACES`, `MINERALS`, `RARE_BIO`, `FERTILITY_MEAN`, `SUITABILITY`, `SITUATIONAL_VALUE` (defensibility), the `settlements` and `danger` features. Danger (`DangerInfluenceParams.movement_scale`) is added to land base cost in the cost graphs. The trade land graph suppresses the ford penalty on settlement faces (`settlement_mask`); the hinterland graph is a separate copy with water passable at `hinterland_water_cost`.
 
 Computes the per-face food base and rural population up front (written to `RURAL_POPULATION`, with `TOWN_POPULATION` zeroed — the town stage later moves its towns from one to the other), then runs a relaxation loop for `relaxation_passes` iterations: each pass spawns trade-hub and waypoint settlements (`trade_spawn.py`), recomputes hinterland shares, carrying capacity, trade wealth, urban population, culls cities below `city_min`, then reruns the trade network with population-weighted demands. The trade network after the loop is rebuilt without fallback landings.
 
@@ -72,6 +72,6 @@ Returns `(defensibility, has_walls, wall_strength)`, all stamped onto `Settlemen
 
 ## Outputs
 
-Per-face: `TRADE_FLOW`, `POPULATION`, `HINTERLAND_ID`, `RURAL_POPULATION`, `TOWN_POPULATION` (zeroed), `is_trade_hub`, `settlement_tier`.
+Per-face: `TRADE_FLOW`, `POPULATION`, `HINTERLAND_ID`, `RURAL_POPULATION`, `TOWN_POPULATION` (zeroed), `is_trade_hub`, `settlement_tier` (now the *display* tier from `population / max_pop`, replacing the placement stage's seeding label).
 Features: `settlements` (updated with population, defensibility, has_walls, wall_strength), `trade_routes`, `trade_attribution` (`(S, S)` directional inter-settlement trade matrix, aligned with `settlements`).
-Color schemes (debug): Trade Flow, Hinterland. (Rural density is drawn by the town stage.)
+Overlays: **Settlements** and **Trade Routes** (both checked); hover shows the settlement tier name and population. Color schemes (debug): Trade Flow, Hinterland. (Rural density is drawn by the town stage.)
