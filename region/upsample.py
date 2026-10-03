@@ -79,6 +79,7 @@ SEA_LEVEL_KM = 0.0
 
 # Elevation is the only field with a noise stream; see the module docstring.
 _SEED_SALT_ELEVATION = 0x9E37
+_SEED_SALT_COAST = 0xC0A5
 
 
 @paramclass
@@ -146,6 +147,30 @@ class RegionUpsampleParams:
     coast_persistence_rugged: float = _f(0.8, label="Rugged-coast persistence", min=0.05, max=0.95, step=0.05)
     coast_wander_smooth: float = _f(0.03, label="Smooth-coast wander (wavelengths)", min=0.0, max=2.0, step=0.01)
     coast_wander_rugged: float = _f(0.5, label="Rugged-coast wander (wavelengths)", min=0.0, max=2.0, step=0.01)
+    # ── sea-coast reshaping (reshape_coast).  Conservation pins a coast's
+    # contour to the parent's texel staircase, so the detail above can only
+    # fringe it.  Instead a *target* coastline is drawn — the contour of the
+    # elevation box-blurred over ``coast_blur_texels`` parent texels (curves
+    # through the steps) with its fine detail kept in proportion to the coast's
+    # ruggedness, plus, on rugged coasts, noise one octave below the
+    # detail band (bays and headlands larger than the fringe) — and the conserved
+    # elevation is edited to match it: texels on the wrong side are set just
+    # across sea level and the rest of their parent texel absorbs the difference
+    # by scaling, so every parent mean stays exact.  A parent texel whose dry (or
+    # wet) side would have to grow by more than ``coast_max_scale`` is left alone.
+    reshape_coast: bool = _f(True, label="Reshape sea coasts", min=0, max=1)
+    coast_blur_texels: float = _f(1.5, label="Coast blur (parent texels)", min=0.0, max=4.0, step=0.25)
+    coast_target_wander_smooth: float = _f(
+        0.0, label="Smooth-coast bay size (wavelengths)", min=0.0, max=2.0, step=0.05
+    )
+    coast_target_wander_rugged: float = _f(
+        0.5, label="Rugged-coast bay size (wavelengths)", min=0.0, max=2.0, step=0.05
+    )
+    coast_max_scale: float = _f(1.0, label="Coast edit max scale", min=0.0, max=5.0, step=0.1)
+    # How far past sea level an edited texel is set (km): at least the first,
+    # at most the second.
+    coast_edit_min_km: float = _f(0.001, label="Coast edit min depth/height (km)", min=0.0, max=0.05, step=0.001)
+    coast_edit_max_km: float = _f(0.02, label="Coast edit max depth/height (km)", min=0.0, max=0.2, step=0.005)
     # ── resources, population and danger (region/resources.py) ──
     # Refined slope (km/km) at which the slope-driven terms saturate.  Sub-grid
     # relief is tens to hundreds of metres over ~5-15 km, hence the small value.
@@ -417,6 +442,43 @@ def _flood(
 # ── conservation ─────────────────────────────────────────────────────────────
 
 
+def reshape_to_target(
+    elevation: np.ndarray, target: np.ndarray, anchors: np.ndarray, weights: np.ndarray,
+    n_anchors: int, *, level: float = 0.0, max_scale: float = 1.0,
+    min_offset: float = 0.001, max_offset: float = 0.02,
+) -> np.ndarray:
+    """Edit ``elevation`` so its side of ``level`` matches ``target``'s, keeping every anchor's mean.
+
+    A texel on the wrong side is set to ``target`` clipped to ``[min_offset,
+    max_offset]`` past the level.  The change to its anchor's weighted mean is
+    then taken back from the anchor's texels on the side that can absorb it
+    without crossing the level — the dry ones raised, or the wet ones lowered,
+    in proportion to their height above (depth below) the level — so the result
+    is exact and no other texel changes side.  An anchor needing more than
+    ``max_scale`` (×) of that height, or with nothing to absorb it, keeps its
+    original values.
+    """
+    e = np.asarray(elevation, dtype=np.float64) - level
+    t = np.asarray(target, dtype=np.float64) - level
+    wet_t = t <= 0.0
+    flip = wet_t != (e <= 0.0)
+    mag = np.clip(np.abs(t), min_offset, max(max_offset, min_offset))
+    new = np.where(flip, np.where(wet_t, -mag, mag), e)
+
+    delta = np.bincount(anchors, weights=weights * (new - e), minlength=n_anchors)
+    dry = new > 0.0
+    # delta > 0: the anchor rose, so its wet texels deepen; delta < 0: its dry ones rise.
+    absorb = np.where(delta[anchors] > 0.0, ~dry, dry)
+    capacity = np.bincount(anchors, weights=np.where(absorb, weights * np.abs(new), 0.0), minlength=n_anchors)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        k = np.where(capacity > 0.0, np.abs(delta) / capacity, np.inf)
+    ok = (delta == 0.0) | (k <= max_scale)
+    k = np.where(ok, np.where(np.isfinite(k), k, 0.0), 0.0)
+    out = np.where(absorb, new * (1.0 + k[anchors]), new)
+    out = np.where(ok[anchors], out, e)
+    return out + level
+
+
 def conserve_additive(
     values: np.ndarray, anchors: np.ndarray, targets: np.ndarray,
     weights: np.ndarray, n_anchors: int,
@@ -611,6 +673,54 @@ def _refine_water_masks(
     return masks
 
 
+def _reshape_sea_coast(
+    elevation: np.ndarray, style: CoastStyle, source: ParentSource,
+    loc: Located, flat_pos: np.ndarray, seed: int, weights: np.ndarray, slope: np.ndarray,
+    shape: tuple[int, int], base_frequency: float, feature_length_km: float, spacing_rad: float,
+    params: RegionUpsampleParams,
+) -> np.ndarray:
+    """Draw the target sea coast and edit the conserved ``(P, 1)`` elevation to it.
+
+    See ``RegionUpsampleParams.reshape_coast``.  Only near the sea: the band is
+    the tent on the parent's ocean fraction, as in :func:`coast_style`.
+    """
+    m, tex_size = shape
+    ocean = np.clip(source.coarse("ocean_mask", loc)[:, 0], 0.0, 1.0)
+    near = np.clip(np.minimum(ocean, 1.0 - ocean) / max(float(params.coast_band), 1e-6), 0.0, 1.0)
+    if not near.any():
+        return elevation
+
+    # The conserved elevation's contour sits on the parent's texel staircase
+    # (the correction puts it there), so the target starts from that elevation
+    # blurred over the staircase, then adds back its fine detail as far as the
+    # coast is rugged — smooth coasts lose the fringe, rugged ones keep it.
+    e = elevation[:, 0]
+    blur = int(round(float(params.coast_blur_texels) * source.spacing_rad / max(spacing_rad, 1e-12)))
+    wide = e
+    if blur > 1:
+        size = blur | 1
+        wide = _box_filter(_box_filter(e.reshape(m, tex_size, tex_size, 1), size), size).reshape(-1)
+    goal = wide + (e - wide) * (1.0 - style.smooth)
+    w_rugged, w_smooth = float(params.coast_target_wander_rugged), float(params.coast_target_wander_smooth)
+    wander = w_rugged + (w_smooth - w_rugged) * style.smooth
+    if np.any(wander > 0.0):
+        # One octave below the detail band and the next: the scales conservation
+        # removes from the elevation itself, so the coast can carry them.
+        freqs = np.array([0.5 * base_frequency, base_frequency])
+        bays = _varying_persistence_fbm(flat_pos, seed ^ _SEED_SALT_COAST, freqs, style.persistence)
+        goal = goal + bays * np.clip(wander * 2.0 * feature_length_km * slope, 0.0, float(params.max_relief_km))
+    target = e + near * (goal - e)
+
+    out = reshape_to_target(
+        elevation[:, 0], target, loc.anchors, weights, source.n_anchors,
+        level=SEA_LEVEL_KM, max_scale=float(params.coast_max_scale),
+        min_offset=float(params.coast_edit_min_km), max_offset=float(params.coast_edit_max_km),
+    )
+    # Float crumbs only: the edit is mean-preserving by construction.
+    return conserve_additive(out[:, None], loc.anchors, source.anchor_values("elevation", loc), weights,
+                             source.n_anchors)
+
+
 def refine_fields(
     source: ParentSource,
     positions: np.ndarray,
@@ -673,6 +783,11 @@ def refine_fields(
         amplitude = amplitude + (coast_amplitude - amplitude) * style.near
     elevation = elev_coarse + (noise * amplitude)[:, None]
     elevation = conserve_smooth(elevation, source, loc, source.anchor_values("elevation", loc), weights)
+    if style is not None and params.reshape_coast and water.has_ocean:
+        elevation = _reshape_sea_coast(
+            elevation, style, source, loc, flat_pos, seed, weights, slope,
+            (m, tex_size), base_frequency, feature_length_km, spacing_rad, params,
+        )
     textures["elevation"] = elevation.reshape(m, tex_size, tex_size, 1).astype(np.float32)
 
     # The sub-grid relief, in km: the one signal every derived field reads from.
