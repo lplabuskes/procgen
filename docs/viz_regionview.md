@@ -85,10 +85,26 @@ text for the texel's owning face and UV, except that contributors registered
 with `add_hover(..., refined=keys)` are replaced in place by the refined values
 when the map has all of those keys (`describe_texel`: elevation → `[px: …]`,
 biome/temperature/precipitation → water-or-biome, T, P — the latter only under
-`--debug`, where the climate hover is registered). Everything else (fertility,
-danger, polity, settlements, …) is the world value, even where the layer drawn is
-refined. On a local map the status bar leads with the village under the cursor
-(within 6 px: "Farming village · 340 people"); texels outside the parent hexagon
+`--debug`, where the climate hover is registered). Contributors registered
+`world_only` (the per-face city hover) are dropped. Everything else (fertility,
+danger, polity, …) is the world value, even where the layer drawn is refined.
+
+The status bar leads with the view's own settlement fragments
+(`settlements_under_cursor`):
+
+- **City** (region and local, while the Settlements overlay is on): the city
+  whose marker is under the cursor (its drawn radius plus `_MARKER_HOVER_SLOP`),
+  or on a local map the city whose built-up ground holds the texel —
+  "Major City · 45,210 people".
+- **Towns** — in a region, the hovered hexagon's towns, counted by their drawn
+  position whatever the overlay ("Towns in hex: 3 (9k)", "2 market, 1 river");
+  on a local map, the town dot under the cursor while the Towns overlay is on
+  ("Market town · 3,400 people").
+- **Village** (local only): the dot within 6 px — "Farming village · 340 people".
+
+Marker sizes come from the same helpers the overlays draw with
+(`settlement_markers`, `town_markers`, `city_floor_radius`), so hit areas track
+the drawn markers at every zoom. Texels outside a local map's parent hexagon
 report nothing. Leaving the cell restores the summary.
 
 ## Overlays in a zoomed view

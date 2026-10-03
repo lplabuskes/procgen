@@ -189,6 +189,14 @@ def test_display_registry_hover_concatenates():
     assert reg.hover(1, None, None) == ["biome:1", "wet"]  # type: ignore[arg-type]
 
 
+def test_display_registry_world_only_hover_is_dropped_from_regional_views():
+    reg = DisplayRegistry()
+    reg.add_hover(lambda f, uv, w: ["city"], world_only=True)
+    reg.add_hover(lambda f, uv, w: ["fert"])
+    assert reg.hover(0, None, None) == ["city", "fert"]  # type: ignore[arg-type]
+    assert reg.hover(0, None, None, lambda keys: None) == ["fert"]  # type: ignore[arg-type]
+
+
 def test_display_registry_hover_substitutes_refined_values_in_place():
     reg = DisplayRegistry()
     reg.add_hover(lambda f, uv, w: ["global elev"], refined=("elevation",))

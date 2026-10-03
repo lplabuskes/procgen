@@ -108,7 +108,7 @@ so towns and cities do not overlap in size.
   legend. Drawn **only in the region and local views** (the overlay projector's
   `regional` flag), never on the world map. There, towns and cities that land
   on the refined water are nudged onto land (see [viz_regionview.md](viz_regionview.md)).
-- **Hover** (every view): `Towns: N (pop)` for the face, plus a breakdown by kind.
+- **Hover**: none on the world map. A region view counts the hovered hexagon's towns (`Towns in hex: N (pop)` plus a breakdown by kind); a local map names the town under the cursor (kind and population). See [viz_regionview.md](viz_regionview.md).
 - **Rural Density** (`--debug` layer). The `rural_density` texture,
   sqrt-scaled to its 99th land percentile (`rural_density_recipe`). A region
   redraws it from its refined `rural_density` (see

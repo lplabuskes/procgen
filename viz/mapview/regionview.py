@@ -19,7 +19,7 @@ from localmap.farmland import farmland_rgba
 from localmap.villages import VILLAGE_KIND_NAMES
 from region.display import build_layer_texture, snap_to_land
 from viz.mapview.legend import draw_legend, legend_size
-from viz.mapview.overlays import draw_overlays
+from viz.mapview.overlays import city_floor_radius, draw_overlays, settlement_markers, town_markers
 from region.geometry import RegionGeometry
 from region.grid import RegionHexGrid
 from region.params import RegionParams
@@ -27,7 +27,8 @@ from region.rivers import RegionRivers, build_region_rivers, snap_deltas
 from region.roads import RegionRoads, build_region_roads
 from region.cities import refine_region_cities
 from region.towns import refine_region_towns
-from realmgen.towns.types import Towns
+from realmgen.placement.types import TIER_NAMES, format_population, population_display_tier
+from realmgen.towns.types import TOWN_KIND_NAMES, Towns
 from region.upsample import RegionFields, build_region_fields
 from worldgen.hydrology.discharge import EARTH_RADIUS_KM
 
@@ -73,6 +74,9 @@ class RegionView(QWidget):
     _CLICK_SLOP = 4.0
     # How close (px) the cursor must be to a village dot to describe it.
     _VILLAGE_HOVER_PX = 6.0
+    # How far (px) past a city or town marker's fill the cursor still describes
+    # it — its white ring, and a little slack.
+    _MARKER_HOVER_SLOP = 3.0
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -531,12 +535,7 @@ class RegionView(QWidget):
             cell.addPolygon(transform.map(self._outline(x0, y0, size)))
             painter.setClipPath(cell, Qt.ClipOperation.IntersectClip)
             draw_overlays(
-                painter, self._globe, self._overlay_visible,
-                _RegionProjector(
-                    self._geometry, x0, y0, size, transform, self._equivalent_zoom(size, W), self._on_land,
-                    view_zoom=self._zoom,
-                    px_per_km=self._px_per_rad(size) / EARTH_RADIUS_KM if self._local is not None else None,
-                ),
+                painter, self._globe, self._overlay_visible, self._overlay_projector(),
                 refined=self._refined_features(),
             )
             painter.restore()
@@ -574,6 +573,16 @@ class RegionView(QWidget):
         if self._deltas is not None:
             out["deltas"] = self._deltas
         return out
+
+    def _overlay_projector(self) -> "_RegionProjector":
+        """The projector overlays are drawn with, for the cell as last laid out."""
+        assert self._geometry is not None and self._cell_layout is not None
+        x0, y0, size, transform = self._cell_layout
+        return _RegionProjector(
+            self._geometry, x0, y0, size, transform, self._equivalent_zoom(size, float(self.width())),
+            self._on_land, view_zoom=self._zoom,
+            px_per_km=self._px_per_rad(size) / EARTH_RADIUS_KM if self._local is not None else None,
+        )
 
     def _land_reach(self) -> float:
         """How far (chord) a settlement on refined water is moved onto land: the
@@ -736,6 +745,104 @@ class RegionView(QWidget):
         if texel is not None and self._fields.in_map is not None and not self._fields.in_map[texel]:
             return None                     # a local map's square corner, outside the parent hexagon
         return texel
+
+    def settlements_under_cursor(self, texel: Optional[tuple[int, int, int]]) -> list[str]:
+        """Status fragments for the settlements at the cursor: the city under it,
+        then on a local map the town or village dot under it, or in a region the
+        count of towns in the hovered hexagon (``texel``'s)."""
+        parts: list[str] = []
+        city = self.city_under_cursor(texel)
+        if city is not None:
+            parts.append(city)
+        if self._local is None:
+            parts.extend(self.towns_in_hex(texel[0]) if texel is not None else [])
+        else:
+            for item in (self.town_under_cursor(), self.village_under_cursor()):
+                if item is not None:
+                    parts.append(item)
+        return parts
+
+    def _cursor_ready(self) -> bool:
+        return (
+            self._globe is not None and self._geometry is not None
+            and self._cell_layout is not None and self._mouse is not None
+        )
+
+    def _nearest_marker(self, sx: np.ndarray, sy: np.ndarray, keep: np.ndarray, radii) -> Optional[int]:
+        """Index of the marker under the cursor (nearest centre among those it is
+        within ``radius + _MARKER_HOVER_SLOP`` of), or None."""
+        assert self._mouse is not None
+        d = np.where(keep, np.hypot(sx - self._mouse[0], sy - self._mouse[1]), np.inf)
+        d = np.where(d <= np.asarray(radii) + self._MARKER_HOVER_SLOP, d, np.inf)
+        if d.size == 0 or not np.isfinite(d.min()):
+            return None
+        return int(np.argmin(d))
+
+    def city_under_cursor(self, texel: Optional[tuple[int, int, int]]) -> Optional[str]:
+        """``"<tier> · <people>"`` for the city under the cursor, if any: its marker
+        in a region; on a local map its built-up ground (``texel``) or marker."""
+        if not self._cursor_ready() or not self._overlay_visible.get("settlements"):
+            return None
+        assert self._globe is not None
+        cities = self._globe.get_feature("settlements") or []
+        if not cities:
+            return None
+        proj = self._overlay_projector()
+        footprints = self._local.city_footprints if self._local is not None else None
+        if self._local is not None and footprints is not None:
+            index = np.asarray(self._local.city_index, dtype=np.int64)
+            c = int(footprints.owner[texel]) if texel is not None else -1
+            if c < 0:
+                sx, sy, keep = proj.points(np.asarray(self._local.city_positions, dtype=np.float64))
+                found = self._nearest_marker(sx, sy, keep, np.full(len(index), city_floor_radius(proj, walled=True)))
+                c = -1 if found is None else found
+            if c < 0:
+                return None
+            w = int(index[c])
+            max_pop = max(float(city.population) for city in cities)
+            tier = population_display_tier(float(cities[w].population), max_pop)
+        else:
+            markers = settlement_markers(self._globe, proj)
+            if markers is None:
+                return None
+            sx, sy, keep, tiers, radii = markers
+            found = self._nearest_marker(sx, sy, keep, radii)
+            if found is None:
+                return None
+            w, tier = found, int(tiers[found])
+        return f"{TIER_NAMES[min(tier, len(TIER_NAMES) - 1)]} · {float(cities[w].population):,.0f} people"
+
+    def town_under_cursor(self) -> Optional[str]:
+        """``"<kind> · <people>"`` for a local map's town dot under the cursor, if any."""
+        if self._local is None or not self._cursor_ready() or not self._overlay_visible.get("towns"):
+            return None
+        towns = self._refined_features().get("towns")
+        if towns is None or len(towns) == 0:
+            return None
+        sx, sy, keep, radii = town_markers(towns, self._overlay_projector())
+        found = self._nearest_marker(sx, sy, keep, radii)
+        if found is None:
+            return None
+        return f"{TOWN_KIND_NAMES[int(towns.kind[found])]} · {float(towns.population[found]):,.0f} people"
+
+    def towns_in_hex(self, hex_idx: int) -> list[str]:
+        """``["Towns in hex: N (people)", "<count> <kind>, …"]`` for the towns whose
+        drawn position falls in one of a region's hexagons; empty when none do."""
+        if self._local is not None or self._globe is None or self._fields is None or self._geometry is None:
+            return []
+        towns = self._globe.get_feature("towns")
+        if towns is None or len(towns) == 0:
+            return []
+        s, t, valid = self._geometry.ecef_to_local(self._on_land("towns", towns.positions))
+        hexes, _, _, inside = self._fields.grid.texels_at(s, t, self._fields.tex_size)
+        mine = valid & inside & (hexes == hex_idx)
+        if not mine.any():
+            return []
+        kinds = np.bincount(towns.kind[mine], minlength=len(TOWN_KIND_NAMES))
+        return [
+            f"Towns in hex: {int(mine.sum())} ({format_population(float(towns.population[mine].sum()))})",
+            ", ".join(f"{k} {TOWN_KIND_NAMES[i].split()[0].lower()}" for i, k in enumerate(kinds) if k),
+        ]
 
     def village_under_cursor(self) -> Optional[str]:
         """``"<kind> · <people>"`` for the village dot under the cursor, if any."""

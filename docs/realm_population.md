@@ -74,4 +74,4 @@ Returns `(defensibility, has_walls, wall_strength)`, all stamped onto `Settlemen
 
 Per-face: `TRADE_FLOW`, `POPULATION`, `HINTERLAND_ID`, `RURAL_POPULATION`, `TOWN_POPULATION` (zeroed), `is_trade_hub`, `settlement_tier` (now the *display* tier from `population / max_pop`, replacing the placement stage's seeding label).
 Features: `settlements` (updated with population, defensibility, has_walls, wall_strength), `trade_routes`, `trade_attribution` (`(S, S)` directional inter-settlement trade matrix, aligned with `settlements`).
-Overlays: **Settlements** and **Trade Routes** (both checked); hover shows the settlement tier name and population. Color schemes (debug): Trade Flow, Hinterland. (Rural density is drawn by the town stage.)
+Overlays: **Settlements** and **Trade Routes** (both checked); on the world map, hover shows the face's settlement tier name and population (`world_only`; region and local views name the city under the cursor instead). Color schemes (debug): Trade Flow, Hinterland. (Rural density is drawn by the town stage.)

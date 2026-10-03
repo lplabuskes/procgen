@@ -31,7 +31,6 @@ from core.display import DisplayRegistry, TextureRecipe
 from core.params import param_field as _f, paramclass
 from core.pipeline import BuildContext, Stage
 from realmgen.channels import HINTERLAND_ID, RURAL_POPULATION, TOWN_POPULATION
-from realmgen.placement.types import format_population
 from realmgen.population.builder import PopulationParams
 from realmgen.population.calibration import KM2_PER_STERADIAN
 from realmgen.refine.builder import RefineParams
@@ -277,26 +276,6 @@ class TownStage(Stage):
                 "towns", "Towns", checked=True,
                 legend=("categorical", list(zip(TOWN_KIND_NAMES, TOWN_KIND_COLORS))),
             )
-            n = len(mesh.faces)
-            count = np.bincount(towns.face_id, minlength=n)
-            pop = np.bincount(towns.face_id, weights=towns.population, minlength=n)
-            n_kinds = len(TOWN_KIND_NAMES)
-            kinds = np.bincount(
-                towns.face_id.astype(np.int64) * n_kinds + towns.kind, minlength=n * n_kinds,
-            ).reshape(n, n_kinds)
-
-            def _town_hover(face: int, _uv, _w) -> list:
-                if face >= n or count[face] == 0:
-                    return []
-                return [
-                    f"Towns: {count[face]} ({format_population(pop[face])})",
-                    ", ".join(
-                        f"{k} {TOWN_KIND_NAMES[i].split()[0].lower()}"
-                        for i, k in enumerate(kinds[face]) if k
-                    ),
-                ]
-
-            reg.add_hover(_town_hover)
 
         if debug and RURAL_DENSITY_TEXTURE in mesh.face_textures:
             density = np.asarray(mesh.face_textures[RURAL_DENSITY_TEXTURE], dtype=np.float32)

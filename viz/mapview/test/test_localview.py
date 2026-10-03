@@ -1,5 +1,5 @@
 """Local maps in the viewer: picking a hex in a region, the local view, its
-cache, village hover, and the window's local → region → world navigation."""
+cache, settlement hover, and the window's local → region → world navigation."""
 import dataclasses
 import os
 
@@ -15,6 +15,8 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from localmap.params import LocalParams  # noqa: E402
 from localmap.test.conftest import local_params  # noqa: E402
 from localmap.villages import VillageParams  # noqa: E402
+from realmgen.test.conftest import _settlement  # noqa: E402
+from realmgen.towns.types import TOWN_MARKET, TOWN_RIVER, Towns  # noqa: E402
 from region.geometry import RegionGeometry  # noqa: E402
 from region.params import RegionParams  # noqa: E402
 from region.test.conftest import synthetic_globe  # noqa: E402, F401  (fixture)
@@ -148,6 +150,83 @@ def test_hovering_a_village_describes_it(app, globe):  # noqa: F811
     assert text is not None and "village" in text and "people" in text
     view._mouse = (-100.0, -100.0)
     assert view.village_under_cursor() is None
+
+
+@pytest.fixture
+def settled(globe):  # noqa: F811
+    """Three towns and a city on land texels of the region's landiest hex,
+    installed for one test; yields that hex."""
+    probe = _region_view(globe)
+    fields = probe.fields
+    assert fields is not None
+    h = _land_hex(probe)
+    st = fields.grid.texture_local(fields.tex_size)[h]
+    inside = ((st > 0.02) & (st < 0.98)).all(axis=-1)            # not over-hanging the cell
+    land = (fields.textures["ocean_mask"][h, ..., 0] < 0.5) & fields.in_hex[h] & inside
+    rows, cols = np.nonzero(land)
+    pick = np.linspace(0, len(rows) - 1, 4).astype(int)
+    pos = fields.grid.texture_positions(fields.tex_size)[h, rows[pick], cols[pick]]
+    faces = fields.faces[h, rows[pick], cols[pick]].astype(np.int32)
+    towns = Towns(
+        positions=pos[:3].copy(), population=np.array([4_000.0, 3_000.0, 2_000.0]),
+        face_id=faces[:3], parent=np.full(3, -1, dtype=np.int32),
+        kind=np.array([TOWN_MARKET, TOWN_RIVER, TOWN_MARKET], dtype=np.int8),
+    )
+    city = _settlement(face_id=int(faces[3]), pop=50_000.0, position=pos[3].copy())
+    globe.add_feature("towns", towns)
+    globe.add_feature("settlements", [city])
+    yield h
+    globe.remove_feature("towns")
+    globe.remove_feature("settlements")
+
+
+def _show_settlements(view: RegionView) -> RegionView:
+    view.set_overlay_visible("settlements", True)
+    view.set_overlay_visible("towns", True)
+    return _painted(view)
+
+
+def _hover_at(view: RegionView, ecef) -> None:
+    s, t, _ = view._geometry.ecef_to_local(np.asarray(ecef).reshape(1, 3))  # type: ignore[union-attr]
+    view._mouse = _xy(_screen(view, float(s[0]), float(t[0])))
+
+
+def test_region_hover_names_the_city_and_counts_the_hexs_towns(app, globe, settled):  # noqa: F811
+    view = _show_settlements(_region_view(globe))
+    city = globe.get_feature("settlements")[0]
+    _hover_at(view, view._on_land("settlements", city.position[None]))
+    text = view.city_under_cursor(None)
+    assert text is not None and "people" in text and "50,000" in text
+    view._mouse = (-100.0, -100.0)
+    assert view.city_under_cursor(None) is None
+    # The hexagon's towns, wherever the cursor is in it; none elsewhere.
+    drawn = view._on_land("towns", globe.get_feature("towns").positions)
+    s, t, _ = view._geometry.ecef_to_local(drawn)  # type: ignore[union-attr]
+    hexes, _, _, inside = view.fields.grid.texels_at(s, t, view.fields.tex_size)  # type: ignore[union-attr]
+    assert inside.any()
+    h = int(np.bincount(hexes[inside]).argmax())     # refinement may move them off ``settled``
+    n = int((inside & (hexes == h)).sum())
+    count, kinds = view.towns_in_hex(h)
+    assert count.startswith(f"Towns in hex: {n} (") and ("market" in kinds or "river" in kinds)
+    other = next(i for i in range(len(view.hex_local)) if not (inside & (hexes == i)).any())
+    assert view.towns_in_hex(other) == []
+
+
+def test_local_hover_names_the_town_under_the_cursor(app, globe, settled):  # noqa: F811
+    region = _region_view(globe)
+    view = _local_view()
+    view.set_local(region, settled)
+    _show_settlements(view)
+    towns = view._refined_features().get("towns")
+    assert towns is not None and len(towns) > 0
+    _hover_at(view, view._on_land("towns", towns.positions)[0])
+    text = view.town_under_cursor()
+    assert text is not None and "town" in text and "people" in text
+    assert any(text == part for part in view.settlements_under_cursor(None))
+    view._mouse = (-100.0, -100.0)
+    assert view.town_under_cursor() is None
+    # Towns are counted per hexagon only in a region.
+    assert view.towns_in_hex(0) == []
 
 
 def test_the_window_steps_back_one_tier_at_a_time(app, globe):  # noqa: F811

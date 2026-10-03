@@ -73,6 +73,8 @@ class HoverSpec:
     # Face-texture keys this contributor reports. A regional view that has
     # refined all of them shows its own values in place of this contributor.
     refined: Tuple[str, ...] = ()
+    # Shown on the world map only; a regional view describes this itself.
+    world_only: bool = False
 
 
 @dataclass
@@ -118,13 +120,14 @@ class DisplayRegistry:
     ) -> None:
         self.overlays.append(OverlaySpec(feature, label, checked, legend))
 
-    def add_hover(self, fn: HoverFn, *, refined: Tuple[str, ...] = ()) -> None:
+    def add_hover(self, fn: HoverFn, *, refined: Tuple[str, ...] = (), world_only: bool = False) -> None:
         """Register a hover contributor.
 
         ``refined`` names the face textures it reports on (e.g. ``("elevation",)``);
-        see ``hover``'s ``local``.
+        see ``hover``'s ``local``.  ``world_only`` drops it from a regional view
+        (one that passes ``local``), which describes that content itself.
         """
-        self.hover_fns.append(HoverSpec(fn, tuple(refined)))
+        self.hover_fns.append(HoverSpec(fn, tuple(refined), world_only))
 
     def hover(
         self,
@@ -137,10 +140,13 @@ class DisplayRegistry:
 
         ``local`` lets a regional view substitute its refined values: for each
         contributor with ``refined`` keys, ``local(keys)`` is tried first and, if
-        it returns fragments, they replace the contributor's global ones in place.
+        it returns fragments, they replace the contributor's global ones in place;
+        ``world_only`` contributors are skipped.
         """
         parts: List[str] = []
         for spec in self.hover_fns:
+            if local is not None and spec.world_only:
+                continue
             replaced = local(spec.refined) if local is not None and spec.refined else None
             parts.extend(replaced if replaced is not None else spec.fn(face_idx, uv, world))
         return parts

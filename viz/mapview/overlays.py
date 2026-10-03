@@ -267,11 +267,16 @@ _FOOTPRINT_GROW = 1.1
 _CITY_WALL_PX = 2.5
 
 
-def _draw_settlements(painter: QPainter, globe: "World", proj: OverlayProjector) -> None:
-    from realmgen.placement.types import TIER_COLORS, TIER_RADII, population_display_tier
+def settlement_markers(
+    globe: "World", proj: OverlayProjector,
+) -> Optional[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
+    """``(sx, sy, keep, tiers, radii)`` of the city markers as ``_draw_settlements``
+    draws them (radius in px, without the region's white ring); None when there
+    are no cities."""
+    from realmgen.placement.types import TIER_RADII, population_display_tier
     feature = globe.get_feature("settlements")
     if not feature:
-        return
+        return None
     positions = np.array([s.position for s in feature], dtype=np.float64)
     pops = np.array([s.population for s in feature], dtype=np.float64)
     max_pop = float(pops.max()) if pops.size > 0 else 0.0
@@ -285,11 +290,24 @@ def _draw_settlements(painter: QPainter, globe: "World", proj: OverlayProjector)
     else:
         pop_scale = np.ones(len(feature), dtype=np.float64)
     # In a region, cities share the map with the towns: draw them bigger (never
-    # smaller than twice the largest town), opaque, and ringed dark-then-white so
-    # they read as a different class of place rather than big towns.
+    # smaller than twice the largest town).
     regional = proj.regional
     size_scale = _REGION_CITY_SCALE if regional else 1.0
     min_r = 2.0 * _TOWN_MAX_RADIUS * proj.zoom ** 0.3 if regional else 0.0
+    base_r = np.asarray(TIER_RADII, dtype=np.float64)[tiers] * zoom_scale * size_scale
+    radii = np.maximum(base_r * pop_scale, min_r)
+    return sx, sy, keep, tiers, radii
+
+
+def _draw_settlements(painter: QPainter, globe: "World", proj: OverlayProjector) -> None:
+    from realmgen.placement.types import TIER_COLORS
+    markers = settlement_markers(globe, proj)
+    if markers is None:
+        return
+    sx, sy, keep, tiers, all_radii = markers
+    # In a region, cities are opaque and ringed dark-then-white so they read
+    # as a different class of place rather than big towns.
+    regional = proj.regional
     painter.save()
     for tier_idx in range(len(TIER_COLORS)):
         mask = (tiers == tier_idx) & keep
@@ -297,8 +315,7 @@ def _draw_settlements(painter: QPainter, globe: "World", proj: OverlayProjector)
             continue
         rgba = TIER_COLORS[tier_idx]
         r_fill, g_fill, b_fill = int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255)
-        base_r = TIER_RADII[tier_idx] * zoom_scale * size_scale
-        radii = [max(base_r * float(sc), min_r) for sc in pop_scale[mask]]
+        radii = [float(r) for r in all_radii[mask]]
         centres = list(zip(sx[mask], sy[mask]))
         if regional:
             painter.setPen(QPen(QColor(255, 255, 255, 235), 2.5))
@@ -318,6 +335,12 @@ def _draw_settlements(painter: QPainter, globe: "World", proj: OverlayProjector)
     painter.restore()
 
 
+def city_floor_radius(proj: OverlayProjector, walled: bool = False) -> float:
+    """Radius (px) of a local map's floor city marker, inside its wall or
+    (``walled``) out to the wall's edge."""
+    return 2.0 * _TOWN_MAX_RADIUS * proj.zoom ** 0.3 + (_CITY_WALL_PX if walled else 0.0)
+
+
 def _draw_city_footprints(
     painter: QPainter, globe: "World", proj: OverlayProjector,
     city_index: np.ndarray, positions: np.ndarray, footprints,
@@ -335,7 +358,7 @@ def _draw_city_footprints(
         return
     max_pop = max(float(s.population) for s in settlements)
     px_per_km = float(proj.px_per_km or 0.0)
-    floor_r = 2.0 * _TOWN_MAX_RADIUS * proj.zoom ** 0.3
+    floor_r = city_floor_radius(proj)
     csx, csy, ckeep = proj.points(np.asarray(positions, dtype=np.float64))
     corners = np.asarray(footprints.corners, dtype=np.float64)
     qx, qy, qkeep = proj.points(corners.reshape(-1, 3))
@@ -387,6 +410,17 @@ def _draw_city_footprints(
     painter.restore()
 
 
+def town_markers(towns, proj: OverlayProjector) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """``(sx, sy, keep, radii)`` of the town dots as ``_draw_towns`` draws them
+    (radius in px, without a local map's ring)."""
+    sx, sy, keep = proj.points(proj.on_land("towns", towns.positions))
+    pop = towns.population
+    lo, hi = float(pop.min()), float(pop.max())
+    frac = np.sqrt((pop - lo) / (hi - lo)) if hi > lo else np.zeros_like(pop)
+    radii = (_TOWN_MAX_RADIUS - 0.7 + 0.7 * frac) * proj.zoom ** 0.3
+    return sx, sy, keep, radii
+
+
 def _draw_towns(painter: QPainter, towns, proj: OverlayProjector, ringed: bool = False) -> None:
     """Small kind-coloured dots, sized by population; only in the region view.
     ``ringed`` (a local map) circles each one dark-then-white, as cities are in
@@ -394,11 +428,7 @@ def _draw_towns(painter: QPainter, towns, proj: OverlayProjector, ringed: bool =
     from realmgen.towns.types import TOWN_KIND_COLORS
     if towns is None or len(towns) == 0 or not proj.regional:
         return
-    sx, sy, keep = proj.points(proj.on_land("towns", towns.positions))
-    pop = towns.population
-    lo, hi = float(pop.min()), float(pop.max())
-    frac = np.sqrt((pop - lo) / (hi - lo)) if hi > lo else np.zeros_like(pop)
-    radii = (_TOWN_MAX_RADIUS - 0.7 + 0.7 * frac) * proj.zoom ** 0.3
+    sx, sy, keep, radii = town_markers(towns, proj)
     painter.save()
     if ringed:
         painter.setPen(QPen(QColor(255, 255, 255, 235), 2.0))

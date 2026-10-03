@@ -1116,8 +1116,9 @@ class MapWindow(QMainWindow):
         self.set_status("  |  ".join(self._hover_parts(face, uv, None)))
 
     def _zoomed_hover(self, view: RegionView, texel: Optional[tuple[int, int, int]]) -> None:
-        """World-map hover for the texel's face, with refined values swapped in
-        (and, on a local map, the village under the cursor first)."""
+        """World-map hover for the texel's face, with refined values swapped in,
+        after the view's own settlement fragments (the city, town or village under
+        the cursor; a region hexagon's towns)."""
         fields = view.fields
         if texel is None or fields is None:
             self.set_status(view.status_text())
@@ -1132,9 +1133,7 @@ class MapWindow(QMainWindow):
         else:
             uv = np.clip(fields.face_uv[texel], 0.0, 1.0)
             parts = self._hover_parts(int(fields.faces[texel]), uv, _local)
-        village = view.village_under_cursor()
-        if village is not None:
-            parts = [village, *parts]
+        parts = [*view.settlements_under_cursor(texel), *parts]
         self.set_status("  |  ".join(parts))
 
     def add_overlay(self, name: str, label: Optional[str] = None, checked: bool = True) -> None:

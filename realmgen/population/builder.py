@@ -491,7 +491,8 @@ class PopulationStage(Stage):
                 parts.append(f"Pop: {format_population(float(pop))}")
             return parts
 
-        reg.add_hover(_settlement_hover)
+        # Region and local views name the city under the cursor instead.
+        reg.add_hover(_settlement_hover, world_only=True)
 
     # ── Persistence ───────────────────────────────────────────────────────────
     # Settlements are the only realm *feature* this stage owns; their final
