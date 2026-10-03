@@ -394,5 +394,401 @@
         ]
       }
     ]
+  },
+  {
+    "timestamp": "2026-10-03T17:08:20.400737",
+    "params": {
+      "village_fraction": 0.7,
+      "village_min": 200.0,
+      "village_max": 1000.0,
+      "size_exponent": 1.0,
+      "spacing_km": 2.0,
+      "settlement_clearance_km": 3.0,
+      "river_bonus": 2.0,
+      "confluence_bonus": 1.0,
+      "coast_bonus": 1.0,
+      "road_bonus": 1.0,
+      "water_reach_km": 0.6,
+      "road_reach_km": 0.6,
+      "slope_penalty": 0.8,
+      "slope_saturation": 0.15
+    },
+    "results": [
+      {
+        "seed": 4,
+        "hexes": [
+          {
+            "region": 13,
+            "hex": 129,
+            "density": 0.41472985016150277,
+            "villages": 7,
+            "per_100km2": 0.013089070536022472,
+            "predicted_per_100km2": 0.07215212040680417,
+            "mean_size": 200.0,
+            "median_size": 200.0,
+            "nn_median_km": 18.68560328958537,
+            "nn_p10_km": 6.788050188338296,
+            "nn_p90_km": 38.03474365157669,
+            "village_share": 0.06312094743566381,
+            "no_village_share": 0.9350021925660925,
+            "kinds": {
+              "Farming village": 1.0,
+              "River village": 0.0,
+              "Fishing village": 0.0,
+              "Roadside village": 0.0
+            },
+            "max_relative_residual": 3.8210642144120116e-11,
+            "seconds": 3.3919504169607535,
+            "quantile": 0.5
+          },
+          {
+            "region": 17,
+            "hex": 130,
+            "density": 1.8741819578387937,
+            "villages": 208,
+            "per_100km2": 0.3889323816418106,
+            "predicted_per_100km2": 0.3260585227554401,
+            "mean_size": 320.5113542438943,
+            "median_size": 263.4585118966662,
+            "nn_median_km": 8.34213378863586,
+            "nn_p10_km": 3.9253445707125856,
+            "nn_p90_km": 15.302115790009543,
+            "village_share": 0.665128825021173,
+            "no_village_share": 0.05067078339124384,
+            "kinds": {
+              "Farming village": 0.8894230769230769,
+              "River village": 0.10096153846153846,
+              "Fishing village": 0.0,
+              "Roadside village": 0.009615384615384616
+            },
+            "max_relative_residual": 5.092815686932356e-10,
+            "seconds": 3.4737152499728836,
+            "quantile": 0.75
+          },
+          {
+            "region": 44,
+            "hex": 136,
+            "density": 5.254054791611495,
+            "villages": 575,
+            "per_100km2": 1.0751736511732746,
+            "predicted_per_100km2": 0.914067781233192,
+            "mean_size": 338.49137658833496,
+            "median_size": 289.21059397455565,
+            "nn_median_km": 5.360480595957669,
+            "nn_p10_km": 3.182687617162939,
+            "nn_p90_km": 8.106382526708323,
+            "village_share": 0.6926783668838049,
+            "no_village_share": 0.006044248387794293,
+            "kinds": {
+              "Farming village": 0.8834782608695653,
+              "River village": 0.11652173913043479,
+              "Fishing village": 0.0,
+              "Roadside village": 0.0
+            },
+            "max_relative_residual": 8.456266274625245e-10,
+            "seconds": 3.421668375027366,
+            "quantile": 0.9
+          },
+          {
+            "region": 5,
+            "hex": 133,
+            "density": 8.974862566687294,
+            "villages": 920,
+            "per_100km2": 1.7202778418772393,
+            "predicted_per_100km2": 1.5613907807551646,
+            "mean_size": 364.200110724094,
+            "median_size": 304.3811442524096,
+            "nn_median_km": 3.8198473174243,
+            "nn_p10_km": 2.6197382365027817,
+            "nn_p90_km": 5.670214708327848,
+            "village_share": 0.6980891081423571,
+            "no_village_share": 0.003579896201698054,
+            "kinds": {
+              "Farming village": 0.908695652173913,
+              "River village": 0.08152173913043478,
+              "Fishing village": 0.009782608695652175,
+              "Roadside village": 0.0
+            },
+            "max_relative_residual": 1.6563005541303871e-09,
+            "seconds": 3.40093533298932,
+            "quantile": 0.97
+          },
+          {
+            "region": 5,
+            "hex": 103,
+            "density": 11.252328020384752,
+            "villages": 1144,
+            "per_100km2": 2.1391280990299584,
+            "predicted_per_100km2": 1.9576100583729326,
+            "mean_size": 366.5293046181784,
+            "median_size": 308.64246306171356,
+            "nn_median_km": 3.8162741089517116,
+            "nn_p10_km": 2.7602401346721894,
+            "nn_p90_km": 5.802383770945778,
+            "village_share": 0.6967919289290744,
+            "no_village_share": 0.0037983995089466245,
+            "kinds": {
+              "Farming village": 0.9213286713286714,
+              "River village": 0.0743006993006993,
+              "Fishing village": 0.0,
+              "Roadside village": 0.004370629370629371
+            },
+            "max_relative_residual": 5.065171628416498e-09,
+            "seconds": 3.855798250006046,
+            "quantile": 1.0
+          }
+        ]
+      },
+      {
+        "seed": 31,
+        "hexes": [
+          {
+            "region": 37,
+            "hex": 41,
+            "density": 1.136397736798446,
+            "villages": 138,
+            "per_100km2": 0.2580416762815859,
+            "predicted_per_100km2": 0.19770341175965894,
+            "mean_size": 234.51098505109263,
+            "median_size": 200.0,
+            "nn_median_km": 10.13907748735945,
+            "nn_p10_km": 5.3850413107583,
+            "nn_p90_km": 16.114692856288066,
+            "village_share": 0.5325037680866369,
+            "no_village_share": 0.2816809982737007,
+            "kinds": {
+              "Farming village": 0.8188405797101449,
+              "River village": 0.18115942028985507,
+              "Fishing village": 0.0,
+              "Roadside village": 0.0
+            },
+            "max_relative_residual": 5.003544738692416e-10,
+            "seconds": 3.654774540977087,
+            "quantile": 0.5
+          },
+          {
+            "region": 35,
+            "hex": 97,
+            "density": 3.860014316534155,
+            "villages": 439,
+            "per_100km2": 0.8208717093305522,
+            "predicted_per_100km2": 0.6715412879736159,
+            "mean_size": 319.54455779891055,
+            "median_size": 269.79622514558827,
+            "nn_median_km": 6.016808612705205,
+            "nn_p10_km": 3.264602261374508,
+            "nn_p90_km": 9.6325276832686,
+            "village_share": 0.6795443380717475,
+            "no_village_share": 0.01950744681653822,
+            "kinds": {
+              "Farming village": 0.8747152619589977,
+              "River village": 0.1252847380410023,
+              "Fishing village": 0.0,
+              "Roadside village": 0.0
+            },
+            "max_relative_residual": 8.205874074476679e-10,
+            "seconds": 3.5825567079591565,
+            "quantile": 0.75
+          },
+          {
+            "region": 11,
+            "hex": 64,
+            "density": 5.490161060735974,
+            "villages": 583,
+            "per_100km2": 1.0901325889287288,
+            "predicted_per_100km2": 0.9551440817503523,
+            "mean_size": 348.58145628064733,
+            "median_size": 292.3575786023491,
+            "nn_median_km": 5.370972566582422,
+            "nn_p10_km": 2.9856974648197956,
+            "nn_p90_km": 8.852767450325768,
+            "village_share": 0.6921472816260664,
+            "no_village_share": 0.007958401973286093,
+            "kinds": {
+              "Farming village": 0.8593481989708405,
+              "River village": 0.13550600343053174,
+              "Fishing village": 0.0,
+              "Roadside village": 0.005145797598627788
+            },
+            "max_relative_residual": 2.708941318016149e-09,
+            "seconds": 3.5739187079598196,
+            "quantile": 0.9
+          },
+          {
+            "region": 32,
+            "hex": 82,
+            "density": 7.482979032342612,
+            "villages": 781,
+            "per_100km2": 1.4603662983762216,
+            "predicted_per_100km2": 1.3018421604640324,
+            "mean_size": 355.58170490617533,
+            "median_size": 299.92578683280914,
+            "nn_median_km": 4.697400692319918,
+            "nn_p10_km": 2.88019400365835,
+            "nn_p90_km": 7.344031264596446,
+            "village_share": 0.6939476055187772,
+            "no_village_share": 0.004906792813180481,
+            "kinds": {
+              "Farming village": 0.9026888604353394,
+              "River village": 0.08450704225352113,
+              "Fishing village": 0.0076824583866837385,
+              "Roadside village": 0.005121638924455826
+            },
+            "max_relative_residual": 8.705250696933806e-10,
+            "seconds": 3.673027082986664,
+            "quantile": 0.97
+          },
+          {
+            "region": 15,
+            "hex": 95,
+            "density": 9.869687925559132,
+            "villages": 982,
+            "per_100km2": 1.8362096094820097,
+            "predicted_per_100km2": 1.7170669323783008,
+            "mean_size": 374.99642863795196,
+            "median_size": 315.4953468746778,
+            "nn_median_km": 4.123680617466206,
+            "nn_p10_km": 2.8777041196519804,
+            "nn_p90_km": 6.551049389939523,
+            "village_share": 0.6976634428361963,
+            "no_village_share": 0.0017528167364361381,
+            "kinds": {
+              "Farming village": 0.884928716904277,
+              "River village": 0.1109979633401222,
+              "Fishing village": 0.0,
+              "Roadside village": 0.004073319755600814
+            },
+            "max_relative_residual": 1.3389182019861326e-09,
+            "seconds": 3.875584416964557,
+            "quantile": 1.0
+          }
+        ]
+      },
+      {
+        "seed": 35,
+        "hexes": [
+          {
+            "region": 1,
+            "hex": 163,
+            "density": 0.4933390616307197,
+            "villages": 5,
+            "per_100km2": 0.00934933609715891,
+            "predicted_per_100km2": 0.08582806220072658,
+            "mean_size": 216.79851989224056,
+            "median_size": 204.14285864520465,
+            "nn_median_km": 14.079108635046351,
+            "nn_p10_km": 11.23565617818925,
+            "nn_p90_km": 19.51609784487904,
+            "village_share": 0.04108578431108229,
+            "no_village_share": 0.944355363501481,
+            "kinds": {
+              "Farming village": 0.8,
+              "River village": 0.2,
+              "Fishing village": 0.0,
+              "Roadside village": 0.0
+            },
+            "max_relative_residual": 4.894700350989789e-10,
+            "seconds": 3.4376522499951534,
+            "quantile": 0.5
+          },
+          {
+            "region": 38,
+            "hex": 44,
+            "density": 4.493148546257898,
+            "villages": 500,
+            "per_100km2": 0.9349336097158909,
+            "predicted_per_100km2": 0.7816900442276145,
+            "mean_size": 332.91514879231494,
+            "median_size": 289.1647886547163,
+            "nn_median_km": 5.433320466991228,
+            "nn_p10_km": 3.1603835490069643,
+            "nn_p90_km": 9.404813978687033,
+            "village_share": 0.6927292934677806,
+            "no_village_share": 0.008016729251695637,
+            "kinds": {
+              "Farming village": 0.892,
+              "River village": 0.108,
+              "Fishing village": 0.0,
+              "Roadside village": 0.0
+            },
+            "max_relative_residual": 7.109266127359112e-10,
+            "seconds": 3.4714872500044294,
+            "quantile": 0.75
+          },
+          {
+            "region": 8,
+            "hex": 17,
+            "density": 7.761860048556066,
+            "villages": 793,
+            "per_100km2": 1.482804705009403,
+            "predicted_per_100km2": 1.3503601454925256,
+            "mean_size": 365.42856173927777,
+            "median_size": 312.4865984297807,
+            "nn_median_km": 4.338986339089289,
+            "nn_p10_km": 2.778501029500016,
+            "nn_p90_km": 6.747159281024737,
+            "village_share": 0.6981048193372436,
+            "no_village_share": 0.0053913481550456445,
+            "kinds": {
+              "Farming village": 0.8650693568726355,
+              "River village": 0.11475409836065574,
+              "Fishing village": 0.0037831021437578815,
+              "Roadside village": 0.01639344262295082
+            },
+            "max_relative_residual": 1.0153099847906606e-09,
+            "seconds": 3.681366208009422,
+            "quantile": 0.9
+          },
+          {
+            "region": 17,
+            "hex": 146,
+            "density": 8.68812564679682,
+            "villages": 913,
+            "per_100km2": 1.7071887713412166,
+            "predicted_per_100km2": 1.5115060744554925,
+            "mean_size": 354.19480995920964,
+            "median_size": 291.33709559459777,
+            "nn_median_km": 4.360310369491971,
+            "nn_p10_km": 2.716796482738993,
+            "nn_p90_km": 7.060806458167809,
+            "village_share": 0.6959814199425559,
+            "no_village_share": 0.00524458182016212,
+            "kinds": {
+              "Farming village": 0.8543263964950711,
+              "River village": 0.12705366922234393,
+              "Fishing village": 0.0,
+              "Roadside village": 0.018619934282584884
+            },
+            "max_relative_residual": 3.883286906284696e-09,
+            "seconds": 3.794297333981376,
+            "quantile": 0.97
+          },
+          {
+            "region": 17,
+            "hex": 133,
+            "density": 10.228084943134265,
+            "villages": 1042,
+            "per_100km2": 1.9484016426479167,
+            "predicted_per_100km2": 1.779418616867494,
+            "mean_size": 364.78205270836725,
+            "median_size": 304.88638148945245,
+            "nn_median_km": 4.13384801163677,
+            "nn_p10_km": 2.7958333360396996,
+            "nn_p90_km": 6.322423622988748,
+            "village_share": 0.6948924990914906,
+            "no_village_share": 0.0029715146820117437,
+            "kinds": {
+              "Farming village": 0.9097888675623801,
+              "River village": 0.07677543186180422,
+              "Fishing village": 0.0,
+              "Roadside village": 0.013435700575815739
+            },
+            "max_relative_residual": 7.602923939115696e-09,
+            "seconds": 3.707043083035387,
+            "quantile": 1.0
+          }
+        ]
+      }
+    ]
   }
 ]

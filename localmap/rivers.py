@@ -9,11 +9,12 @@ routed largest flow first, and one that ends inside the map ends on whatever it
 drains into near its regional end — the stem it joins, a lake, or the local
 coast.  Flow is the region's, which is the world's.
 
-**Only the world's channels exist here.**  The region never invents a channel,
-and neither does a local map: every stream is one of the hydrology stage's
-(down to its ``stream_flow_threshold``), which is coarse for villages to sit on.
-:func:`_region_paths` is where a finer local network would join them — see the
-note there.
+**Then the region's streams.**  The world's network stops at its
+``stream_flow_threshold``, coarse for villages; the region adds its own streams
+below that (:mod:`region.streams`), and a local map re-traces them the same way,
+after the rivers, so each ends on the river or stream it drains into.  They go
+to :attr:`RegionRivers.streams`: drawn and sited on by villages, but towns,
+cities and deltas keep to the world's channels.
 """
 from __future__ import annotations
 
@@ -23,7 +24,7 @@ import numpy as np
 
 from core.params import param_field as _f, paramclass
 from region.corridor import node_spacing_rad, raster_frame
-from region.rivers import RegionRiverParams, RegionRivers, StreamPath, route_stream_paths
+from region.rivers import RegionRiverParams, RegionRivers, RiverPath, StreamPath, route_stream_paths
 from region.upsample import RegionFields
 
 if TYPE_CHECKING:
@@ -57,23 +58,16 @@ def _runs(inside: np.ndarray) -> list[tuple[int, int]]:
 
 
 def _region_paths(
-    local: RegionFields, rivers: RegionRivers, lo: float, hi: float,
+    local: RegionFields, rivers: list[RiverPath], lo: float, hi: float, minor: bool = False,
 ) -> list[StreamPath]:
     """The region's river paths inside the local raster, largest flow first.
 
     A path leaving and re-entering the raster becomes one run per visit; a run
     ends *here* (on a sink or a stem, not at the raster edge) only when it holds
     the region path's last vertex.
-
-    **A finer local stream network would join here.**  Flow accumulation over the
-    local relief (D8 on the local elevation, seeded with the regional rivers'
-    flow where they enter) would add channels below the world's
-    ``stream_flow_threshold`` as extra :class:`StreamPath`\\ s — the tributaries
-    villages sit on.  They would need no corridor (they are local facts), so
-    their paths would be the accumulation's own, routed after these.
     """
     out: list[StreamPath] = []
-    for positions, flows, _ in rivers.paths:
+    for positions, flows, _ in rivers:
         pts = np.asarray(positions, dtype=np.float64)
         f = np.asarray(flows, dtype=np.float64)
         if len(pts) < 2:
@@ -85,7 +79,7 @@ def _region_paths(
                 continue
             out.append(StreamPath(
                 s=s[i:j + 1], t=t[i:j + 1], edge_flows=np.maximum.accumulate(f[i:j]),
-                ends_here=j == len(pts) - 1,
+                ends_here=j == len(pts) - 1, minor=minor,
             ))
     out.sort(key=lambda p: -float(p.edge_flows.max()))
     return out
@@ -97,8 +91,10 @@ def build_local_rivers(
     region_rivers: RegionRivers,
     globe: "World",
     params: Optional[LocalRiverParams] = None,
+    region_streams: Optional[list[RiverPath]] = None,
 ) -> RegionRivers:
-    """Re-route ``region_rivers`` over the local map ``local`` of ``region``."""
+    """Re-route ``region_rivers``, then ``region_streams`` (:func:`region.streams.build_region_streams`;
+    none when omitted), over the local map ``local`` of ``region``."""
     params = params or LocalRiverParams()
     lo, step, n = raster_frame(local, params.raster_texels, params.margin)
     hi = lo + step * (n - 1)
@@ -106,7 +102,8 @@ def build_local_rivers(
     radius_nodes = max(
         float(params.corridor_parent_texels) * parent_spacing / node_spacing_rad(local, step), 1.5
     )
-    paths = _region_paths(local, region_rivers, lo, hi)
+    paths = (_region_paths(local, region_rivers.paths, lo, hi)
+             + _region_paths(local, region_streams or [], lo, hi, minor=True))
     if not paths:
         return RegionRivers(region_id=local.region_id, paths=[])
     routing = RegionRiverParams(

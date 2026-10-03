@@ -94,6 +94,11 @@ class RegionRivers:
     # (J, 3) where a path ends on the refined sea, and the flow it arrives with.
     mouths: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))
     mouth_flows: np.ndarray = field(default_factory=lambda: np.zeros(0))
+    # Local maps only: the region's own streams below the world's network
+    # (region.streams), re-routed.  Drawn and sited on by villages, but not
+    # among the confluences or mouths — towns, cities and deltas keep to the
+    # world's channels.
+    streams: list[RiverPath] = field(default_factory=list)
 
 
 # ── re-routing ───────────────────────────────────────────────────────────────
@@ -168,6 +173,7 @@ class StreamPath:
     t: np.ndarray
     edge_flows: np.ndarray       # (len - 1,) world flow, monotonic
     ends_here: bool              # ends on a sink or a stem, not at the raster edge
+    minor: bool = False          # a regional stream (goes to RegionRivers.streams)
 
 
 def _stream_paths(
@@ -260,7 +266,8 @@ def route_stream_paths(
     """Re-route ``paths`` (largest flow first) over ``fields``' raster ``(lo, step, n)``.
 
     The tier-agnostic half of :func:`build_region_rivers`: a region feeds it the
-    world's stream network, a local map the region's re-routed rivers.
+    world's stream network, a local map the region's re-routed rivers and then
+    its streams (``minor``), which end on those rivers and on each other.
     """
     reach = corridor_reach([(p.s, p.t) for p in paths], lo, step, n, 2.0 * radius_nodes + 2.0)
     raster = sample_raster(fields, globe, lo, step, n, reach)
@@ -268,14 +275,16 @@ def route_stream_paths(
     occupied = np.zeros(n * n, dtype=bool)
     on_path = np.zeros(n * n, dtype=np.int64)
     routed: list[tuple[np.ndarray, np.ndarray]] = []
+    minor: list[tuple[np.ndarray, np.ndarray]] = []
     for p in paths:
         sinks = occupied | raster.ocean | raster.lake
         nodes = _route_run(raster, p.s, p.t, radius_nodes, sinks, p.ends_here, params)
         if nodes is None or len(nodes) < 2:
             continue
-        routed.append((nodes, _run_flows(raster, nodes, p.s, p.t, p.edge_flows)))
+        (minor if p.minor else routed).append((nodes, _run_flows(raster, nodes, p.s, p.t, p.edge_flows)))
         occupied[nodes] = True
-        on_path[nodes] += 1
+        if not p.minor:
+            on_path[nodes] += 1
 
     # A path ending on another one (not on water) is a confluence.
     water = raster.ocean | raster.lake
@@ -288,6 +297,7 @@ def route_stream_paths(
         confluences=raster.positions[ends].reshape(-1, 3),
         mouths=np.array([drawn[i][0][-1] for i in at_sea], dtype=np.float64).reshape(-1, 3),
         mouth_flows=np.array([float(drawn[i][1][-1]) for i in at_sea], dtype=np.float64),
+        streams=[_to_path(raster, nodes, flows, params) for nodes, flows in minor],
     )
 
 

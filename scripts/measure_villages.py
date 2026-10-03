@@ -43,6 +43,7 @@ from scipy.spatial import KDTree
 from localmap import LocalParams, village_budget_report
 from localmap.villages import VILLAGE_KIND_NAMES
 from region.rivers import build_region_rivers
+from region.streams import build_region_streams
 from region.roads import build_region_roads
 from region.upsample import EARTH_RADIUS_KM, RegionUpsampleParams, build_region_fields
 from localmap.builder import build_local_map
@@ -77,10 +78,12 @@ def measure_hex(  # type: ignore[no-untyped-def]
     if region_id not in region_cache:
         region = build_region_fields(world, region_id, RegionUpsampleParams())
         rivers = build_region_rivers(region, world)
-        region_cache[region_id] = (region, rivers, build_region_roads(region, world, rivers))
-    region, rivers, roads = region_cache[region_id]
+        region_cache[region_id] = (region, rivers, build_region_roads(region, world, rivers),
+                                   build_region_streams(region, world, rivers, params.streams))
+    region, rivers, roads, streams = region_cache[region_id]
     t0 = time.perf_counter()
-    local = build_local_map(world, region, hex_index, params, region_rivers=rivers, region_roads=roads)
+    local = build_local_map(world, region, hex_index, params, region_rivers=rivers, region_roads=roads,
+                            region_streams=streams)
     seconds = time.perf_counter() - t0
 
     v = local.villages

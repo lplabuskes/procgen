@@ -87,7 +87,7 @@ Stage reference docs (read the relevant one before working on a stage):
 - [docs/viz_regionview.md](docs/viz_regionview.md) — `RegionView`, the zoomed region / local-map viewer (wiring, drawing, hover, refined overlays)
 - [docs/region.md](docs/region.md) — `region/` regional maps overview (cubed-sphere cells, hex grid, global sampling, parent sources, params, display)
 - [docs/region_fields.md](docs/region_fields.md) — `region/upsample.py`, `region/resources.py`: the conserving field refinement (elevation, climate, water, resources, rural density, danger)
-- [docs/region_features.md](docs/region_features.md) — `region/corridor.py`, `rivers.py`, `roads.py`, `towns.py`, `cities.py`: rivers, roads, towns and cities re-sited on refined terrain
+- [docs/region_features.md](docs/region_features.md) — `region/corridor.py`, `rivers.py`, `streams.py`, `roads.py`, `towns.py`, `cities.py`: rivers, roads, towns and cities re-sited on refined terrain; the region's own streams for the local maps
 - [docs/local.md](docs/local.md) — `localmap/` local maps (one regional hex refined onto its own hex grid: geometry, fields, rivers, roads)
 - [docs/local_settlements.md](docs/local_settlements.md) — local-map towns and cities, city footprints, farmland, villages
 - [docs/worldgen.md](docs/worldgen.md) — `worldgen/builder.py`, `main.py`, pipeline stage contract

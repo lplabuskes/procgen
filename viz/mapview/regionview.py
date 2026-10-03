@@ -23,8 +23,9 @@ from viz.mapview.overlays import city_floor_radius, draw_overlays, settlement_ma
 from region.geometry import RegionGeometry
 from region.grid import RegionHexGrid
 from region.params import RegionParams
-from region.rivers import RegionRivers, build_region_rivers, snap_deltas
+from region.rivers import RegionRivers, RiverPath, build_region_rivers, snap_deltas
 from region.roads import RegionRoads, build_region_roads
+from region.streams import RegionStreamParams, build_region_streams
 from region.cities import refine_region_cities
 from region.towns import refine_region_towns
 from realmgen.placement.types import TIER_NAMES, format_population, population_display_tier
@@ -93,6 +94,10 @@ class RegionView(QWidget):
         # relief; built with the region, since refining the towns needs them.
         self._rivers: Optional[RegionRivers] = None
         self._roads: Optional[RegionRoads] = None
+        # The region's streams below the world's network, with the params they
+        # were built with: built when a local map is first opened (only local
+        # maps draw them) and shared by all of them.
+        self._streams: Optional[tuple[RegionStreamParams, list[RiverPath]]] = None
         # World deltas moved onto the re-routed rivers' mouths.
         self._deltas: Optional[np.ndarray] = None
         self._globe: Optional["World"] = None
@@ -145,6 +150,7 @@ class RegionView(QWidget):
         self._hover_hex = None
         self._fields = None
         self._rivers = None
+        self._streams = None
         self._roads = None
         self._deltas = None
         self._hex_images = []
@@ -174,6 +180,7 @@ class RegionView(QWidget):
         assert self._fields is not None and self._globe is not None
         f, globe, rp = self._fields, self._globe, self._region_params
         self._rivers = build_region_rivers(f, globe, rp.rivers)
+        self._streams = None
         realm, world = self._realm_params, self._world_params
         factor = realm.refine.river_threshold_factor if realm is not None else 1.5
         refine_region_cities(f, self._rivers, globe, factor, rp.settlements)
@@ -203,6 +210,16 @@ class RegionView(QWidget):
 
     # ── local maps ───────────────────────────────────────────────────────────
 
+    def _region_streams(self, params: RegionStreamParams) -> list[RiverPath]:
+        """This region's streams for its local maps (:func:`build_region_streams`),
+        built on first use and kept until the region, its rivers or ``params`` change."""
+        if self._fields is None or self._globe is None or self._rivers is None:
+            return []
+        if self._streams is None or self._streams[0] != params:
+            built = build_region_streams(self._fields, self._globe, self._rivers, params)
+            self._streams = (dataclasses.replace(params), built)
+        return self._streams[1]
+
     def set_local(self, parent: "RegionView", hex_index: int, keep_view: bool = False) -> None:
         """Show the local map of ``parent``'s regional hex ``hex_index``.
 
@@ -224,6 +241,7 @@ class RegionView(QWidget):
             local = build_local_map(
                 globe, fields, int(hex_index), self._local_params,
                 region_rivers=parent._rivers, region_roads=parent._roads, region_deltas=parent._deltas,
+                region_streams=parent._region_streams(self._local_params.streams),
                 resources=world.resources if world is not None else None,
                 fertility_exponent=float(realm.population.fertility_exponent) if realm is not None else 2.0,
                 land=world.cost.land if world is not None else None,
@@ -342,6 +360,7 @@ class RegionView(QWidget):
         self._local = None
         self._hover_hex = None
         self._rivers = None
+        self._streams = None
         self._roads = None
         self._deltas = None
         self._hex_images = []
@@ -567,7 +586,7 @@ class RegionView(QWidget):
             if self._local.city_footprints is not None:
                 out["cities"] = (self._local.city_index, self._local.city_positions, self._local.city_footprints)
         if self._rivers is not None:
-            out["rivers"] = self._rivers.paths
+            out["rivers"] = [*self._rivers.paths, *self._rivers.streams]
         if self._roads is not None:
             out["trade_routes"] = self._roads.segments
         if self._deltas is not None:

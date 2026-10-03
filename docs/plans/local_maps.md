@@ -32,7 +32,9 @@ The detail band gains ~3–4 octaves (a 12× refinement, against the region's 3�
    density texture (hamlets, farmsteads).
 3. **Streams: the world's network only** in the first version. The code marks
    where a finer local network (flow accumulation over the local relief) would
-   plug in.
+   plug in. *Done 2026-10-03, one tier up instead:* the region builds its own
+   streams (`region/streams.py`) and every local map re-routes them, so hex seams
+   agree.
 4. **Villages exist in the local view only** — not on the region or world maps.
 
 ## Phases

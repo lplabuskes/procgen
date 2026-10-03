@@ -14,13 +14,13 @@ This doc covers the frame, fields, rivers and roads. The rest of the tier:
 - `localmap/geometry.py` — `LocalGeometry`: the parent hex's texture square, mapped affinely onto `[0, 1]²`
 - `localmap/grid.py` — `LocalHexGrid`: `RegionHexGrid` kept to the parent hexagon; `texture_in_map`
 - `localmap/upsample.py` — `LocalUpsampleParams`, `build_local_fields`, `local_conservation_report`
-- `localmap/rivers.py` — `LocalRiverParams`, `build_local_rivers`: the region's rivers re-routed over the local relief
+- `localmap/rivers.py` — `LocalRiverParams`, `build_local_rivers`: the region's rivers and streams re-routed over the local relief
 - `localmap/roads.py` — `LocalRoadParams`, `build_local_roads`: the region's roads re-routed over the local terrain
 - `localmap/settlements.py` — `LocalSettlementParams`, `local_owned`, `refine_local_cities`, `refine_local_towns` ([local_settlements.md](local_settlements.md))
 - `localmap/villages.py` — `VillageParams`, `Villages`, `place_villages`, `village_budget_report` ([local_settlements.md](local_settlements.md))
 - `localmap/cities.py` — `CityParams`, `CityFootprints`, `city_footprints` ([local_settlements.md](local_settlements.md))
 - `localmap/farmland.py` — `FarmlandParams`, `Farmland`, `place_farmland`, `farmland_rgba` ([local_settlements.md](local_settlements.md))
-- `localmap/params.py` — `LocalParams`: `upsample`, `rivers`, `roads`, `settlements`, `villages`, `cities`, `farmland` (`AppParams.local`, the **Local map** dialog section; view-side only, like `region`)
+- `localmap/params.py` — `LocalParams`: `upsample`, `streams` (the region's `RegionStreamParams`), `rivers`, `roads`, `settlements`, `villages`, `cities`, `farmland` (`AppParams.local`, the **Local map** dialog section; view-side only, like `region`)
 - `localmap/builder.py` — `LocalMap`, `build_local_map`: everything above for one regional hex
 
 ## Pipeline (`localmap/builder.py`)
@@ -29,7 +29,7 @@ This doc covers the frame, fields, rivers and roads. The rest of the tier:
 region_roads, region_deltas, …world and realm tuning) → LocalMap` runs, in order:
 
 1. the fields (`build_local_fields`);
-2. the rivers (`build_local_rivers`), and the region's deltas snapped onto the local river mouths;
+2. the rivers and the region's streams (`build_local_rivers`), and the region's deltas snapped onto the local river mouths;
 3. the cities this map owns, re-sited (`refine_local_cities`, saved on the world);
 4. the roads (`build_local_roads`), fording the local rivers and ending on the re-sited cities;
 5. the towns this map owns, re-sited (`refine_local_towns`, saved on the world); every town and city in and around the map is then placed where it stands, moved off the local water with `snap_to_land` if it is not this map's to refine;
@@ -123,10 +123,20 @@ path leaving and re-entering the raster is routed once per visit; a visit that
 holds the path's last vertex ends on whatever it drains into near there (its
 stem, a lake, the local coast). Flow is the region's.
 
-**Only the world's channels exist.** Every stream is one of the hydrology
-stage's, down to its `stream_flow_threshold`, which is coarse for villages.
-`_region_paths` carries the note on where a finer local network (flow
-accumulation over the local relief) would add tributaries.
+**Then the region's streams.** The world's network stops at its
+`stream_flow_threshold`, coarse for villages. `build_local_map` takes the
+region's own streams below it (`region_streams`, from
+`region.streams.build_region_streams`; see
+[region_features.md](region_features.md#streams-below-the-worlds-network-regionstreamspy))
+and re-traces them the same way, after the rivers, so each ends on the river or
+stream it drains into. They go to `RegionRivers.streams`, not `paths`: the view
+draws them (at their physical width, most as hairlines) and villages site on
+them, but town and city refinement, confluences, mouths and deltas keep to the
+world's channels, and roads do not ford them. Without `region_streams` a map
+has none.
+
+Seed 4, a dense-land hex: ~30 streams (~1,800 km) on a map that had 1 river;
+~0.3 s more per map, plus ~0.35 s once per region for the network.
 
 On seed 4 the local rivers run ~1.1× the length of the regional ones over the
 same ground (median sinuosity 1.1–1.2), ~0.1 s per map.

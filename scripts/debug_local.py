@@ -50,7 +50,8 @@ from localmap.villages import VILLAGE_KIND_NAMES  # noqa: E402
 from realmgen.towns.builder import rural_density_recipe  # noqa: E402
 from region.geometry import RegionGeometry, ecef_to_cell  # noqa: E402
 from region.grid import RegionHexGrid  # noqa: E402
-from region.rivers import build_region_rivers  # noqa: E402
+from region.rivers import build_region_rivers, river_length_km  # noqa: E402
+from region.streams import build_region_streams  # noqa: E402
 from region.roads import build_region_roads  # noqa: E402
 from region.upsample import EARTH_RADIUS_KM, RegionFields, RegionUpsampleParams, build_region_fields  # noqa: E402
 from debug_region import LAYERS, draw_region  # noqa: E402  (shared with the region check)
@@ -95,7 +96,9 @@ def build_local(
     region = build_region_fields(world, region_id, region_params)
     rivers = build_region_rivers(region, world)
     roads = build_region_roads(region, world, rivers)
-    local = build_local_map(world, region, hex_index, params, region_rivers=rivers, region_roads=roads)
+    streams = build_region_streams(region, world, rivers, (params or LocalParams()).streams)
+    local = build_local_map(world, region, hex_index, params, region_rivers=rivers, region_roads=roads,
+                            region_streams=streams)
     return region, local
 
 
@@ -123,8 +126,9 @@ def draw_features(ax, local: LocalMap, world) -> None:  # type: ignore[no-untype
         s, t, _ = geo.ecef_to_local(np.asarray(points, dtype=np.float64).reshape(-1, 3))
         return s, t
 
-    top = max((float(np.max(f)) for _, f, _ in local.rivers.paths), default=1.0)
-    for positions, flows, in_water in local.rivers.paths:
+    channels = [*local.rivers.paths, *local.rivers.streams]
+    top = max((float(np.max(f)) for _, f, _ in channels), default=1.0)
+    for positions, flows, in_water in channels:
         s, t = st(positions)
         for k in np.flatnonzero(~np.asarray(in_water, dtype=bool)):
             ax.plot(s[k:k + 2], t[k:k + 2], color="#4a9be8",
@@ -233,8 +237,10 @@ def main() -> None:
     print("  conservation residual per regional texel (downsample must recover the region):")
     for name, stats in local_conservation_report(fields, region).items():
         print(f"    {name:<14} max {stats['max']:.3e}  mean {stats['mean']:.3e}  over {stats['n_anchors']} anchors")
+    stream_km = sum(river_length_km(p) for p in local.rivers.streams)
     print(f"  rivers {len(local.rivers.paths)} ({len(local.rivers.confluences)} confluences, "
-          f"{len(local.rivers.mouths)} mouths) · roads {len(local.roads.polylines)} · "
+          f"{len(local.rivers.mouths)} mouths) · streams {len(local.rivers.streams)} ({stream_km:.0f} km)"
+          f" · roads {len(local.roads.polylines)} · "
           f"towns {len(local.town_index)} · cities {len(local.city_index)}")
     report_villages(local)
 

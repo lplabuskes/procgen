@@ -97,7 +97,7 @@ settlement_populations, seed, params) → Villages`.
   stochastic remainder.
 - **Sites**, largest first, among the budget's dry domain texels by Gumbel-max
   over `log((ρ/ρ̄ + 0.05) · (1 + river·r + confluence·c + coast·k + road·d) ·
-  (1 − slope_penalty · slope))` (bonuses 2 / +1 / 1 / 1; river and road within
+  (1 − slope_penalty · slope))` (bonuses 2 / +1 / 1 / 1; river — rivers and streams alike — and road within
   `water_reach_km` / `road_reach_km`, 0.6 km). A village claims `spacing_km`
   (2 km) × `(pop/200)^0.25`; towns and cities claim `settlement_clearance_km`
   (3 km) × `(pop/1000)^0.25`. Kinds, in precedence: fishing (coast), river,
@@ -114,8 +114,10 @@ Seed 4, the densest land (~11 people/km²): ~940 villages per local map, mean
 ~370 people, median nearest neighbour 4.2 km (p10 2.7, p90 6.4). Sparser land
 (~4/km²): ~350–400 villages, 6–7 km apart. Real high-medieval villages sat
 2–3 km apart at about twice that density; the population calibration, not
-this tier, sets the difference. Nearly all are farming villages: the world
-network gives a map only 0–6 rivers.
+this tier, sets the difference. Most are farming villages; with the region's
+streams on the map (see [local.md](local.md#rivers-localmapriverspy)) 7–20%
+are river villages (seeds 4/31/35, 2026-10-03), where the world's network alone
+gave only 0–6 rivers per map and almost none.
 
 `scripts/measure_villages.py`, seeds 4/31/35, five hexes each (2026-09-27):
 

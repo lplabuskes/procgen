@@ -11,6 +11,7 @@ from localmap.test.conftest import local_params
 from localmap.upsample import build_local_fields
 from region.rivers import RegionRivers
 from region.roads import RegionRoads
+from region.streams import RegionStreamParams, build_region_streams
 
 
 @pytest.fixture(scope="module")
@@ -64,6 +65,30 @@ def test_local_rivers_are_deterministic(local, region, region_rivers, globe, riv
 def test_no_region_rivers_no_local_rivers(local, region, globe):
     empty = RegionRivers(region_id=region.region_id, paths=[])
     assert build_local_rivers(local, region, empty, globe).paths == []
+
+
+@pytest.fixture(scope="module")
+def region_streams(region, region_rivers, globe):
+    return build_region_streams(region, globe, region_rivers, RegionStreamParams(min_catchment_km2=2000.0))
+
+
+def test_the_regions_streams_are_drawn_after_the_rivers(local, region, region_rivers, region_streams, globe, rivers):
+    """Streams go to ``streams``; the rivers, confluences and mouths are as without them."""
+    with_streams = build_local_rivers(local, region, region_rivers, globe, region_streams=region_streams)
+    assert len(with_streams.streams) > 0
+    assert rivers.streams == []
+    assert len(with_streams.paths) == len(rivers.paths)
+    for (a, _, _), (b, _, _) in zip(rivers.paths, with_streams.paths):
+        assert np.array_equal(a, b)
+    np.testing.assert_array_equal(with_streams.confluences, rivers.confluences)
+    np.testing.assert_array_equal(with_streams.mouths, rivers.mouths)
+    spacing = region.grid.texel_spacing_rad(region.tex_size)
+    region_lines = [np.asarray(p, dtype=np.float64) for p, _, _ in region_streams]
+    for positions, flows, _ in with_streams.streams:
+        assert np.all(np.diff(flows) >= 0.0)
+        pts = np.asarray(positions, dtype=np.float64)
+        d = np.min([_dist_to(pts, line) for line in region_lines], axis=0)
+        assert np.percentile(d, 95) <= 3.0 * spacing
 
 
 @pytest.fixture(scope="module")

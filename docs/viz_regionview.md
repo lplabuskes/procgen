@@ -42,8 +42,10 @@ the cities' site → refined positions), `snap_deltas`, then `refine_region_town
 scaffolding.
 
 **`set_local(region_view, hex)`** builds the local map with `build_local_map`
-from the region view's fields, rivers, roads and deltas and the world's tuning,
-or reuses it from an LRU cache (`LOCAL_CACHE_SIZE` = 6, ~0.02 s), valid while
+from the region view's fields, rivers, roads and deltas, the region's streams
+(`build_region_streams`, built on the first local map of a region and kept on the
+region view until the region, its rivers or `LocalParams.streams` change, ~0.35 s)
+and the world's tuning, or reuses it from an LRU cache (`LOCAL_CACHE_SIZE` = 6, ~0.02 s), valid while
 the region's fields are the same object and the local params are unchanged. The
 `rural_density` it draws is `Villages.rural_density` (the countryside net of
 villages).
@@ -126,7 +128,7 @@ global paths rather than the refined terrain — except these, handed to
 
 | key | region | local map |
 |---|---|---|
-| `rivers` | `RegionRivers.paths` | the local rivers |
+| `rivers` | `RegionRivers.paths` | the local rivers and streams (`paths` + `streams`) |
 | `trade_routes` | `RegionRoads.segments` | the local roads |
 | `deltas` | snapped deltas | snapped onto the local mouths |
 | `towns` | — (refined positions are in the world feature) | a `Towns` at the positions the map draws them |

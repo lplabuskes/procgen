@@ -144,10 +144,9 @@ def place_villages(
     coast = (dry & _neighbour_any(water))[dry]
     near_river = np.zeros(len(cand_pos), dtype=bool)
     confluence = np.zeros(len(cand_pos), dtype=bool)
-    # Only the world's channels exist here (see localmap/rivers.py): a finer
-    # local stream network would widen ``near_river`` to its tributaries.
+    # Rivers and the region's streams alike (see localmap/rivers.py).
     if rivers is not None and len(cand_pos):
-        river_pts = _river_points(rivers, 0.5 * spacing)
+        river_pts = _river_points(rivers, 0.5 * spacing, streams=True)
         if river_pts is not None:
             near_river = KDTree(river_pts).query(cand_pos, workers=-1)[0] < _chord(p.water_reach_km)
         if len(rivers.confluences):

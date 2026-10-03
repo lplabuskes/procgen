@@ -4,8 +4,8 @@
 hex, from the region's own refined fields, rivers and roads:
 
 1. the fields (:func:`localmap.upsample.build_local_fields`);
-2. the rivers (:func:`localmap.rivers.build_local_rivers`), and the region's
-   deltas moved onto the local river mouths;
+2. the rivers and the region's streams (:func:`localmap.rivers.build_local_rivers`),
+   and the region's deltas moved onto the local river mouths;
 3. the cities this map owns re-sited on its coast and rivers
    (:func:`localmap.settlements.refine_local_cities`, saved on the world);
 4. the roads (:func:`localmap.roads.build_local_roads`), fording the local
@@ -38,7 +38,7 @@ from localmap.settlements import refine_local_cities, refine_local_towns
 from localmap.upsample import build_local_fields
 from localmap.villages import Villages, place_villages
 from region.display import snap_to_land
-from region.rivers import RegionRivers, snap_deltas
+from region.rivers import RegionRivers, RiverPath, snap_deltas
 from region.roads import RegionRoads
 from region.upsample import RegionFields
 
@@ -116,6 +116,7 @@ def build_local_map(
     region_rivers: Optional[RegionRivers] = None,
     region_roads: Optional[RegionRoads] = None,
     region_deltas: Optional[np.ndarray] = None,
+    region_streams: Optional[list[RiverPath]] = None,
     resources: Optional["ResourcesParams"] = None,
     fertility_exponent: float = 2.0,
     land: Optional["LandCostParams"] = None,
@@ -127,7 +128,9 @@ def build_local_map(
     """Build the local map of regional hex ``hex_index``.  See the module docstring.
 
     ``region_rivers`` / ``region_roads`` / ``region_deltas`` are the region's
-    (as the region view holds them); without them the map has none.  The rest
+    (as the region view holds them), and ``region_streams`` its streams below
+    the world's network (:func:`region.streams.build_region_streams`, with
+    ``params.streams``); without them the map has none.  The rest
     is the world's and realm's tuning, as for the region.  Re-sites the towns
     and cities this map owns in ``globe``'s features, in place.
     """
@@ -141,7 +144,7 @@ def build_local_map(
     # refinement lets water spread, plus a couple of texels.
     land_reach = (int(params.upsample.water_spread_texels) + 2) * spacing
 
-    rivers = (build_local_rivers(local, region, region_rivers, globe, params.rivers)
+    rivers = (build_local_rivers(local, region, region_rivers, globe, params.rivers, region_streams)
               if region_rivers is not None else RegionRivers(region_id=local.region_id, paths=[]))
     deltas = None
     if region_deltas is not None and len(region_deltas):

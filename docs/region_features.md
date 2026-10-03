@@ -8,6 +8,7 @@ down ([local.md](local.md), [local_settlements.md](local_settlements.md)).
 ## Files
 - `region/corridor.py` — `Raster`, `raster_frame`, `sample_raster`, `corridor_reach`, `route_corridor`: the raster + least-cost corridor router the rivers and roads share
 - `region/rivers.py` — `RegionRiverParams`, `RegionRivers`, `build_region_rivers`, `route_stream_paths`, `snap_deltas`, `river_length_km`
+- `region/streams.py` — `RegionStreamParams`, `build_region_streams`: the region's own streams below the world's network, for the local maps
 - `region/roads.py` — `RegionRoadParams`, `RegionRoads`, `build_region_roads`, `route_polyline`, `move_points`
 - `region/towns.py` — `RegionSettlementParams`, `refine_region_towns`, `refine_towns`, `tier_sites`, `REGION_TIER` / `LOCAL_TIER`
 - `region/cities.py` — `refine_region_cities`, `refine_cities`
@@ -85,6 +86,42 @@ shared edge independently (each is shown alone, so no seam is visible).
 ### `RegionRiverParams`
 `raster_texels` (1.0), `margin` (0.08), `corridor_global_texels` (1.0),
 `valley_seeking` (2.0), `min_global_nodes` (3), `smoothing_iterations` (8).
+
+## Streams below the world's network (`region/streams.py`)
+
+`build_region_streams(fields, globe, rivers, params) → list[RiverPath]` is the
+region's own drainage network below the world's `stream_flow_threshold`
+(~100 global texels, ~20,000 km² of catchment), the brooks a local map's
+villages sit on. **The region view does not draw them**; the region builds
+them once, when its first local map is opened, and every local map of the
+region re-routes the same network ([local.md](local.md#rivers-localmapriverspy)),
+so neighbouring local maps agree on which streams there are.
+
+- **Routing.** On the rivers' raster (every node sampled), a priority-flood over
+  the refined elevation from the outlets — refined sea and lakes, the nodes the
+  region's re-routed rivers run through, the raster edge. Each node drains to the
+  neighbour it was flooded from (its lowest), so depressions are filled over and
+  every node reaches an outlet. numba-compiled, with a pure-Python fallback.
+- **Flow** is each node's catchment at its annual precipitation over the world's
+  mean, in the world's flow units (one global texel at mean rain), so a stream
+  reads on the world's scale and is drawn at its physical width. It is capped at
+  the world's stream threshold: more than that is a world stream the world
+  routed elsewhere, and the region does not overrule it.
+- **Channels** are nodes with at least `min_catchment_km2` of catchment, cut
+  into main stems with `main_stem_paths`. A stem ends on the river, lake or
+  coast it drains into (only its last node can be on a river, so streams never
+  cross one) or is cut at the raster edge.
+- Not conserved against anything: the world has no channels this small.
+
+At 300 km² on seed 4: ~0.35 s per region, and a drainage density of ~0.05
+km/km² against ~0.006 for the world's network (roughly 10× the channel
+length); a dense-land local map gets ~30 streams (~1,800 km). Precipitation
+weighting leaves dry land with few.
+
+### `RegionStreamParams`
+Held in `LocalParams.streams` (the **Local map** dialog), since only local maps
+use them. `min_catchment_km2` (300), `min_nodes` (3), `raster_texels` (1.0),
+`margin` (0.08).
 
 ## Roads (`region/roads.py`)
 

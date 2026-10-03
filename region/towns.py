@@ -89,10 +89,11 @@ def _tree(points: Optional[np.ndarray]) -> Optional[KDTree]:
     return KDTree(points) if points is not None and len(points) else None
 
 
-def _river_points(rivers: RegionRivers, step: float) -> Optional[np.ndarray]:
-    """Points along every drawn (not under-water) stretch of the regional rivers."""
+def _river_points(rivers: RegionRivers, step: float, streams: bool = False) -> Optional[np.ndarray]:
+    """Points along every drawn (not under-water) stretch of the regional rivers
+    (and of a local map's :attr:`RegionRivers.streams`, given ``streams``)."""
     runs = []
-    for positions, _, in_water in rivers.paths:
+    for positions, _, in_water in [*rivers.paths, *(rivers.streams if streams else [])]:
         pts = np.asarray(positions, dtype=np.float64)
         dry = np.flatnonzero(~np.asarray(in_water, dtype=bool))
         # Split at hidden segments so no run bridges a lake.

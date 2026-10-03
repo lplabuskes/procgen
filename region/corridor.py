@@ -106,7 +106,9 @@ def sample_raster(
 
     Refined values come from the nearest hex texel where a texture covers the
     node, else from the globe (bilinear); a key the globe does not have (a field
-    refined only regionally) reads the nearest texel, covered or not.
+    refined only regionally) reads the nearest texel, covered or not.  A
+    multi-channel key is summed over its channels (seasonal precipitation →
+    annual).
     """
     grid, tex = fields.grid, fields.tex_size
     idx = np.flatnonzero(sampled)
@@ -120,10 +122,11 @@ def sample_raster(
     hexes, hrows, hcols, covered = _hex_texel_lookup(grid, tex, s, t)
 
     def read(key: str) -> Optional[np.ndarray]:
-        fine = fields.textures[key][hexes, hrows, hcols, 0].astype(np.float64) if key in fields.textures else None
+        fine = (fields.textures[key][hexes, hrows, hcols].astype(np.float64).sum(axis=-1)
+                if key in fields.textures else None)
         if key not in mesh.face_textures:
             return fine
-        out = sampler.sample(mesh.face_textures[key], faces, u, v)[:, 0]
+        out = sampler.sample(mesh.face_textures[key], faces, u, v).sum(axis=1)
         return out if fine is None else np.where(covered, fine, out)
 
     coarse = sampler.sample(mesh.face_textures["elevation"], faces, u, v)[:, 0]
