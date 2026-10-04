@@ -36,7 +36,8 @@ from localmap.rivers import build_local_rivers
 from localmap.roads import build_local_roads
 from localmap.settlements import refine_local_cities, refine_local_towns
 from localmap.upsample import build_local_fields
-from localmap.villages import Villages, place_villages
+from localmap.villages import VILLAGE_MINING, Villages, place_villages
+from realmgen.towns.types import TOWN_MINING
 from region.display import snap_to_land
 from region.rivers import RegionRivers, RiverPath, snap_deltas
 from region.roads import RegionRoads
@@ -107,6 +108,11 @@ def _local_settlements(
     return t_idx, t_pos, t_pop, c_idx, c_pos, c_pop
 
 
+def _town_kinds(globe: "World", t_idx: np.ndarray) -> np.ndarray:
+    towns = globe.get_feature("towns")
+    return np.asarray(towns.kind)[t_idx] if towns is not None and len(towns) else np.zeros(0, dtype=np.int8)
+
+
 def build_local_map(
     globe: "World",
     region: RegionFields,
@@ -170,6 +176,8 @@ def build_local_map(
     footprints = city_footprints(local, c_pos, c_pop, seed, params.cities)
     farmland = place_farmland(
         local, villages.positions, villages.population, t_pos, t_pop, footprints, seed, params.farmland,
+        village_mining=villages.kind == VILLAGE_MINING,
+        town_mining=_town_kinds(globe, t_idx) == TOWN_MINING,
     )
     return LocalMap(
         fields=local, rivers=rivers, roads=roads, villages=villages,

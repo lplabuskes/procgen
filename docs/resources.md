@@ -11,7 +11,7 @@ See also: `docs/plans/resources_generation_spec.md` for the original design.
 - `worldgen/resources/minerals.py`
 - `worldgen/resources/rare_bio.py`
 - `worldgen/resources/display.py`
-- `worldgen/resources/channels.py` — `FERTILITY_MEAN`, `MINERALS`, `RARE_BIO`
+- `worldgen/resources/channels.py` — `FERTILITY_MEAN`, `MINERALS`, `MINERAL_SITES`, `RARE_BIO`
 
 ## `builder.py`
 
@@ -19,14 +19,14 @@ See also: `docs/plans/resources_generation_spec.md` for the original design.
 
 **`ResourcesBuilder`**: A pipeline `Stage`, runs after climate's lake-feedback pass. Reads: `"river_objects"` and (for aquatic fertility) `"currents"` world features, plus `temperature`, `precipitation`, `elevation`, `ocean_mask`, `lake_mask` face textures, and per-face `biome`, `is_ocean`, `volcanic_activity`, `boundary_type`, `plate_type`, `elevation` metadata (the last four by the mineral model).
 
-Order: forest density → fertility (with the forest penalty) → the delta silt bonus (`apply_delta_fertility`, when the `delta` texture is present; see [delta.md](delta.md)) → aquatic fertility written over ocean/lake texels → crops → minerals → rare resources.
+Order: forest density → fertility (with the forest penalty) → the delta silt bonus (`apply_delta_fertility`, when the `delta` texture is present; see [delta.md](delta.md)) → aquatic fertility written over ocean/lake texels → crops → minerals (and their workings) → rare resources.
 
 Attaches face textures:
 - `"fertility"` `(N,H,W,1) float16`
 - `"forest_density"` `(N,H,W,1) float16`
 - `"dominant_crop"` `(N,H,W,1) uint8`
 
-Writes per-face metadata: `fertility_mean`, `forest_density_mean`, `dominant_crop` (modal crop over the face's non-ocean texels). Stores `minerals` and `rare_bio` as `(positions, kinds, abundances)` 3-tuples and registers them directly as `"minerals"` and `"rare_bio"` globe features.
+Writes per-face metadata: `fertility_mean`, `forest_density_mean`, `dominant_crop` (modal crop over the face's non-ocean texels). Stores `minerals` and `rare_bio` as `(positions, kinds, abundances)` 3-tuples and registers them directly as `"minerals"` and `"rare_bio"` globe features, and the deposits' workings as `"mineral_sites"` (`MINERAL_SITES`).
 
 ## Individual modules
 
@@ -43,7 +43,9 @@ Writes per-face metadata: `fertility_mean`, `forest_density_mean`, `dominant_cro
 
 **`crops.py`** — `classify_crops()`: First-match-wins threshold table (T_grow, P_annual, elevation) over 8 crop types. Fertility gates the whole classifier — pixels below `FERTILITY_GATE` (0.08) yield no crop. Vectorised implementation mirrors the scalar `default_crop` reference exactly.
 
-**`minerals.py`** — `place_mineral_deposits()`: Hybrid geology + fBm noise model. Nine mineral types (Iron, Copper, Gold, Gems, Coal, Tin, Rare Metals, Salt, Marble) each have a geological candidate mask derived from boundary type, plate type, volcanic activity, and elevation; independent 3-octave fBm noise fields cluster deposits within those candidates. Returns `(positions (M,3), kinds (M,) int8, abundances (M,) float32)`.
+**`minerals.py`** — `place_mineral_deposits()`: Hybrid geology + fBm noise model. Nine mineral types (Iron, Copper, Gold, Gems, Coal, Tin, Rare Metals, Salt, Marble) each have a geological candidate mask derived from boundary type, plate type, volcanic activity, and elevation; independent 3-octave fBm noise fields cluster deposits within those candidates. Returns `(positions (M,3), kinds (M,) int8, abundances (M,) float32)` — one deposit per (face, kind), at the face centroid.
+
+`place_mineral_sites()` splits each deposit into the **workings** it is mined at: `min_sites`–`max_sites` (2–5) of them, each on a different land texel the face owns (nearest face centroid; interior texels before coastal ones), at a random point inside an interior texel (a coastal one keeps its centre, off the sea), with a Dirichlet(`site_share_concentration` = 1) share of the deposit — so a few workings carry most of it. Returns `(positions (K,3), deposit (K,) int32, share (K,) float32)`, shares summing to 1 per deposit; deterministic per deposit. A face with no owned land keeps one working at its centroid. On seed 4, 415 deposits make 1,416 workings, ~80 km from the face centre on average. `mineral_workings(world)` reads them back (one working per deposit, at the deposit, on a world without them); `site_workers(deposit, share, mine_workers)` gives each working its share of its deposit's miners. The world map still draws one marker per deposit; the region and local maps draw the workings (see [realm_towns.md](realm_towns.md), [region_fields.md](region_fields.md)).
 
 **`rare_bio.py`** — `place_rare_bio_resources()`: Ten rare biological resources (Spices, Tea, Silk, Ivory, Furs, Incense, Dyes, Amber, Rubber, Pearls) placed via narrow ecological criteria (biome, T_annual, P_annual, elevation, distance_to_coast) plus fBm noise. A global per-type cap enforces world-level rarity by keeping only the top-scoring candidates.
 

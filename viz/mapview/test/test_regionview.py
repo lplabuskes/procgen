@@ -224,3 +224,30 @@ def test_river_widths_are_physical_on_a_local_map():
     w = _river_widths(flows, 1e5, _WidthProjector(1.0, px_per_km=10.0), 2.0)  # type: ignore[arg-type]
     assert w[1] == pytest.approx(float(channel_width_km(2e5)) * 10.0)
     assert w[0] > 1.0  # too narrow for a pixel — still drawn as a hairline
+
+
+def test_region_draws_each_deposit_as_its_workings(app, synthetic_globe):  # noqa: F811
+    from region.geometry import ecef_to_cell
+    centroids = np.asarray(synthetic_globe.mesh.face_centroids, dtype=np.float64)
+    here = np.flatnonzero(ecef_to_cell(centroids, synthetic_globe.antimeridian) == 40)[:2]
+    deposits = (centroids[here], np.array([0, 2], np.int8), np.array([0.8, 0.4], np.float32))
+    # Three workings of the first deposit, one of the second, a little off their centroids.
+    offset = np.array([[1e-3, 0, 0], [0, 1e-3, 0], [0, 0, 1e-3], [1e-3, 1e-3, 0]])
+    pos = centroids[here][[0, 0, 0, 1]] + offset
+    sites = (pos / np.linalg.norm(pos, axis=1, keepdims=True), np.array([0, 0, 0, 1], np.int32),
+             np.array([0.5, 0.3, 0.2, 1.0], np.float32))
+    synthetic_globe.add_feature("minerals", deposits)
+    synthetic_globe.add_feature("mineral_sites", sites)
+    try:
+        view = RegionView()
+        view.resize(600, 400)
+        view.set_region(RegionGeometry(40, synthetic_globe.antimeridian), synthetic_globe)
+        view.set_overlay_visible("minerals", True)
+        drawn = view._refined_features()["minerals"]
+        assert drawn[0].shape == (4, 3)
+        np.testing.assert_array_equal(drawn[1], [0, 0, 0, 2])
+        np.testing.assert_allclose(drawn[2], [0.4, 0.24, 0.16, 0.4], rtol=1e-6)
+        _painted(view)
+    finally:
+        synthetic_globe.remove_feature("minerals")
+        synthetic_globe.remove_feature("mineral_sites")

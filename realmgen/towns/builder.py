@@ -54,6 +54,7 @@ from worldgen.cost.surfaces import EARTH_RADIUS_KM
 from worldgen.geology.channels import OCEAN_MASK
 from worldgen.geology.display import OCEAN_COLOR
 from worldgen.hydrology.channels import LAKE_MASK
+from worldgen.resources.minerals import mineral_workings, site_workers
 
 RURAL_DENSITY_TEXTURE = "rural_density"
 # The fishers' part of ``rural_density``: the finer tiers keep them on the shore.
@@ -147,7 +148,7 @@ def town_site_context(world, p: TownParams, pp: PopulationParams) -> TownSiteCon
     region view's re-siting (``region/towns.py``)."""
     settlements = world.get_feature("settlements") or []
     city_pop = np.array([s.population for s in settlements], dtype=np.float64)
-    minerals = world.get_feature("minerals")
+    workings = mineral_workings(world)
     routes = world.get_feature("trade_routes") or []
     route_radius = float(p.route_radius_km) / EARTH_RADIUS_KM
     return TownSiteContext(
@@ -160,7 +161,7 @@ def town_site_context(world, p: TownParams, pp: PopulationParams) -> TownSiteCon
         route_points=densify_polylines(
             [np.stack([np.asarray(a), np.asarray(b)]) for a, b, _ in routes], 0.5 * route_radius,
         ),
-        mineral_points=None if minerals is None else np.asarray(minerals[0], dtype=np.float64),
+        mineral_points=None if workings is None else workings[0],
         town_spacing=float(p.town_spacing_km) / EARTH_RADIUS_KM,
         route_radius=route_radius,
         mining_radius=float(p.mining_radius_km) / EARTH_RADIUS_KM,
@@ -220,20 +221,22 @@ class TownStage(Stage):
             np.asarray(FISHING_POPULATION.read(mesh), dtype=np.float64)
             if FISHING_POPULATION.present(mesh) else None
         )
-        # The miners, on the texels of their deposits (the minerals feature,
-        # index-aligned with the population stage's mine_workers).
+        # The miners, on the texels of their deposits' workings (the minerals
+        # feature, index-aligned with the population stage's mine_workers, split
+        # by mineral_sites).
         minerals = world.get_feature("minerals")
+        workings = mineral_workings(world)
         workers = world.get_feature("mine_workers")
         mining = np.zeros(n)
         mine_points = mine_faces = None
         mining_density = np.zeros(water.shape)
-        if MINING_POPULATION.present(mesh) and minerals is not None and workers is not None:
+        if MINING_POPULATION.present(mesh) and minerals is not None and workings is not None and workers is not None:
             mining = np.clip(np.asarray(MINING_POPULATION.read(mesh), dtype=np.float64), 0.0, rural)
-            mine_points = np.asarray(minerals[0], dtype=np.float64)
-            mine_points = mine_points / np.linalg.norm(mine_points, axis=1, keepdims=True)
+            mine_points, site_deposit, site_share = workings
             # The population stage's face assignment, so the miners match its channel.
-            mine_faces = _positions_to_face_ids(np.asarray(minerals[0]), np.asarray(mesh.face_centroids))
-            workers = np.asarray(workers, dtype=np.float64)
+            deposit_faces = _positions_to_face_ids(np.asarray(minerals[0]), np.asarray(mesh.face_centroids))
+            mine_faces = deposit_faces[site_deposit]
+            workers = site_workers(site_deposit, site_share, workers)
             mining_density, unsited = compute_mining_density(
                 mine_points, mine_faces, workers, positions, areas_km2, ~water, owner)
             mining = mining - unsited

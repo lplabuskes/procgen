@@ -7,6 +7,9 @@ How much ground each settlement farms (medieval rules of thumb):
   and pasture) for every villager.
 - **Towns**: about half the townspeople (``town_farming_share``) work the town's
   own fields; the rest of its food comes from the villages around it.
+- **Mining villages and towns** live off the mine and buy their food: only
+  ``mining_farming_share`` (0.1) of their people farm, so their fields are a
+  narrow band, or none.
 - **Cities** are fed by their trade hinterland, not by fields of their own, so
   their farmland is a ring of market gardens and orchards
   ``city_garden_ring_km`` (1.5 km) wide outside their built-up footprint
@@ -66,6 +69,8 @@ _FARM_STREAM = 17
 class FarmlandParams:
     ha_per_farmer: float = _f(1.5, label="Farmland per farmer (ha)", min=0.1, max=5.0, step=0.1)
     town_farming_share: float = _f(0.5, label="Townspeople who farm", min=0.0, max=1.0, step=0.05)
+    mining_farming_share: float = _f(
+        0.1, label="Miners' settlements: people who farm", min=0.0, max=1.0, step=0.05)
     city_garden_ring_km: float = _f(1.5, label="City garden ring (km)", min=0.0, max=5.0, step=0.25)
     fertility_weight: float = _f(1.0, label="Poor-soil stretch", min=0.0, max=5.0, step=0.1)
     slope_weight: float = _f(2.0, label="Steep-slope stretch", min=0.0, max=10.0, step=0.1)
@@ -102,6 +107,10 @@ def _claim(order, who, texel, quota, owner):  # pragma: no cover - numba-compile
     return claimed
 
 
+def _flags(mask: Optional[np.ndarray], n: int) -> np.ndarray:
+    return np.zeros(n, dtype=bool) if mask is None else np.asarray(mask, dtype=bool).reshape(-1)
+
+
 def _chord(km: float) -> float:
     return float(km) / EARTH_RADIUS_KM
 
@@ -113,8 +122,15 @@ def place_farmland(
     footprints: Optional[CityFootprints],
     seed: int,
     params: Optional[FarmlandParams] = None,
+    *,
+    village_mining: Optional[np.ndarray] = None,
+    town_mining: Optional[np.ndarray] = None,
 ) -> Farmland:
-    """Claim every settlement's farmland.  See the module docstring."""
+    """Claim every settlement's farmland.  See the module docstring.
+
+    ``village_mining`` / ``town_mining`` (bool, per village / town) flag the
+    mining settlements, which farm only ``mining_farming_share`` of their people.
+    """
     p = params or FarmlandParams()
     shape = local.in_hex.shape
     kind = np.full(shape, -1, dtype=np.int8)
@@ -125,8 +141,11 @@ def place_farmland(
     t_pop = np.asarray(town_population, dtype=np.float64).reshape(-1)
     n_cities = len(footprints) if footprints is not None else 0
     texel_km2 = float(local.texel_area_km2)
-    v_target = v_pop * float(p.ha_per_farmer) * _KM2_PER_HA
-    t_target = t_pop * float(p.town_farming_share) * float(p.ha_per_farmer) * _KM2_PER_HA
+    mining_share = float(p.mining_farming_share)
+    v_share = np.where(_flags(village_mining, len(v_pop)), mining_share, 1.0)
+    t_share = np.where(_flags(town_mining, len(t_pop)), mining_share, float(p.town_farming_share))
+    v_target = v_pop * v_share * float(p.ha_per_farmer) * _KM2_PER_HA
+    t_target = t_pop * t_share * float(p.ha_per_farmer) * _KM2_PER_HA
     areas: list[np.ndarray] = [np.zeros(len(v_pop)), np.zeros(len(t_pop)), np.zeros(n_cities)]
 
     def result() -> Farmland:

@@ -130,7 +130,7 @@ def draw_overlays(
             max(2.5, 4.0 * proj.zoom ** 0.3),
         )
     if on("minerals"):
-        _draw_minerals(painter, globe, proj)
+        _draw_minerals(painter, globe, proj, refined.get("minerals"))
     if on("rare_bio"):
         _draw_rare_bio(painter, globe, proj)
     if on("danger_sources"):
@@ -180,9 +180,12 @@ def _draw_resource(
     painter: QPainter, globe: "World", proj: OverlayProjector, feature_name: str,
     palette: np.ndarray, n_kinds: int, base_r: float,
     draw_shape: Callable[[QPainter, float, float, float], None],
+    feature: Optional[tuple] = None,
 ) -> None:
-    """A palette-per-kind resource overlay, sized by abundance."""
-    feature = globe.get_feature(feature_name)
+    """A palette-per-kind resource overlay, sized by abundance (``feature``, a
+    view's ``(positions, kinds, abundances)``, in place of the world's)."""
+    if feature is None:
+        feature = globe.get_feature(feature_name)
     if feature is None:
         return
     positions, kinds, abundances = feature
@@ -204,7 +207,9 @@ def _draw_resource(
     painter.restore()
 
 
-def _draw_minerals(painter: QPainter, globe: "World", proj: OverlayProjector) -> None:
+def _draw_minerals(
+    painter: QPainter, globe: "World", proj: OverlayProjector, workings: Optional[tuple] = None,
+) -> None:
     from worldgen.resources.minerals import MINERAL_PALETTE, N_MINERALS
 
     def _square(p: QPainter, x: float, y: float, r: float) -> None:
@@ -212,7 +217,7 @@ def _draw_minerals(painter: QPainter, globe: "World", proj: OverlayProjector) ->
 
     _draw_resource(
         painter, globe, proj, "minerals", MINERAL_PALETTE, N_MINERALS,
-        max(2.0, 3.5 * proj.zoom ** 0.3), _square,
+        max(2.0, 3.5 * proj.zoom ** 0.3), _square, workings,
     )
 
 

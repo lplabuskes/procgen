@@ -20,7 +20,7 @@ normalised excess above the threshold.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
@@ -218,3 +218,112 @@ def place_mineral_deposits(
     kinds = np.concatenate(all_kinds, axis=0)
     abundances = np.concatenate(all_abund, axis=0)
     return positions, kinds, abundances
+
+
+def place_mineral_sites(
+    deposit_faces: np.ndarray,
+    texel_positions: np.ndarray,
+    land: np.ndarray,
+    face_centroids: np.ndarray,
+    *,
+    min_sites: int,
+    max_sites: int,
+    share_concentration: float,
+    seed: int = 0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Split each deposit into the workings it is mined at, inside its face.
+
+    A deposit (one face and kind) is ``min_sites``–``max_sites`` workings, each
+    on a different owned land texel of the face (one whose nearest face
+    centroid is the deposit's face), interior texels before coastal ones, at a
+    random point within the texel.  Each takes a Dirichlet(``share_concentration``)
+    share of the deposit, so a few workings carry most of it.
+
+    Args:
+        deposit_faces: (M,) face of each deposit.
+        texel_positions: (N, H, W, 3) face texel centres.
+        land: (N, H, W) bool, not ocean or lake.
+        face_centroids: (N, 3).
+
+    Returns:
+        positions: (K, 3) float32 unit vectors of the workings.
+        deposit:   (K,) int32 deposit index.
+        share:     (K,) float32 share of its deposit (sums to 1 per deposit).
+    """
+    from scipy.spatial import KDTree
+
+    deposit_faces = np.asarray(deposit_faces, dtype=np.int64)
+    n_dep = deposit_faces.size
+    out_pos: list[np.ndarray] = []
+    out_dep: list[np.ndarray] = []
+    out_share: list[np.ndarray] = []
+    if n_dep == 0:
+        return np.zeros((0, 3), np.float32), np.zeros(0, np.int32), np.zeros(0, np.float32)
+    h, w = land.shape[1:]
+    tree = KDTree(np.asarray(face_centroids, dtype=np.float64))
+    lo, hi = max(1, int(min_sites)), max(1, int(min_sites), int(max_sites))
+    for d, f in enumerate(deposit_faces.tolist()):
+        rng = np.random.default_rng([int(seed) & 0xFFFFFFFF, d])
+        grid = np.asarray(texel_positions[f], dtype=np.float64)          # (H, W, 3)
+        pos = grid.reshape(-1, 3)
+        dry = np.asarray(land[f], dtype=bool)
+        owned = (tree.query(pos, workers=-1)[1] == f).reshape(h, w)
+        interior = dry.copy()
+        interior[1:, :] &= dry[:-1, :]
+        interior[:-1, :] &= dry[1:, :]
+        interior[:, 1:] &= dry[:, :-1]
+        interior[:, :-1] &= dry[:, 1:]
+        # Interior texels first (in random order), then the coast.
+        tiers = [np.flatnonzero((interior & owned).reshape(-1)),
+                 np.flatnonzero((dry & owned & ~interior).reshape(-1))]
+        cand = np.concatenate([rng.permutation(t) for t in tiers])
+        if cand.size == 0:          # no owned land: the face's own centroid
+            out_pos.append(np.asarray(face_centroids[f], dtype=np.float64)[None])
+            out_dep.append(np.array([d], np.int32))
+            out_share.append(np.ones(1, np.float32))
+            continue
+        k = min(int(rng.integers(lo, hi + 1)), cand.size)
+        picked = cand[:k]
+        # A random point within each interior texel (half a spacing either way
+        # along the grid); coast texels keep their centre, off the sea.
+        r, c = np.divmod(picked, w)
+        du = rng.uniform(-0.5, 0.5, k)
+        dv = rng.uniform(-0.5, 0.5, k)
+        step_c = np.where((c + 1 < w)[:, None], grid[r, np.minimum(c + 1, w - 1)] - grid[r, c],
+                          grid[r, c] - grid[r, np.maximum(c - 1, 0)])
+        step_r = np.where((r + 1 < h)[:, None], grid[np.minimum(r + 1, h - 1), c] - grid[r, c],
+                          grid[r, c] - grid[np.maximum(r - 1, 0), c])
+        inner = interior.reshape(-1)[picked][:, None]
+        p = grid[r, c] + np.where(inner, du[:, None] * step_c + dv[:, None] * step_r, 0.0)
+        share = rng.dirichlet(np.full(k, max(float(share_concentration), 1e-3))) if k > 1 else np.ones(1)
+        out_pos.append(p)
+        out_dep.append(np.full(k, d, np.int32))
+        out_share.append(share)
+    positions = np.concatenate(out_pos)
+    positions /= np.linalg.norm(positions, axis=1, keepdims=True)
+    return (positions.astype(np.float32), np.concatenate(out_dep).astype(np.int32),
+            np.concatenate(out_share).astype(np.float32))
+
+
+def site_workers(deposit: np.ndarray, share: np.ndarray, workers: np.ndarray) -> np.ndarray:
+    """``(K,)`` miners at each working: its deposit's ``workers`` × its share."""
+    return np.asarray(workers, dtype=np.float64)[np.asarray(deposit, dtype=np.int64)] * np.asarray(share, np.float64)
+
+
+def mineral_workings(world) -> Optional[tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    """``(positions (K, 3) unit float64, deposit (K,), share (K,))`` — the
+    workings of ``world``'s mineral deposits (each deposit is one working, at its
+    own position, when the world has no ``mineral_sites``); None without deposits."""
+    minerals = world.get_feature("minerals")
+    if minerals is None or len(minerals[0]) == 0:
+        return None
+    sites = world.get_feature("mineral_sites")
+    if sites is None:
+        pos = np.asarray(minerals[0], dtype=np.float64)
+        dep = np.arange(len(pos), dtype=np.int64)
+        share = np.ones(len(pos))
+    else:
+        pos = np.asarray(sites[0], dtype=np.float64)
+        dep = np.asarray(sites[1], dtype=np.int64)
+        share = np.asarray(sites[2], dtype=np.float64)
+    return pos / np.linalg.norm(pos, axis=1, keepdims=True), dep, share

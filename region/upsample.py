@@ -66,6 +66,7 @@ from region.resources import RefineContext, refine_resources, refined_slope
 from region.sampling import GlobalSampler, anchor_means
 from region.source import GlobalSource, Located, ParentSource
 from utils.simplex import fbm_sum, make_perm
+from worldgen.resources.minerals import mineral_workings, site_workers
 
 if TYPE_CHECKING:
     from core.world import World
@@ -923,13 +924,14 @@ def refine_fields(
 
 
 def worked_mine_points(globe: "World") -> Optional[np.ndarray]:
-    """``(K, 3)`` unit vectors of the deposits with miners (None without any)."""
-    minerals = globe.get_feature("minerals")
+    """``(K, 3)`` unit vectors of the deposits' workings with miners (None without any)."""
+    workings = mineral_workings(globe)
     workers = globe.get_feature("mine_workers")
-    if minerals is None or workers is None:
+    if workings is None or workers is None:
         return None
-    pts = np.asarray(minerals[0], dtype=np.float64)[np.asarray(workers) > 0]
-    return pts / np.linalg.norm(pts, axis=1, keepdims=True) if len(pts) else None
+    pos, deposit, share = workings
+    pts = pos[site_workers(deposit, share, workers) > 0]
+    return pts if len(pts) else None
 
 
 def build_region_fields(

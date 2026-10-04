@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Mapping, Optional
 
 import numpy as np
+from scipy.spatial import KDTree
 
 from core.display import DisplayRegistry
 from core.pipeline import BuildContext, Stage
@@ -22,7 +23,7 @@ from worldgen.climate.channels import BIOME, PRECIPITATION, TEMPERATURE
 from worldgen.delta.channels import DELTA
 from worldgen.geology.channels import ELEVATION, IS_OCEAN, OCEAN_MASK
 from worldgen.hydrology.channels import LAKE_MASK, RIVER_OBJECTS
-from worldgen.resources.channels import FERTILITY_MEAN, MINERALS, RARE_BIO
+from worldgen.resources.channels import FERTILITY_MEAN, MINERAL_SITES, MINERALS, RARE_BIO
 from worldgen.resources.crops import classify_crops
 from worldgen.resources.display import (
     DOMINANT_CROP_RECIPE,
@@ -41,7 +42,7 @@ from worldgen.resources.fertility import (
     apply_delta_fertility, compute_aquatic_fertility, compute_fertility, neighbour_water_fertility,
 )
 from worldgen.resources.forest import compute_forest_density
-from worldgen.resources.minerals import place_mineral_deposits
+from worldgen.resources.minerals import place_mineral_deposits, place_mineral_sites
 from worldgen.resources.rare_bio import place_rare_bio_resources
 from worldgen.resources.terrain import (
     coastal_ocean_faces,
@@ -135,6 +136,10 @@ class MineralParams:
     volcanic_threshold_rare: float = _f(0.15, label="Rare metals volcanic min", min=0.0, max=1.0)
     coal_min_boundary_hops: int = _f(3, label="Coal min boundary hops", min=0, max=16)
     coal_max_elevation_km: float = _f(0.5, label="Coal max elevation (km)", min=-1.0, max=5.0)
+    min_sites: int = _f(2, label="Min workings per deposit", min=1, max=12)
+    max_sites: int = _f(5, label="Max workings per deposit", min=1, max=12)
+    site_share_concentration: float = _f(
+        1.0, label="Working share evenness (Dirichlet α)", min=0.1, max=10.0, step=0.1)
 
 
 @paramclass
@@ -200,6 +205,8 @@ class ResourcesBuilder(Stage):
         self.volcanism_hops: Optional[np.ndarray] = None           # (N,) int
         # Mineral deposits: 3-tuple (positions (M,3), kinds (M,) int8, abundances (M,) float32)
         self.minerals: Optional[tuple] = None
+        # The workings each deposit is split into: (positions (K,3), deposit (K,) int32, share (K,) float32)
+        self.mineral_sites: Optional[tuple] = None
         # Rare biological resources: same 3-tuple format as minerals.
         self.rare_bio: Optional[tuple] = None
 
@@ -339,6 +346,19 @@ class ResourcesBuilder(Stage):
             params=p.minerals,
             seed=mineral_seed,
         )
+        self.mineral_sites = None
+        if len(self.minerals[0]):
+            centroids = np.asarray(mesh.face_centroids, dtype=np.float64)
+            _, deposit_faces = KDTree(centroids).query(np.asarray(self.minerals[0], dtype=np.float64))
+            land_px = ocean_mask_tex[..., 0] <= 0.5
+            if lake_mask_tex is not None:
+                land_px &= lake_mask_tex[..., 0] <= 0.5
+            h, w = land_px.shape[1:]
+            self.mineral_sites = place_mineral_sites(
+                np.asarray(deposit_faces), mesh.face_texture_positions(h, w), land_px, centroids,
+                min_sites=p.minerals.min_sites, max_sites=p.minerals.max_sites,
+                share_concentration=p.minerals.site_share_concentration, seed=mineral_seed,
+            )
 
         _report("Placing rare biological resources…")
         rare_bio_seed = int(p.seed if p.seed is not None else 0) + 55557
@@ -356,6 +376,8 @@ class ResourcesBuilder(Stage):
 
         if self.minerals is not None and len(self.minerals[0]) > 0:
             MINERALS.write(ctx.world, self.minerals)
+        if self.mineral_sites is not None:
+            MINERAL_SITES.write(ctx.world, self.mineral_sites)
         if self.rare_bio is not None and len(self.rare_bio[0]) > 0:
             RARE_BIO.write(ctx.world, self.rare_bio)
 
@@ -451,6 +473,11 @@ class ResourcesBuilder(Stage):
             arrays["mineral_positions"] = m_pos.astype(np.float32)
             arrays["mineral_kinds"] = m_kinds.astype(np.int8)
             arrays["mineral_abundances"] = m_abund.astype(np.float32)
+        if self.mineral_sites is not None:
+            s_pos, s_dep, s_share = self.mineral_sites
+            arrays["mineral_site_positions"] = s_pos.astype(np.float32)
+            arrays["mineral_site_deposits"] = s_dep.astype(np.int32)
+            arrays["mineral_site_shares"] = s_share.astype(np.float32)
         if self.rare_bio is not None and len(self.rare_bio[0]) > 0:
             rb_pos, rb_kinds, rb_abund = self.rare_bio
             arrays["rare_bio_positions"] = rb_pos.astype(np.float32)
@@ -466,6 +493,13 @@ class ResourcesBuilder(Stage):
                 arrays["mineral_abundances"],
             )
             MINERALS.write(ctx.world, self.minerals)
+        if "mineral_site_positions" in arrays:
+            self.mineral_sites = (
+                arrays["mineral_site_positions"],
+                arrays["mineral_site_deposits"],
+                arrays["mineral_site_shares"],
+            )
+            MINERAL_SITES.write(ctx.world, self.mineral_sites)
         if "rare_bio_positions" in arrays:
             self.rare_bio = (
                 arrays["rare_bio_positions"],

@@ -12,3 +12,6 @@ FERTILITY_MEAN = MetaChannel("fertility_mean", dtype=np.float64)
 # realmgen.
 MINERALS = FeatureChannel("minerals")
 RARE_BIO = FeatureChannel("rare_bio")
+# ``(positions (K,3), deposit (K,), share (K,))``: the workings each ``minerals``
+# deposit is split into inside its face (``share`` sums to 1 per deposit).
+MINERAL_SITES = FeatureChannel("mineral_sites")

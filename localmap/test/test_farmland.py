@@ -120,3 +120,15 @@ def test_colours_follow_the_overlays(local, sites):
             if on:
                 expected |= fm.kind == k
         np.testing.assert_array_equal(alpha, expected)
+
+
+def test_mining_settlements_farm_only_their_farming_share(local, sites):
+    share = FarmlandParams().mining_farming_share
+    v_pop = _people(local, [20, 20])
+    t_pop = _people(local, [10]) / FarmlandParams().town_farming_share
+    fm = place_farmland(local, sites[:2], v_pop, sites[2:], t_pop, None, seed=8,
+                        village_mining=np.array([True, False]), town_mining=np.array([True]))
+    v_area = np.bincount(fm.owner[fm.kind == FARM_VILLAGE], minlength=2)
+    assert v_area[0] == round(20 * share)
+    assert v_area[1] == 20
+    np.testing.assert_allclose(fm.target_km2[FARM_TOWN], t_pop * share * FarmlandParams().ha_per_farmer * 0.01)

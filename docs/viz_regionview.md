@@ -131,6 +131,7 @@ global paths rather than the refined terrain — except these, handed to
 | `rivers` | `RegionRivers.paths` | the local rivers and streams (`paths` + `streams`) |
 | `trade_routes` | `RegionRoads.segments` | the local roads |
 | `deltas` | snapped deltas | snapped onto the local mouths |
+| `minerals` | each deposit as its workings (`mineral_sites`; kind of the deposit, size abundance × share), moved off the refined water | the same, off the local water |
 | `towns` | — (refined positions are in the world feature) | a `Towns` at the positions the map draws them |
 | `villages` | — | `LocalMap.villages` |
 | `cities` | — | `(city_index, positions, CityFootprints)` |

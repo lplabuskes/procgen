@@ -43,7 +43,9 @@ which region is viewed, since each town has exactly one owning region.
    is all barren spreads its people evenly. The face's **miners**
    (`MINING_POPULATION`, from the population stage's
    [Miners](realm_population.md#miners)) are not spread: each deposit's
-   (`mine_workers`) go on the owned land texel nearest it
+   (`mine_workers`) are split over its workings by share (`mineral_sites`,
+   see [resources.md](resources.md)) and each working's go on the owned land
+   texel nearest it
    (`compute_mining_density`), written as the `mining_density` texture so the
    finer tiers keep them by the mine. Result: the `rural_density` face
    texture (people/km², float32) — farmers + fishers + miners — reduced by the
@@ -66,7 +68,7 @@ which region is viewed, since each town has exactly one owning region.
    below the rivers) and not already a river or confluence site; the water
    bonuses do not stack. City siting shares `SiteField` but passes no network,
    so streams never draw cities. `route` means within `route_radius_km` of a
-   trade route, and `mine` means within `mining_radius_km` of a mineral deposit.
+   trade route, and `mine` means within `mining_radius_km` of a mineral working.
    The 0.05 floor keeps barren sites possible for mining camps and waypoints. A
    site is rejected if it lies within the exclusion radius of a town or city
    already placed. A pair must be the larger of their two radii apart:
@@ -80,7 +82,7 @@ which region is viewed, since each town has exactly one owning region.
 
    **Mining towns** are sited in the same largest-first pass with the same
    spacing rules, but only among the face's sites within `2 × mining_radius_km`
-   of one of its worked deposits, weighted `Σ miners · exp(−(d / mining_radius)²)`
+   of one of its deposits' worked workings, weighted `Σ miners · exp(−(d / mining_radius)²)`
    so they favour the bigger mines and stand close by, and are always of the
    mining kind. They do not need farmland, so a barren icecap or desert face
    whose deposits are worked still gets its mining town.

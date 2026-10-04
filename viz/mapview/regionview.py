@@ -32,6 +32,7 @@ from realmgen.placement.types import TIER_NAMES, format_population, population_d
 from realmgen.towns.types import TOWN_KIND_NAMES, Towns
 from region.upsample import RegionFields, build_region_fields
 from worldgen.hydrology.discharge import EARTH_RADIUS_KM
+from worldgen.resources.minerals import mineral_workings
 
 if TYPE_CHECKING:
     from core.world import World
@@ -568,8 +569,8 @@ class RegionView(QWidget):
 
     def _refined_features(self) -> dict:
         """Overlay features this region draws finer than the world map: the
-        rivers and roads re-routed over the refined terrain, and the deltas on the
-        new river mouths. (Towns and cities need no override: their refined
+        rivers and roads re-routed over the refined terrain, the deltas on the
+        new river mouths, and each mineral deposit as its workings. (Towns and cities need no override: their refined
         positions are in the world features.)  A local map adds its villages, its
         towns moved off its water and its cities' footprints."""
         out: dict = {}
@@ -591,6 +592,15 @@ class RegionView(QWidget):
             out["trade_routes"] = self._roads.segments
         if self._deltas is not None:
             out["deltas"] = self._deltas
+        minerals = self._globe.get_feature("minerals") if self._globe is not None else None
+        workings = mineral_workings(self._globe) if minerals is not None else None
+        if minerals is not None and workings is not None:
+            # Each deposit as the workings it is split into, sized by their share.
+            pos, deposit, share = workings
+            out["minerals"] = (
+                self._on_land("mineral_sites", pos), np.asarray(minerals[1])[deposit],
+                np.asarray(minerals[2], dtype=np.float64)[deposit] * share,
+            )
         return out
 
     def _overlay_projector(self) -> "_RegionProjector":

@@ -64,6 +64,7 @@ thumb:
 |---|---|---|
 | Village | every villager × `ha_per_farmer` (cropland under three-field rotation, fallow, meadow and pasture) | 1.5 ha |
 | Town | the share who farm (`town_farming_share`) × `ha_per_farmer`; the rest eat from the villages around | 0.5 |
+| Mining village or town | only `mining_farming_share` of its people farm; the rest live off the mine and buy food | 0.1 |
 | City | fed by its trade hinterland: a ring of market gardens and orchards `city_garden_ring_km` wide outside its footprint | 1.5 km |
 
 Fields are claimed texel by texel, outward from the settlement like a
