@@ -95,7 +95,7 @@ class RegionUpsampleParams:
     # the factor reads as "sub-grid relief per unit of grid-scale slope".  The
     # global field is smooth at ~15 km, where even mountain slopes only reach
     # ~0.007 km/km — hence the small saturation point and the factor above 1.
-    relief_factor: float = _f(2.0, label="Detail relief factor", min=0.0, max=8.0)
+    relief_factor: float = _f(1.0, label="Detail relief factor", min=0.0, max=8.0)
     slope_reference: float = _f(
         0.005, label="Slope saturation (km/km)", min=0.0005, max=0.05, step=0.0005
     )

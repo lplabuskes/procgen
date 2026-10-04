@@ -267,7 +267,7 @@ their anchors, the refined and coarse elevation and slope, and the land masks.
 | param | default | |
 |---|---|---|
 | `n_cols`, `tex_size` | 14, 64 | grid size |
-| `relief_factor`, `slope_reference`, `slope_floor`, `max_relief_km` | 2.0, 0.005, 0.10, 1.0 | detail amplitude |
+| `relief_factor`, `slope_reference`, `slope_floor`, `max_relief_km` | 1.0, 0.005, 0.10, 1.0 | detail amplitude |
 | `octaves`, `lacunarity`, `persistence`, `nyquist_safety` | 4, 2.0, 0.5, 0.5 | detail band |
 | `orographic_gain` | 0.5 /km | precipitation |
 | `lapse_rate_c_per_km` | 6.5 | temperature |
