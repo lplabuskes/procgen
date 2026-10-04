@@ -245,6 +245,31 @@ class TestComputeTradeNetwork:
         assert result.face_flow[3] > 0.0
         assert result.face_flow[4] == pytest.approx(0.0)
 
+    def test_deposit_decay_shrinks_a_far_deposits_yield(self):
+        # One settlement at face 0; deposits 2 and 6 steps away.
+        mesh = _line_mesh(8)
+        n = 8
+        ec = _uniform_edge_costs(mesh, cost=1.0)
+        result = compute_trade_network(
+            mesh, [_settlement(0, tier=0)], [(2, 1.0, 0), (6, 1.0, 0)],
+            ec, np.ones(n, dtype=bool), [np.empty(0)] * n, np.zeros(n, dtype=bool),
+            deposit_decay=0.5,
+        )
+        np.testing.assert_array_equal(result.deposit_owner, [0, 0])
+        np.testing.assert_allclose(result.deposit_cost, [2.0, 6.0])
+        np.testing.assert_allclose(result.deposit_credit, np.exp(-0.5 * np.array([2.0, 6.0])))
+        # Its own goods arriving are part of the settlement's flow.
+        assert result.goods_flow[0] > 0.0
+
+    def test_no_deposit_decay_credits_full_abundance(self):
+        mesh = _line_mesh(8)
+        n = 8
+        result = compute_trade_network(
+            mesh, [_settlement(0, tier=0)], [(6, 2.0, 0)],
+            _uniform_edge_costs(mesh), np.ones(n, dtype=bool), [np.empty(0)] * n, np.zeros(n, dtype=bool),
+        )
+        np.testing.assert_allclose(result.deposit_credit, [2.0])
+
     def test_flow_decay_reduces_distant_flow(self):
         # Same setup; with high decay, a distant source contributes little flow.
         mesh = _line_mesh(10)

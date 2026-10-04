@@ -449,9 +449,10 @@ def _draw_towns(painter: QPainter, towns, proj: OverlayProjector, ringed: bool =
     painter.restore()
 
 
-# Farming, river, fishing, roadside (localmap.villages.VILLAGE_* order).
+# Farming, river, fishing, roadside, mining (localmap.villages.VILLAGE_* order).
 _VILLAGE_COLORS = (
     QColor(214, 190, 120), QColor(110, 170, 235), QColor(90, 205, 190), QColor(200, 150, 110),
+    QColor(165, 150, 175),
 )
 # Dot radius (px) for the smallest and largest village: under the towns'
 # ``_TOWN_MAX_RADIUS`` scale, so a village never reads as a town.

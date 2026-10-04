@@ -19,7 +19,8 @@ terrain.
 - **Rural density** — each global texel's farmers redistributed over its refined
   land by the rural model's own weight, ``fertility ** γ``, and its fishers
   (``fishing_density``) over its refined shore, within ``fishing_shore_km`` of
-  the water.  Conserved *exactly* as totals: no one is created or lost, and none
+  the water, and its miners (``mining_density``) in camps within a few
+  ``mining_camp_km`` of their deposit.  Conserved *exactly* as totals: no one is created or lost, and none
   are left on refined water unless a global texel has no dry ground left at all.
 - **Danger** — per face on the globe, so first made continuous with
   :class:`region.smooth.FaceFanField` (exact face means), then nudged by terrain:
@@ -33,6 +34,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
+from scipy.spatial import KDTree
 
 from region.sampling import anchor_means
 from region.smooth import FaceFanField
@@ -42,6 +44,9 @@ if TYPE_CHECKING:
     from region.source import Located, ParentSource
     from region.upsample import RegionUpsampleParams
     from worldgen.resources.builder import ResourcesParams
+
+
+_EARTH_RADIUS_KM = 6371.0
 
 
 @dataclass
@@ -66,6 +71,7 @@ class RefineContext:
     land: np.ndarray             # refined dry ground
     anchor_land: np.ndarray      # the anchor texel is dry on the globe
     texel_km: float = 1.0        # child texel spacing
+    mine_points: Optional[np.ndarray] = None   # (K, 3) worked deposits
 
     def has(self, key: str) -> bool:
         return self.source.has(key)
@@ -259,7 +265,32 @@ def refine_resources(
         # evenly over that land; one with no land left keeps them where they are.
         w = _or_fallback(ctx, w, ctx.land.astype(np.float64))
         w = _or_fallback(ctx, w, np.ones(len(w)))
-        rho = ctx.conserve_mean(w, target - fish_target, everywhere)
+        mine_target = (
+            np.clip(ctx.anchor("mining_density"), 0.0, target - fish_target) if ctx.has("mining_density")
+            else np.zeros(len(target))
+        )
+        rho = ctx.conserve_mean(w, target - fish_target - mine_target, everywhere)
+        if ctx.has("mining_density"):
+            # The miners camp around their deposit: land weighted by a Gaussian
+            # of ``mining_camp_km`` about the nearest worked deposit; a global
+            # texel with no such land keeps them with its farmers.
+            if ctx.mine_points is not None and len(ctx.mine_points):
+                d, _ = KDTree(ctx.mine_points).query(ctx.positions, workers=-1)
+                camp_rad = float(params.mining_camp_km) / _EARTH_RADIUS_KM
+                q = np.where(ctx.land & (ctx.weights > 0), (np.asarray(d) / camp_rad) ** 2, np.inf)
+                # Relative to each global texel's closest land, so a texel far
+                # from its deposit (in camp radii) does not underflow.
+                q_min = np.full(ctx.n_anchors, np.inf)
+                np.minimum.at(q_min, ctx.anchors, q)
+                finite = np.isfinite(q)
+                rel = np.subtract(q, q_min[ctx.anchors], out=np.full_like(q, np.inf), where=finite)
+                near_mine = np.exp(-rel)
+            else:
+                near_mine = np.zeros(len(w))
+            wm = _or_fallback(ctx, near_mine, w)
+            mine = ctx.conserve_mean(wm, mine_target, everywhere)
+            out["mining_density"] = texture(mine)
+            rho = rho + mine
         if ctx.has("fishing_density"):
             # The fishers stay on the refined shore: land weighted by how much
             # water lies within ``fishing_shore_km``; with no shore left in a

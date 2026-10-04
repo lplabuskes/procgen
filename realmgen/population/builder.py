@@ -13,7 +13,7 @@ from core.display import DisplayRegistry
 from core.params import field, param_field as _f, paramclass
 from core.pipeline import BuildContext, Stage
 from realmgen.channels import (
-    FISHING_POPULATION, HINTERLAND_ID, POPULATION, RURAL_POPULATION, SITUATIONAL_VALUE, SUITABILITY,
+    FISHING_POPULATION, HINTERLAND_ID, MINING_POPULATION, POPULATION, RURAL_POPULATION, SITUATIONAL_VALUE, SUITABILITY,
     TOWN_POPULATION, TRADE_FLOW,
 )
 from realmgen.placement.builder import SeederParams
@@ -30,6 +30,7 @@ from realmgen.population.calibration import (
     compute_farm_and_fish_food,
     compute_food_base,
     compute_hinterland_shares,
+    compute_miners,
     compute_rural_population,
     compute_trade_wealth,
     compute_urban_population,
@@ -38,7 +39,7 @@ from realmgen.population.calibration import (
 from realmgen.population.trade_spawn import spawn_trade_settlements
 from realmgen.scoring.suitability import _positions_to_face_ids
 from realmgen.persistence import pack_settlements, unpack_settlements
-from realmgen.trade.network import RARE_BIO_TYPE_OFFSET, TradeResult, compute_trade_network
+from realmgen.trade.network import GOOD_RARITY_WEIGHTS, RARE_BIO_TYPE_OFFSET, TradeResult, compute_trade_network
 from viz.color_stops import interp_stops_scalar
 from worldgen.cost.channels import COST_SURFACES, IS_WATER
 from worldgen.geology.channels import OCEAN_MASK
@@ -59,6 +60,9 @@ class TradeParams:
     # still pays it, a port town is founded.  The final network has no landings.
     landing_cost: float = _f(12.0, label="Fallback landing cost", min=0.0, max=200.0)
     flow_decay: float = _f(0.05, label="Flow decay", min=0.001, max=1.0)
+    # A deposit's yield to the city that works it falls off with the route cost
+    # between them (~1 per 100 km of open land, ~2 on icecap).
+    deposit_decay: float = _f(0.2, label="Deposit yield decay with distance", min=0.0, max=2.0)
     hub_display_quantile: float = _f(0.90, label="Hub display quantile", min=0.5, max=0.99)
 
 
@@ -90,8 +94,11 @@ class PopulationParams:
     # gets only a share; the remainder is reserved for the future town pipeline
     # (see docs/plans/city_population_rework_plan.md §5 — don't double-count).
     city_surplus_share: float = _f(0.04, label="Major-city share of regional surplus", min=0.0, max=1.0)
-    trade_food_weight: float = _f(900.0, label="Trade food weight β (people per flow unit)", min=0.0, max=10_000.0)
+    trade_food_weight: float = _f(1500.0, label="Trade food weight β (people per flow unit)", min=0.0, max=10_000.0)
     city_min: float = _f(7_000.0, label="City existence floor (people)", min=0.0, max=100_000.0)
+    # Of the trade people a city's own mineral goods feed, the share who are
+    # miners living at its deposits rather than in the city.
+    mining_share: float = _f(0.5, label="Share of mineral-trade people who are miners", min=0.0, max=1.0)
     hinterland_max_distance: float = _f(40.0, label="Hinterland max distance", min=5.0, max=200.0)
     hinterland_influence_scale: float = _f(4.5, label="Hinterland influence scale", min=0.1, max=10.0)
     hinterland_reach_scale: float = _f(9.0, label="Hinterland reach scale", min=0.1, max=30.0)
@@ -180,6 +187,8 @@ class PopulationStage(Stage):
         # the exact inputs that produced the final urban populations.
         self.carrying_cap: Optional[np.ndarray] = None
         self.trade_wealth: Optional[np.ndarray] = None
+        # (M,) miners at each deposit of the ``minerals`` feature (index-aligned).
+        self.mine_workers: Optional[np.ndarray] = None
 
     def build(self, ctx: BuildContext) -> None:
         world = ctx.world
@@ -301,7 +310,10 @@ class PopulationStage(Stage):
         hinterland_cost_graph = build_cost_graph(mesh.face_adjacency, hinterland_edge_costs)
 
         # ── Good sources (minerals + rare bio) ──────────────────────────────
+        # Minerals first, so the first ``n_minerals`` sources are the
+        # ``minerals`` feature's deposits in order.
         good_sources: list[tuple] = []
+        n_minerals = 0
         for channel, type_offset in ((MINERALS, 0), (RARE_BIO, RARE_BIO_TYPE_OFFSET)):
             if channel.present(world):
                 positions, kinds, abundances = channel.read(world)
@@ -309,6 +321,8 @@ class PopulationStage(Stage):
                     fids = _positions_to_face_ids(positions, centroids)
                     for fid, kind, ab in zip(fids.tolist(), kinds.tolist(), abundances.tolist()):
                         good_sources.append((fid, ab, int(kind) + type_offset))
+                    if channel is MINERALS:
+                        n_minerals = len(positions)
 
         # Tier configs reused by trade-spawn for initial_population of new settlements.
         tier_configs = [
@@ -326,6 +340,7 @@ class PopulationStage(Stage):
                 river_switch_cost=tp.river_switch_cost,
                 landing_cost=tp.landing_cost if landings else np.inf,
                 flow_decay=tp.flow_decay,
+                deposit_decay=tp.deposit_decay,
                 hub_display_quantile=tp.hub_display_quantile,
                 settlement_demands=settlement_demands,
             )
@@ -452,6 +467,36 @@ class PopulationStage(Stage):
             # No landings now: every land↔water hop is at a settlement.
             self.trade_result = _compute_trade(self.settlements, settlement_demands=population, landings=False)
 
+        # ── Miners: out of the cities, onto their deposits ───────────────────
+        mine_faces = np.array([f for f, _, _ in good_sources[:n_minerals]], dtype=np.int64)
+        miners = np.zeros(n_minerals, dtype=np.float64)
+        if self.settlements and n_minerals:
+            tr = self.trade_result
+            face_flow = tr.face_flow.astype(np.float64)
+            s_faces = np.array([s.face_id for s in self.settlements], dtype=np.int64)
+            own_share = np.where(
+                face_flow[s_faces] > 0, tr.goods_flow / np.maximum(face_flow[s_faces], 1e-300), 0.0)
+            rarity = np.array([GOOD_RARITY_WEIGHTS.get(int(g), 1.0) for _, _, g in good_sources])
+            workable = np.zeros(len(good_sources), dtype=bool)
+            workable[:n_minerals] = ~np.asarray(is_water, dtype=bool)[mine_faces]
+            miners = compute_miners(
+                population, pp.trade_food_weight * trade_wealth, own_share,
+                tr.deposit_owner, tr.deposit_credit * rarity, workable,
+                mining_share=pp.mining_share, city_min=pp.city_min,
+            )[:n_minerals]
+            owner = tr.deposit_owner[:n_minerals]
+            population = population - np.bincount(
+                owner[owner >= 0], weights=miners[owner >= 0], minlength=len(population))
+            self.settlements = apply_population_to_settlements(self.settlements, population)
+            self.population = population
+        mining = np.bincount(mine_faces, weights=miners, minlength=n) if n_minerals else np.zeros(n)
+        self.mine_workers = miners
+        # The miners are countryside until the town stage gathers them into mining towns.
+        self.rural_population = self.rural_population + mining
+        RURAL_POPULATION.write(mesh, self.rural_population)
+        MINING_POPULATION.write(mesh, mining)
+        world.add_feature("mine_workers", miners)
+
         # ── Write per-face metadata ──────────────────────────────────────────
         TRADE_FLOW.write(mesh, self.trade_result.face_flow)
         mesh.apply_metadata_channel("is_trade_hub", self.trade_result.hub_mask.tolist())
@@ -526,7 +571,10 @@ class PopulationStage(Stage):
 
     def serialize(self) -> dict:
         if self.settlements:
-            return pack_settlements(self.settlements)
+            out = pack_settlements(self.settlements)
+            if self.mine_workers is not None:
+                out["mine_workers"] = self.mine_workers
+            return out
         return {}
 
     def load(self, arrays, ctx: BuildContext) -> None:
@@ -534,6 +582,9 @@ class PopulationStage(Stage):
         if "settle_face_id" in arrays:
             self.settlements = unpack_settlements(arrays)
             world.add_feature("settlements", self.settlements)
+        if "mine_workers" in arrays:
+            self.mine_workers = np.asarray(arrays["mine_workers"], dtype=np.float64)
+            world.add_feature("mine_workers", self.mine_workers)
         if RURAL_POPULATION.present(mesh):
             self.rural_population = RURAL_POPULATION.read(mesh)
         if HINTERLAND_ID.present(mesh):

@@ -40,10 +40,17 @@ which region is viewed, since each town has exactly one owning region.
    `face_area / n_owned`, so the face total is conserved exactly. An
    over-hanging texel uses its owner face's scale, which makes the field a
    function of position that agrees across face seams. A face whose owned land
-   is all barren spreads its people evenly. Result: the `rural_density` face
-   texture (people/km², float32), reduced by the towns in step 4.
-2. **Town sizes** (`draw_town_sizes`). A face spends `town_fraction × rural`
-   people on towns, drawing truncated-Pareto sizes (`pdf ∝ x^-(α+1)` on
+   is all barren spreads its people evenly. The face's **miners**
+   (`MINING_POPULATION`, from the population stage's
+   [Miners](realm_population.md#miners)) are not spread: each deposit's
+   (`mine_workers`) go on the owned land texel nearest it
+   (`compute_mining_density`), written as the `mining_density` texture so the
+   finer tiers keep them by the mine. Result: the `rural_density` face
+   texture (people/km², float32) — farmers + fishers + miners — reduced by the
+   towns in step 4.
+2. **Town sizes** (`draw_town_sizes`). A face spends `town_fraction ×` its
+   farmers and fishers on towns, and separately `mining_town_fraction ×` its
+   miners on mining towns, drawing truncated-Pareto sizes (`pdf ∝ x^-(α+1)` on
    `[town_min, city_min]`, α = `size_exponent`), largest first. The draw that
    would overspend is cut to what is left. A remainder under `town_min` becomes
    one more minimum-size town with probability `remainder / town_min`, so the
@@ -70,10 +77,19 @@ which region is viewed, since each town has exactly one owning region.
    are jittered by up to `site_jitter` × texel spacing so towns do not sit on
    the texel lattice; coast sites are not jittered (it could step into the sea),
    and a jitter that would leave the face is dropped.
+
+   **Mining towns** are sited in the same largest-first pass with the same
+   spacing rules, but only among the face's sites within `2 × mining_radius_km`
+   of one of its worked deposits, weighted `Σ miners · exp(−(d / mining_radius)²)`
+   so they favour the bigger mines and stand close by, and are always of the
+   mining kind. They do not need farmland, so a barren icecap or desert face
+   whose deposits are worked still gets its mining town.
 4. **Accounting.** `town_population` is the sum of sited towns per face, and
-   `rural_population` and the density texture are reduced to match. A town with
-   no legal site is dropped and its people stay rural. None were dropped on
-   seeds 4/31/35.
+   `rural_population` and the density texture are reduced to match: a mining
+   town out of the miners (the odd minimum-size one drawn beyond them out of
+   the farmers), every other town out of the farmers and fishers. A town with
+   no legal site is dropped and its people stay rural — a mining town's in the
+   camps by its deposit, which the local maps draw as mining villages.
 
 The stage reads the pre-town countryside as `rural_population +
 town_population`, and `PopulationStage` zeroes `town_population` whenever it
@@ -87,7 +103,8 @@ city whose hinterland holds it.
 
 ## `TownParams`
 
-`town_fraction` (0.12), `town_min` (1000), `size_exponent` (1.0),
+`town_fraction` (0.12), `mining_town_fraction` (0.6 — the rest of the miners
+live in camps and hamlets by the mine), `town_min` (1000), `size_exponent` (1.0),
 `town_spacing_km` (20), `city_clearance_km` (25), the site bonuses `port_bonus`
 (2), `confluence_bonus` (2), `river_bonus` (1), `stream_bonus` (1), `route_bonus` (1),
 `mining_bonus` (1.5), `route_radius_km` (15), `mining_radius_km` (25), and

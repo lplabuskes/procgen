@@ -24,6 +24,8 @@ SPACING_EXPONENT = 0.25
 # Density floor (relative to the face mean) so barren-but-land sites keep a
 # nonzero chance: mining camps and waypoints do not need farmland.
 _DENSITY_FLOOR = 0.05
+# RNG stream tag for a face's mining-town site noise, seeded (seed, face, tag).
+_MINING_STREAM = 5
 
 
 def texel_owners(centroids: np.ndarray, positions: np.ndarray) -> np.ndarray:
@@ -93,6 +95,43 @@ def compute_rural_density(
         shore_raw = np.where(no_shore[owner], farm_raw, shore_raw)
     fishing_density = spread(fish, shore_raw)
     return spread(rural - fish, farm_raw) + fishing_density, fishing_density
+
+
+def compute_mining_density(
+    points: np.ndarray,
+    faces: np.ndarray,
+    workers: np.ndarray,
+    positions: np.ndarray,
+    face_areas_km2: np.ndarray,
+    land: np.ndarray,
+    owner: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """The miners as density on the texel of their deposit, ``(N, H, W)``
+    people/km², and the miners of each face that found no texel, ``(N,)``.
+
+    Each deposit's ``workers`` go on the owned land texel of its face nearest the
+    deposit (``points``, unit vectors), at the face's owned-texel area — the
+    scale :func:`compute_rural_density` uses — so the face's texels hold exactly
+    its miners.  A face that owns no land texel cannot hold its miners; they are
+    returned for the caller to spread with the rest of its countryside.
+    """
+    n = land.shape[0]
+    density = np.zeros(land.shape, dtype=np.float64)
+    unsited = np.zeros(n, dtype=np.float64)
+    owned = owner == np.arange(n)[:, None, None]
+    texel_area = np.asarray(face_areas_km2, dtype=np.float64) / np.maximum(owned.sum(axis=(1, 2)), 1)
+    for p, f, m in zip(np.asarray(points, dtype=np.float64), np.asarray(faces), np.asarray(workers)):
+        if m <= 0:
+            continue
+        f = int(f)
+        ok = owned[f] & land[f]
+        if not ok.any():
+            unsited[f] += m
+            continue
+        idx = np.flatnonzero(ok)
+        best = idx[int(np.argmax(positions[f].reshape(-1, 3)[idx] @ p))]
+        density[f].reshape(-1)[best] += m / texel_area[f]
+    return density, unsited
 
 
 def draw_town_sizes(
@@ -221,6 +260,19 @@ def _build_candidates(
     return out, rngs
 
 
+def _mining_candidates(
+    cand: FaceCandidates, points: np.ndarray, workers: np.ndarray, mining_radius: float,
+) -> FaceCandidates:
+    """A face's sites for its mining towns: those within ``2 × mining_radius`` of
+    one of its worked deposits, weighted ``Σ workers · exp(−(d / radius)²)`` so a
+    town favours the bigger mines and stands close by."""
+    d2 = ((cand.positions[:, None, :] - points[None, :, :]) ** 2).sum(axis=2) / mining_radius ** 2
+    w = (workers[None, :] * np.exp(-d2)).sum(axis=1)
+    reach = (d2 < 4.0).any(axis=1) & (w > 0)
+    log_weight = np.where(reach, np.log(np.maximum(w, 1e-300)), -np.inf)
+    return FaceCandidates(cand.positions, log_weight, np.full(cand.positions.shape[0], TOWN_MINING, dtype=np.int8))
+
+
 def place_towns(
     requests: Sequence[tuple[int, np.ndarray]],
     *,
@@ -238,8 +290,13 @@ def place_towns(
     mineral_points: Optional[np.ndarray],
     route_points: Optional[np.ndarray],
     seed: int,
-) -> tuple[Towns, np.ndarray]:
-    """Site every requested town; returns ``(towns, unplaced_people_per_face)``.
+    mining_requests: Sequence[tuple[int, np.ndarray]] = (),
+    mine_points: Optional[np.ndarray] = None,
+    mine_faces: Optional[np.ndarray] = None,
+    mine_workers: Optional[np.ndarray] = None,
+) -> tuple[Towns, np.ndarray, np.ndarray]:
+    """Site every requested town; returns ``(towns, unplaced_people_per_face,
+    is_mining_request)`` — the last flags the towns sited for ``mining_requests``.
 
     ``requests`` is ``(face, sizes)`` per face. Towns are sited globally largest
     first, so the biggest towns take the best sites. Each picks among its face's
@@ -250,28 +307,46 @@ def place_towns(
     ``town_spacing`` for a ``town_min`` town, ``city_radii`` per city, and a pair
     must be the larger of their two radii apart.
 
+    ``mining_requests`` (``(face, sizes)``) are the mining towns: sited the same
+    way among the face's sites near its worked deposits (``mine_points`` on
+    ``mine_faces`` with ``mine_workers`` miners), always of the mining kind.
+
     Exclusion is only checked against the face and its neighbours, which is exact
     while every radius is shorter than a face's width.
     """
     mineral_tree = KDTree(mineral_points) if mineral_points is not None and len(mineral_points) else None
     route_tree = KDTree(route_points) if route_points is not None and len(route_points) else None
-    candidates, rngs = _build_candidates(
-        [int(f) for f, _ in requests], sites, density, params,
-        mineral_tree, route_tree, mining_radius, route_radius, seed,
+    faces = sorted({int(f) for f, _ in requests} | {int(f) for f, _ in mining_requests})
+    face_cands, face_rngs = _build_candidates(
+        faces, sites, density, params, mineral_tree, route_tree, mining_radius, route_radius, seed,
     )
+    all_requests = [(int(f), sz) for f, sz in requests]
+    candidates = [face_cands[f] for f, _ in all_requests]
+    rngs = [face_rngs[f] for f, _ in all_requests]
+    if mining_requests:
+        assert mine_points is not None and mine_faces is not None and mine_workers is not None
+        m_faces = np.asarray(mine_faces)
+        m_workers = np.asarray(mine_workers, dtype=np.float64)
+        for f, sizes in mining_requests:
+            on = (m_faces == int(f)) & (m_workers > 0)
+            all_requests.append((int(f), sizes))
+            candidates.append(_mining_candidates(
+                face_cands[int(f)], np.asarray(mine_points, dtype=np.float64)[on], m_workers[on], mining_radius))
+            rngs.append(np.random.default_rng([int(seed), int(f), _MINING_STREAM]))
     placed, unplaced = site_largest_first(
-        requests, candidates, rngs,
+        all_requests, candidates, rngs,
         adjacency=adjacency,
         disc_positions=city_positions, disc_faces=city_faces, disc_radii=city_radii,
         town_spacing=town_spacing, town_min=float(params.town_min),
     )
-    return _towns_from(placed, hinterland), unplaced
+    is_mining = np.asarray([r >= len(requests) for r, *_ in placed], dtype=bool)
+    return _towns_from([(f, size, pos, kind) for _, f, size, pos, kind in placed], hinterland), unplaced, is_mining
 
 
 def site_largest_first(
     requests: Sequence[tuple[int, np.ndarray]],
-    candidates: dict[int, FaceCandidates],
-    rngs: dict[int, np.random.Generator],
+    candidates: Sequence[FaceCandidates],
+    rngs: Sequence[np.random.Generator],
     *,
     adjacency: Sequence[Sequence[int]],
     disc_positions: np.ndarray,
@@ -279,12 +354,13 @@ def site_largest_first(
     disc_radii: np.ndarray,
     town_spacing: float,
     town_min: float,
-) -> tuple[list[tuple[int, float, np.ndarray, int]], np.ndarray]:
-    """Site ``requests`` (``(face, sizes)``) on their faces' ``candidates``, globally
-    largest first; returns ``([(face, size, position, kind)], unplaced_per_face)``.
+) -> tuple[list[tuple[int, int, float, np.ndarray, int]], np.ndarray]:
+    """Site ``requests`` (``(face, sizes)``) on their ``candidates`` (one per
+    request, all on that request's face), globally largest first; returns
+    ``([(request, face, size, position, kind)], unplaced_per_face)``.
 
-    Each town takes the Gumbel-max of its face's log site weights (noise drawn
-    from ``rngs[face]``) over the sites clear of every exclusion disc already
+    Each town takes the Gumbel-max of its request's log site weights (noise drawn
+    from ``rngs[request]``) over the sites clear of every exclusion disc already
     placed — the fixed ``disc_*`` ones (cities) and earlier towns. A town of
     ``size`` claims ``town_spacing · (size / town_min)^0.25``; a pair must be the
     larger of their two radii apart. Only the face and its neighbours are
@@ -292,8 +368,8 @@ def site_largest_first(
     """
     n = len(adjacency)
     order = sorted(
-        ((float(size), int(f), j) for f, sizes in requests for j, size in enumerate(sizes)),
-        key=lambda t: (-t[0], t[1], t[2]),
+        ((float(size), int(f), r, j) for r, (f, sizes) in enumerate(requests) for j, size in enumerate(sizes)),
+        key=lambda t: (-t[0], t[1], t[2], t[3]),
     )
 
     # Per face: exclusion discs already placed (fixed ones, then towns), in
@@ -316,22 +392,22 @@ def site_largest_first(
     for p, f, r in zip(disc_positions, disc_faces, disc_radii):
         _add_disc(int(f), np.asarray(p, dtype=np.float64), float(r))
 
-    gumbel = {
-        int(f): rngs[int(f)].gumbel(size=(len(sizes), candidates[int(f)].positions.shape[0]))
-        for f, sizes in requests
-    }
+    gumbel = [
+        rngs[r].gumbel(size=(len(sizes), candidates[r].positions.shape[0]))
+        for r, (_, sizes) in enumerate(requests)
+    ]
 
-    placed: list[tuple[int, float, np.ndarray, int]] = []
+    placed: list[tuple[int, int, float, np.ndarray, int]] = []
     unplaced = np.zeros(n, dtype=np.float64)
 
-    for size, f, j in order:
-        cand = candidates[f]
+    for size, f, r, j in order:
+        cand = candidates[r]
         if cand.positions.shape[0] == 0:
             unplaced[f] += size
             continue
 
         radius = town_spacing * (size / town_min) ** SPACING_EXPONENT
-        score = cand.log_weight + gumbel[f][j]
+        score = cand.log_weight + gumbel[r][j]
         near = [g for g in (f, *adjacency[f]) if n_disc[g]]
         if near:
             near_pos = np.concatenate([disc_pos[g][:n_disc[g]] for g in near])
@@ -346,7 +422,7 @@ def site_largest_first(
 
         p = cand.positions[best]
         _add_disc(f, p, radius)
-        placed.append((f, size, p, int(cand.kind[best])))
+        placed.append((r, f, size, p, int(cand.kind[best])))
     return placed, unplaced
 
 

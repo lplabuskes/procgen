@@ -13,6 +13,7 @@ settlements covers both phases. Land node i = i; sea node i = i + N.
 """
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from typing import List
 
@@ -68,6 +69,15 @@ class TradeResult:
     # (N,) float32 — flow crossing between land and water at each land face that
     # is not a port (the fallback landings); all zero without landings.
     landing_flow: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.float32))
+    # (D,) per good source (aligned with the ``good_sources`` arg): the settlement
+    # that works it (-1 = none can reach it), the route cost there, and the
+    # abundance credited to that settlement after ``deposit_decay``.
+    deposit_owner: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int32))
+    deposit_cost: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.float64))
+    deposit_credit: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.float64))
+    # (S,) flow of each settlement's own goods at its face: deposit hauls arriving
+    # plus everything it exports (the rest of its face flow is imports and transit).
+    goods_flow: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.float64))
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -282,6 +292,7 @@ def compute_trade_network(
     landing_cost: float = np.inf,
     settlement_demands: np.ndarray | None = None,
     flow_decay: float = 0.05,
+    deposit_decay: float = 0.0,
     hub_display_quantile: float = 0.90,
     min_display_flow: float | None = None,
     rarity_weights: dict | None = None,
@@ -289,8 +300,10 @@ def compute_trade_network(
     """Accumulate trade flow in two phases.
 
     **Phase 1** — each deposit routes to its nearest settlement (by hybrid cost).
-    Flow on each path = ``abundance × rarity[g] × exp(−flow_decay × dist)``.
-    Raw abundance is credited to that settlement per good type.
+    That settlement is credited ``abundance × exp(−deposit_decay × dist)`` of
+    good *g* — a far deposit yields little, since working it means hauling
+    supplies out and ore back — and the haul on the path is that credit
+    ``× rarity[g] × exp(−flow_decay × dist)``.
 
     **Phase 2** — each settlement with goods routes to every other settlement.
     Demand for good type *g* at the destination is modulated by how well the
@@ -333,6 +346,9 @@ def compute_trade_network(
             proportional demands.
         flow_decay: exponential decay factor applied to both phase-1 and
             phase-2 routes with increasing cost distance.
+        deposit_decay: exponential decay of a deposit's credited yield with its
+            cost distance from the settlement that works it (0 = full yield at
+            any distance).
         hub_display_quantile: percentile of positive face flows above which a
             face is flagged as a trade hub for display.
         min_display_flow: minimum edge flow to include in the route list for
@@ -353,6 +369,10 @@ def compute_trade_network(
         routes=[],
         pair_flow=np.zeros((s, s), dtype=np.float32),
         landing_flow=np.zeros(n, dtype=np.float32),
+        deposit_owner=np.full(len(good_sources), -1, dtype=np.int32),
+        deposit_cost=np.full(len(good_sources), np.inf),
+        deposit_credit=np.zeros(len(good_sources)),
+        goods_flow=np.zeros(s),
     )
     if not settlements or not good_sources:
         return empty
@@ -415,11 +435,16 @@ def compute_trade_network(
 
     decay = float(flow_decay)
     edge_flow: dict[tuple[int, int], float] = {}
-    # deposit_goods[k, g] = raw abundance of type g collected at settlement k.
+    # deposit_goods[k, g] = credited abundance of type g collected at settlement k.
     deposit_goods = np.zeros((len(settlements), n_types), dtype=np.float64)
 
     # Phase 1: route each deposit to its nearest settlement
-    for face_id, abundance, good_type in good_sources:
+    n_src = len(good_sources)
+    deposit_owner = np.full(n_src, -1, dtype=np.int32)
+    deposit_cost = np.full(n_src, np.inf)
+    deposit_credit = np.zeros(n_src)
+    goods_flow = np.zeros(len(settlements))
+    for i, (face_id, abundance, good_type) in enumerate(good_sources):
         src_node = int(face_id)
         if src_node >= size:
             continue
@@ -429,10 +454,13 @@ def compute_trade_network(
         if not np.isfinite(d):
             continue
         g = int(good_type)
-        deposit_goods[k, g] += float(abundance)
-        phase1_flow = float(abundance) * float(rarity_arr[g]) * np.exp(-decay * d)
+        credit = float(abundance) * np.exp(-float(deposit_decay) * d)
+        deposit_owner[i], deposit_cost[i], deposit_credit[i] = k, d, credit
+        deposit_goods[k, g] += credit
+        phase1_flow = credit * float(rarity_arr[g]) * np.exp(-decay * d)
         if phase1_flow < 1e-9:
             continue
+        goods_flow[k] += phase1_flow
         _accumulate_path(pred[k], src_node, settlement_nodes[k], phase1_flow, edge_flow)
 
     # Phase 2: inter-settlement trade, modulated by local supply per good type.
@@ -467,10 +495,12 @@ def compute_trade_network(
             if inter_flow < 1e-9:
                 continue
             pair_flow[k_src, k_dst] = inter_flow
+            goods_flow[k_src] += inter_flow
             _accumulate_path(pred[k_src], dst_node, src_node, inter_flow, edge_flow)
 
     if not edge_flow:
-        return empty
+        return dataclasses.replace(
+            empty, deposit_owner=deposit_owner, deposit_cost=deposit_cost, deposit_credit=deposit_credit)
 
     # Per-face flow: sum contributions from both endpoints of each edge
     face_flow = np.zeros(n, dtype=np.float64)
@@ -507,4 +537,8 @@ def compute_trade_network(
         routes=routes,
         pair_flow=pair_flow.astype(np.float32),
         landing_flow=landing_flow.astype(np.float32),
+        deposit_owner=deposit_owner,
+        deposit_cost=deposit_cost,
+        deposit_credit=deposit_credit,
+        goods_flow=goods_flow,
     )

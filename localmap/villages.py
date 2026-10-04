@@ -44,8 +44,8 @@ from region.roads import RegionRoads
 from region.towns import _neighbour_any, _river_points
 from region.upsample import EARTH_RADIUS_KM, RegionFields
 
-VILLAGE_FARM, VILLAGE_RIVER, VILLAGE_COAST, VILLAGE_ROAD = range(4)
-VILLAGE_KIND_NAMES = ("Farming village", "River village", "Fishing village", "Roadside village")
+VILLAGE_FARM, VILLAGE_RIVER, VILLAGE_COAST, VILLAGE_ROAD, VILLAGE_MINING = range(5)
+VILLAGE_KIND_NAMES = ("Farming village", "River village", "Fishing village", "Roadside village", "Mining village")
 
 # RNG stream tag for village sizes and sites.
 _VILLAGE_STREAM = 7
@@ -174,8 +174,13 @@ def place_villages(
     if "fishing_density" in tex:
         fish = tex["fishing_density"][..., 0].astype(np.float64)[dry]
         fishers |= fish > 0.5 * cand_rho
+    # A mining village is among people who mostly mine.
+    miners = np.zeros_like(fishers)
+    if "mining_density" in tex:
+        miners = tex["mining_density"][..., 0].astype(np.float64)[dry] > 0.5 * cand_rho
     kind = np.select(
-        [fishers, near_river | confluence, near_road], [VILLAGE_COAST, VILLAGE_RIVER, VILLAGE_ROAD],
+        [miners, fishers, near_river | confluence, near_road],
+        [VILLAGE_MINING, VILLAGE_COAST, VILLAGE_RIVER, VILLAGE_ROAD],
         default=VILLAGE_FARM,
     ).astype(np.int8)
 

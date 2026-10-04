@@ -62,6 +62,7 @@ bands on the contours instead.
 | `dominant_crop` | reclassified from the refined fields (climate area-averaged, as for `biome`) | derived |
 | `rural_density` | each global texel's farmers over its refined land by `fertility ** γ`, its fishers over its refined shore | **total exact** |
 | `fishing_density` | the fishers' part of `rural_density` | **total exact** |
+| `mining_density` | the miners' part of `rural_density`, in camps by their deposit | **total exact** |
 | `danger` | per face on the globe: made continuous (`FaceFanField`), then nudged by terrain | per face (smooth base); nudge per global texel |
 
 The last five need the world's resource / town / danger stages; a world without
@@ -227,7 +228,11 @@ their anchors, the refined and coarse elevation and slope, and the land masks.
   `fertility ** γ`, and its fishers over refined land weighted by the share of
   water within `fishing_shore_km` (2 km; a box of `round(km / texel_km)` texels
   each way) — so they follow the refined shoreline, and a global texel with no
-  shore left puts them with its farmers. Both parts are conserved — the design doc's hard
+  shore left puts them with its farmers. Its miners (`mining_density`) go on
+  refined land weighted by a Gaussian of `mining_camp_km` (3 km) about the
+  nearest worked deposit (measured from each global texel's closest land, so
+  the weight cannot underflow), or with its farmers if the texel has no land.
+  All three parts are conserved — the design doc's hard
   constraint: the regional sum equals the global one to float noise, and nobody
   stands on refined water unless the global texel has no dry ground left (a
   texel whose land is all barren spreads its people evenly). Town refinement

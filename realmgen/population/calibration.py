@@ -332,6 +332,58 @@ def compute_urban_population(
     return float(surplus_rate) * cap + float(trade_food_weight) * wealth
 
 
+def compute_miners(
+    population: np.ndarray,
+    trade_people: np.ndarray,
+    own_goods_share: np.ndarray,
+    deposit_owner: np.ndarray,
+    deposit_value: np.ndarray,
+    workable: np.ndarray,
+    *,
+    mining_share: float,
+    city_min: float,
+) -> np.ndarray:
+    """Miners per deposit, ``(D,)`` people, taken out of the cities that work them.
+
+    A city's trade-fed people (``trade_people``) live on the flow at its face;
+    ``own_goods_share`` of that flow is its own goods (deposit hauls in, exports
+    out). The ``workable`` deposits' share of the value it owns
+    (``deposit_value`` = credited abundance × rarity) is the part that comes out
+    of the ground, and ``mining_share`` of those people dig it instead of
+    living in the city: they live at the deposits, in proportion to each one's
+    value. No city is cut below ``city_min``.
+
+    Args:
+        population: (S,) city people before the miners leave.
+        trade_people: (S,) ``β · trade_wealth`` — the trade-fed part of it.
+        own_goods_share: (S,) in [0, 1].
+        deposit_owner: (D,) settlement index working each deposit, -1 for none.
+        deposit_value: (D,) credited value of each deposit to its owner.
+        workable: (D,) bool — deposits that employ miners (minerals on land).
+        mining_share: share of the mined goods' trade people who are miners.
+        city_min: floor no city is cut below.
+
+    Returns:
+        (D,) float64 — miners at each deposit; their sum per owner is what that
+        city loses.
+    """
+    pop = np.asarray(population, dtype=np.float64)
+    n_s = pop.size
+    owner = np.asarray(deposit_owner, dtype=np.int64)
+    value = np.where(owner >= 0, np.maximum(np.asarray(deposit_value, dtype=np.float64), 0.0), 0.0)
+    owned = owner >= 0
+    total = np.bincount(owner[owned], weights=value[owned], minlength=n_s)
+    mined = np.bincount(owner[owned], weights=(value * workable)[owned], minlength=n_s)
+    frac = np.where(total > 0, mined / np.maximum(total, 1e-300), 0.0)
+    city_miners = (
+        float(mining_share) * np.maximum(np.asarray(trade_people, dtype=np.float64), 0.0)
+        * np.clip(np.asarray(own_goods_share, dtype=np.float64), 0.0, 1.0) * frac
+    )
+    city_miners = np.minimum(city_miners, np.maximum(pop - float(city_min), 0.0))
+    per_value = np.where(mined > 0, city_miners / np.maximum(mined, 1e-300), 0.0)
+    return np.where(owned & workable, value * per_value[np.maximum(owner, 0)], 0.0)
+
+
 def cull_settlements(
     settlements: List[Settlement],
     population: np.ndarray,

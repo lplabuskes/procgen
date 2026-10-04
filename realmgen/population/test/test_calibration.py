@@ -15,6 +15,7 @@ from realmgen.population.calibration import (
     compute_farm_and_fish_food,
     compute_food_base,
     compute_hinterland_shares,
+    compute_miners,
     compute_rural_population,
     compute_trade_wealth,
     compute_urban_population,
@@ -186,6 +187,35 @@ class TestFarmAndFishFood:
             fert, np.zeros((3, 4, 4), bool), np.ones(3), density_max=16.0, fishing_density_max=8.0)
         np.testing.assert_allclose(farm, compute_food_base(fert.mean(axis=(1, 2)), np.ones(3), density_max=16.0))
         assert np.all(fish == 0.0)
+
+
+class TestComputeMiners:
+    def test_miners_follow_each_deposits_value(self):
+        # City 0 works deposits 0 and 1 (minerals, values 1 and 3) and deposit 2
+        # (not workable, value 4): half its goods' value is mined.
+        miners = compute_miners(
+            np.array([100_000.0]), np.array([80_000.0]), np.array([0.5]),
+            np.array([0, 0, 0]), np.array([1.0, 3.0, 4.0]), np.array([True, True, False]),
+            mining_share=0.5, city_min=7_000.0,
+        )
+        total = 0.5 * 80_000.0 * 0.5 * 0.5
+        np.testing.assert_allclose(miners, [0.25 * total, 0.75 * total, 0.0])
+
+    def test_no_city_is_cut_below_the_floor(self):
+        miners = compute_miners(
+            np.array([8_000.0]), np.array([8_000.0]), np.array([1.0]),
+            np.array([0]), np.array([1.0]), np.array([True]),
+            mining_share=1.0, city_min=7_000.0,
+        )
+        np.testing.assert_allclose(miners, [1_000.0])
+
+    def test_unworked_deposits_have_no_miners(self):
+        miners = compute_miners(
+            np.array([50_000.0, 50_000.0]), np.array([40_000.0, 40_000.0]), np.array([1.0, 1.0]),
+            np.array([-1, 1]), np.array([5.0, 1.0]), np.array([True, True]),
+            mining_share=0.5, city_min=7_000.0,
+        )
+        assert miners[0] == 0.0 and miners[1] == pytest.approx(20_000.0)
 
 
 class TestComputeRuralPopulation:

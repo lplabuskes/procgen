@@ -7,15 +7,15 @@ import pytest
 from core.mesh import Mesh
 from core.pipeline import BuildContext
 from core.world import World
-from realmgen.channels import HINTERLAND_ID, RURAL_POPULATION, TOWN_POPULATION
+from realmgen.channels import HINTERLAND_ID, MINING_POPULATION, RURAL_POPULATION, TOWN_POPULATION
 from realmgen.population.calibration import KM2_PER_STERADIAN
 from realmgen.refine.sites import SiteField
 from realmgen.test.conftest import _settlement
-from realmgen.towns.builder import RURAL_DENSITY_TEXTURE, TownParams, TownStage
+from realmgen.towns.builder import MINING_DENSITY_TEXTURE, RURAL_DENSITY_TEXTURE, TownParams, TownStage
 from realmgen.towns.placement import (
-    compute_rural_density, draw_town_sizes, place_towns, shore_texels, texel_owners,
+    compute_mining_density, compute_rural_density, draw_town_sizes, place_towns, shore_texels, texel_owners,
 )
-from realmgen.towns.types import Towns
+from realmgen.towns.types import TOWN_MINING, Towns
 from worldgen.cost.surfaces import EARTH_RADIUS_KM
 
 TEX = 8
@@ -143,7 +143,7 @@ def _place(dual, requests, *, spacing_km=20.0, city=None, params=None, streams=N
 def test_towns_keep_their_spacing_and_their_face(dual):
     faces = [f for f in range(len(dual.faces)) if dual.face_centroids[f][2] > 0.3][:6]
     requests = [(f, np.full(4, 1_000.0)) for f in faces]
-    (towns, unplaced), sites = _place(dual, requests, spacing_km=200.0)
+    (towns, unplaced, _), sites = _place(dual, requests, spacing_km=200.0)
     assert len(towns) + unplaced.sum() / 1_000.0 == 4 * len(faces)
     gaps = np.linalg.norm(towns.positions[:, None] - towns.positions[None], axis=2)
     np.fill_diagonal(gaps, np.inf)
@@ -154,7 +154,7 @@ def test_towns_keep_their_spacing_and_their_face(dual):
 def test_town_with_no_room_stays_rural(dual):
     f = next(f for f in range(len(dual.faces)) if dual.face_centroids[f][2] > 0.5)
     # A city whose exclusion disc covers the whole neighbourhood.
-    (towns, unplaced), _ = _place(
+    (towns, unplaced, _), _ = _place(
         dual, [(f, np.array([2_000.0]))], city=(dual.face_centroids[f], f, 1.0))
     assert len(towns) == 0 and unplaced[f] == 2_000.0
 
@@ -180,9 +180,9 @@ def test_streams_draw_river_towns(dual):
     faces = [f for f in range(len(dual.faces)) if dual.face_centroids[f][2] > 0.3][:8]
     requests = [(f, np.array([1_000.0])) for f in faces]
     strong = TownParams(stream_bonus=1e6, route_bonus=0.0, mining_bonus=0.0, port_bonus=0.0)
-    (towns, _), sites = _place(dual, requests, params=strong, streams=_column_streams(dual))
+    (towns, _, _), sites = _place(dual, requests, params=strong, streams=_column_streams(dual))
     assert len(towns) == len(faces) and np.all(towns.kind == TOWN_RIVER)
-    (plain, _), plain_sites = _place(dual, requests, params=strong)
+    (plain, _, _), plain_sites = _place(dual, requests, params=strong)
     assert not np.any(plain.kind == TOWN_RIVER)
     assert not plain_sites.face(faces[0]).stream.any() and sites.face(faces[0]).stream.any()
 
@@ -190,8 +190,8 @@ def test_streams_draw_river_towns(dual):
 def test_siting_is_deterministic(dual):
     faces = [f for f in range(len(dual.faces)) if dual.face_centroids[f][2] > 0.3][:4]
     requests = [(f, np.array([3_000.0, 1_000.0])) for f in faces]
-    (a, _), _ = _place(dual, requests)
-    (b, _), _ = _place(dual, requests)
+    (a, _, _), _ = _place(dual, requests)
+    (b, _, _), _ = _place(dual, requests)
     np.testing.assert_array_equal(a.positions, b.positions)
 
 
@@ -249,3 +249,60 @@ def test_stage_carves_towns_out_of_the_countryside(dual):
     stage.build(ctx)
     np.testing.assert_allclose(RURAL_POPULATION.read(mesh) + TOWN_POPULATION.read(mesh), rural0, rtol=1e-12)
     np.testing.assert_array_equal(world.get_feature("towns").positions, towns.positions)
+
+
+def test_mining_density_puts_each_deposits_miners_on_its_texel(dual):
+    pos, ocean, _ = _fields(dual)
+    owner, owned = _owned(dual, pos)
+    n = len(dual.faces)
+    land = ocean[..., 0] < 0.5
+    areas = np.full(n, 1e5)
+    f = next(f for f in range(n) if (owned[f] & land[f]).any())
+    texel = np.argwhere(owned[f] & land[f])[0]
+    point = pos[f, texel[0], texel[1]] / np.linalg.norm(pos[f, texel[0], texel[1]])
+    density, unsited = compute_mining_density(
+        point[None], np.array([f]), np.array([3_000.0]), pos, areas, land, owner)
+    assert np.count_nonzero(density) == 1 and density[f, texel[0], texel[1]] > 0
+    texel_area = areas[f] / owned[f].sum()
+    assert density.sum() * texel_area == pytest.approx(3_000.0)
+    assert unsited.sum() == 0.0
+
+
+def test_stage_gathers_miners_into_mining_towns_by_their_deposit(dual):
+    world, rural0 = _world(dual)
+    mesh = world.mesh
+    pos = dual.face_texture_positions(TEX, TEX)
+    owner, owned = _owned(dual, pos)
+    land = mesh.face_textures["ocean_mask"][..., 0] < 0.5
+    city = world.get_feature("settlements")[0].face_id
+    f = next(f for f in range(len(rural0))
+             if rural0[f] > 0 and f != city and f not in dual.face_adjacency[city] and (owned[f] & land[f]).sum() > 8)
+    texel = np.argwhere(owned[f] & land[f])[0]
+    deposit = pos[f, texel[0], texel[1]] / np.linalg.norm(pos[f, texel[0], texel[1]])
+    miners = 20_000.0
+    world.add_feature("minerals", (deposit[None], np.zeros(1, dtype=np.int8), np.ones(1, dtype=np.float32)))
+    world.add_feature("mine_workers", np.array([miners]))
+    rural0 = rural0.copy()
+    rural0[f] += miners
+    RURAL_POPULATION.write(mesh, rural0)
+    mining = np.zeros(len(rural0))
+    mining[f] = miners
+    MINING_POPULATION.write(mesh, mining)
+
+    radius_km = 600.0
+    stage = TownStage(TownParams(town_fraction=0.0, mining_town_fraction=0.6,
+                                 mining_radius_km=radius_km, site_jitter=0.0))
+    stage.build(BuildContext(world=world, seed=3))
+    towns = world.get_feature("towns")
+    # Only the miners make towns here, all of the mining kind and by the deposit.
+    assert len(towns) > 0 and np.all(towns.face_id == f) and np.all(towns.kind == TOWN_MINING)
+    chord = np.linalg.norm(towns.positions - deposit, axis=1)
+    assert chord.max() < 2.0 * radius_km / EARTH_RADIUS_KM
+    in_towns = TOWN_POPULATION.read(mesh)
+    np.testing.assert_allclose(RURAL_POPULATION.read(mesh) + in_towns, rural0, rtol=1e-12)
+    # The miners left in camps stay on the deposit's texel, conserved per face.
+    mine_tex = mesh.face_textures[MINING_DENSITY_TEXTURE][..., 0]
+    texel_area = (dual.face_areas[f] * KM2_PER_STERADIAN) / owned[f].sum()
+    left = float(mine_tex[f].sum()) * texel_area
+    assert left == pytest.approx(miners - in_towns[f], rel=1e-5)
+    assert mine_tex[f, texel[0], texel[1]] * texel_area == pytest.approx(left, rel=1e-5)

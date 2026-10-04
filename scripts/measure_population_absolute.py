@@ -37,7 +37,7 @@ import numpy as np
 
 from core.pipeline import BuildContext
 from realmgen.builder import RealmParams, RealmPipeline
-from realmgen.channels import FISHING_POPULATION
+from realmgen.channels import FISHING_POPULATION, MINING_POPULATION
 from realmgen.population.calibration import KM2_PER_STERADIAN, split_fertility
 from worldgen.cost.channels import IS_WATER
 from worldgen.geology.channels import OCEAN_MASK
@@ -98,7 +98,10 @@ def measure_seed(seed: int, rebuild: bool) -> dict:
             "pop": float(pops[k]),
             "surplus": float(surplus_term[k]),
             "trade": float(trade_term[k]),
-            "trade_share": float(trade_term[k] / pops[k]) if pops[k] > 0 else 0.0,
+            # Share of the city's food that is imported (its miners, fed the
+            # same way, have left for the deposits).
+            "trade_share": (float(trade_term[k] / (trade_term[k] + surplus_term[k]))
+                            if trade_term[k] + surplus_term[k] > 0 else 0.0),
         }
         for k in order[:10]
     ]
@@ -108,22 +111,24 @@ def measure_seed(seed: int, rebuild: bool) -> dict:
     band_lo, band_hi = MEDIEVAL_REF["top_city"]
 
     # Implied D_max for an exact 400 M *rural* total at the current γ, the
-    # fishers held fixed — the direct calibration handle for ``rural_density_max``.
+    # fishers and miners held fixed — the direct calibration handle for ``rural_density_max``.
     land = ~IS_WATER.read(mesh)
     fishing_total = float(FISHING_POPULATION.read(mesh)[land].sum()) if FISHING_POPULATION.present(mesh) else 0.0
+    mining_total = float(MINING_POPULATION.read(mesh).sum()) if MINING_POPULATION.present(mesh) else 0.0
     water_tex = OCEAN_MASK.read(mesh)[..., 0] > 0.5
     if LAKE_MASK.present(mesh):
         water_tex |= LAKE_MASK.read(mesh)[..., 0] > 0.5
     land_fert, land_frac, _, _ = split_fertility(np.asarray(mesh.face_textures["fertility"][..., 0]), water_tex)
     areas_km2 = np.asarray(mesh.face_areas, dtype=np.float64) * KM2_PER_STERADIAN
     eff_area = float((land_fert[land] ** pp.fertility_exponent * (areas_km2 * land_frac)[land]).sum())
-    implied_d_max = (400e6 - fishing_total) / eff_area if eff_area > 0 else float("nan")
+    implied_d_max = (400e6 - fishing_total - mining_total) / eff_area if eff_area > 0 else float("nan")
 
     return {
         "seed": seed,
         "n_cities": int(len(settlements)),
         "rural_total_M": rural_total / 1e6,
         "fishing_total_M": fishing_total / 1e6,
+        "mining_total_M": mining_total / 1e6,
         "urban_total_M": urban_total / 1e6,
         "world_total_M": world_total / 1e6,
         "urban_fraction": urban_total / world_total if world_total > 0 else float("nan"),
@@ -164,6 +169,7 @@ def print_table(rows: list[dict]) -> None:
     line("world total (M)", lambda r: f"{r['world_total_M']:.0f}", f"{lo:.0f}-{hi:.0f}")
     line("  rural (M)", lambda r: f"{r['rural_total_M']:.0f}", "—")
     line("    of which fishing (M)", lambda r: f"{r.get('fishing_total_M', 0.0):.1f}", "—")
+    line("    of which mining (M)", lambda r: f"{r.get('mining_total_M', 0.0):.2f}", "—")
     line("  urban (M)", lambda r: f"{r['urban_total_M']:.1f}", "—")
     ulo, uhi = MEDIEVAL_REF["urban_fraction"]
     line("urban fraction", lambda r: f"{r['urban_fraction']:.3f}", f"{ulo:.2f}-{uhi:.2f}")

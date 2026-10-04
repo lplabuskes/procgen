@@ -15,15 +15,15 @@ All populations are **real people**, anchored to a medieval-tech Earth (~300–4
 
 ## Params
 
-**`TradeParams`**: `port_cost`, `river_switch_cost`, `landing_cost` (fallback land↔water transition away from a settlement, relaxation passes only — see [Ports](#ports)), `flow_decay`, `hub_display_quantile`.
+**`TradeParams`**: `port_cost`, `river_switch_cost`, `landing_cost` (fallback land↔water transition away from a settlement, relaxation passes only — see [Ports](#ports)), `flow_decay`, `deposit_decay` (a deposit's yield to the settlement working it falls as `exp(−deposit_decay · cost)` — see [Miners](#miners)), `hub_display_quantile`.
 
 **`TradeSpawnParams`**: `hub_spawn_quantile`, `hub_min_suitability`, `hub_exclusion`, `waypoint_min_cost`, `waypoint_min_suitability`, `waypoint_exclusion`, `port_spawn_quantile`, `port_min_suitability`, `port_exclusion`.
 
-**`PopulationParams`**: `relaxation_passes`, `rural_density_max` (D_max, people/km² at fertility 1), `fishing_density_max` (D_fish, people/km² of water at aquatic fertility 1), `fertility_exponent` (γ ≈ 2 — restores density contrast), `surplus_rate` (s — regional agricultural surplus), `city_surplus_share` (major city's slice of `s·cap`; remainder reserved for the future town pipeline), `trade_food_weight` (β — people fed per unit trade flow), `city_min` (urban-formation floor in people), `hinterland_max_distance`, `hinterland_influence_scale`, `hinterland_reach_scale`, `hinterland_water_cost`, `trade_spawn: TradeSpawnParams`.
+**`PopulationParams`**: `relaxation_passes`, `rural_density_max` (D_max, people/km² at fertility 1), `fishing_density_max` (D_fish, people/km² of water at aquatic fertility 1), `fertility_exponent` (γ ≈ 2 — restores density contrast), `surplus_rate` (s — regional agricultural surplus), `city_surplus_share` (major city's slice of `s·cap`; remainder reserved for the future town pipeline), `trade_food_weight` (β — people fed per unit trade flow), `city_min` (urban-formation floor in people), `mining_share` (share of the trade people a city's own mineral goods feed who are miners at its deposits — see [Miners](#miners)), `hinterland_max_distance`, `hinterland_influence_scale`, `hinterland_reach_scale`, `hinterland_water_cost`, `trade_spawn: TradeSpawnParams`.
 
 ## Trade network
 
-**`trade/network.py`**: `compute_trade_network` — two-phase flow over the hybrid land + sea graph (land node `i`, sea node `i + N`; one multi-source Dijkstra from all settlements): each resource deposit (minerals + rare bio, good types offset by `RARE_BIO_TYPE_OFFSET`) routes to its nearest settlement, then every settlement ships its goods to every other, weighted by `GOOD_RARITY_WEIGHTS`, the destination's lack of that good, its demand and `exp(−flow_decay · cost)`. Returns a `TradeResult`: `face_flow` (per-face scalar), `routes` (`(start, end, flow)` hops between face centroids above the display threshold), `hub_mask` (faces above `hub_display_quantile`), `landing_flow` (below), and `pair_flow` (the `(S, S)` directional inter-settlement trade matrix — `pair_flow[i, j]` = volume exporter *i* sends to importer *j*, index-aligned with `settlements`). Called at the start and after each relaxation pass with population-weighted demands.
+**`trade/network.py`**: `compute_trade_network` — two-phase flow over the hybrid land + sea graph (land node `i`, sea node `i + N`; one multi-source Dijkstra from all settlements): each resource deposit (minerals + rare bio, good types offset by `RARE_BIO_TYPE_OFFSET`) routes to its nearest settlement, which is credited `abundance · exp(−deposit_decay · cost)` of it, then every settlement ships its goods to every other, weighted by `GOOD_RARITY_WEIGHTS`, the destination's lack of that good, its demand and `exp(−flow_decay · cost)`. Returns a `TradeResult`: `face_flow` (per-face scalar), `routes` (`(start, end, flow)` hops between face centroids above the display threshold), `hub_mask` (faces above `hub_display_quantile`), `landing_flow` (below), `pair_flow` (the `(S, S)` directional inter-settlement trade matrix — `pair_flow[i, j]` = volume exporter *i* sends to importer *j*, index-aligned with `settlements`), per good source `deposit_owner` / `deposit_cost` / `deposit_credit` (who works it, how far, what it yields them), and per settlement `goods_flow` (its own goods' flow at its face: deposit hauls in plus exports). Called at the start and after each relaxation pass with population-weighted demands.
 
 ### Ports
 
@@ -45,6 +45,16 @@ After the relaxation loop, **defensibility is computed per settlement** and stam
 
 A face's food base is two parts, read from its fertility texture: its **land** pixels (mean fertility, at `rural_density_max`) and its **water** pixels (mean aquatic fertility, at `fishing_density_max`). A land face's water pixels are its shallows — the resources stage gives them the neighbouring water faces' aquatic fertility ([resources.md](resources.md)) — so a productive coast houses fishers even where its land is barren tundra or desert. Rural population (land faces) is farm + fish; the fish part is also written to `FISHING_POPULATION` so the town stage can put those people on the shore, which is where its port towns and the local maps' fishing villages then come from ([realm_towns.md](realm_towns.md), [region_fields.md](region_fields.md)). A water face houses nobody; its food base feeds the cities whose hinterland reaches it.
 
+## Miners
+
+A city that lives on its deposits' goods does not dig them from the city. After the trade network is rebuilt, `compute_miners` moves some of each city's trade-fed people out to the mineral deposits it works:
+
+    miners_city = mining_share · β·trade_wealth · own_goods_share · mineral_share
+
+`own_goods_share` = `goods_flow / face_flow` at the city (its own goods, not imports or transit) and `mineral_share` the minerals' part of the value it owns (`deposit_credit × rarity`; rare bio goods — spices, silk, pearls — employ no miners here). They are split over its minerals in proportion to each one's value, and no city is cut below `city_min`. The miners are added to the deposit face's `RURAL_POPULATION` (and written to `MINING_POPULATION`); the city's population falls by the same number, so the world total is unchanged. The town stage gathers them into mining towns and camps by the deposit ([realm_towns.md](realm_towns.md)).
+
+`deposit_decay` (0.2 — a cost of ~1 per 100 km over open land, ~2 on icecap) is what keeps this sensible: before it, a city was credited a deposit's whole yield however far away, so polar and desert cities grew on deposits 1,000 km off with nobody living at them. Now a deposit 250 km out yields ~55%, 700 km ~14%, and remote icecap little. On seeds 4/31/35 (β 900 → 1500 to restore the city sizes) the miners are 0.25–0.4 M.
+
 ## calibration.py
 
 Pure functions:
@@ -55,6 +65,7 @@ Pure functions:
 - `compute_carrying_capacity` — Σ shares · food_base per settlement
 - `compute_trade_wealth` — face_flow at settlement face
 - `compute_urban_population` — `s_eff · cap + β · wealth`
+- `compute_miners` — miners per deposit, taken out of the cities that work them (see [Miners](#miners))
 - `cull_settlements` — drop settlements below `city_min`; returns keep mask
 - `apply_population_to_settlements` — stamp population onto Settlement objects
 
@@ -77,6 +88,6 @@ Returns `(defensibility, has_walls, wall_strength)`, all stamped onto `Settlemen
 
 ## Outputs
 
-Per-face: `TRADE_FLOW`, `POPULATION`, `HINTERLAND_ID`, `RURAL_POPULATION`, `FISHING_POPULATION` (the fishers within `RURAL_POPULATION`, before towns), `TOWN_POPULATION` (zeroed), `is_trade_hub`, `settlement_tier` (now the *display* tier from `population / max_pop`, replacing the placement stage's seeding label).
-Features: `settlements` (updated with population, defensibility, has_walls, wall_strength), `trade_routes`, `trade_attribution` (`(S, S)` directional inter-settlement trade matrix, aligned with `settlements`).
+Per-face: `TRADE_FLOW`, `POPULATION`, `HINTERLAND_ID`, `RURAL_POPULATION`, `FISHING_POPULATION` (the fishers within `RURAL_POPULATION`, before towns), `MINING_POPULATION` (the miners within it, at their deposits' faces), `TOWN_POPULATION` (zeroed), `is_trade_hub`, `settlement_tier` (now the *display* tier from `population / max_pop`, replacing the placement stage's seeding label).
+Features: `settlements` (updated with population, defensibility, has_walls, wall_strength), `trade_routes`, `trade_attribution` (`(S, S)` directional inter-settlement trade matrix, aligned with `settlements`), `mine_workers` (miners per deposit, index-aligned with the `minerals` feature; saved with the settlements).
 Overlays: **Settlements** and **Trade Routes** (both checked); on the world map, hover shows the face's settlement tier name and population (`world_only`; region and local views name the city under the cursor instead). Color schemes (debug): Trade Flow, Hinterland. (Rural density is drawn by the town stage.)

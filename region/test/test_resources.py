@@ -8,7 +8,7 @@ from region.upsample import RegionUpsampleParams, build_region_fields, conservat
 
 REGION_ID = 40
 TEX_SIZE = 16
-_KEYS = ("fertility", "forest_density", "dominant_crop", "rural_density", "fishing_density")
+_KEYS = ("fertility", "forest_density", "dominant_crop", "rural_density", "fishing_density", "mining_density")
 
 
 @pytest.fixture(scope="module")
@@ -27,6 +27,18 @@ def globe(synthetic_globe):
     mesh.set_face_textures("dominant_crop", np.ones_like(fert, dtype=np.uint8)[..., None], n_channels=1)
     mesh.set_face_textures("rural_density", rho[..., None], n_channels=1)
     mesh.set_face_textures("fishing_density", (0.3 * rho)[..., None], n_channels=1)
+    # Miners on a few land texels of the region, each beside its deposit.
+    from region.geometry import ecef_to_cell
+    flat = pos.reshape(-1, 3)
+    unit = flat / np.linalg.norm(flat, axis=1, keepdims=True)
+    cand = np.flatnonzero((ecef_to_cell(unit, synthetic_globe.antimeridian) == REGION_ID) & (rho.reshape(-1) > 1.0))
+    picks = cand[:: max(len(cand) // 6, 1)][:6]
+    mine = np.zeros(rho.size, dtype=np.float32)
+    mine[picks] = 0.5 * rho.reshape(-1)[picks]
+    mesh.set_face_textures("mining_density", mine.reshape(rho.shape)[..., None], n_channels=1)
+    synthetic_globe.add_feature("minerals", (unit[picks], np.zeros(len(picks), dtype=np.int8),
+                                             np.ones(len(picks), dtype=np.float32)))
+    synthetic_globe.add_feature("mine_workers", np.full(len(picks), 1_000.0))
     rng = np.random.default_rng(5)
     danger = np.where(rng.random(len(mesh.faces)) < 0.3, rng.random(len(mesh.faces)), 0.0).astype(np.float32)
     synthetic_globe.add_feature("danger", danger)
@@ -34,6 +46,8 @@ def globe(synthetic_globe):
     for key in _KEYS:
         mesh.face_textures.pop(key, None)
     synthetic_globe.remove_feature("danger")
+    synthetic_globe.remove_feature("minerals")
+    synthetic_globe.remove_feature("mine_workers")
 
 
 @pytest.fixture(scope="module")
@@ -78,6 +92,25 @@ def test_fishers_are_conserved_and_stay_on_the_shore(fields, globe):
     inland = land & ~near & has_shore[anchors]
     assert inland.any()
     assert fish[inland].max() == 0.0
+
+
+def test_miners_are_conserved_and_gather_by_their_deposit(fields, globe):
+    report = conservation_report(fields, globe)
+    assert report["mining_density"]["n_anchors"] > 100
+    assert report["mining_density"]["max"] < 1e-4
+    mine = fields.textures["mining_density"][..., 0].astype(np.float64)
+    rho = fields.textures["rural_density"][..., 0].astype(np.float64)
+    assert mine.sum() > 0 and np.all(mine <= rho + 1e-6)
+    # Within the global texels holding miners, they sit far closer to their
+    # deposits than the countryside as a whole does.
+    deposits = globe.get_feature("minerals")[0]
+    p = fields.positions / np.linalg.norm(fields.positions, axis=-1, keepdims=True)
+    d = np.arccos(np.clip(p @ deposits.T, -1.0, 1.0)).min(axis=-1)
+    has_mine = np.zeros(fields.anchors.max() + 1, dtype=bool)
+    has_mine[fields.anchors[(mine > 0) & fields.in_hex]] = True
+    sel = has_mine[fields.anchors] & fields.in_hex
+    farm = rho - mine
+    assert (mine[sel] * d[sel]).sum() / mine[sel].sum() < 0.5 * (farm[sel] * d[sel]).sum() / farm[sel].sum()
 
 
 def test_no_one_lives_on_refined_water_that_has_land_beside_it(fields):

@@ -25,7 +25,7 @@ from localmap.geometry import LocalGeometry
 from localmap.grid import LocalHexGrid
 from region.sampling import GlobalSampler
 from region.source import RegionSource
-from region.upsample import RegionFields, RegionUpsampleParams, anchor_residuals, refine_fields
+from region.upsample import RegionFields, RegionUpsampleParams, anchor_residuals, refine_fields, worked_mine_points
 
 if TYPE_CHECKING:
     from core.world import World
@@ -96,6 +96,7 @@ def build_local_fields(
         RegionSource(region), positions, domain, grid.texel_spacing_rad(tex_size), texel_area_km2,
         params, int(globe.seed or 0) ^ _SEED_SALT_LOCAL,
         resources=resources, fertility_exponent=fertility_exponent,
+        mine_points=worked_mine_points(globe),
     )
     gh, gw = globe.mesh.face_textures["elevation"].shape[1:3]
     sampler = GlobalSampler(globe.mesh)

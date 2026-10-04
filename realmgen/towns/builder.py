@@ -4,14 +4,16 @@ Runs after :class:`~realmgen.refine.builder.RefineStage`, once the cities have
 their final sites. Towns are **display-only**: nothing downstream reads them.
 
 1. **Rural density** — each face's farmers are spread over its texels by the
-   rural model's own food base (``fertility ** γ``) and its fishers over its
-   shore, conserved per face (``compute_rural_density``).
-2. **Town sizes** — a share (``town_fraction``) of each face's rural people is
-   spent on towns of ``town_min`` … ``PopulationParams.city_min`` people,
+   rural model's own food base (``fertility ** γ``), its fishers over its
+   shore and its miners on the texel of their deposit, conserved per face
+   (``compute_rural_density``, ``compute_mining_density``).
+2. **Town sizes** — a share (``town_fraction``) of each face's farmers and
+   fishers, and a share (``mining_town_fraction``) of its miners, is spent on
+   towns of ``town_min`` … ``PopulationParams.city_min`` people,
    truncated-Pareto sized, from an RNG keyed on ``(seed, face)``.
 3. **Town sites** — towns are sited largest first on owned land texels,
-   weighted by density and site bonuses, clear of each other and of cities
-   (``place_towns``).
+   weighted by density and site bonuses, clear of each other and of cities;
+   mining towns only near their face's worked deposits (``place_towns``).
 4. **Accounting** — town people come *out of* the rural population: the face's
    ``rural_population`` and its density texture are reduced by exactly the
    towns sited there, so rural + towns is the countryside the population stage
@@ -30,13 +32,17 @@ import numpy as np
 from core.display import DisplayRegistry, TextureRecipe
 from core.params import param_field as _f, paramclass
 from core.pipeline import BuildContext, Stage
-from realmgen.channels import FISHING_POPULATION, HINTERLAND_ID, RURAL_POPULATION, TOWN_POPULATION
+from realmgen.channels import (
+    FISHING_POPULATION, HINTERLAND_ID, MINING_POPULATION, RURAL_POPULATION, TOWN_POPULATION,
+)
 from realmgen.population.builder import PopulationParams
 from realmgen.population.calibration import KM2_PER_STERADIAN
 from realmgen.refine.builder import RefineParams
 from realmgen.refine.sites import SiteField, densify_polylines
+from realmgen.scoring.suitability import _positions_to_face_ids
 from realmgen.towns.placement import (
     SPACING_EXPONENT,
+    compute_mining_density,
     compute_rural_density,
     draw_town_sizes,
     place_towns,
@@ -52,13 +58,19 @@ from worldgen.hydrology.channels import LAKE_MASK
 RURAL_DENSITY_TEXTURE = "rural_density"
 # The fishers' part of ``rural_density``: the finer tiers keep them on the shore.
 FISHING_DENSITY_TEXTURE = "fishing_density"
+# ... and the miners' part: the finer tiers keep them by their deposit.
+MINING_DENSITY_TEXTURE = "mining_density"
 _SIZE_STREAM = 1   # RNG stream tag for town sizes (sites use the bare (seed, face) stream)
+_MINING_SIZE_STREAM = 2   # ... and for mining-town sizes
 
 
 @paramclass
 class TownParams:
     town_fraction: float = _f(
         0.12, label="Share of rural people living in towns", min=0.0, max=0.5, step=0.01)
+    # The rest of the miners live in camps and hamlets by the mine (villages on a local map).
+    mining_town_fraction: float = _f(
+        0.6, label="Share of miners living in mining towns", min=0.0, max=1.0, step=0.05)
     town_min: float = _f(1_000.0, label="Smallest town (people)", min=100.0, max=5_000.0, step=100.0)
     size_exponent: float = _f(1.0, label="Town size exponent α (1 = rank-size)", min=0.3, max=3.0)
     town_spacing_km: float = _f(
@@ -208,24 +220,47 @@ class TownStage(Stage):
             np.asarray(FISHING_POPULATION.read(mesh), dtype=np.float64)
             if FISHING_POPULATION.present(mesh) else None
         )
+        # The miners, on the texels of their deposits (the minerals feature,
+        # index-aligned with the population stage's mine_workers).
+        minerals = world.get_feature("minerals")
+        workers = world.get_feature("mine_workers")
+        mining = np.zeros(n)
+        mine_points = mine_faces = None
+        mining_density = np.zeros(water.shape)
+        if MINING_POPULATION.present(mesh) and minerals is not None and workers is not None:
+            mining = np.clip(np.asarray(MINING_POPULATION.read(mesh), dtype=np.float64), 0.0, rural)
+            mine_points = np.asarray(minerals[0], dtype=np.float64)
+            mine_points = mine_points / np.linalg.norm(mine_points, axis=1, keepdims=True)
+            # The population stage's face assignment, so the miners match its channel.
+            mine_faces = _positions_to_face_ids(np.asarray(minerals[0]), np.asarray(mesh.face_centroids))
+            workers = np.asarray(workers, dtype=np.float64)
+            mining_density, unsited = compute_mining_density(
+                mine_points, mine_faces, workers, positions, areas_km2, ~water, owner)
+            mining = mining - unsited
+        countryside = rural - mining
         density, fishing_density = compute_rural_density(
-            rural, areas_km2,
+            countryside, areas_km2,
             None if fert_tex is None else np.asarray(fert_tex[..., 0], dtype=np.float64),
             ~water, owner, float(pp.fertility_exponent), fishing,
         )
 
         # ── Town sizes, per face ─────────────────────────────────────────────
         town_max = max(float(pp.city_min), float(p.town_min))
-        requests = []
-        for f in np.flatnonzero(rural > 0):
-            sizes = draw_town_sizes(
-                float(p.town_fraction) * rural[f],
-                np.random.default_rng([seed, int(f), _SIZE_STREAM]),
-                town_min=float(p.town_min), town_max=town_max,
-                alpha=float(p.size_exponent), cap=float(rural[f]),
-            )
-            if sizes.size:
-                requests.append((int(f), sizes))
+
+        def _requests(budget: np.ndarray, stream: int) -> list:
+            out = []
+            for f in np.flatnonzero(budget > 0):
+                sizes = draw_town_sizes(
+                    float(budget[f]), np.random.default_rng([seed, int(f), stream]),
+                    town_min=float(p.town_min), town_max=town_max,
+                    alpha=float(p.size_exponent), cap=float(rural[f]),
+                )
+                if sizes.size:
+                    out.append((int(f), sizes))
+            return out
+
+        requests = _requests(float(p.town_fraction) * countryside, _SIZE_STREAM)
+        mining_requests = _requests(float(p.mining_town_fraction) * mining, _MINING_SIZE_STREAM)
 
         # ── Sites ────────────────────────────────────────────────────────────
         sites = SiteField(
@@ -236,8 +271,8 @@ class TownStage(Stage):
         )
         sc = town_site_context(world, p, pp)
 
-        ctx.report(f"Siting {sum(len(s) for _, s in requests)} towns…")
-        towns, unplaced = place_towns(
+        ctx.report(f"Siting {sum(len(s) for _, s in requests + mining_requests)} towns…")
+        towns, unplaced, from_mines = place_towns(
             requests,
             sites=sites,
             density=density,
@@ -253,14 +288,26 @@ class TownStage(Stage):
             mineral_points=sc.mineral_points,
             route_points=sc.route_points,
             seed=seed,
+            mining_requests=mining_requests,
+            mine_points=mine_points,
+            mine_faces=mine_faces,
+            mine_workers=workers,
         )
 
         # ── Carve the towns out of the countryside ───────────────────────────
+        # A mining town takes miners first; any it drew beyond them (the odd
+        # minimum-size town) comes from the face's farmers and fishers.
         town_pop = np.bincount(towns.face_id, weights=towns.population, minlength=n)
-        rural_left = np.maximum(rural - town_pop, 0.0)
-        keep = np.where(rural > 0, rural_left / np.maximum(rural, 1e-300), 0.0)
-        density *= keep[owner]
+        mine_town_pop = np.bincount(
+            towns.face_id[from_mines], weights=towns.population[from_mines], minlength=n)
+        miners_left = np.maximum(mining - mine_town_pop, 0.0)
+        countryside_left = np.maximum(countryside - (town_pop - (mining - miners_left)), 0.0)
+        keep = np.where(countryside > 0, countryside_left / np.maximum(countryside, 1e-300), 0.0)
+        keep_mine = np.where(mining > 0, miners_left / np.maximum(mining, 1e-300), 0.0)
+        mining_density = mining_density * keep_mine[owner]
+        density = density * keep[owner] + mining_density
         fishing_density *= keep[owner]
+        rural_left = countryside_left + miners_left
 
         RURAL_POPULATION.write(mesh, rural_left)
         TOWN_POPULATION.write(mesh, town_pop)
@@ -268,6 +315,8 @@ class TownStage(Stage):
             RURAL_DENSITY_TEXTURE, density[..., None].astype(np.float32), n_channels=1)
         mesh.set_face_textures(
             FISHING_DENSITY_TEXTURE, fishing_density[..., None].astype(np.float32), n_channels=1)
+        mesh.set_face_textures(
+            MINING_DENSITY_TEXTURE, mining_density[..., None].astype(np.float32), n_channels=1)
         self.towns = towns
         world.add_feature("towns", towns)
         ctx.report(

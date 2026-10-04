@@ -196,6 +196,11 @@ class RegionUpsampleParams:
     fishing_shore_km: float = _f(
         2.0, label="Fishing shore band (km)", min=0.1, max=20.0, step=0.1
     )
+    # How far from its deposit the miners' share of the rural density spreads
+    # (the Gaussian scale of their camps around the mine).
+    mining_camp_km: float = _f(
+        3.0, label="Mining camp radius (km)", min=0.1, max=20.0, step=0.1
+    )
 
 
 @dataclass
@@ -768,6 +773,7 @@ def refine_fields(
     *,
     resources: Optional["ResourcesParams"] = None,
     fertility_exponent: float = 2.0,
+    mine_points: Optional[np.ndarray] = None,
 ) -> tuple[dict[str, np.ndarray], Located, int]:
     """Refine ``source``'s fields onto a child tier's ``(M, T, T, 3)`` texels.
 
@@ -777,6 +783,8 @@ def refine_fields(
     child map, weighted out), ``spacing_rad`` the child's texel spacing and
     ``seed`` the elevation noise stream.  Returns ``(textures, located,
     detail_octaves)``, ``located`` holding each texel's parent anchor.
+    ``mine_points`` are the worked deposits (unit vectors) the miners' share of
+    the rural density gathers around.
     """
     m, tex_size = positions.shape[0], positions.shape[1]
     flat_pos = positions.reshape(-1, 3)
@@ -906,11 +914,22 @@ def refine_fields(
             slope=refined_slope(elevation[:, 0].reshape(shape), np.sqrt(texel_area_km2)).reshape(-1),
             land=~water_now, anchor_land=~(water.ocean | water.lake),
             texel_km=float(np.sqrt(texel_area_km2)),
+            mine_points=mine_points,
         ),
         textures, params, resources, fertility_exponent,
         source.danger(loc, flat_pos),
     ))
     return textures, loc, int(freqs.size)
+
+
+def worked_mine_points(globe: "World") -> Optional[np.ndarray]:
+    """``(K, 3)`` unit vectors of the deposits with miners (None without any)."""
+    minerals = globe.get_feature("minerals")
+    workers = globe.get_feature("mine_workers")
+    if minerals is None or workers is None:
+        return None
+    pts = np.asarray(minerals[0], dtype=np.float64)[np.asarray(workers) > 0]
+    return pts / np.linalg.norm(pts, axis=1, keepdims=True) if len(pts) else None
 
 
 def build_region_fields(
@@ -948,6 +967,7 @@ def build_region_fields(
         source, positions, in_hex, grid.texel_spacing_rad(tex_size), texel_area_km2,
         params, int(globe.seed or 0) ^ int(region_id),
         resources=resources, fertility_exponent=fertility_exponent,
+        mine_points=worked_mine_points(globe),
     )
     faces, u, v = loc.data
     return RegionFields(
@@ -999,7 +1019,7 @@ def anchor_residuals(
     report: dict[str, dict[str, float]] = {}
     for key, weights in (
         ("elevation", in_hex), ("temperature", in_hex), ("precipitation", in_hex), ("rural_density", in_hex),
-        ("fishing_density", in_hex), ("fertility", dry), ("forest_density", dry),
+        ("fishing_density", in_hex), ("mining_density", in_hex), ("fertility", dry), ("forest_density", dry),
     ):
         if key not in textures or key not in parent_textures:
             continue

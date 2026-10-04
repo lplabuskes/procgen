@@ -59,7 +59,7 @@ from _common import get_realm_world  # noqa: E402
 
 RESULTS_DIR = Path(__file__).parent / "results"
 # Village dot colours, as the viewer draws them (viz/mapview/overlays.py).
-VILLAGE_COLORS = ("#d6be78", "#6eaaeb", "#5acdbe", "#c8966e")
+VILLAGE_COLORS = ("#d6be78", "#6eaaeb", "#5acdbe", "#c8966e", "#a596af")
 
 
 def local_layers(world) -> dict[str, TextureRecipe]:  # type: ignore[no-untyped-def]
