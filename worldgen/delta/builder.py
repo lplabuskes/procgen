@@ -5,9 +5,9 @@ lake-feedback pass (which re-derives precipitation and biomes from the edited
 relief, so the new land gets its own).  For each big river reaching the sea it
 deposits a delta (:mod:`worldgen.delta.deposit`): a low plain over the river's
 lower course and built out into the shallow sea, with the rivers carried across
-it to the new front.
+it to the new front.  Big rivers entering a lake build one there too.
 
-Writes back the ``elevation``, ``ocean_mask`` and ``filled_height`` textures,
+Writes back the ``elevation``, ``ocean_mask``, ``lake_mask`` and ``filled_height`` textures,
 the per-face ``is_ocean`` / ``elevation`` aggregates, the extended river objects,
 river polylines and stream network; adds the ``delta`` texture, the per-face
 ``delta_fraction`` / ``marsh_fraction``, and the ``"delta_fans"`` and
@@ -34,12 +34,17 @@ from worldgen.hydrology.rivers import River
 
 @paramclass
 class DeltaParams:
-    # Which rivers get a delta: mouth flow and length, reaching the sea.
+    # Which rivers get a delta: mouth flow and length, reaching the sea or a lake.
     min_flow: float = _f(1000.0, label="Min mouth flow", min=0.0, max=10000.0)
     min_length_km: float = _f(500.0, label="Min river length (km)", min=0.0, max=5000.0)
     # Size: area_km2 · (flow / 1000) ** area_exponent.
     area_km2: float = _f(1500.0, label="Area at flow 1000 (km²)", min=0.0, max=20000.0, step=100.0)
     area_exponent: float = _f(0.7, label="Area exponent", min=0.0, max=1.5, step=0.05)
+    # The share of the sediment reaching a lake that settles there (the outflow
+    # carries the rest on); a river's supply is its flow × the share still in it.
+    lake_trap_efficiency: float = _f(0.2, label="Lake sediment trapping", min=0.0, max=1.0, step=0.05)
+    # The share of a lake's area its deltas may fill, all together.
+    max_lake_share: float = _f(0.25, label="Max lake share filled", min=0.0, max=1.0, step=0.05)
     # Shape.  The apex (head of the delta) lies this far up the river from the
     # mouth, and the flood looks this far past the mouth, both × √area.
     apex_distance: float = _f(0.5, label="Apex distance (× √area)", min=0.0, max=3.0, step=0.05)
@@ -110,7 +115,7 @@ class DeltaBuilder(Stage):
         rivers: List[River] = RIVER_OBJECTS.read(world)
         elevation = np.array(ELEVATION.read(mesh), dtype=np.float32)
         ocean = np.array(OCEAN_MASK.read(mesh))
-        lake = LAKE_MASK.read(mesh) if LAKE_MASK.present(mesh) else None
+        lake = np.array(LAKE_MASK.read(mesh)) if LAKE_MASK.present(mesh) else None
         filled = (np.array(mesh.face_textures["filled_height"], dtype=np.float32)
                   if "filled_height" in mesh.face_textures else None)
         streams = STREAMS.read(world) if STREAMS.present(world) else None
@@ -123,6 +128,8 @@ class DeltaBuilder(Stage):
 
         ELEVATION.write(mesh, elevation)
         OCEAN_MASK.write(mesh, ocean)
+        if lake is not None:
+            LAKE_MASK.write(mesh, lake)
         if filled is not None:
             mesh.set_face_textures("filled_height", filled.astype(np.float16), n_channels=1)
         IS_OCEAN.write(mesh, ocean[..., 0].mean(axis=(1, 2)) > 0.5)
@@ -172,7 +179,10 @@ class DeltaBuilder(Stage):
             if self.fans:
                 gap = [float(np.linalg.norm(np.asarray(f.apex) - centroids[face])) for f in self.fans]
                 fan = self.fans[int(np.argmin(gap))]
-                line += f" — {SHAPE_NAMES.get(fan.shape, fan.shape)}, wave dominance {fan.wave_dominance:.2f}"
+                line += f" — {SHAPE_NAMES.get(fan.shape, fan.shape)}{' lake' if fan.lake else ''}, " \
+                        f"wave dominance {fan.wave_dominance:.2f}"
+                if fan.sediment < 0.995:
+                    line += f", sediment {fan.sediment:.0%} of flow"
             return [line]
 
         reg.add_hover(_delta_hover)
@@ -190,9 +200,11 @@ class DeltaBuilder(Stage):
             "delta_axis": np.stack([f.axis for f in self.fans]).astype(np.float32),
             "delta_head": np.stack([f.head if f.head is not None else f.mouth for f in self.fans]).astype(np.float32),
             "delta_scalars": np.array(
-                [[f.radius_km, f.flow, f.area_km2, f.wave_dominance] for f in self.fans], dtype=np.float64
+                [[f.radius_km, f.flow, f.area_km2, f.wave_dominance, f.sediment] for f in self.fans],
+                dtype=np.float64
             ),
             "delta_shape": np.array([_SHAPES.index(f.shape) for f in self.fans], dtype=np.int8),
+            "delta_lake": np.array([f.lake for f in self.fans], dtype=np.bool_),
             "delta_finger_count": np.array([len(f.fingers) for f in self.fans], dtype=np.int32),
             "delta_fingers": np.concatenate(
                 [np.asarray(f.fingers, dtype=np.float32).reshape(-1, 3) for f in self.fans]),
@@ -203,13 +215,14 @@ class DeltaBuilder(Stage):
         if "delta_apex" in arrays:
             ends = np.cumsum(arrays["delta_finger_count"])
             fingers = np.split(np.asarray(arrays["delta_fingers"]).reshape(-1, 3), ends[:-1])
-            for a, m, x, hd, (r, q, ar, wd), sh, fg in zip(
+            for a, m, x, hd, (r, q, ar, wd, sd), sh, fg, lk in zip(
                     arrays["delta_apex"], arrays["delta_mouth"], arrays["delta_axis"], arrays["delta_head"],
-                    arrays["delta_scalars"], arrays["delta_shape"], fingers):
+                    arrays["delta_scalars"], arrays["delta_shape"], fingers, arrays["delta_lake"]):
                 self.fans.append(DeltaFan(apex=np.asarray(a), mouth=np.asarray(m), axis=np.asarray(x),
                                           radius_km=float(r), flow=float(q), area_km2=float(ar),
                                           head=np.asarray(hd), wave_dominance=float(wd),
-                                          shape=_SHAPES[int(sh)], fingers=np.asarray(fg)))
+                                          shape=_SHAPES[int(sh)], fingers=np.asarray(fg), lake=bool(lk),
+                                          sediment=float(sd)))
         self._publish(ctx.world)
 
 

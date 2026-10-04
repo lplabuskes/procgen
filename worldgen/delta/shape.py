@@ -11,15 +11,17 @@ and the waves that rework it (Galloway's triangle; tides are not modelled):
   beach ridges, so the delta barely protrudes: a blunt cusp at the mouth with
   straight flanks running along the coast (São Francisco, Tiber, Ebro).
 
-**Wave power** at a mouth comes from the onshore wind over the open sea in
+**Wave power** at a mouth comes from the onshore wind over the open water in
 front of it: for bearings within 90° of the fan's axis, a ray is marched over
-ocean faces until it meets land (the *fetch*, capped at ``fetch_cap_km``), and
-each bearing contributes ``cos φ · (onshore wind³ + swell³) · fetch / cap``
-(deep-water wave power grows as the wind speed cubed).
-``swell_speed`` stands in for the swell distant storms send in, whatever the
-local wind.  **River power** is ``(flow / 1000) ** river_exponent``.  The
-**wave dominance** is ``W / (W + river_weight · R)``, with ``W`` the wave power
-over ``(7 m/s)³``: 0 is all river, 1 all wave.
+the water the river runs into until it meets land (the *fetch*, capped at
+``fetch_cap_km``), and each bearing contributes
+``cos φ · (onshore wind³ + swell³) · fetch / cap`` (deep-water wave power grows
+as the wind speed cubed).  ``swell_speed`` stands in for the swell distant
+storms send in, whatever the local wind; a lake has none, and its fetch is
+measured over its own texels, so most lake deltas come out river-dominated.
+**River power** is ``(flow / 1000) ** river_exponent``.  The **wave dominance**
+is ``W / (W + river_weight · R)``, with ``W`` the wave power over ``(7 m/s)³``:
+0 is all river, 1 all wave.
 
 The flood's priority is a blend of three shape metrics, weighted by where the
 dominance falls between ``birdfoot_below`` and ``cuspate_above`` (with a soft
@@ -72,26 +74,40 @@ def _smoothstep(lo: float, hi: float, x: float) -> float:
 
 
 class WaveField:
-    """Face-level open sea and winds, for measuring wave power at a coast."""
+    """Open water and winds, for measuring wave power at a coast.
 
-    def __init__(self, centroids: np.ndarray, sea: np.ndarray, winds: Optional[np.ndarray],
-                 face_spacing_rad: float) -> None:
-        self.centroids = np.asarray(centroids, dtype=np.float64)
-        self.sea = np.asarray(sea, dtype=bool)
+    The water is sampled at ``points`` (face centroids for the sea, texels for
+    lakes).  ``sea`` is either a bool mask or integer water-body labels (-1 is
+    land); a ray's fetch ends where it leaves the body it started in, or strays
+    more than a step from every point.  ``point_face`` maps each point to the
+    face whose winds blow there (default: point ``i`` is face ``i``).
+    """
+
+    def __init__(self, points: np.ndarray, sea: np.ndarray, winds: Optional[np.ndarray],
+                 face_spacing_rad: float, *, point_face: Optional[np.ndarray] = None,
+                 step_rad: Optional[float] = None, start_rad: Optional[float] = None) -> None:
+        self.centroids = np.asarray(points, dtype=np.float64)
+        sea = np.asarray(sea)
+        self.body = np.where(sea, 0, -1) if sea.dtype == bool else sea.astype(np.int64)
         # (N, K, 3) per-season winds, or none (then only swell).
         self.winds = None if winds is None else np.asarray(winds, dtype=np.float64)
+        self.point_face = (np.arange(len(self.centroids)) if point_face is None
+                           else np.asarray(point_face, dtype=np.int64))
         self.tree = KDTree(self.centroids)
         self.spacing = float(face_spacing_rad)
+        self.step = _FETCH_STEP_FACES * self.spacing if step_rad is None else float(step_rad)
+        self.start = _FETCH_START_FACES * self.spacing if start_rad is None else float(start_rad)
 
-    def power(self, mouth: np.ndarray, axis: np.ndarray, params: "DeltaParams") -> float:
-        """Wave power at ``mouth`` from the sea in front of it, in ``(7 m/s)³``."""
+    def power(self, mouth: np.ndarray, axis: np.ndarray, params: "DeltaParams",
+              body: int = 0, swell: bool = True) -> float:
+        """Wave power at ``mouth`` from water body ``body`` in front of it, in ``(7 m/s)³``."""
         mouth = _unit(np.asarray(mouth, dtype=np.float64))
         a = _tangent(np.asarray(axis, dtype=np.float64), mouth)
         b = np.cross(mouth, a)
         cap = float(params.fetch_cap_km) / EARTH_RADIUS_KM
-        step = _FETCH_STEP_FACES * self.spacing
-        arcs = np.arange(_FETCH_START_FACES * self.spacing, cap + 0.5 * step, step)
-        swell3 = float(params.swell_speed) ** 3
+        step = self.step
+        arcs = np.arange(self.start, cap + 0.5 * step, step)
+        swell3 = float(params.swell_speed) ** 3 if swell else 0.0
         total, weights = 0.0, 0.0
         for phi in np.linspace(-0.5 * np.pi, 0.5 * np.pi, _N_BEARINGS):
             d = np.cos(phi) * a + np.sin(phi) * b
@@ -100,16 +116,16 @@ class WaveField:
             if w <= 1e-9:
                 continue
             ray = np.cos(arcs)[:, None] * mouth[None, :] + np.sin(arcs)[:, None] * d[None, :]
-            _, faces = self.tree.query(ray)
-            faces = np.asarray(faces, dtype=np.int64)
-            land = np.flatnonzero(~self.sea[faces])
-            n_sea = int(land[0]) if land.size else len(faces)
+            gap, points = self.tree.query(ray)
+            points = np.asarray(points, dtype=np.int64)
+            land = np.flatnonzero((self.body[points] != body) | (np.asarray(gap) > max(step, self.spacing)))
+            n_sea = int(land[0]) if land.size else len(points)
             if n_sea == 0:
                 continue
             fetch = min(arcs[n_sea - 1] + 0.5 * step, cap) / cap
             onshore3 = 0.0
             if self.winds is not None:
-                over = self.winds[faces[:n_sea]]                         # (S, K, 3)
+                over = self.winds[self.point_face[points[:n_sea]]]       # (S, K, 3)
                 # The direction the waves travel at each sample: back toward the mouth.
                 back = -_ray_tangents(ray[:n_sea], mouth)                 # (S, 3)
                 along = np.einsum("skc,sc->sk", over, back)

@@ -76,7 +76,7 @@ Paths leaving the raster are cut at its edge.
 moves each world delta (a world river's mouth) to the largest-flow regional
 mouth within reach — two river corridors plus twice the settlement snap reach,
 since a re-routed stem can end that far from its world mouth — so a delta marker
-sits on its drawn river; one with no mouth in reach stays.
+sits on its drawn river; one with no mouth in reach stays (as a lake delta does).
 
 Paths are Laplacian-smoothed (`smoothing_iterations`); a segment is flagged
 `in_lake` (hidden) when both its ends are on refined water, with land runs of up
@@ -92,17 +92,18 @@ shared edge independently (each is shown alone, so no seam is visible).
 ## Delta distributaries (`region/distributaries.py`)
 
 The world's delta stage ([delta.md](delta.md)) builds each delta as a plain of
-global texels with one river carried across it. `build_region_rivers` ends with
+global texels with one river carried across it, into the sea or a lake. `build_region_rivers` ends with
 `add_distributaries`, which fans that river out for every delta whose apex
 (`"delta_fans"`) is on the region's raster. It needs the refined `delta`
 texture, which the refinement copies down from the globe.
 
 - **The stem.** The largest-flow re-routed path passing within two global
-  texels of the apex and ending on the refined sea. Its flow at the apex sets
-  everything below.
+  texels of the apex, cut where it first meets open refined water (sea or lake:
+  a run of 3 water nodes, or water to its end — a lake delta's river runs on
+  through its lake). Its flow at the apex sets everything below.
 - **Mouths.** `mouth_count(flow)` = `base_count` (3) + `per_decade` (2) ×
   log10(flow / 1000), clipped to 1..`max_count` (8), the main stem's mouth
-  included. The delta front (refined sea beside the refined plain, on a disc of
+  included. The delta front (refined sea or lake beside the refined plain, on a disc of
   1.5 fan radii around the apex) is split by bearing from the apex, within
   `max_angle_deg` (70°) of the axis, into that many sectors. The stem's mouth
   holds one sector, and each other sector gets the front node nearest its
@@ -128,7 +129,7 @@ texture, which the refinement copies down from the globe.
   (`valley_seeking` 1.0), ×50 on water before the mouth, and × `1 + separation ·
   exp(−d / 2)` within `d` nodes of an existing channel (`separation` 3.0, waived
   within 3 nodes of the junction), so branches spread instead of doubling one
-  another. A route not ending on the sea is dropped.
+  another. A route not ending on water (sea or lake) is dropped.
 - **Flow.** Each branch carries `apex flow ×` (its mouth's share + the shares of
   the branches leaving it downstream). The stem keeps `main_share` (0.5) and the
   other mouths split the rest evenly. The stem's own path and flow are

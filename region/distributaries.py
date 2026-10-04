@@ -1,14 +1,14 @@
 """Delta distributaries — the channels a big river splits into over its delta.
 
 The world's delta stage (:mod:`worldgen.delta`) builds each delta as a plain of
-global texels with one river carried across it to the sea; at ~14 km a texel
+global texels with one river carried across it to the sea or into a lake; at ~14 km a texel
 that is all the globe can say.  A region is fine enough to show the river
 fanning out, so here the delta river's re-routed stem gets *distributaries*:
 
 - **How many.**  ``base_count`` mouths in all at a mouth flow of 1000, plus
   ``per_decade`` for each tenfold more flow, at most ``max_count``.
-- **Where they reach the sea.**  The plain's seaward edge (refined sea next to
-  the refined ``delta`` plain) is split by its bearing from the apex, within
+- **Where they reach the sea.**  The plain's seaward edge (refined sea or lake
+  next to the refined ``delta`` plain) is split by its bearing from the apex, within
   ``max_angle_deg`` of the fan's axis, into that many equal sectors.  The main
   stem's own mouth holds one; each other sector gets a mouth near its middle.
 - **Shape.**  A cuspate (wave-dominated) delta has at most ``wave_mouths``:
@@ -58,6 +58,8 @@ _BEND_AT = 0.5
 _MIN_MOUTH_GAP = 3.0
 # Two branches never leave within this many raster nodes of each other.
 _MIN_JUNCTION_GAP = 2.5
+# The delta river's stem ends at the first water this many nodes long (or running to its end).
+_OPEN_WATER_NODES = 3
 
 
 @paramclass
@@ -119,7 +121,7 @@ def _path_nodes(raster: Raster, fields: RegionFields, positions: np.ndarray) -> 
 
 
 def _front(raster: Raster, plain: np.ndarray) -> np.ndarray:
-    """Sea nodes beside a plain node: where a distributary can reach the sea."""
+    """Water nodes beside a plain node: where a distributary can reach the sea (or lake)."""
     n = raster.n
     land = (plain & ~raster.water & raster.sampled).reshape(n, n)
     beside = np.zeros((n, n), dtype=bool)
@@ -127,7 +129,7 @@ def _front(raster: Raster, plain: np.ndarray) -> np.ndarray:
         for dc in (-1, 0, 1):
             if dr or dc:
                 beside |= np.roll(np.roll(land, dr, axis=0), dc, axis=1)
-    return (beside.reshape(-1) & raster.ocean & raster.sampled)
+    return (beside.reshape(-1) & raster.water & raster.sampled)
 
 
 def _pick_mouths(
@@ -231,7 +233,7 @@ def _route_branch(
         out = step * 0.5 * (c[a] + c[b])
         return np.where(ok[a] & ok[b], out, np.inf)
 
-    sinks = raster.ocean & raster.sampled
+    sinks = raster.water & raster.sampled
     radius = max(float(params.corridor) * length, 2.0)
     return route_corridor(raster, s, t, radius, edge_cost, sinks=sinks, mouth_radius=2.0)
 
@@ -257,7 +259,7 @@ def _fan_branches(
     raster = sample_raster(fields, globe, lo, step, n, sampled, keys=("delta",))
     plain = raster.values.get("delta", np.zeros(n * n)) > 0.5
 
-    # The delta river: the largest-flow path passing the apex and ending at sea.
+    # The delta river: the largest-flow path passing the apex, to where it meets open water.
     best, best_flow, best_vertex = -1, 0.0, 0
     # A re-routed stem stays within a corridor (one global texel) of its world line.
     gw = globe.mesh.face_textures["elevation"].shape[2]
@@ -275,7 +277,15 @@ def _fan_branches(
     stem_pos = np.asarray(rivers.paths[best][0], dtype=np.float64)[best_vertex:]
     stem = _path_nodes(raster, fields, stem_pos)
     stem = stem[stem >= 0]
-    if stem.size < 3 or not raster.ocean[stem[-1]]:
+    # A lake delta's river may run on through the lake: its stem ends where it
+    # meets open water (not a speckle of it on the plain).
+    wet = raster.water[stem] & raster.sampled[stem]
+    run = _OPEN_WATER_NODES
+    open_water = [i for i in np.flatnonzero(wet) if wet[i:i + run].all()]
+    if not open_water:
+        return []
+    stem = stem[: int(open_water[0]) + 1]
+    if stem.size < 3:
         return []
     apex_flow = float(np.asarray(rivers.paths[best][1])[min(best_vertex, len(rivers.paths[best][1]) - 1)])
 
@@ -343,7 +353,7 @@ def _fan_branches(
                 continue
             j = int(np.argmin(score))
             path = _route_branch(raster, int(trunk[j]), m, base_cost, occupied, dp, rng)
-            if path is None or len(path) < 3 or not raster.ocean[path[-1]]:
+            if path is None or len(path) < 3 or not raster.water[path[-1]]:
                 continue
             parent = int(owner[j])
             channels.append(_Channel(nodes=path, mouth_share=share, parent=parent, children=[]))

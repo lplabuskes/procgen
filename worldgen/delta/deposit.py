@@ -1,8 +1,9 @@
-"""River deltas: the sediment a large river lays down where it meets the sea.
+"""River deltas: the sediment a large river lays down where it meets the sea or a lake.
 
-A delta is a low plain at a big river's mouth, built out into the sea from what
-the river carries.  Each one here is a *footprint* of global texels around the
-river's lower course, grown by a priority flood from that course:
+A delta is a low plain at a big river's mouth, built out into the sea (or a
+lake) from what the river carries.  Each one here is a *footprint* of global
+texels around the river's lower course, grown by a priority flood from that
+course:
 
 - **Where.**  The fan spreads from an *apex* on the river some way upstream of
   its mouth (the head of the delta, where it starts to branch) and opens
@@ -11,9 +12,14 @@ river's lower course, grown by a priority flood from that course:
   it would fill (``depth_scale_km``), and on land (``land_cost``), so the fan
   hugs the river on land and bulges out over a shallow shelf.  Hills
   (``max_land_elevation_km``) and deep water (``max_depth_km``) are never
-  taken, nor lakes, nor another delta's texels.
-- **How much.**  The flood stops at an area that grows with the mouth flow,
-  ``area_km2 · (flow / 1000) ** area_exponent``.
+  taken, nor other water, nor another delta's texels.
+- **How much.**  The flood stops at an area that grows with the river's
+  sediment supply — its mouth flow, less the silt lakes upstream trapped
+  (:mod:`worldgen.delta.sediment`) — as
+  ``area_km2 · (supply / 1000) ** area_exponent``, or — in a lake — once the
+  lake has lost ``max_lake_share`` of its area to deltas.
+- **Lakes.**  A river entering a lake builds its delta there.  Heights and
+  depths are then measured from the lake's surface instead of sea level.
 - **Its shape.**  The balance of river power against the wave power at the
   mouth (:mod:`worldgen.delta.shape`) bends the priority toward long fingers
   in calm water (bird's-foot), a rounded fan, or a blunt cusp with beaches
@@ -24,8 +30,9 @@ river's lower course, grown by a priority flood from that course:
   ``skirt_rings`` rings (the prodelta).  Texels that were sea turn to land.
 - **The rivers.**  A river (or saved stream) that ended on the old shore now
   ends inside the plain, so it is carried on across it: the delta's own river
-  out to the front along the fan's axis, the others to the nearest open sea or
-  onto the delta river's new reach, whichever is nearer.
+  out to the front along the fan's axis, the others to the nearest open water or
+  onto the delta river's new reach, whichever is nearer.  A river that ran on
+  through the lake rejoins its old course past the plain.
 
 The flood runs over the texels *inside* their face polygons; a texture's
 over-hang copies the texel nearest it, so neighbouring faces agree at seams.
@@ -38,9 +45,10 @@ from typing import TYPE_CHECKING, List, Optional
 
 import numpy as np
 from scipy.sparse import csr_matrix
-from scipy.sparse.csgraph import dijkstra
+from scipy.sparse.csgraph import connected_components, dijkstra
 from scipy.spatial import KDTree
 
+from worldgen.delta.sediment import downstream_order, mouth_node, sediment_load
 from worldgen.delta.shape import ARCUATE, DeltaShape, WaveField, finger_tips, make_shape, shape_metric, wave_dominance
 from worldgen.hydrology.types import River, RiverNode, RiverSegment, StreamNetwork, laplacian_smooth_sphere
 
@@ -59,6 +67,10 @@ _NEIGHBOUR_SPACINGS = 1.6
 _DUPLICATE_SPACINGS = 0.3
 # Smoothing of a river's new reach over the plain.
 _EXTENSION_SMOOTHING = 4
+# Water-body labels: the sea, and land (lakes are numbered from 1).
+SEA, LAND = 0, -1
+# A lake's fetch is marched in steps of this many texel spacings.
+_LAKE_FETCH_STEP = 1.0
 
 
 @dataclass
@@ -77,6 +89,8 @@ class DeltaFan:
     wave_dominance: float = 0.5
     shape: str = ARCUATE
     fingers: np.ndarray = field(default_factory=lambda: np.zeros((0, 3), dtype=np.float32))
+    lake: bool = False        # built into a lake rather than the sea
+    sediment: float = 1.0     # share of the flow still carrying silt (lakes upstream trap it)
 
 
 @dataclass
@@ -215,6 +229,9 @@ class _Footprint:
     front: np.ndarray          # (C,) bool: open sea next to the plain
     shape: DeltaShape
     fingers: np.ndarray        # (F, 3) built finger tips
+    water_km2: float = 0.0     # of it, what was open water
+    # The share of its area budget the lake's cap left unbuilt (0 if it never hit it).
+    shortfall: float = 0.0
 
 
 def target_area_km2(flow: float, params: "DeltaParams") -> float:
@@ -224,16 +241,23 @@ def target_area_km2(flow: float, params: "DeltaParams") -> float:
 def _footprint(
     idx: TexelIndex,
     elev: np.ndarray,
-    ocean: np.ndarray,
-    lake: np.ndarray,
+    body: np.ndarray,
+    target: int,
+    level: float,
     claimed: np.ndarray,
     river_pts: np.ndarray,
     flow: float,
     params: "DeltaParams",
     dominance: float = 0.5,
     rng: Optional[np.random.Generator] = None,
+    water_budget_km2: float = np.inf,
 ) -> Optional[_Footprint]:
-    """Grow one delta's footprint from its river's lower course."""
+    """Grow one delta's footprint from its river's lower course.
+
+    The river runs into water body ``target`` (labels in ``body``: the sea,
+    a lake, or land) whose surface is at ``level`` km.  The flood takes at most
+    ``water_budget_km2`` of that water.
+    """
     area_target = target_area_km2(flow, params)
     size_km = float(np.sqrt(area_target))
     mouth = _unit(river_pts[-1])
@@ -253,23 +277,24 @@ def _footprint(
     if cand.size == 0:
         return None
     pos = idx.positions[cand]
-    e = elev[cand]
-    is_ocean = ocean[cand]
+    e = elev[cand] - level
+    is_water = body[cand] == target
     dist = _arc_km(pos, apex[None, :])
     forward = (pos - apex[None, :]) @ axis * EARTH_RADIUS_KM
     cos_off = np.clip(forward / np.maximum(dist, 1e-9), -1.0, 1.0)
 
     allowed = (
-        ~lake[cand] & ~claimed[cand] & (forward >= -0.5 * idx.spacing_km)
-        & np.where(is_ocean, e >= -float(params.max_depth_km), e <= float(params.max_land_elevation_km))
+        ~claimed[cand] & (forward >= -0.5 * idx.spacing_km)
+        & np.where(is_water, e >= -float(params.max_depth_km),
+                   (body[cand] == LAND) & (e <= float(params.max_land_elevation_km)))
     )
     # The shape metrics start at the shore: the river's last vertex on land.
-    on_land = ~ocean[idx.nearest_inside(river_pts)]
+    on_land = body[idx.nearest_inside(river_pts)] != target
     head = _unit(river_pts[int(np.flatnonzero(on_land)[-1])]) if on_land.any() else mouth
     shape = make_shape(dominance, head, axis, flow, size_km, params, rng or np.random.default_rng(0))
     arcuate = dist * (1.0 + float(params.lateral_cost) * (1.0 - cos_off))
     key = shape_metric(pos, apex, axis, arcuate, shape, idx.spacing_km, params) * np.where(
-        is_ocean, 1.0 + np.maximum(-e, 0.0) / max(float(params.depth_scale_km), 1e-6), float(params.land_cost),
+        is_water, 1.0 + np.maximum(-e, 0.0) / max(float(params.depth_scale_km), 1e-6), float(params.land_cost),
     )
 
     tree = KDTree(pos)
@@ -306,10 +331,16 @@ def _footprint(
     heap = [(0.0, int(s)) for s in seeds]
     queued[seeds] = True
     heapq.heapify(heap)
-    area = 0.0
+    area = water = 0.0
+    capped = False
     indptr, indices = graph.indptr, graph.indices
     while heap and area < area_target:
         _, k = heapq.heappop(heap)
+        if is_water[k]:
+            if water + float(weight[k]) > water_budget_km2:
+                capped = True
+                break   # the lake is as full as it may get
+            water += float(weight[k])
         taken[k] = True
         area += float(weight[k])
         for nb in indices[indptr[k]:indptr[k + 1]]:
@@ -326,19 +357,20 @@ def _footprint(
         nbrs = np.zeros(n, dtype=bool)
         for k in np.flatnonzero(frontier):
             nbrs[indices[indptr[k]:indptr[k + 1]]] = True
-        nbrs &= is_ocean & ~taken & (ring == 0) & ~lake[cand] & ~claimed[cand]
+        nbrs &= is_water & ~taken & (ring == 0) & ~claimed[cand]
         ring[nbrs] = r
         frontier = nbrs
     front = np.zeros(n, dtype=bool)
     for k in np.flatnonzero(taken):
         front[indices[indptr[k]:indptr[k + 1]]] = True
-    front &= is_ocean & ~taken & ~lake[cand]
+    front &= is_water & ~taken
 
     return _Footprint(
         apex=apex, axis=axis, ids=cand[taken], skirt_ids=cand[ring > 0], skirt_ring=ring[ring > 0],
         radius_km=float(dist[taken].max()), area_km2=float(weight[taken].sum()),
         cand=cand, graph=graph, in_plain=taken, front=front,
-        shape=shape, fingers=finger_tips(pos, taken, shape, idx.spacing_km, params),
+        shape=shape, fingers=finger_tips(pos, taken, shape, idx.spacing_km, params), water_km2=water,
+        shortfall=max(1.0 - area / max(area_target, 1e-9), 0.0) if capped else 0.0,
     )
 
 
@@ -352,6 +384,10 @@ def _apply(
     fp: _Footprint,
     elev: np.ndarray,
     ocean: np.ndarray,
+    lake: Optional[np.ndarray],
+    body: np.ndarray,
+    target: int,
+    level: float,
     filled: Optional[np.ndarray],
     delta: np.ndarray,
     claimed: np.ndarray,
@@ -359,8 +395,10 @@ def _apply(
 ) -> np.ndarray:
     """Write a footprint into the flat textures; returns the flat ids now on the plain.
 
-    Every texel near the delta — over-hang included — takes the role of the
-    in-polygon texel nearest it, so faces agree across their seams.
+    The plain stands above ``level`` (the surface of water body ``target``),
+    and the water in front of it shoals toward that surface.  Every texel near
+    the delta — over-hang included — takes the role of the in-polygon texel
+    nearest it, so faces agree across their seams.
     """
     plain_set = np.zeros(len(elev), dtype=bool)
     plain_set[fp.ids] = True
@@ -377,9 +415,12 @@ def _apply(
 
     s = np.clip(_arc_km(idx.positions[on_plain], fp.apex[None, :]) / max(fp.radius_km, 1e-9), 0.0, 1.0)
     top, toe = float(params.apex_height_km), float(params.front_height_km)
-    surface = toe + (top - toe) * (1.0 - s)
+    surface = level + toe + (top - toe) * (1.0 - s)
     elev[on_plain] = surface
     ocean[on_plain] = 0
+    if lake is not None:
+        lake[on_plain] = 0
+    body[on_plain] = LAND
     if filled is not None:
         filled[on_plain] = surface
     delta[on_plain, 0] = 1.0
@@ -389,9 +430,9 @@ def _apply(
     claimed[on_plain] = True
 
     rings = max(int(params.skirt_rings), 1)
-    depth = -float(params.skirt_depth_km) * skirt_ring[role[skirt_mask]] / (rings + 1)
-    still_sea = ocean[in_skirt] > 0
-    elev[in_skirt] = np.where(still_sea, np.maximum(elev[in_skirt], depth), elev[in_skirt])
+    depth = level - float(params.skirt_depth_km) * skirt_ring[role[skirt_mask]] / (rings + 1)
+    still_water = body[in_skirt] == target
+    elev[in_skirt] = np.where(still_water, np.maximum(elev[in_skirt], depth), elev[in_skirt])
     return on_plain
 
 
@@ -454,7 +495,7 @@ def _extend_river(river: River, pts: np.ndarray, nodes: np.ndarray, fp: _Footpri
 
 
 class _StreamExtension:
-    """New nodes appended to a ``StreamNetwork``, applied in one go at the end."""
+    """New nodes appended to a ``StreamNetwork`` (and old ones dropped), applied in one go at the end."""
 
     def __init__(self, streams: StreamNetwork) -> None:
         self.streams = streams
@@ -466,6 +507,7 @@ class _StreamExtension:
         self.channel: list[bool] = []
         self.stop: list[bool] = []
         self.relink: dict[int, int] = {}
+        self.drop: set[int] = set()
 
     def add_path(self, start: int, flats: list[int], positions: list[np.ndarray], flow: float,
                  ends_on: Optional[int] = None) -> list[int]:
@@ -505,14 +547,60 @@ class _StreamExtension:
             receiver[old] = new
             channel[old] = True
             stop[old] = False
+        nodes, positions, flow = st.nodes, st.positions, st.flow
         if self.nodes:
-            st.nodes = np.concatenate([st.nodes, np.asarray(self.nodes, dtype=np.int64)])
-            st.positions = np.concatenate([st.positions, np.asarray(self.positions, dtype=np.float32)])
+            nodes = np.concatenate([nodes, np.asarray(self.nodes, dtype=np.int64)])
+            positions = np.concatenate([positions, np.asarray(self.positions, dtype=np.float32)])
             receiver = np.concatenate([receiver, np.asarray(self.receiver, dtype=np.int64)])
-            st.flow = np.concatenate([st.flow, np.asarray(self.flow, dtype=np.float32)])
+            flow = np.concatenate([flow, np.asarray(self.flow, dtype=np.float32)])
             channel = np.concatenate([channel, np.asarray(self.channel, dtype=bool)])
             stop = np.concatenate([stop, np.asarray(self.stop, dtype=bool)])
-        st.receiver, st.channel, st.stop = receiver, channel, stop
+        keep = np.ones(len(nodes), dtype=bool)
+        keep[list(self.drop)] = False
+        remap = np.full(len(nodes), -1, dtype=np.int64)
+        remap[keep] = np.arange(int(keep.sum()))
+        receiver = np.where(receiver >= 0, remap[np.maximum(receiver, 0)], -1)
+        st.nodes, st.positions, st.flow = nodes[keep], positions[keep], flow[keep]
+        st.receiver, st.channel, st.stop = receiver[keep], channel[keep], stop[keep]
+
+
+def _rejoin(river: River, tail: List[RiverSegment], mouth: Optional[RiverNode], now_plain: np.ndarray,
+            idx: TexelIndex) -> None:
+    """Re-attach the course ``tail`` a river ran on past its old mouth, from the
+    first vertex beyond the plain, with one hidden reach from the new front."""
+    if not tail:
+        return
+    ends = np.stack([s_.end.position for s_ in tail]).astype(np.float64)
+    on = np.flatnonzero(now_plain[idx.nearest_inside(ends)])
+    first = int(on[-1]) + 1 if on.size else 0
+    if first >= len(tail):
+        return   # all of it now lies on the plain: the river ends at the front
+    nxt = tail[first]
+    river.segments.append(RiverSegment(start=river.segments[-1].end, end=nxt.end,
+                                       flow_rate=nxt.flow_rate, in_lake=nxt.in_lake))
+    river.segments.extend(tail[first + 1:])
+    river.mouth = mouth
+
+
+def _own_stream(streams: StreamNetwork, old_mouth: np.ndarray, now_plain: np.ndarray,
+                idx: TexelIndex) -> Optional[int]:
+    """The stream node at the delta river's old mouth: among the big nodes now on
+    the plain within a texel and a half of it, the nearest."""
+    gap = _arc_km(streams.positions.astype(np.float64), old_mouth[None, :])
+    near = np.flatnonzero((gap <= 1.5 * idx.spacing_km) & now_plain[streams.nodes])
+    if near.size == 0:
+        return None
+    near = near[streams.flow[near] >= 0.5 * float(streams.flow[near].max())]
+    return int(near[np.argmin(gap[near])])
+
+
+def _course_past(streams: StreamNetwork, own: int, now_plain: np.ndarray) -> tuple[set, Optional[int]]:
+    """The nodes downstream of ``own`` on the plain, and the first node past it (if any)."""
+    on, k = {own}, int(streams.receiver[own])
+    while k >= 0 and k not in on and now_plain[streams.nodes[k]]:
+        on.add(k)
+        k = int(streams.receiver[k])
+    return on, (k if k >= 0 and k not in on else None)
 
 
 def _carry_across(
@@ -520,14 +608,17 @@ def _carry_across(
     idx: TexelIndex,
     on_plain: np.ndarray,
     delta_river: River,
+    mouth_index: int,
     rivers: List[River],
     streams: Optional[StreamNetwork],
     ext: Optional[_StreamExtension],
     elev: np.ndarray,
 ) -> Optional[np.ndarray]:
-    """Carry the rivers and streams that now end on the plain out to the sea.
+    """Carry the rivers and streams that now end on the plain out to open water.
 
-    Returns the delta river's new mouth position (None if it could not be routed).
+    The delta river's mouth is its polyline vertex ``mouth_index`` (its last at
+    sea; where it enters a lake it may run on through it).  Returns the delta
+    river's new mouth position (None if it could not be routed).
     """
     now_plain = np.zeros(len(elev), dtype=bool)
     now_plain[on_plain] = True
@@ -539,7 +630,7 @@ def _carry_across(
         return int(tree.query(np.asarray(p, dtype=np.float64))[1])
 
     # The delta river, out along the fan's axis.
-    old_mouth = np.asarray(delta_river.as_polyline()[-1], dtype=np.float64)
+    old_mouth = np.asarray(delta_river.as_polyline()[mouth_index], dtype=np.float64)
     start = cand_of(old_mouth)
     main = _route(fp, start, _main_target(fp, idx))
     if main is None:
@@ -547,8 +638,11 @@ def _carry_across(
     if main is None:
         return None
     main_pts = _extension_points(old_mouth, main, fp, idx)
+    final_mouth, tail = delta_river.mouth, delta_river.segments[mouth_index:]
+    delta_river.segments = delta_river.segments[:mouth_index]
     _extend_river(delta_river, main_pts, main, fp, idx, elev)
-    # The other rivers: to open sea, or onto the delta river's new reach.
+    _rejoin(delta_river, tail, final_mouth, now_plain, idx)
+    # The other rivers: to open water, or onto the delta river's new reach.
     joins = main[1:-1]
     for river in rivers:
         if river is delta_river or river.mouth is None or not river.segments:
@@ -564,29 +658,36 @@ def _carry_across(
 
     if streams is None or ext is None:
         return main_pts[-1]
-    # Saved streams ending on the plain: the delta river's own outlet follows its
-    # new reach; the rest find their way like the other rivers.
-    stops = np.flatnonzero(streams.stop & now_plain[streams.nodes])
-    if stops.size == 0:
-        return main_pts[-1]
-    stop_cand = np.array([cand_of(streams.positions[k]) for k in stops])
-    own = int(stops[np.argmax(streams.flow[stops] - 1e6 * (stop_cand != start))])
-    main_nodes = ext.add_path(own, [int(fp.cand[k]) for k in main[1:]], list(main_pts[1:]),
-                              float(streams.flow[own]))
-    joined = {int(c): j for c, j in zip(main[1:], main_nodes)}
-    for k, c in zip(stops, stop_cand):
-        if int(k) == own:
-            continue
-        path = _route(fp, int(c), np.concatenate([front, joins]))
+    # The delta river's own stream follows its new reach, then drains on into
+    # whatever its old course reached past the plain (or stops at the front).
+    # Its old course over the plain is dropped.
+    own = _own_stream(streams, old_mouth, now_plain, idx)
+    old_course: set = set()
+    joined: dict = {}
+    if own is not None:
+        old_course, past = _course_past(streams, own, now_plain)
+        old_course.discard(own)
+        ext.drop |= old_course
+        main_nodes = ext.add_path(own, [int(fp.cand[k]) for k in main[1:]], list(main_pts[1:]),
+                                  float(streams.flow[own]), ends_on=past)
+        joined = {int(c): j for c, j in zip(main[1:], main_nodes)}
+    # The other streams ending on the plain — or on that old course — find
+    # their way like the other rivers.
+    ends = streams.stop & now_plain[streams.nodes]
+    feeds_old = np.isin(streams.receiver, list(old_course)) if old_course else np.zeros(len(streams), dtype=bool)
+    stops = [int(k) for k in np.flatnonzero(ends | feeds_old)
+             if int(k) not in old_course and int(k) != own]
+    for k in stops:
+        path = _route(fp, cand_of(streams.positions[k]), np.concatenate([front, joins]))
         if path is None:
             continue
         pts = _extension_points(streams.positions[k], path, fp, idx)
         last = int(path[-1])
         if last in joined:
-            ext.add_path(int(k), [int(fp.cand[j]) for j in path[1:-1]], list(pts[1:-1]),
+            ext.add_path(k, [int(fp.cand[j]) for j in path[1:-1]], list(pts[1:-1]),
                          float(streams.flow[k]), ends_on=joined[last])
         else:
-            ext.add_path(int(k), [int(fp.cand[j]) for j in path[1:]], list(pts[1:]), float(streams.flow[k]))
+            ext.add_path(k, [int(fp.cand[j]) for j in path[1:]], list(pts[1:]), float(streams.flow[k]))
     return main_pts[-1]
 
 
@@ -608,17 +709,129 @@ def is_delta_river(river: River, ocean: np.ndarray, params: "DeltaParams") -> bo
     return bool(ocean[int(river.mouth.face_id), row, col])
 
 
-def _faces_around(mesh: "PolygonMesh", rivers: List[River], params: "DeltaParams") -> np.ndarray:
-    """Every face a delta of these rivers could reach, with two faces' margin."""
+@dataclass
+class _Mouth:
+    """Where a river meets the water a delta could be built into."""
+
+    river: River
+    entry: Optional[RiverSegment]   # a lake mouth's first in-lake segment (None at sea)
+    flow: float
+    lake: bool
+    sediment: float = 1.0    # share of ``flow`` carrying silt here
+    load: float = 0.0        # the sediment load arriving (stream-network units)
+    node: Optional[int] = None   # its stream node
+    body: int = LAND         # the lake it enters
+
+    @property
+    def supply(self) -> float:
+        """The flow that builds the delta: the water still carrying sediment."""
+        return self.flow * self.sediment
+
+    def end(self) -> int:
+        """Polyline vertex of the mouth, wherever earlier deltas left it (-1 if
+        one built over it): at sea the river's end, at a lake its entry segment's end."""
+        if self.entry is None:
+            return len(self.river.segments)
+        for k, seg in enumerate(self.river.segments):
+            if seg is self.entry:
+                return k + 1
+        return -1
+
+
+def lake_mouths(rivers: List[River], params: "DeltaParams") -> List[_Mouth]:
+    """Every place a river big and long enough runs into a lake (its in-lake
+    segments start), however it carries on from there."""
+    out: list[_Mouth] = []
+    for river in rivers:
+        segs = river.segments
+        entries = [k for k in range(1, len(segs)) if segs[k].in_lake and not segs[k - 1].in_lake]
+        if not entries:
+            continue
+        pts = np.stack(river.as_polyline()).astype(np.float64)
+        steps = np.concatenate([[0.0], np.cumsum(_arc_km(pts[:-1], pts[1:]))])
+        for k in entries:
+            flow = float(segs[k].flow_rate)
+            if flow >= float(params.min_flow) and steps[k + 1] >= float(params.min_length_km):
+                out.append(_Mouth(river, segs[k], flow, lake=True))
+    return out
+
+
+def _faces_around(mesh: "PolygonMesh", mouths: List[_Mouth], params: "DeltaParams") -> np.ndarray:
+    """Every face a delta at these mouths could reach, with two faces' margin."""
     tree = KDTree(np.asarray(mesh.face_centroids, dtype=np.float64))
     face_km = float(np.sqrt(np.mean(mesh.face_areas))) * EARTH_RADIUS_KM
     out: list[np.ndarray] = []
-    for river in rivers:
-        size = float(np.sqrt(target_area_km2(float(river.segments[-1].flow_rate), params)))
+    for m in mouths:
+        size = float(np.sqrt(target_area_km2(m.flow, params)))
         reach = (float(params.apex_distance) + float(params.reach)) * size + 2.0 * face_km
-        mouth = np.asarray(river.as_polyline()[-1], dtype=np.float64)
+        mouth = np.asarray(m.river.as_polyline()[m.end()], dtype=np.float64)
         out.append(np.asarray(tree.query_ball_point(mouth, chord(reach)), dtype=np.int64))
     return np.unique(np.concatenate(out)) if out else np.zeros(0, dtype=np.int64)
+
+
+def _water_bodies(idx: TexelIndex, ocean: np.ndarray, lake: np.ndarray) -> np.ndarray:
+    """Per flat texel: ``SEA``, ``LAND``, or the lake's number (1, 2, …).
+
+    Lakes are the connected pieces of the in-polygon lake texels on the index;
+    an over-hanging lake texel joins the lake nearest it.
+    """
+    body = np.full(ocean.shape, LAND, dtype=np.int64)
+    body[ocean > 0] = SEA
+    wet = idx.inside_ids[lake[idx.inside_ids]]
+    if wet.size == 0:
+        return body
+    pos = idx.positions[wet]
+    tree = KDTree(pos)
+    pairs = tree.query_pairs(_NEIGHBOUR_SPACINGS * idx.spacing, output_type="ndarray")
+    graph = csr_matrix((np.ones(len(pairs)), (pairs[:, 0], pairs[:, 1])), shape=(wet.size, wet.size))
+    _, labels = connected_components(graph, directed=False)
+    body[wet] = labels + 1
+    over = idx.ids[lake[idx.ids] & ~idx.inside[idx.ids]]
+    if over.size:
+        body[over] = body[wet[tree.query(idx.positions[over], workers=-1)[1]]]
+    return body
+
+
+def _lake_texel(idx: TexelIndex, body: np.ndarray, point: np.ndarray) -> int:
+    """The in-polygon lake texel nearest ``point`` within a texel and a half (-1 if none)."""
+    near = idx.near(point, 1.5 * idx.spacing_km, inside_only=True)
+    near = near[body[near] > SEA]
+    if near.size == 0:
+        return -1
+    return int(near[np.argmin(_arc_km(idx.positions[near], point[None, :]))])
+
+
+class _Sediment:
+    """The stream network's sediment load, re-derived as full lakes spill."""
+
+    def __init__(self, streams: StreamNetwork, node_lake: np.ndarray, trap: float, order: np.ndarray) -> None:
+        self.streams, self.node_lake, self.trap, self.order = streams, node_lake, trap, order
+        self.spilled: dict[int, float] = {}
+        self.load: Optional[np.ndarray] = None
+
+    def lake_rank(self) -> dict[int, int]:
+        """Per lake, the drainage-order position of its last node: a lake ranks
+        above every lake upstream of it."""
+        position = np.empty(len(self.order), dtype=np.int64)
+        position[self.order] = np.arange(len(self.order))
+        rank: dict[int, int] = {}
+        for k in np.flatnonzero(self.node_lake > 0):
+            b = int(self.node_lake[k])
+            rank[b] = max(rank.get(b, 0), int(position[k]))
+        return rank
+
+    def spill(self, lake: int, load: float) -> None:
+        if load > 0.0:
+            self.spilled[lake] = self.spilled.get(lake, 0.0) + float(load)
+            self.load = None
+
+    def at(self, node: int) -> tuple[float, float]:
+        """The load arriving at ``node``, and the share of its flow that is."""
+        if self.load is None:
+            self.load = sediment_load(self.streams, self.node_lake, self.trap, self.spilled, self.order)
+        flow = float(self.streams.flow[node])
+        load = float(self.load[node])
+        return load, (float(np.clip(load / flow, 0.0, 1.0)) if flow > 0 else 1.0)
 
 
 def build_deltas(
@@ -633,56 +846,136 @@ def build_deltas(
     winds: Optional[np.ndarray] = None,
     seed: int = 0,
 ) -> DeltaResult:
-    """Deposit every delta, largest river first.
+    """Deposit every delta: into lakes (upstream lakes first), then the sea, largest river first.
 
     ``winds`` (``(N, K, 3)`` per-season face winds, m/s) set the wave power
     that shapes each delta; without them only swell counts.  ``seed`` makes the
-    bird's-foot fingers reproducible.  Edits ``elevation``, ``ocean_mask`` and ``filled_height`` (``(N, H, W, 1)``)
-    in place, extends ``rivers`` and ``streams`` in place, and returns the fans,
-    the ``(N, H, W, 2)`` delta texture and its per-face fractions.
+    bird's-foot fingers reproducible.  Edits ``elevation``, ``ocean_mask``,
+    ``lake_mask`` and ``filled_height`` (``(N, H, W, 1)``) in place, extends
+    ``rivers`` and ``streams`` in place, and returns the fans, the
+    ``(N, H, W, 2)`` delta texture and its per-face fractions.
     """
     n_faces, h, w, _ = elevation.shape
     result = DeltaResult(
         delta=np.zeros((n_faces, h, w, 2), dtype=np.float32),
         plain_fraction=np.zeros(n_faces), marsh_fraction=np.zeros(n_faces),
     )
-    candidates = [r for r in rivers if is_delta_river(r, ocean_mask[..., 0] > 0, params)]
-    candidates.sort(key=lambda r: -float(r.segments[-1].flow_rate))
-    if not candidates:
+    mouths = [_Mouth(r, None, float(r.segments[-1].flow_rate), lake=False)
+              for r in rivers if is_delta_river(r, ocean_mask[..., 0] > 0, params)]
+    has_lakes = lake_mask is not None and bool((lake_mask > 0).any())
+    if has_lakes:
+        mouths += lake_mouths(rivers, params)
+    if not mouths:
         return result
-    idx = TexelIndex(mesh, h, w, faces=_faces_around(mesh, candidates, params))
+    faces = _faces_around(mesh, mouths, params)
+    if has_lakes:
+        assert lake_mask is not None
+        # Whole lakes, so each is labelled (its fetch measured, its silt trapped) in one piece.
+        faces = np.union1d(faces, np.flatnonzero((lake_mask[..., 0] > 0).any(axis=(1, 2))))
+    idx = TexelIndex(mesh, h, w, faces=faces)
     elev = elevation.reshape(-1)
     ocean = ocean_mask.reshape(-1)
-    lake = (lake_mask.reshape(-1) > 0) if lake_mask is not None else np.zeros(elev.shape, dtype=bool)
+    lake = lake_mask.reshape(-1) if lake_mask is not None else None
     filled = filled_height.reshape(-1) if filled_height is not None else None
+    body = _water_bodies(idx, ocean, lake > 0 if lake is not None else np.zeros(elev.shape, dtype=bool))
+    # Where each mouth is: its lake, and its stream node for the sediment load.
+    for m in mouths:
+        point = np.asarray(m.river.as_polyline()[m.end()], dtype=np.float64)
+        flat = _lake_texel(idx, body, point) if m.lake else int(idx.nearest_inside(point[None, :])[0])
+        if m.lake and flat >= 0:
+            m.body = int(body[flat])
+        if streams is not None and len(streams) and flat >= 0:
+            m.node = mouth_node(streams, flat, point, 1.5 * idx.spacing)
+    # Sediment: what the lakes upstream trapped, less what full lakes spilled.
+    sediment = None
+    if streams is not None and len(streams) and lake is not None:
+        node_lake = np.maximum(body[streams.nodes], 0)      # lake labels, before any delta
+        order = downstream_order(streams)
+        sediment = _Sediment(streams, node_lake, float(params.lake_trap_efficiency), order)
+    # Lake deltas first, so a full lake's spill reaches the deltas below it: lakes
+    # upstream before lakes downstream (by their last node in drainage order),
+    # then the largest river first within a lake, then the sea's, largest first.
+    rank = sediment.lake_rank() if sediment is not None else {}
+    mouths.sort(key=lambda m: (not m.lake, rank.get(m.body, 0) if m.lake else 0, -m.flow))
+    # Each lake's surface (its filled level) and how much of it deltas may take.
+    lake_ids = idx.inside_ids[body[idx.inside_ids] > SEA]
+    surface = filled if filled is not None else elev
+    n_lakes = int(body[lake_ids].max()) if lake_ids.size else 0
+    level = np.zeros(n_lakes + 1)
+    room = np.full(n_lakes + 1, np.inf)
+    if n_lakes:
+        order = np.argsort(body[lake_ids], kind="stable")
+        groups = np.split(lake_ids[order], np.flatnonzero(np.diff(body[lake_ids][order])) + 1)
+        for g in groups:
+            b = int(body[g[0]])
+            level[b] = float(np.median(surface[g]))
+            room[b] = float(params.max_lake_share) * float(idx.texel_area_km2[g].sum())
     delta = np.zeros((elev.size, 2), dtype=np.float32)
     claimed = np.zeros(elev.size, dtype=bool)
     ext = _StreamExtension(streams) if streams is not None else None
-    # Open sea per face, from the coast before any delta was built.
+    # Open water per face (the sea) or texel (lakes), from before any delta was built.
     waves = WaveField(mesh.face_centroids, ocean_mask[..., 0].mean(axis=(1, 2)) > 0.5, winds,
                       float(np.sqrt(np.mean(mesh.face_areas))))
+    lake_waves = None
+    if n_lakes:
+        ins = idx.inside_ids
+        lake_waves = WaveField(idx.positions[ins], np.where(body[ins] > SEA, body[ins], LAND), winds, idx.spacing,
+                               point_face=ins // (h * w), step_rad=_LAKE_FETCH_STEP * idx.spacing,
+                               start_rad=_LAKE_FETCH_STEP * idx.spacing)
 
-    for i, river in enumerate(candidates):
-        pts = np.stack(river.as_polyline()).astype(np.float64)
-        mouth_flat = int(idx.nearest_inside(pts[-1:])[0])
-        if claimed[mouth_flat] or not ocean[mouth_flat]:
+    for i, m in enumerate(mouths):
+        river = m.river
+        end = m.end()
+        if end < 0:
+            continue   # its entry lies under a delta built further up the river
+        if sediment is not None and m.node is not None:
+            m.load, m.sediment = sediment.at(m.node)
+        if m.supply < float(params.min_flow):
+            continue   # too little silt left
+        # The river's last run over land: its apex never lies back in a lake it left.
+        wet_before = [k for k in range(end - 1) if river.segments[k].in_lake]
+        land_from = wet_before[-1] + 1 if wet_before else 0
+        pts = np.stack(river.as_polyline()).astype(np.float64)[land_from: end + 1]
+        if len(pts) < 2:
+            continue
+        if m.lake:
+            mouth_flat = _lake_texel(idx, body, pts[-1])
+            if mouth_flat < 0:
+                continue
+        else:
+            mouth_flat = int(idx.nearest_inside(pts[-1:])[0])
+        target = int(body[mouth_flat])
+        if claimed[mouth_flat] or (target == LAND) or (m.lake != (target > SEA)):
             continue  # swallowed by a bigger delta already
-        flow = float(river.segments[-1].flow_rate)
+        if room[target] <= 0.0:
+            if sediment is not None and m.lake:
+                sediment.spill(target, m.load)    # the lake is full: its silt passes on
+            continue
         seaward = pts[-1] - pts[max(len(pts) - 1 - max(len(pts) // 10, 2), 0)]
-        dominance = wave_dominance(waves.power(pts[-1], seaward, params), flow, params)
+        if m.lake:
+            assert lake_waves is not None
+            power = lake_waves.power(pts[-1], seaward, params, body=target, swell=False)
+        else:
+            power = waves.power(pts[-1], seaward, params)
+        dominance = wave_dominance(power, m.supply, params)
         rng = np.random.default_rng([int(seed) & 0xFFFFFFFF, i])
-        fp = _footprint(idx, elev, ocean > 0, lake, claimed, pts, flow, params, dominance, rng)
+        fp = _footprint(idx, elev, body, target, float(level[target]), claimed, pts, m.supply, params,
+                        dominance, rng, water_budget_km2=float(room[target]))
         if fp is None:
             continue
-        on_plain = _apply(idx, fp, elev, ocean, filled, delta, claimed, params)
-        mouth = _carry_across(fp, idx, on_plain, river, rivers, streams, ext, elev)
+        room[target] -= fp.water_km2
+        if sediment is not None and m.lake and fp.shortfall > 0.0:
+            sediment.spill(target, fp.shortfall * m.load)
+        on_plain = _apply(idx, fp, elev, ocean, lake, body, target, float(level[target]), filled, delta,
+                          claimed, params)
+        mouth = _carry_across(fp, idx, on_plain, river, end, rivers, streams, ext, elev)
         result.fans.append(DeltaFan(
             apex=fp.apex.astype(np.float32),
             mouth=(mouth if mouth is not None else pts[-1]).astype(np.float32),
-            axis=fp.axis.astype(np.float32), radius_km=fp.radius_km, flow=flow, area_km2=fp.area_km2,
+            axis=fp.axis.astype(np.float32), radius_km=fp.radius_km, flow=m.flow, area_km2=fp.area_km2,
             head=np.asarray(fp.shape.head if fp.shape.head is not None else pts[-1], dtype=np.float32),
             wave_dominance=fp.shape.wave_dominance, shape=fp.shape.name,
-            fingers=fp.fingers.astype(np.float32),
+            fingers=fp.fingers.astype(np.float32), lake=m.lake, sediment=m.sediment,
         ))
     if ext is not None:
         ext.apply()
