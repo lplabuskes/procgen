@@ -26,6 +26,7 @@ from core.pipeline import BuildContext, Stage
 from core.world import World
 from worldgen.delta.channels import DELTA, DELTA_FANS, DELTA_FRACTION, DELTA_MOUTHS, MARSH_FRACTION
 from worldgen.delta.deposit import DeltaFan, build_deltas
+from worldgen.delta.shape import ARCUATE, BIRDFOOT, CUSPATE
 from worldgen.geology.channels import ELEVATION, ELEVATION_FACE, IS_OCEAN, OCEAN_MASK
 from worldgen.hydrology.channels import LAKE_MASK, RIVER_OBJECTS, RIVERS, STREAMS
 from worldgen.hydrology.rivers import River
@@ -58,6 +59,37 @@ class DeltaParams:
     # Marsh: from this fraction of the way from apex to front, rising to 1 at the front.
     marsh_start: float = _f(0.6, label="Marsh start (apex→front)", min=0.0, max=1.0, step=0.05)
 
+    # ── Shape: river power against wave power (see worldgen/delta/shape.py) ──
+    # Wave power: onshore wind³ + swell³, × fetch over open sea (capped).
+    fetch_cap_km: float = _f(1500.0, label="Fetch cap (km)", min=100.0, max=5000.0, step=100.0)
+    swell_speed: float = _f(3.0, label="Swell (m/s equivalent)", min=0.0, max=20.0, step=0.5)
+    # River power: river_weight · (flow / 1000) ** river_exponent.
+    river_weight: float = _f(0.08, label="River weight", min=0.0, max=10.0, step=0.05)
+    river_exponent: float = _f(0.5, label="River exponent", min=0.0, max=1.5, step=0.05)
+    # Wave dominance below / above which a delta is bird's-foot / cuspate, blended over this width.
+    birdfoot_below: float = _f(0.3, label="Bird's-foot below (wave dominance)", min=0.0, max=1.0, step=0.05)
+    cuspate_above: float = _f(0.7, label="Cuspate above (wave dominance)", min=0.0, max=1.0, step=0.05)
+    shape_blend: float = _f(0.1, label="Shape blend width", min=0.0, max=0.5, step=0.05)
+    # Bird's-foot fingers: how many (at flow 1000, more per tenfold flow), fanned
+    # how wide, how long (× √area, the longest; the rest up to ``finger_jitter``
+    # shorter), how wide (texels either side) and how dear it is to leave them.
+    finger_base: float = _f(2.0, label="Fingers at flow 1000", min=2.0, max=8.0, step=1.0)
+    finger_per_decade: float = _f(1.0, label="More fingers per 10× flow", min=0.0, max=4.0, step=0.5)
+    finger_max: int = _f(5, label="Max fingers", min=2, max=8)
+    finger_spread_deg: float = _f(45.0, label="Finger spread (°)", min=10.0, max=85.0, step=5.0)
+    finger_length: float = _f(1.4, label="Finger length (× √area)", min=0.1, max=3.0, step=0.05)
+    finger_jitter: float = _f(0.5, label="Finger length jitter", min=0.0, max=0.9, step=0.05)
+    finger_half_width: float = _f(0.4, label="Finger half-width (texels)", min=0.0, max=3.0, step=0.1)
+    finger_cost: float = _f(8.0, label="Finger cost", min=1.0, max=20.0, step=0.5)
+    # Cuspate: the angle between the two beaches meeting at the mouth, and the
+    # marsh left (× the arcuate marsh) on its sandy, wave-built front.
+    cusp_angle_deg: float = _f(140.0, label="Cusp angle (°)", min=60.0, max=175.0, step=5.0)
+    cuspate_marsh: float = _f(0.4, label="Cuspate marsh (×)", min=0.0, max=1.0, step=0.05)
+
+
+# Saved shape codes.
+_SHAPES = (BIRDFOOT, ARCUATE, CUSPATE)
+
 
 class DeltaBuilder(Stage):
     """Deposits river deltas onto the global relief — a pipeline ``Stage``."""
@@ -82,8 +114,11 @@ class DeltaBuilder(Stage):
         filled = (np.array(mesh.face_textures["filled_height"], dtype=np.float32)
                   if "filled_height" in mesh.face_textures else None)
         streams = STREAMS.read(world) if STREAMS.present(world) else None
+        winds = world.get_feature("winds") if world.has_feature("winds") else None
+        winds = np.stack([w for _, w in winds], axis=1) if winds else None
 
-        result = build_deltas(mesh, rivers, elevation, ocean, lake, filled, streams, self.params)
+        result = build_deltas(mesh, rivers, elevation, ocean, lake, filled, streams, self.params,
+                              winds=winds, seed=int(world.seed or 0))
         self.fans = result.fans
 
         ELEVATION.write(mesh, elevation)
@@ -118,6 +153,7 @@ class DeltaBuilder(Stage):
         if "delta" not in mesh.face_textures:
             return
         from worldgen.delta.display import DELTA_RECIPE, delta_color, delta_legend_entries
+        from worldgen.delta.shape import SHAPE_NAMES
 
         mesh.set_face_textures("delta_rgba", DELTA_RECIPE(mesh.face_textures))
         reg.add_scheme(
@@ -125,12 +161,19 @@ class DeltaBuilder(Stage):
             legend=("gradient", delta_legend_entries()), recipe=DELTA_RECIPE,
         )
 
+        centroids = np.asarray(mesh.face_centroids, dtype=np.float64)
+
         def _delta_hover(face: int, _uv, _w) -> list:
             meta = mesh.face_metadata[face]
             plain = float(meta.get("delta_fraction", 0.0))
             if plain <= 0.0:
                 return []
-            return [f"Delta plain: {plain:.0%} (marsh {float(meta.get('marsh_fraction', 0.0)):.0%})"]
+            line = f"Delta plain: {plain:.0%} (marsh {float(meta.get('marsh_fraction', 0.0)):.0%})"
+            if self.fans:
+                gap = [float(np.linalg.norm(np.asarray(f.apex) - centroids[face])) for f in self.fans]
+                fan = self.fans[int(np.argmin(gap))]
+                line += f" — {SHAPE_NAMES.get(fan.shape, fan.shape)}, wave dominance {fan.wave_dominance:.2f}"
+            return [line]
 
         reg.add_hover(_delta_hover)
 
@@ -145,18 +188,28 @@ class DeltaBuilder(Stage):
             "delta_apex": np.stack([f.apex for f in self.fans]).astype(np.float32),
             "delta_mouth": np.stack([f.mouth for f in self.fans]).astype(np.float32),
             "delta_axis": np.stack([f.axis for f in self.fans]).astype(np.float32),
+            "delta_head": np.stack([f.head if f.head is not None else f.mouth for f in self.fans]).astype(np.float32),
             "delta_scalars": np.array(
-                [[f.radius_km, f.flow, f.area_km2] for f in self.fans], dtype=np.float64
+                [[f.radius_km, f.flow, f.area_km2, f.wave_dominance] for f in self.fans], dtype=np.float64
             ),
+            "delta_shape": np.array([_SHAPES.index(f.shape) for f in self.fans], dtype=np.int8),
+            "delta_finger_count": np.array([len(f.fingers) for f in self.fans], dtype=np.int32),
+            "delta_fingers": np.concatenate(
+                [np.asarray(f.fingers, dtype=np.float32).reshape(-1, 3) for f in self.fans]),
         }
 
     def load(self, arrays: Mapping[str, np.ndarray], ctx: BuildContext) -> None:
         self.fans = []
         if "delta_apex" in arrays:
-            for a, m, x, (r, q, ar) in zip(arrays["delta_apex"], arrays["delta_mouth"], arrays["delta_axis"],
-                                           arrays["delta_scalars"]):
+            ends = np.cumsum(arrays["delta_finger_count"])
+            fingers = np.split(np.asarray(arrays["delta_fingers"]).reshape(-1, 3), ends[:-1])
+            for a, m, x, hd, (r, q, ar, wd), sh, fg in zip(
+                    arrays["delta_apex"], arrays["delta_mouth"], arrays["delta_axis"], arrays["delta_head"],
+                    arrays["delta_scalars"], arrays["delta_shape"], fingers):
                 self.fans.append(DeltaFan(apex=np.asarray(a), mouth=np.asarray(m), axis=np.asarray(x),
-                                          radius_km=float(r), flow=float(q), area_km2=float(ar)))
+                                          radius_km=float(r), flow=float(q), area_km2=float(ar),
+                                          head=np.asarray(hd), wave_dominance=float(wd),
+                                          shape=_SHAPES[int(sh)], fingers=np.asarray(fg)))
         self._publish(ctx.world)
 
 

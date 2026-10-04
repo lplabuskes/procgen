@@ -10,6 +10,7 @@ from region.distributaries import DistributaryParams, mouth_count
 from region.rivers import RegionRiverParams, build_region_rivers
 from region.upsample import EARTH_RADIUS_KM, RegionUpsampleParams, build_region_fields
 from worldgen.delta.deposit import DeltaFan
+from worldgen.delta.shape import BIRDFOOT, CUSPATE
 
 REGION_ID = 40   # coast, a lake and a peak (see conftest)
 # The synthetic world's flows are tiny, so fix the mouth count instead of scaling it.
@@ -37,7 +38,7 @@ def delta_setup(fields, synthetic_globe, plain_rivers):
     mouth = pts[-1]
     radius_km = 1.6 * float(np.linalg.norm(mouth - apex)) * EARTH_RADIUS_KM
     fan = DeltaFan(apex=apex, mouth=mouth, axis=mouth - apex, radius_km=radius_km,
-                   flow=float(plain_rivers.paths[i][1][-1]), area_km2=0.0)
+                   flow=float(plain_rivers.paths[i][1][-1]), area_km2=0.0, head=mouth.copy())
     pos = fields.positions.reshape(-1, 3)
     near = np.linalg.norm(pos - apex[None, :], axis=1) * EARTH_RADIUS_KM < radius_km
     plain = np.zeros((pos.shape[0], 2), dtype=np.float32)
@@ -106,6 +107,34 @@ def test_distributaries_are_deterministic(branched):
     assert len(a.paths) == len(b.paths)
     for pa, pb in zip(a.paths, b.paths):
         assert np.array_equal(pa[0], pb[0])
+
+
+def _with_fan(globe, fields, fan):
+    globe.add_feature("delta_fans", [fan])
+    try:
+        return build_region_rivers(fields, globe, PARAMS)
+    finally:
+        globe.remove_feature("delta_fans")
+
+
+def test_a_cuspate_delta_keeps_few_mouths(delta_setup, synthetic_globe, plain_rivers):
+    fields, fan, _ = delta_setup
+    rivers = _with_fan(synthetic_globe, fields, dataclasses.replace(fan, shape=CUSPATE))
+    extra = len(rivers.paths) - len(plain_rivers.paths)
+    assert 0 <= extra <= PARAMS.distributaries.wave_mouths - 1
+
+
+def test_a_birdfoot_delta_has_a_mouth_at_each_finger(branched, delta_setup, synthetic_globe, plain_rivers):
+    arcuate, _ = branched
+    fields, fan, _ = delta_setup
+    # Fingers where the arcuate branches reached the sea.
+    tips = np.array([p[0][-1] for p in arcuate.paths[len(plain_rivers.paths):]], dtype=np.float64)
+    rivers = _with_fan(synthetic_globe, fields, dataclasses.replace(fan, shape=BIRDFOOT, fingers=tips))
+    ends = np.array([p[0][-1] for p in rivers.paths[len(plain_rivers.paths):]], dtype=np.float64)
+    assert len(ends) >= 1
+    spacing = fields.grid.texel_spacing_rad(fields.tex_size)
+    gap = np.linalg.norm(ends[:, None, :] - tips[None, :, :], axis=2).min(axis=1)
+    assert np.all(gap < 4.0 * spacing)
 
 
 def test_no_delta_no_distributaries(fields, synthetic_globe, plain_rivers):

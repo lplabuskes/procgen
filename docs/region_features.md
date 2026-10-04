@@ -108,12 +108,20 @@ texture, which the refinement copies down from the globe.
   holds one sector, and each other sector gets the front node nearest its
   (jittered) middle bearing, unless that is within 3 raster nodes of a mouth
   already taken.
+- **By shape** (the fan's `shape`, see [delta.md](delta.md#shape)). A
+  **cuspate** delta keeps at most `wave_mouths` (2) mouths: waves close all but
+  the strongest channels. A **bird's-foot** delta skips the sectors: each
+  finger tip the world built (`fan.fingers`) gets the front node nearest it,
+  with the same 3-node gap rule. Arcuate deltas use the sectors above.
 - **Junctions.** On each side of the stem, mouths are taken outward from it.
   Each branches off that side's outermost channel so far (the stem up to the
   last junction, then the last branch), at the node whose distance from the
   apex is nearest a random `junction_min`–`junction_max` (0.15–0.6) of the
   mouth's. It is never within 2.5 nodes of another junction or on the trunk's
-  last 3 nodes. Outer branches thus leave further upstream and the fan nests.
+  last 3 nodes. Outer branches thus leave further upstream and the fan nests. A
+  bird's-foot's branches instead aim at `birdfoot_junction_min`–`max`
+  (0.75–1.0) of the apex's distance to the old shore (`fan.head`), so the
+  river splits into its passes just behind the fingers.
 - **Routing.** `route_corridor` from junction to mouth through a corridor
   `corridor` (0.3) × length wide around a guide bent sideways by up to `wander`
   (0.15) × length at its middle. Node cost is valley-seeking over the plain

@@ -5,9 +5,7 @@ from __future__ import annotations
 import copy
 
 import numpy as np
-import pytest
 
-from core.mesh import Mesh
 from worldgen.delta.builder import DeltaParams
 from worldgen.delta.deposit import REFERENCE_FLOW, TexelIndex, build_deltas
 from worldgen.hydrology.types import River, RiverNode, RiverSegment, StreamNetwork
@@ -16,16 +14,6 @@ TEX = 16
 # The coast is the great circle ⟂ to UP; land rises inland, the sea deepens offshore.
 UP = np.array([0.0, 0.0, 1.0])
 EAST = np.array([1.0, 0.0, 0.0])
-
-
-@pytest.fixture(scope="module")
-def mesh():
-    return Mesh.icosphere(4).mesh_dual()
-
-
-@pytest.fixture(scope="module")
-def index(mesh):
-    return TexelIndex(mesh, TEX, TEX)
 
 
 def _textures(mesh, land_km: float = 0.05):
@@ -182,7 +170,14 @@ def test_builder_round_trips_its_fans(mesh, index):
     from core.world import World
     from worldgen.delta.builder import DeltaBuilder
 
+    import dataclasses
+
     result, *_ = _run(mesh, index)
+    # One bird's-foot among them, so fingers are saved too.
+    bird, *_ = _run(mesh, index, flow=200 * REFERENCE_FLOW,
+                    params=DeltaParams(birdfoot_below=1.1, cuspate_above=1.2))
+    result.fans = result.fans + bird.fans + [dataclasses.replace(result.fans[0], shape="cuspate")]
+    assert len(bird.fans[0].fingers) > 0
     builder = DeltaBuilder()
     builder.fans = result.fans
     arrays = builder.serialize()
@@ -193,5 +188,8 @@ def test_builder_round_trips_its_fans(mesh, index):
     for a, b in zip(loaded.fans, result.fans):
         assert np.allclose(a.apex, b.apex) and np.allclose(a.mouth, b.mouth) and np.allclose(a.axis, b.axis)
         assert np.isclose(a.flow, b.flow) and np.isclose(a.radius_km, b.radius_km)
+        assert a.shape == b.shape and np.isclose(a.wave_dominance, b.wave_dominance)
+        assert a.head is not None and b.head is not None and np.allclose(a.head, b.head)
+        assert np.allclose(a.fingers, b.fingers)
     assert np.allclose(world.get_feature("deltas"), np.stack([f.mouth for f in result.fans]))
     assert world.get_feature("delta_fans") is loaded.fans

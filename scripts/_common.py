@@ -50,7 +50,7 @@ def get_physical_world(seed: int, rebuild: bool, cache_dir: Path = CACHE_DIR) ->
         params.seed = seed
         world = World(params.mesh, seed=params.seed)
         gp = GlobePipeline(params)
-        gp.build(BuildContext(world=world))
+        gp.build(BuildContext(world=world, seed=seed))
         cache_dir.mkdir(parents=True, exist_ok=True)
         save_globe(gp, path)
     _, world = load_globe(path)

@@ -14,6 +14,10 @@ river's lower course, grown by a priority flood from that course:
   taken, nor lakes, nor another delta's texels.
 - **How much.**  The flood stops at an area that grows with the mouth flow,
   ``area_km2 · (flow / 1000) ** area_exponent``.
+- **Its shape.**  The balance of river power against the wave power at the
+  mouth (:mod:`worldgen.delta.shape`) bends the priority toward long fingers
+  in calm water (bird's-foot), a rounded fan, or a blunt cusp with beaches
+  running along shore where waves rework the sediment (cuspate).
 - **What it becomes.**  Every footprint texel — built land and flattened
   lowland alike — is set to a plain falling from ``apex_height_km`` at the apex
   to ``front_height_km`` at the delta front; the sea in front shoals over
@@ -37,6 +41,7 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import dijkstra
 from scipy.spatial import KDTree
 
+from worldgen.delta.shape import ARCUATE, DeltaShape, WaveField, finger_tips, make_shape, shape_metric, wave_dominance
 from worldgen.hydrology.types import River, RiverNode, RiverSegment, StreamNetwork, laplacian_smooth_sphere
 
 if TYPE_CHECKING:
@@ -66,6 +71,12 @@ class DeltaFan:
     radius_km: float          # apex to the footprint's farthest texel
     flow: float               # the river's mouth flow
     area_km2: float           # footprint area
+    # Shape: the river's old mouth (where fingers / the cusp start), 0 (river-) …
+    # 1 (wave-dominated), the shape it came out as, and a bird's-foot's finger tips.
+    head: Optional[np.ndarray] = None
+    wave_dominance: float = 0.5
+    shape: str = ARCUATE
+    fingers: np.ndarray = field(default_factory=lambda: np.zeros((0, 3), dtype=np.float32))
 
 
 @dataclass
@@ -202,6 +213,8 @@ class _Footprint:
     graph: csr_matrix          # (C, C) edge lengths, km
     in_plain: np.ndarray       # (C,) bool
     front: np.ndarray          # (C,) bool: open sea next to the plain
+    shape: DeltaShape
+    fingers: np.ndarray        # (F, 3) built finger tips
 
 
 def target_area_km2(flow: float, params: "DeltaParams") -> float:
@@ -217,6 +230,8 @@ def _footprint(
     river_pts: np.ndarray,
     flow: float,
     params: "DeltaParams",
+    dominance: float = 0.5,
+    rng: Optional[np.random.Generator] = None,
 ) -> Optional[_Footprint]:
     """Grow one delta's footprint from its river's lower course."""
     area_target = target_area_km2(flow, params)
@@ -248,7 +263,12 @@ def _footprint(
         ~lake[cand] & ~claimed[cand] & (forward >= -0.5 * idx.spacing_km)
         & np.where(is_ocean, e >= -float(params.max_depth_km), e <= float(params.max_land_elevation_km))
     )
-    key = dist * (1.0 + float(params.lateral_cost) * (1.0 - cos_off)) * np.where(
+    # The shape metrics start at the shore: the river's last vertex on land.
+    on_land = ~ocean[idx.nearest_inside(river_pts)]
+    head = _unit(river_pts[int(np.flatnonzero(on_land)[-1])]) if on_land.any() else mouth
+    shape = make_shape(dominance, head, axis, flow, size_km, params, rng or np.random.default_rng(0))
+    arcuate = dist * (1.0 + float(params.lateral_cost) * (1.0 - cos_off))
+    key = shape_metric(pos, apex, axis, arcuate, shape, idx.spacing_km, params) * np.where(
         is_ocean, 1.0 + np.maximum(-e, 0.0) / max(float(params.depth_scale_km), 1e-6), float(params.land_cost),
     )
 
@@ -318,6 +338,7 @@ def _footprint(
         apex=apex, axis=axis, ids=cand[taken], skirt_ids=cand[ring > 0], skirt_ring=ring[ring > 0],
         radius_km=float(dist[taken].max()), area_km2=float(weight[taken].sum()),
         cand=cand, graph=graph, in_plain=taken, front=front,
+        shape=shape, fingers=finger_tips(pos, taken, shape, idx.spacing_km, params),
     )
 
 
@@ -362,7 +383,9 @@ def _apply(
     if filled is not None:
         filled[on_plain] = surface
     delta[on_plain, 0] = 1.0
-    delta[on_plain, 1] = _smoothstep(float(params.marsh_start), 1.0, s)
+    # Waves winnow a cuspate delta's front into sandy beach ridges: less marsh.
+    marsh_scale = 1.0 - fp.shape.cuspate * (1.0 - float(params.cuspate_marsh))
+    delta[on_plain, 1] = marsh_scale * _smoothstep(float(params.marsh_start), 1.0, s)
     claimed[on_plain] = True
 
     rings = max(int(params.skirt_rings), 1)
@@ -607,10 +630,14 @@ def build_deltas(
     filled_height: Optional[np.ndarray],
     streams: Optional[StreamNetwork],
     params: "DeltaParams",
+    winds: Optional[np.ndarray] = None,
+    seed: int = 0,
 ) -> DeltaResult:
     """Deposit every delta, largest river first.
 
-    Edits ``elevation``, ``ocean_mask`` and ``filled_height`` (``(N, H, W, 1)``)
+    ``winds`` (``(N, K, 3)`` per-season face winds, m/s) set the wave power
+    that shapes each delta; without them only swell counts.  ``seed`` makes the
+    bird's-foot fingers reproducible.  Edits ``elevation``, ``ocean_mask`` and ``filled_height`` (``(N, H, W, 1)``)
     in place, extends ``rivers`` and ``streams`` in place, and returns the fans,
     the ``(N, H, W, 2)`` delta texture and its per-face fractions.
     """
@@ -631,14 +658,20 @@ def build_deltas(
     delta = np.zeros((elev.size, 2), dtype=np.float32)
     claimed = np.zeros(elev.size, dtype=bool)
     ext = _StreamExtension(streams) if streams is not None else None
+    # Open sea per face, from the coast before any delta was built.
+    waves = WaveField(mesh.face_centroids, ocean_mask[..., 0].mean(axis=(1, 2)) > 0.5, winds,
+                      float(np.sqrt(np.mean(mesh.face_areas))))
 
-    for river in candidates:
+    for i, river in enumerate(candidates):
         pts = np.stack(river.as_polyline()).astype(np.float64)
         mouth_flat = int(idx.nearest_inside(pts[-1:])[0])
         if claimed[mouth_flat] or not ocean[mouth_flat]:
             continue  # swallowed by a bigger delta already
         flow = float(river.segments[-1].flow_rate)
-        fp = _footprint(idx, elev, ocean > 0, lake, claimed, pts, flow, params)
+        seaward = pts[-1] - pts[max(len(pts) - 1 - max(len(pts) // 10, 2), 0)]
+        dominance = wave_dominance(waves.power(pts[-1], seaward, params), flow, params)
+        rng = np.random.default_rng([int(seed) & 0xFFFFFFFF, i])
+        fp = _footprint(idx, elev, ocean > 0, lake, claimed, pts, flow, params, dominance, rng)
         if fp is None:
             continue
         on_plain = _apply(idx, fp, elev, ocean, filled, delta, claimed, params)
@@ -647,6 +680,9 @@ def build_deltas(
             apex=fp.apex.astype(np.float32),
             mouth=(mouth if mouth is not None else pts[-1]).astype(np.float32),
             axis=fp.axis.astype(np.float32), radius_km=fp.radius_km, flow=flow, area_km2=fp.area_km2,
+            head=np.asarray(fp.shape.head if fp.shape.head is not None else pts[-1], dtype=np.float32),
+            wave_dominance=fp.shape.wave_dominance, shape=fp.shape.name,
+            fingers=fp.fingers.astype(np.float32),
         ))
     if ext is not None:
         ext.apply()

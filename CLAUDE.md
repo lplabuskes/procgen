@@ -94,7 +94,7 @@ Stage reference docs (read the relevant one before working on a stage):
 - [docs/elevation.md](docs/elevation.md) — `worldgen/geology/`
 - [docs/climate.md](docs/climate.md) — `worldgen/climate/`
 - [docs/hydrology.md](docs/hydrology.md) — `worldgen/hydrology/`
-- [docs/delta.md](docs/delta.md) — `worldgen/delta/` (river deltas: deposited plains, rivers carried across them, fertility / marsh / apex consumers)
+- [docs/delta.md](docs/delta.md) — `worldgen/delta/` (river deltas: deposited plains shaped bird's-foot / arcuate / cuspate by river vs wave power, rivers carried across them, fertility / marsh / apex consumers)
 - [docs/coast.md](docs/coast.md) — `worldgen/coast/` (coast smoothness: the shore style the region/local tiers draw)
 - [docs/resources.md](docs/resources.md) — `worldgen/resources/`
 - [docs/danger.md](docs/danger.md) — `worldgen/danger/`

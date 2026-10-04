@@ -11,6 +11,11 @@ fanning out, so here the delta river's re-routed stem gets *distributaries*:
   the refined ``delta`` plain) is split by its bearing from the apex, within
   ``max_angle_deg`` of the fan's axis, into that many equal sectors.  The main
   stem's own mouth holds one; each other sector gets a mouth near its middle.
+- **Shape.**  A cuspate (wave-dominated) delta has at most ``wave_mouths``:
+  waves close all but the strongest channels.  A bird's-foot delta has one
+  mouth at the tip of each finger the world built, and its branches leave near
+  the old shore (``birdfoot_junction_min``–``max`` of the way from the apex to
+  it), where the river splits into its passes.
 - **Where they leave.**  Mouths are taken outward from the main stem on each
   side, each branching off the channel nearest it on that side — the main stem
   for the first, then the branch before it — at a random
@@ -39,6 +44,7 @@ from scipy.ndimage import distance_transform_edt
 from core.params import field, param_field as _f, paramclass
 from region.corridor import Raster, node_spacing_rad, raster_frame, route_corridor, sample_raster
 from region.upsample import EARTH_RADIUS_KM, RegionFields
+from worldgen.delta.shape import BIRDFOOT, CUSPATE
 
 if TYPE_CHECKING:
     from core.world import World
@@ -76,6 +82,13 @@ class DistributaryParams:
     # Extra cost beside another channel (decaying over ~2 raster nodes).
     separation: float = _f(3.0, label="Channel separation", min=0.0, max=10.0, step=0.5)
     valley_seeking: float = _f(1.0, label="Valley seeking", min=0.0, max=6.0, step=0.25)
+    # Cuspate deltas: mouths in all, main stem included.
+    wave_mouths: int = _f(2, label="Mouths, cuspate delta", min=1, max=8)
+    # Bird's-foot deltas: where a branch leaves, as a fraction of the way from the apex to the old shore.
+    birdfoot_junction_min: float = _f(0.75, label="Bird's-foot junction min (apex→shore)", min=0.0, max=1.5,
+                                      step=0.05)
+    birdfoot_junction_max: float = _f(1.0, label="Bird's-foot junction max (apex→shore)", min=0.0, max=1.5,
+                                      step=0.05)
 
 
 @dataclass
@@ -146,6 +159,28 @@ def _pick_mouths(
             continue
         centre = lo + (b + 0.5 + rng.uniform(-0.25, 0.25)) * width
         pick = int(cand[np.argmin(np.abs(bearing - centre))])
+        pr, pc = _grid_rc(raster, np.array(taken))
+        qr, qc = _grid_rc(raster, np.array([pick]))
+        if np.hypot(pr - qr[0], pc - qc[0]).min() >= _MIN_MOUTH_GAP:
+            taken.append(pick)
+    return taken[1:]
+
+
+def _finger_mouths(
+    raster: Raster, fields: RegionFields, front: np.ndarray, fingers: np.ndarray, main_mouth: int,
+) -> list[int]:
+    """The front node nearest each bird's-foot finger tip, away from the main mouth."""
+    cand = np.flatnonzero(front)
+    if cand.size == 0 or len(fingers) == 0:
+        return []
+    s, t, valid = fields.geometry.ecef_to_local(np.asarray(fingers, dtype=np.float64).reshape(-1, 3))
+    rows, cols = _grid_rc(raster, cand)
+    taken = [main_mouth]
+    for ok, si, ti in zip(valid, s, t):
+        if not ok:
+            continue
+        r, c = (ti - raster.lo) / raster.step, (si - raster.lo) / raster.step
+        pick = int(cand[np.argmin(np.hypot(rows - r, cols - c))])
         pr, pc = _grid_rc(raster, np.array(taken))
         qr, qc = _grid_rc(raster, np.array([pick]))
         if np.hypot(pr - qr[0], pc - qc[0]).min() >= _MIN_MOUTH_GAP:
@@ -252,7 +287,17 @@ def _fan_branches(
     axis /= np.linalg.norm(axis)
     seed = (int(globe.seed or 0) * 1_000_003 + fields.region_id * 7_919 + fan_index) & 0xFFFFFFFF
     rng = np.random.default_rng(seed)
-    mouths = _pick_mouths(raster, _front(raster, plain), apex_rc, axis, int(stem[-1]), k, radius_nodes, dp, rng)
+    front = _front(raster, plain)
+    head_nodes = 0.0
+    if fan.shape == BIRDFOOT and len(fan.fingers) and fan.head is not None:
+        mouths = _finger_mouths(raster, fields, front, fan.fingers, int(stem[-1]))
+        hs, ht, hv = fields.geometry.ecef_to_local(np.asarray(fan.head, dtype=np.float64)[None, :])
+        if hv[0]:
+            head_nodes = float(np.hypot((ht[0] - lo) / step - apex_rc[0], (hs[0] - lo) / step - apex_rc[1]))
+    else:
+        if fan.shape == CUSPATE:
+            k = min(k, int(dp.wave_mouths))
+        mouths = _pick_mouths(raster, front, apex_rc, axis, int(stem[-1]), k, radius_nodes, dp, rng)
     if not mouths:
         return []
 
@@ -280,8 +325,12 @@ def _fan_branches(
         for m in ordered:
             tr, tc = _grid_rc(raster, trunk)
             mr, mc = _grid_rc(raster, np.array([m]))
-            target = rng.uniform(float(dp.junction_min), float(dp.junction_max)) * np.hypot(
-                mr[0] - apex_rc[0], mc[0] - apex_rc[1])
+            if head_nodes > 0.0:
+                # A bird's-foot splits into its passes near the old shore.
+                target = rng.uniform(float(dp.birdfoot_junction_min), float(dp.birdfoot_junction_max)) * head_nodes
+            else:
+                target = rng.uniform(float(dp.junction_min), float(dp.junction_max)) * np.hypot(
+                    mr[0] - apex_rc[0], mc[0] - apex_rc[1])
             score = np.abs(np.hypot(tr - apex_rc[0], tc - apex_rc[1]) - target)
             # Never at the very end of the trunk (a branch must leave over land),
             # nor on another junction.
