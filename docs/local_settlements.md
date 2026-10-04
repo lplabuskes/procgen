@@ -100,8 +100,9 @@ settlement_populations, seed, params) → Villages`.
   (1 − slope_penalty · slope))` (bonuses 2 / +1 / 1 / 1; river — rivers and streams alike — and road within
   `water_reach_km` / `road_reach_km`, 0.6 km). A village claims `spacing_km`
   (2 km) × `(pop/200)^0.25`; towns and cities claim `settlement_clearance_km`
-  (3 km) × `(pop/1000)^0.25`. Kinds, in precedence: fishing (coast), river,
-  roadside, otherwise farming.
+  (3 km) × `(pop/1000)^0.25`. Kinds, in precedence: fishing (on the coast, or
+  where fishers are most of the site's rural density — `fishing_density`, see
+  [region_fields.md](region_fields.md)), river, roadside, otherwise farming.
 - **Accounting.** A village with no free site stays rural; each budget's rural
   density is scaled down by what its villages took, so rural + villages per
   budget is unchanged (`village_budget_report`: ~1e-8 relative on seed 4).

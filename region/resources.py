@@ -16,10 +16,11 @@ terrain.
   follows the refined forest.  Conserved multiplicatively over land.
 - **Dominant crop** — reclassified from the refined fields, with the climate
   area-averaged the way ``biome`` is.
-- **Rural density** — each global texel's people redistributed over its refined
-  land by the rural model's own weight, ``fertility ** γ``.  Conserved *exactly*
-  as a total: no one is created or lost, and none are left on refined water
-  unless a global texel has no dry ground left at all.
+- **Rural density** — each global texel's farmers redistributed over its refined
+  land by the rural model's own weight, ``fertility ** γ``, and its fishers
+  (``fishing_density``) over its refined shore, within ``fishing_shore_km`` of
+  the water.  Conserved *exactly* as totals: no one is created or lost, and none
+  are left on refined water unless a global texel has no dry ground left at all.
 - **Danger** — per face on the globe, so first made continuous with
   :class:`region.smooth.FaceFanField` (exact face means), then nudged by terrain:
   rugged ground and dense forest more dangerous, open flat ground less
@@ -64,6 +65,7 @@ class RefineContext:
     slope: np.ndarray            # refined, km/km
     land: np.ndarray             # refined dry ground
     anchor_land: np.ndarray      # the anchor texel is dry on the globe
+    texel_km: float = 1.0        # child texel spacing
 
     def has(self, key: str) -> bool:
         return self.source.has(key)
@@ -146,6 +148,27 @@ def _spread_into(values: np.ndarray, where: np.ndarray, shape: tuple[int, int, i
     return v.reshape(-1)
 
 
+def _or_fallback(ctx: RefineContext, w: np.ndarray, fallback: np.ndarray) -> np.ndarray:
+    """``w``, with every anchor group that has no weight in it replaced by ``fallback``."""
+    mass, _ = anchor_means(w, ctx.anchors, ctx.weights, ctx.n_anchors)
+    return np.where(mass[ctx.anchors, 0] > 0.0, w, fallback)
+
+
+def _box_mean(values: np.ndarray, r: int) -> np.ndarray:
+    """``(2r+1)``² mean over each ``(M, T, T)`` hex texture, edges replicated
+    (separable running sums, so a wide box is as cheap as a narrow one)."""
+    out = np.asarray(values, dtype=np.float64)
+    for axis in (1, 2):
+        pad = [(0, 0)] * 3
+        pad[axis] = (r + 1, r)
+        c = np.cumsum(np.pad(out, pad, mode="edge"), axis=axis)
+        n = out.shape[axis]
+        hi = np.take(c, np.arange(2 * r + 1, 2 * r + 1 + n), axis=axis)
+        lo = np.take(c, np.arange(n), axis=axis)
+        out = (hi - lo) / (2 * r + 1)
+    return out
+
+
 def refined_slope(elevation: np.ndarray, texel_km: float) -> np.ndarray:
     """``(M, T, T)`` gradient magnitude (km/km) of refined ``(M, T, T)`` elevation,
     within each hex texture (which over-hangs its hexagon, so the visible area
@@ -224,16 +247,29 @@ def refine_resources(
 
     # ── rural density: each global texel's people over its refined land ──────
     if ctx.has("rural_density"):
+        everywhere = np.ones(len(ctx.land), dtype=bool)
         target = ctx.anchor("rural_density")
+        fish_target = (
+            np.clip(ctx.anchor("fishing_density"), 0.0, target) if ctx.has("fishing_density")
+            else np.zeros(len(target))
+        )
         fert = fertility if fertility is not None else np.ones(len(target))
         w = np.where(ctx.land, np.clip(fert, 0.0, 1.0) ** float(fertility_exponent), 0.0)
         # A global texel whose refined land is all barren spreads its people
         # evenly over that land; one with no land left keeps them where they are.
-        mass, _ = anchor_means(w, ctx.anchors, ctx.weights, ctx.n_anchors)
-        w = np.where(mass[ctx.anchors, 0] > 0.0, w, ctx.land.astype(np.float64))
-        mass, _ = anchor_means(w, ctx.anchors, ctx.weights, ctx.n_anchors)
-        w = np.where(mass[ctx.anchors, 0] > 0.0, w, 1.0)
-        rho = ctx.conserve_mean(w, target, np.ones(len(w), dtype=bool))
+        w = _or_fallback(ctx, w, ctx.land.astype(np.float64))
+        w = _or_fallback(ctx, w, np.ones(len(w)))
+        rho = ctx.conserve_mean(w, target - fish_target, everywhere)
+        if ctx.has("fishing_density"):
+            # The fishers stay on the refined shore: land weighted by how much
+            # water lies within ``fishing_shore_km``; with no shore left in a
+            # global texel they join its farmers.
+            r = int(round(float(params.fishing_shore_km) / max(ctx.texel_km, 1e-9)))
+            near = _box_mean((~ctx.land).astype(np.float64).reshape(shape), max(r, 1)).reshape(-1)
+            ws = _or_fallback(ctx, np.where(ctx.land, near, 0.0), w)
+            fish = ctx.conserve_mean(ws, fish_target, everywhere)
+            out["fishing_density"] = texture(fish)
+            rho = rho + fish
         out["rural_density"] = texture(rho)
 
     # ── danger: continuous across faces, nudged by terrain ───────────────────

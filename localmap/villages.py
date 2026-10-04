@@ -169,8 +169,13 @@ def place_villages(
         * np.maximum(1.0 - p.slope_penalty * slope_n, 1e-3)
     )
     log_w = np.log(weight)
+    # A fishing village is on the shore, or among people who mostly fish.
+    fishers = coast.copy()
+    if "fishing_density" in tex:
+        fish = tex["fishing_density"][..., 0].astype(np.float64)[dry]
+        fishers |= fish > 0.5 * cand_rho
     kind = np.select(
-        [coast, near_river | confluence, near_road], [VILLAGE_COAST, VILLAGE_RIVER, VILLAGE_ROAD],
+        [fishers, near_river | confluence, near_road], [VILLAGE_COAST, VILLAGE_RIVER, VILLAGE_ROAD],
         default=VILLAGE_FARM,
     ).astype(np.int8)
 

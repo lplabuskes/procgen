@@ -11,7 +11,7 @@ Part of `realmgen/`. [Back to realmgen overview](realmgen.md)
 
 ## Design
 
-All populations are **real people**, anchored to a medieval-tech Earth (~300–400 M world total). Design rationale: `docs/plans/city_population_rework_plan.md`. Three quantities: per-face **rural population** (`D_max · fertility^γ · area_km²` — the Malthusian food base, land only), per-settlement **carrying capacity** (food base summed over claimed hinterland shares), and per-settlement **urban population** (`s · share · cap + β · trade_flow` — additive trade lets a thin-hinterland chokepoint grow large on imported grain, the Constantinople/Venice case). A settlement exists as a city only if its urban population clears `city_min`; the modeled settlements are *major cities* — towns/villages are sub-face-scale and not modeled here (their slice of the regional surplus is reserved via `city_surplus_share`); display-only towns are carved out of the rural population later by the town stage, see [realm_towns.md](realm_towns.md).
+All populations are **real people**, anchored to a medieval-tech Earth (~300–400 M world total). Design rationale: `docs/plans/city_population_rework_plan.md`. Three quantities: per-face **rural population** (the Malthusian food base, land faces only: farmers `D_max · land_fertility^γ · land_km²` plus fishers `D_fish · aquatic_fertility^γ · water_km²` fed by the face's own shallows — see [Farmers and fishers](#farmers-and-fishers)), per-settlement **carrying capacity** (food base summed over claimed hinterland shares), and per-settlement **urban population** (`s · share · cap + β · trade_flow` — additive trade lets a thin-hinterland chokepoint grow large on imported grain, the Constantinople/Venice case). A settlement exists as a city only if its urban population clears `city_min`; the modeled settlements are *major cities* — towns/villages are sub-face-scale and not modeled here (their slice of the regional surplus is reserved via `city_surplus_share`); display-only towns are carved out of the rural population later by the town stage, see [realm_towns.md](realm_towns.md).
 
 ## Params
 
@@ -19,7 +19,7 @@ All populations are **real people**, anchored to a medieval-tech Earth (~300–4
 
 **`TradeSpawnParams`**: `hub_spawn_quantile`, `hub_min_suitability`, `hub_exclusion`, `waypoint_min_cost`, `waypoint_min_suitability`, `waypoint_exclusion`, `port_spawn_quantile`, `port_min_suitability`, `port_exclusion`.
 
-**`PopulationParams`**: `relaxation_passes`, `rural_density_max` (D_max, people/km² at fertility 1), `fertility_exponent` (γ ≈ 2 — restores density contrast), `surplus_rate` (s — regional agricultural surplus), `city_surplus_share` (major city's slice of `s·cap`; remainder reserved for the future town pipeline), `trade_food_weight` (β — people fed per unit trade flow), `city_min` (urban-formation floor in people), `hinterland_max_distance`, `hinterland_influence_scale`, `hinterland_reach_scale`, `hinterland_water_cost`, `trade_spawn: TradeSpawnParams`.
+**`PopulationParams`**: `relaxation_passes`, `rural_density_max` (D_max, people/km² at fertility 1), `fishing_density_max` (D_fish, people/km² of water at aquatic fertility 1), `fertility_exponent` (γ ≈ 2 — restores density contrast), `surplus_rate` (s — regional agricultural surplus), `city_surplus_share` (major city's slice of `s·cap`; remainder reserved for the future town pipeline), `trade_food_weight` (β — people fed per unit trade flow), `city_min` (urban-formation floor in people), `hinterland_max_distance`, `hinterland_influence_scale`, `hinterland_reach_scale`, `hinterland_water_cost`, `trade_spawn: TradeSpawnParams`.
 
 ## Trade network
 
@@ -41,10 +41,15 @@ Computes the per-face food base and rural population up front (written to `RURAL
 
 After the relaxation loop, **defensibility is computed per settlement** and stamped onto the `Settlement` objects — see [Defensibility](#defensibility) below. Stores final per-settlement diagnostics (`carrying_cap`, `trade_wealth`) aligned with `settlements`/`population`. 
 
+## Farmers and fishers
+
+A face's food base is two parts, read from its fertility texture: its **land** pixels (mean fertility, at `rural_density_max`) and its **water** pixels (mean aquatic fertility, at `fishing_density_max`). A land face's water pixels are its shallows — the resources stage gives them the neighbouring water faces' aquatic fertility ([resources.md](resources.md)) — so a productive coast houses fishers even where its land is barren tundra or desert. Rural population (land faces) is farm + fish; the fish part is also written to `FISHING_POPULATION` so the town stage can put those people on the shore, which is where its port towns and the local maps' fishing villages then come from ([realm_towns.md](realm_towns.md), [region_fields.md](region_fields.md)). A water face houses nobody; its food base feeds the cities whose hinterland reaches it.
+
 ## calibration.py
 
 Pure functions:
-- `compute_food_base` — `D_max · fertility^γ · area_km²` per face (people the face can feed; aquatic fertility on coastal water counts)
+- `compute_food_base` — `D · fertility^γ · area_km²` per face: the law both parts of the food base use
+- `split_fertility` / `compute_farm_and_fish_food` — each face's land pixels (mean fertility, share of pixels) at `D_max` and water pixels (mean aquatic fertility) at `D_fish`; returns `(farm, fish)`
 - `compute_rural_population` — food base masked to land
 - `compute_hinterland_shares` — soft fractional multi-source undirected Dijkstra; passes a *water-permeable* graph so coastal settlements claim a limited coastal band for fishing (bounded by `hinterland_water_cost × hinterland_max_distance`)
 - `compute_carrying_capacity` — Σ shares · food_base per settlement
@@ -72,6 +77,6 @@ Returns `(defensibility, has_walls, wall_strength)`, all stamped onto `Settlemen
 
 ## Outputs
 
-Per-face: `TRADE_FLOW`, `POPULATION`, `HINTERLAND_ID`, `RURAL_POPULATION`, `TOWN_POPULATION` (zeroed), `is_trade_hub`, `settlement_tier` (now the *display* tier from `population / max_pop`, replacing the placement stage's seeding label).
+Per-face: `TRADE_FLOW`, `POPULATION`, `HINTERLAND_ID`, `RURAL_POPULATION`, `FISHING_POPULATION` (the fishers within `RURAL_POPULATION`, before towns), `TOWN_POPULATION` (zeroed), `is_trade_hub`, `settlement_tier` (now the *display* tier from `population / max_pop`, replacing the placement stage's seeding label).
 Features: `settlements` (updated with population, defensibility, has_walls, wall_strength), `trade_routes`, `trade_attribution` (`(S, S)` directional inter-settlement trade matrix, aligned with `settlements`).
 Overlays: **Settlements** and **Trade Routes** (both checked); on the world map, hover shows the face's settlement tier name and population (`world_only`; region and local views name the city under the cursor instead). Color schemes (debug): Trade Flow, Hinterland. (Rural density is drawn by the town stage.)

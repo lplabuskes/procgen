@@ -37,7 +37,9 @@ from worldgen.resources.display import (
     mineral_legend_entries,
     rare_bio_legend_entries,
 )
-from worldgen.resources.fertility import apply_delta_fertility, compute_aquatic_fertility, compute_fertility
+from worldgen.resources.fertility import (
+    apply_delta_fertility, compute_aquatic_fertility, compute_fertility, neighbour_water_fertility,
+)
 from worldgen.resources.forest import compute_forest_density
 from worldgen.resources.minerals import place_mineral_deposits
 from worldgen.resources.rare_bio import place_rare_bio_resources
@@ -297,12 +299,16 @@ class ResourcesBuilder(Stage):
             current_temp_delta=current_temp_delta,
             params=fp,
         )                                                          # (N,) float32
+        # A land face's own sea or lake pixels are the neighbouring water's
+        # fishing grounds, so they take its aquatic fertility rather than 0.
+        ocean_fert = neighbour_water_fertility(aquatic_fert, is_ocean, mesh.face_adjacency)
+        lake_fert = neighbour_water_fertility(aquatic_fert, is_lake_face & ~is_ocean, mesh.face_adjacency)
         fert_arr = fertility[..., 0]                               # (N, H, W)
         ocean_px = ocean_mask_tex[..., 0] > 0
-        fert_arr = np.where(ocean_px, aquatic_fert[:, None, None], fert_arr)
+        fert_arr = np.where(ocean_px, ocean_fert[:, None, None], fert_arr)
         if lake_mask_tex is not None:
             lake_px = lake_mask_tex[..., 0] > 0
-            fert_arr = np.where(lake_px, aquatic_fert[:, None, None], fert_arr)
+            fert_arr = np.where(lake_px, lake_fert[:, None, None], fert_arr)
         fertility = fert_arr[..., None].astype(np.float32)         # (N, H, W, 1)
 
         _report("Computing crop suitability…")

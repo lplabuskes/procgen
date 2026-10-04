@@ -191,6 +191,11 @@ class RegionUpsampleParams:
     danger_terrain_gain: float = _f(
         1.0, label="Danger terrain gain", min=0.0, max=4.0, step=0.1
     )
+    # How far inland of the refined shoreline the fishers' share of the rural
+    # density lives.
+    fishing_shore_km: float = _f(
+        2.0, label="Fishing shore band (km)", min=0.1, max=20.0, step=0.1
+    )
 
 
 @dataclass
@@ -900,6 +905,7 @@ def refine_fields(
             elevation=elevation[:, 0], elev_coarse=elev_coarse[:, 0],
             slope=refined_slope(elevation[:, 0].reshape(shape), np.sqrt(texel_area_km2)).reshape(-1),
             land=~water_now, anchor_land=~(water.ocean | water.lake),
+            texel_km=float(np.sqrt(texel_area_km2)),
         ),
         textures, params, resources, fertility_exponent,
         source.danger(loc, flat_pos),
@@ -993,7 +999,7 @@ def anchor_residuals(
     report: dict[str, dict[str, float]] = {}
     for key, weights in (
         ("elevation", in_hex), ("temperature", in_hex), ("precipitation", in_hex), ("rural_density", in_hex),
-        ("fertility", dry), ("forest_density", dry),
+        ("fishing_density", in_hex), ("fertility", dry), ("forest_density", dry),
     ):
         if key not in textures or key not in parent_textures:
             continue

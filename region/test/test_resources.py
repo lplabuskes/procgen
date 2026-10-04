@@ -8,7 +8,7 @@ from region.upsample import RegionUpsampleParams, build_region_fields, conservat
 
 REGION_ID = 40
 TEX_SIZE = 16
-_KEYS = ("fertility", "forest_density", "dominant_crop", "rural_density")
+_KEYS = ("fertility", "forest_density", "dominant_crop", "rural_density", "fishing_density")
 
 
 @pytest.fixture(scope="module")
@@ -26,6 +26,7 @@ def globe(synthetic_globe):
     mesh.set_face_textures("forest_density", forest[..., None], n_channels=1)
     mesh.set_face_textures("dominant_crop", np.ones_like(fert, dtype=np.uint8)[..., None], n_channels=1)
     mesh.set_face_textures("rural_density", rho[..., None], n_channels=1)
+    mesh.set_face_textures("fishing_density", (0.3 * rho)[..., None], n_channels=1)
     rng = np.random.default_rng(5)
     danger = np.where(rng.random(len(mesh.faces)) < 0.3, rng.random(len(mesh.faces)), 0.0).astype(np.float32)
     synthetic_globe.add_feature("danger", danger)
@@ -55,6 +56,28 @@ def test_rural_people_are_conserved_exactly(fields, globe):
     report = conservation_report(fields, globe)
     assert report["rural_density"]["n_anchors"] > 100
     assert report["rural_density"]["max"] < 1e-4
+
+
+def test_fishers_are_conserved_and_stay_on_the_shore(fields, globe):
+    report = conservation_report(fields, globe)
+    assert report["fishing_density"]["n_anchors"] > 100
+    assert report["fishing_density"]["max"] < 1e-4
+    fish = fields.textures["fishing_density"][..., 0]
+    rho = fields.textures["rural_density"][..., 0]
+    assert np.all(fish <= rho + 1e-6)
+    # Land beyond the shore band holds no fishers wherever its global texel has
+    # shore of its own (then the band takes them all).
+    from region.resources import _box_mean
+    land = _land(fields)
+    params = RegionUpsampleParams(n_cols=6, tex_size=TEX_SIZE)
+    r = max(int(round(params.fishing_shore_km / np.sqrt(fields.texel_area_km2))), 1)
+    near = _box_mean((~land).astype(np.float64), r) > 0
+    anchors = fields.anchors
+    has_shore = np.zeros(anchors.max() + 1, dtype=bool)
+    has_shore[anchors[land & near & fields.in_hex]] = True
+    inland = land & ~near & has_shore[anchors]
+    assert inland.any()
+    assert fish[inland].max() == 0.0
 
 
 def test_no_one_lives_on_refined_water_that_has_land_beside_it(fields):

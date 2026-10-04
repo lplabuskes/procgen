@@ -12,7 +12,9 @@ from realmgen.population.calibration import KM2_PER_STERADIAN
 from realmgen.refine.sites import SiteField
 from realmgen.test.conftest import _settlement
 from realmgen.towns.builder import RURAL_DENSITY_TEXTURE, TownParams, TownStage
-from realmgen.towns.placement import compute_rural_density, draw_town_sizes, place_towns, texel_owners
+from realmgen.towns.placement import (
+    compute_rural_density, draw_town_sizes, place_towns, shore_texels, texel_owners,
+)
 from realmgen.towns.types import Towns
 from worldgen.cost.surfaces import EARTH_RADIUS_KM
 
@@ -74,7 +76,7 @@ def test_rural_density_conserves_each_face(dual):
     rural = np.linspace(0.0, 5e5, n)
     areas = np.asarray(dual.face_areas) * KM2_PER_STERADIAN
     land = ocean[..., 0] < 0.5
-    density = compute_rural_density(rural, areas, fert[..., 0].astype(np.float64), land, owner, 2.0)
+    density, _ = compute_rural_density(rural, areas, fert[..., 0].astype(np.float64), land, owner, 2.0)
 
     texel_area = areas / owned.sum(axis=(1, 2))
     held = (density * owned).sum(axis=(1, 2)) * texel_area
@@ -88,11 +90,32 @@ def test_rural_density_spreads_evenly_over_barren_land(dual):
     owner, owned = _owned(dual, pos)
     n = len(dual.faces)
     land = ocean[..., 0] < 0.5
-    density = compute_rural_density(
+    density, _ = compute_rural_density(
         np.full(n, 1e4), np.ones(n), np.zeros(land.shape), land, owner, 2.0)
     f = int(np.argmax((land & owned).sum(axis=(1, 2))))
     vals = density[f][land[f] & owned[f]]
     assert vals.min() > 0 and np.allclose(vals, vals[0])
+
+
+def test_rural_density_puts_the_fishers_on_the_shore(dual):
+    pos, ocean, fert = _fields(dual)
+    owner, owned = _owned(dual, pos)
+    n = len(dual.faces)
+    land = ocean[..., 0] < 0.5
+    areas = np.asarray(dual.face_areas) * KM2_PER_STERADIAN
+    rural = np.full(n, 1e5)
+    fishing = np.full(n, 4e4)
+    density, fish = compute_rural_density(
+        rural, areas, fert[..., 0].astype(np.float64), land, owner, 2.0, fishing)
+
+    texel_area = areas / owned.sum(axis=(1, 2))
+    shore = shore_texels(land)
+    coastal = (land & owned).any(axis=(1, 2)) & (shore & owned).any(axis=(1, 2))
+    np.testing.assert_allclose(((density * owned).sum(axis=(1, 2)) * texel_area)[coastal], rural[coastal], rtol=1e-9)
+    np.testing.assert_allclose(((fish * owned).sum(axis=(1, 2)) * texel_area)[coastal], fishing[coastal], rtol=1e-9)
+    owned_coastal = owned & coastal[:, None, None]
+    assert np.all(fish[owned_coastal & ~shore] == 0.0)
+    assert np.all(density >= fish - 1e-12)
 
 
 # ── siting ───────────────────────────────────────────────────────────────────
@@ -103,7 +126,7 @@ def _place(dual, requests, *, spacing_km=20.0, city=None, params=None, streams=N
     owner, _ = _owned(dual, pos)
     n = len(dual.faces)
     land = ocean[..., 0] < 0.5
-    density = compute_rural_density(
+    density, _ = compute_rural_density(
         np.full(n, 1e5), np.full(n, 1e5), fert[..., 0].astype(np.float64), land, owner, 2.0)
     sites = SiteField(dual, ocean, None, fert, None, positions=pos, streams=streams)
     cp = np.zeros((0, 3)) if city is None else np.asarray(city[0])[None, :]

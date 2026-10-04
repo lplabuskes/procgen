@@ -29,10 +29,14 @@ which region is viewed, since each town has exactly one owning region.
 
 ## Steps
 
-1. **Rural density** (`compute_rural_density`). Each face's rural population is
-   spread over the land texels it owns (nearest centroid) in proportion to the
-   rural model's own food base, `fertility_tex ** γ` (γ =
-   `PopulationParams.fertility_exponent`). Each owned texel stands for
+1. **Rural density** (`compute_rural_density`). Each face's farmers (rural
+   population less `FISHING_POPULATION`) are spread over the land texels it owns
+   (nearest centroid) in proportion to the rural model's own food base,
+   `fertility_tex ** γ` (γ = `PopulationParams.fertility_exponent`); its fishers
+   go evenly onto its owned **shore** texels (`shore_texels`: land with water
+   among its 8 neighbours), or join the farmers if it owns no shore. The fishers'
+   part is also written as the `fishing_density` texture, reduced with the rest
+   in step 4, so the region and local maps keep them on the shore. Each owned texel stands for
    `face_area / n_owned`, so the face total is conserved exactly. An
    over-hanging texel uses its owner face's scale, which makes the field a
    function of position that agrees across face seams. A face whose owned land

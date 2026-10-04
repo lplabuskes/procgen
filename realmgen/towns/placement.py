@@ -35,6 +35,19 @@ def texel_owners(centroids: np.ndarray, positions: np.ndarray) -> np.ndarray:
     return np.asarray(owner, dtype=np.int32).reshape(shape)
 
 
+def shore_texels(land: np.ndarray) -> np.ndarray:
+    """``(N, H, W)`` land texels with water among their 8 neighbours in the same
+    face texture (which over-hangs its face, so a polygon-edge texel sees the
+    real neighbouring water)."""
+    water = np.pad(~land, ((0, 0), (1, 1), (1, 1)), mode="edge")
+    _, h, w = land.shape
+    near = np.zeros(land.shape, dtype=bool)
+    for di in range(3):
+        for dj in range(3):
+            near |= water[:, di:di + h, dj:dj + w]
+    return land & near
+
+
 def compute_rural_density(
     rural: np.ndarray,
     face_areas_km2: np.ndarray,
@@ -42,30 +55,44 @@ def compute_rural_density(
     land: np.ndarray,
     owner: np.ndarray,
     fertility_exponent: float,
-) -> np.ndarray:
-    """Per-texel rural density (people/km²), ``(N, H, W)``.
+    fishing: Optional[np.ndarray] = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-texel rural density and its fishing part (people/km²), ``(N, H, W)`` each.
 
-    Density follows the rural model's own food base, ``fertility ** γ``, over
-    land texels, scaled per face so the texels a face *owns* hold exactly its
-    rural population (each owned texel standing for an equal share of the face's
-    area). An over-hanging texel takes its owner face's scale, so the field is a
-    function of position and agrees across face seams. A face whose owned land
-    is all barren spreads its people evenly over that land instead.
+    The farmers — ``rural − fishing`` — follow the rural model's own food base,
+    ``fertility ** γ``, over land texels; the fishers (``fishing``, per face)
+    live on the shore (:func:`shore_texels`).  Each is scaled per face so the
+    texels a face *owns* hold exactly its people (each owned texel standing for
+    an equal share of the face's area). An over-hanging texel takes its owner
+    face's scale, so the field is a function of position and agrees across face
+    seams. A face whose owned land is all barren spreads its farmers evenly over
+    that land instead, and one with no owned shore puts its fishers with them.
     """
     n = rural.shape[0]
+    rural = np.asarray(rural, dtype=np.float64)
+    fish = np.zeros(n) if fishing is None else np.clip(np.asarray(fishing, dtype=np.float64), 0.0, rural)
     fert = np.zeros(land.shape) if fertility is None else np.clip(fertility, 0.0, 1.0)
-    raw = np.where(land, fert ** fertility_exponent, 0.0)
     owned = owner == np.arange(n)[:, None, None]
     n_owned = owned.sum(axis=(1, 2))
     texel_area = np.asarray(face_areas_km2, dtype=np.float64) / np.maximum(n_owned, 1)
 
-    mass = (raw * owned).sum(axis=(1, 2)) * texel_area
-    barren = (mass <= 0) & (rural > 0)
+    def mass(raw: np.ndarray) -> np.ndarray:
+        return (raw * owned).sum(axis=(1, 2)) * texel_area
+
+    def spread(people: np.ndarray, raw: np.ndarray) -> np.ndarray:
+        m = mass(raw)
+        return raw * np.where(m > 0, people / np.maximum(m, 1e-300), 0.0)[owner]
+
+    farm_raw = np.where(land, fert ** fertility_exponent, 0.0)
+    barren = (mass(farm_raw) <= 0) & (rural > 0)
     if barren.any():
-        raw = np.where(barren[owner] & land, 1.0, raw)
-        mass = (raw * owned).sum(axis=(1, 2)) * texel_area
-    scale = np.where(mass > 0, rural / np.maximum(mass, 1e-300), 0.0)
-    return raw * scale[owner]
+        farm_raw = np.where(barren[owner] & land, 1.0, farm_raw)
+    shore_raw = shore_texels(land).astype(np.float64)
+    no_shore = (mass(shore_raw) <= 0) & (fish > 0)
+    if no_shore.any():
+        shore_raw = np.where(no_shore[owner], farm_raw, shore_raw)
+    fishing_density = spread(fish, shore_raw)
+    return spread(rural - fish, farm_raw) + fishing_density, fishing_density
 
 
 def draw_town_sizes(

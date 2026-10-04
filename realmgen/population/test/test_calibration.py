@@ -12,6 +12,7 @@ from realmgen.population.calibration import (
     KM2_PER_STERADIAN,
     apply_population_to_settlements,
     compute_carrying_capacity,
+    compute_farm_and_fish_food,
     compute_food_base,
     compute_hinterland_shares,
     compute_rural_population,
@@ -165,6 +166,26 @@ class TestComputeFoodBase:
         fb = compute_food_base(fert, areas, density_max=1.0)
         assert fb[0] == 0.0
         assert fb[1] == pytest.approx(KM2_PER_STERADIAN)
+
+
+class TestFarmAndFishFood:
+    def test_land_and_water_pixels_feed_separately(self):
+        # Face 0: all land at 0.5. Face 1: half land at 0.5, half water at 0.8.
+        fert = np.array([np.full((2, 2), 0.5), [[0.5, 0.5], [0.8, 0.8]]])
+        water = np.array([np.zeros((2, 2), bool), [[False, False], [True, True]]])
+        areas = np.ones(2)
+        farm, fish = compute_farm_and_fish_food(
+            fert, water, areas, density_max=10.0, fishing_density_max=4.0, fertility_exponent=2.0)
+        np.testing.assert_allclose(farm, np.array([10.0 * 0.25, 10.0 * 0.25 * 0.5]) * KM2_PER_STERADIAN)
+        np.testing.assert_allclose(fish, np.array([0.0, 4.0 * 0.64 * 0.5]) * KM2_PER_STERADIAN)
+
+    def test_all_land_face_matches_the_plain_law(self):
+        rng = np.random.default_rng(0)
+        fert = rng.random((3, 4, 4))
+        farm, fish = compute_farm_and_fish_food(
+            fert, np.zeros((3, 4, 4), bool), np.ones(3), density_max=16.0, fishing_density_max=8.0)
+        np.testing.assert_allclose(farm, compute_food_base(fert.mean(axis=(1, 2)), np.ones(3), density_max=16.0))
+        assert np.all(fish == 0.0)
 
 
 class TestComputeRuralPopulation:

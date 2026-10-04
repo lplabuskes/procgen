@@ -13,7 +13,8 @@ from core.display import DisplayRegistry
 from core.params import field, param_field as _f, paramclass
 from core.pipeline import BuildContext, Stage
 from realmgen.channels import (
-    HINTERLAND_ID, POPULATION, RURAL_POPULATION, SITUATIONAL_VALUE, SUITABILITY, TOWN_POPULATION, TRADE_FLOW,
+    FISHING_POPULATION, HINTERLAND_ID, POPULATION, RURAL_POPULATION, SITUATIONAL_VALUE, SUITABILITY,
+    TOWN_POPULATION, TRADE_FLOW,
 )
 from realmgen.placement.builder import SeederParams
 from realmgen.placement.seeder import build_cost_graph
@@ -26,6 +27,7 @@ from realmgen.placement.types import (
 from realmgen.population.calibration import (
     apply_population_to_settlements,
     compute_carrying_capacity,
+    compute_farm_and_fish_food,
     compute_food_base,
     compute_hinterland_shares,
     compute_rural_population,
@@ -39,7 +41,9 @@ from realmgen.persistence import pack_settlements, unpack_settlements
 from realmgen.trade.network import RARE_BIO_TYPE_OFFSET, TradeResult, compute_trade_network
 from viz.color_stops import interp_stops_scalar
 from worldgen.cost.channels import COST_SURFACES, IS_WATER
+from worldgen.geology.channels import OCEAN_MASK
 from worldgen.geology.display import OCEAN_COLOR, is_water_meta
+from worldgen.hydrology.channels import LAKE_MASK
 from worldgen.resources.channels import FERTILITY_MEAN, MINERALS, RARE_BIO
 
 
@@ -74,7 +78,11 @@ class TradeSpawnParams:
 @paramclass
 class PopulationParams:
     relaxation_passes: int = _f(2, label="Relaxation passes", min=1, max=5)
-    rural_density_max: float = _f(16.0, label="Max rural density (people/km² at fertility 1)", min=1.0, max=100.0)
+    rural_density_max: float = _f(14.0, label="Max rural density (people/km² at fertility 1)", min=1.0, max=100.0)
+    # People per km² of fishing grounds at aquatic fertility 1: a land face's own
+    # shallows feed fishers on its shore; a water face's feed the cities that reach it.
+    fishing_density_max: float = _f(
+        8.0, label="Max fishing density (people/km² of water at aquatic fertility 1)", min=0.0, max=100.0)
     fertility_exponent: float = _f(2.0, label="Fertility exponent γ (density contrast)", min=0.5, max=4.0)
     surplus_rate: float = _f(0.15, label="Agricultural surplus rate s", min=0.0, max=0.5)
     # ``s × cap`` is the urban headroom of the *whole region* — it also feeds the
@@ -194,15 +202,31 @@ class PopulationStage(Stage):
                 danger = DANGER_ARRAY.read(world).astype(np.float32)
 
         # Per-face food base (people) and rural population. The countryside fills
-        # to its Malthusian ceiling independent of where cities end up; water
-        # faces feed people (fishing grounds) but house none.
-        food_base = compute_food_base(
-            fertility, face_areas,
-            density_max=pp.rural_density_max,
-            fertility_exponent=pp.fertility_exponent,
-        )
+        # to its Malthusian ceiling independent of where cities end up: a land
+        # face houses the farmers of its land and the fishers of its own
+        # shallows; water faces feed people (fishing grounds) but house none.
+        fert_tex = mesh.face_textures.get("fertility")
+        if fert_tex is not None and OCEAN_MASK.present(mesh):
+            water_tex = OCEAN_MASK.read(mesh)[..., 0] > 0.5
+            if LAKE_MASK.present(mesh):
+                water_tex |= LAKE_MASK.read(mesh)[..., 0] > 0.5
+            farm, fish = compute_farm_and_fish_food(
+                np.asarray(fert_tex[..., 0]), water_tex, face_areas,
+                density_max=pp.rural_density_max,
+                fishing_density_max=pp.fishing_density_max,
+                fertility_exponent=pp.fertility_exponent,
+            )
+        else:
+            farm = compute_food_base(
+                fertility, face_areas,
+                density_max=pp.rural_density_max,
+                fertility_exponent=pp.fertility_exponent,
+            )
+            fish = np.zeros(n, dtype=np.float64)
+        food_base = farm + fish
         self.rural_population = compute_rural_population(food_base, is_water)
         RURAL_POPULATION.write(mesh, self.rural_population)
+        FISHING_POPULATION.write(mesh, compute_rural_population(fish, is_water))
         # All of it is countryside until the town stage carves its towns out.
         TOWN_POPULATION.write(mesh, np.zeros(n, dtype=np.float64))
 

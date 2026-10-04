@@ -9,6 +9,7 @@ from worldgen.resources.fertility import (
     BIOME_FERTILITY_MULT,
     apply_delta_fertility,
     compute_fertility,
+    neighbour_water_fertility,
 )
 from worldgen.resources.builder import FertilityParams
 
@@ -216,3 +217,13 @@ def test_delta_marsh_is_docked():
     dry = _delta_case(p.optimal_temperature_c, base=0.0)[0, 0, 0, 0]
     wet = _delta_case(p.optimal_temperature_c, base=0.0, marsh=1.0)[0, 0, 0, 0]
     assert np.isclose(wet, dry * (1.0 - p.delta_marsh_penalty), atol=1e-5)
+
+
+def test_land_faces_take_their_water_neighbours_aquatic_fertility() -> None:
+    aquatic = np.array([0.0, 0.8, 0.4, 0.0, 0.0], dtype=np.float32)
+    is_water = np.array([False, True, True, False, False])
+    adjacency = [[1, 2, 3], [0, 2], [0, 1], [0, 4], [3]]
+    out = neighbour_water_fertility(aquatic, is_water, adjacency)
+    assert out[0] == np.float32(0.6)       # mean of its two water neighbours
+    assert out[1] == np.float32(0.8) and out[2] == np.float32(0.4)   # water keeps its own
+    assert out[3] == 0.0 and out[4] == 0.0  # no water neighbour

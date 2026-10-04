@@ -3,9 +3,9 @@
 Runs after :class:`~realmgen.refine.builder.RefineStage`, once the cities have
 their final sites. Towns are **display-only**: nothing downstream reads them.
 
-1. **Rural density** — each face's rural population is spread over its texels
-   by the rural model's own food base (``fertility ** γ``), conserved per face
-   (``compute_rural_density``).
+1. **Rural density** — each face's farmers are spread over its texels by the
+   rural model's own food base (``fertility ** γ``) and its fishers over its
+   shore, conserved per face (``compute_rural_density``).
 2. **Town sizes** — a share (``town_fraction``) of each face's rural people is
    spent on towns of ``town_min`` … ``PopulationParams.city_min`` people,
    truncated-Pareto sized, from an RNG keyed on ``(seed, face)``.
@@ -30,7 +30,7 @@ import numpy as np
 from core.display import DisplayRegistry, TextureRecipe
 from core.params import param_field as _f, paramclass
 from core.pipeline import BuildContext, Stage
-from realmgen.channels import HINTERLAND_ID, RURAL_POPULATION, TOWN_POPULATION
+from realmgen.channels import FISHING_POPULATION, HINTERLAND_ID, RURAL_POPULATION, TOWN_POPULATION
 from realmgen.population.builder import PopulationParams
 from realmgen.population.calibration import KM2_PER_STERADIAN
 from realmgen.refine.builder import RefineParams
@@ -50,6 +50,8 @@ from worldgen.geology.display import OCEAN_COLOR
 from worldgen.hydrology.channels import LAKE_MASK
 
 RURAL_DENSITY_TEXTURE = "rural_density"
+# The fishers' part of ``rural_density``: the finer tiers keep them on the shore.
+FISHING_DENSITY_TEXTURE = "fishing_density"
 _SIZE_STREAM = 1   # RNG stream tag for town sizes (sites use the bare (seed, face) stream)
 
 
@@ -202,10 +204,14 @@ class TownStage(Stage):
         positions = mesh.face_texture_positions(H, W)
         owner = texel_owners(mesh.face_centroids, positions)
         areas_km2 = np.asarray(mesh.face_areas, dtype=np.float64) * KM2_PER_STERADIAN
-        density = compute_rural_density(
+        fishing = (
+            np.asarray(FISHING_POPULATION.read(mesh), dtype=np.float64)
+            if FISHING_POPULATION.present(mesh) else None
+        )
+        density, fishing_density = compute_rural_density(
             rural, areas_km2,
             None if fert_tex is None else np.asarray(fert_tex[..., 0], dtype=np.float64),
-            ~water, owner, float(pp.fertility_exponent),
+            ~water, owner, float(pp.fertility_exponent), fishing,
         )
 
         # ── Town sizes, per face ─────────────────────────────────────────────
@@ -254,11 +260,14 @@ class TownStage(Stage):
         rural_left = np.maximum(rural - town_pop, 0.0)
         keep = np.where(rural > 0, rural_left / np.maximum(rural, 1e-300), 0.0)
         density *= keep[owner]
+        fishing_density *= keep[owner]
 
         RURAL_POPULATION.write(mesh, rural_left)
         TOWN_POPULATION.write(mesh, town_pop)
         mesh.set_face_textures(
             RURAL_DENSITY_TEXTURE, density[..., None].astype(np.float32), n_channels=1)
+        mesh.set_face_textures(
+            FISHING_DENSITY_TEXTURE, fishing_density[..., None].astype(np.float32), n_channels=1)
         self.towns = towns
         world.add_feature("towns", towns)
         ctx.report(

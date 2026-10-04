@@ -83,6 +83,60 @@ def compute_food_base(
     return float(density_max) * fert ** float(fertility_exponent) * area_km2
 
 
+def split_fertility(
+    fertility_tex: np.ndarray,
+    water_tex: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Each face's farmland and fishing grounds, from its texture.
+
+    Args:
+        fertility_tex: (N, H, W) fertility; water pixels hold aquatic fertility.
+        water_tex: (N, H, W) bool — ocean ∪ lake pixels.
+
+    Returns:
+        ``(land_fertility, land_fraction, water_fertility, water_fraction)``,
+        each (N,) float64: the mean fertility over the face's land (water)
+        pixels and the share of its pixels that are land (water).
+    """
+    fert = np.clip(np.asarray(fertility_tex, dtype=np.float64), 0.0, 1.0)
+    water = np.asarray(water_tex, dtype=bool)
+    n_px = float(water.shape[1] * water.shape[2])
+    n_water = water.sum(axis=(1, 2))
+    n_land = n_px - n_water
+    land_fert = np.where(water, 0.0, fert).sum(axis=(1, 2)) / np.maximum(n_land, 1)
+    water_fert = np.where(water, fert, 0.0).sum(axis=(1, 2)) / np.maximum(n_water, 1)
+    return land_fert, n_land / n_px, water_fert, n_water / n_px
+
+
+def compute_farm_and_fish_food(
+    fertility_tex: np.ndarray,
+    water_tex: np.ndarray,
+    face_areas: np.ndarray,
+    *,
+    density_max: float,
+    fishing_density_max: float,
+    fertility_exponent: float = 2.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-face food base split into farmland and fishing grounds, in people.
+
+    Each is :func:`compute_food_base` over its own part of the face: the land
+    pixels at ``density_max``, the water pixels (aquatic fertility) at
+    ``fishing_density_max``.  A coastal land face's shallows thus feed fishers
+    who live on its shore, and a water face's fishing grounds feed the cities
+    whose hinterland reaches them.
+
+    Returns:
+        ``(farm, fish)`` — (N,) float64 each.
+    """
+    land_fert, land_frac, water_fert, water_frac = split_fertility(fertility_tex, water_tex)
+    areas = np.asarray(face_areas, dtype=np.float64)
+    farm = compute_food_base(
+        land_fert, areas * land_frac, density_max=density_max, fertility_exponent=fertility_exponent)
+    fish = compute_food_base(
+        water_fert, areas * water_frac, density_max=fishing_density_max, fertility_exponent=fertility_exponent)
+    return farm, fish
+
+
 def compute_rural_population(
     food_base: np.ndarray,
     is_water: np.ndarray,

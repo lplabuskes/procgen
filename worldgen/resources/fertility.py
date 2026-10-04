@@ -221,6 +221,25 @@ def compute_aquatic_fertility(
     return np.clip(result, 0.0, 1.0).astype(np.float32)
 
 
+def neighbour_water_fertility(
+    aquatic: np.ndarray,
+    is_water_face: np.ndarray,
+    adjacency: list[list[int]],
+) -> np.ndarray:
+    """Aquatic fertility for the water pixels of every face, ``(N,)`` float32.
+
+    A water face keeps its own value. Any other face — a coastal land face with
+    a sliver of sea in its texture — takes the mean of its neighbouring water
+    faces, since its shallows are the same fishing grounds; 0 if it has none.
+    """
+    out = np.where(is_water_face, aquatic, 0.0).astype(np.float32)
+    for f in np.flatnonzero(~is_water_face):
+        vals = [aquatic[nb] for nb in adjacency[f] if is_water_face[nb]]
+        if vals:
+            out[f] = float(np.mean(vals))
+    return out
+
+
 def compute_fertility(
     *,
     temperature_tex: np.ndarray,

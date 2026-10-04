@@ -37,9 +37,11 @@ import numpy as np
 
 from core.pipeline import BuildContext
 from realmgen.builder import RealmParams, RealmPipeline
-from realmgen.population.calibration import KM2_PER_STERADIAN
+from realmgen.channels import FISHING_POPULATION
+from realmgen.population.calibration import KM2_PER_STERADIAN, split_fertility
 from worldgen.cost.channels import IS_WATER
-from worldgen.resources.channels import FERTILITY_MEAN
+from worldgen.geology.channels import OCEAN_MASK
+from worldgen.hydrology.channels import LAKE_MASK
 from _common import (
     CACHE_DIR, load_history, save_history, add_seed_args, resolve_seeds,
     avg, get_physical_world,
@@ -105,19 +107,23 @@ def measure_seed(seed: int, rebuild: bool) -> dict:
     trade_fed_top10 = int(trade_fed[order[:10]].sum()) if pops.size else 0
     band_lo, band_hi = MEDIEVAL_REF["top_city"]
 
-    # Implied D_max for an exact 400 M *rural* total at the current γ —
-    # the direct calibration handle for ``rural_density_max``.
-    is_water = IS_WATER.read(mesh)
-    fert = FERTILITY_MEAN.read(mesh).clip(0.0, 1.0).astype(np.float64)
+    # Implied D_max for an exact 400 M *rural* total at the current γ, the
+    # fishers held fixed — the direct calibration handle for ``rural_density_max``.
+    land = ~IS_WATER.read(mesh)
+    fishing_total = float(FISHING_POPULATION.read(mesh)[land].sum()) if FISHING_POPULATION.present(mesh) else 0.0
+    water_tex = OCEAN_MASK.read(mesh)[..., 0] > 0.5
+    if LAKE_MASK.present(mesh):
+        water_tex |= LAKE_MASK.read(mesh)[..., 0] > 0.5
+    land_fert, land_frac, _, _ = split_fertility(np.asarray(mesh.face_textures["fertility"][..., 0]), water_tex)
     areas_km2 = np.asarray(mesh.face_areas, dtype=np.float64) * KM2_PER_STERADIAN
-    land = ~is_water
-    eff_area = float((fert[land] ** pp.fertility_exponent * areas_km2[land]).sum())
-    implied_d_max = 400e6 / eff_area if eff_area > 0 else float("nan")
+    eff_area = float((land_fert[land] ** pp.fertility_exponent * (areas_km2 * land_frac)[land]).sum())
+    implied_d_max = (400e6 - fishing_total) / eff_area if eff_area > 0 else float("nan")
 
     return {
         "seed": seed,
         "n_cities": int(len(settlements)),
         "rural_total_M": rural_total / 1e6,
+        "fishing_total_M": fishing_total / 1e6,
         "urban_total_M": urban_total / 1e6,
         "world_total_M": world_total / 1e6,
         "urban_fraction": urban_total / world_total if world_total > 0 else float("nan"),
@@ -157,6 +163,7 @@ def print_table(rows: list[dict]) -> None:
     lo, hi = MEDIEVAL_REF["world_total_M"]
     line("world total (M)", lambda r: f"{r['world_total_M']:.0f}", f"{lo:.0f}-{hi:.0f}")
     line("  rural (M)", lambda r: f"{r['rural_total_M']:.0f}", "—")
+    line("    of which fishing (M)", lambda r: f"{r.get('fishing_total_M', 0.0):.1f}", "—")
     line("  urban (M)", lambda r: f"{r['urban_total_M']:.1f}", "—")
     ulo, uhi = MEDIEVAL_REF["urban_fraction"]
     line("urban fraction", lambda r: f"{r['urban_fraction']:.3f}", f"{ulo:.2f}-{uhi:.2f}")
@@ -189,7 +196,7 @@ def print_detail(rows: list[dict]) -> None:
 def _params_summary(rp: RealmParams) -> str:
     pp = rp.population
     return (
-        f"D_max={pp.rural_density_max:.0f} gamma={pp.fertility_exponent:.1f} "
+        f"D_max={pp.rural_density_max:.0f} D_fish={pp.fishing_density_max:.0f} gamma={pp.fertility_exponent:.1f} "
         f"s={pp.surplus_rate:.2f} share={pp.city_surplus_share:.3f} "
         f"beta={pp.trade_food_weight:.0f} "
         f"city_min={pp.city_min:.0f} sit_w={rp.seeder.situational_weight:.2f}"
