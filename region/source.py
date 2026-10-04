@@ -23,7 +23,7 @@ import numpy as np
 from scipy.spatial import KDTree
 
 from region.resources import _danger_field, refined_slope
-from region.sampling import GlobalSampler, settle_owners
+from region.sampling import GlobalSampler, bilinear_plan, bilinear_read, settle_owners
 
 if TYPE_CHECKING:
     from core.mesh import PolygonMesh
@@ -211,6 +211,8 @@ class RegionSource(ParentSource):
         self.spacing_rad = grid.texel_spacing_rad(t)
         self._slope: Optional[np.ndarray] = None
         self._owner: Optional[np.ndarray] = None
+        # (loc, h, w) → bilinear_plan, for repeated reads at the same points.
+        self._plans: dict[tuple, tuple] = {}
 
     def has(self, key: str) -> bool:
         return key in self.fields.textures
@@ -247,20 +249,18 @@ class RegionSource(ParentSource):
         anchors = hexes * (t * t) + row * t + col
         return Located(anchors, (hexes, np.clip(fx - 0.5, 0.0, t - 1.0), np.clip(fy - 0.5, 0.0, t - 1.0)))
 
-    @staticmethod
-    def _bilinear(texture: np.ndarray, loc: Located) -> np.ndarray:
-        hexes, x, y = loc.data
+    def _bilinear(self, texture: np.ndarray, loc: Located) -> np.ndarray:
         tex = np.asarray(texture)
-        _, h, w, c = tex.shape
-        x0 = np.clip(np.floor(x).astype(np.int64), 0, max(w - 2, 0))
-        y0 = np.clip(np.floor(y).astype(np.int64), 0, max(h - 2, 0))
-        x1 = np.minimum(x0 + 1, w - 1)
-        y1 = np.minimum(y0 + 1, h - 1)
-        fx = (x - x0)[:, None]
-        fy = (y - y0)[:, None]
-        top = tex[hexes, y0, x0].astype(np.float64) * (1.0 - fx) + tex[hexes, y0, x1].astype(np.float64) * fx
-        bot = tex[hexes, y1, x0].astype(np.float64) * (1.0 - fx) + tex[hexes, y1, x1].astype(np.float64) * fx
-        return (top * (1.0 - fy) + bot * fy).reshape(-1, c)
+        _, h, w, _ = tex.shape
+        key = (id(loc), h, w)
+        cached = self._plans.get(key)
+        if cached is None:
+            hexes, x, y = loc.data
+            cached = (loc, bilinear_plan(hexes, x, y, h, w))    # loc pins its id
+            if len(self._plans) >= 8:
+                self._plans.clear()
+            self._plans[key] = cached
+        return bilinear_read(tex, cached[1])
 
     def coarse(self, key: str, loc: Located) -> np.ndarray:
         return self._bilinear(self.fields.textures[key], loc)

@@ -24,16 +24,21 @@ def _arc_param(p1: np.ndarray, p2: np.ndarray, c: np.ndarray) -> float:
 def crossing_pairs(
     p1_a: np.ndarray, p2_a: np.ndarray,
     p1_b: np.ndarray, p2_b: np.ndarray,
+    pair_mask: Optional[np.ndarray] = None,
 ) -> List[Tuple[int, int, float, float, np.ndarray]]:
     """Vectorized great-circle crossing detection.
 
-    Returns list of (si_a, si_b, t_a, t_b, cross_pt).
+    Returns list of (si_a, si_b, t_a, t_b, cross_pt) — per sign of the
+    crossing point, in row-major (si_a, si_b) order.  ``pair_mask`` ``(Na, Nb)``
+    limits the test to the pairs it marks.
     """
     n_a = np.cross(p1_a, p2_a)                        # (Na, 3)
     n_b = np.cross(p1_b, p2_b)                        # (Nb, 3)
     d = np.cross(n_a[:, None, :], n_b[None, :, :])    # (Na, Nb, 3)
     d_len = np.linalg.norm(d, axis=2)                 # (Na, Nb)
     valid = d_len > 1e-10                              # non-coplanar pairs
+    if pair_mask is not None:
+        valid &= pair_mask
 
     hits: List[Tuple[int, int, float, float, np.ndarray]] = []
     for sign in (1.0, -1.0):
@@ -73,6 +78,10 @@ def crossing_pairs(
     return hits
 
 
+# Segment pairs tested at once by resolve_self_crossings (bounds its memory).
+_PAIR_BLOCK = 1 << 18
+
+
 def resolve_self_crossings(rivers: List[River]) -> List[River]:
     """Remove loops caused by Laplacian smoothing.
 
@@ -91,14 +100,21 @@ def resolve_self_crossings(rivers: List[River]) -> List[River]:
             p1 /= np.maximum(np.linalg.norm(p1, axis=1, keepdims=True), 1e-12)
             p2 /= np.maximum(np.linalg.norm(p2, axis=1, keepdims=True), 1e-12)
 
+            # Every segment i against every later, non-adjacent j, in blocks of
+            # rows; the earliest i with a crossing wins (the last of its hits),
+            # so the first block with one ends the search.
             best: Optional[Tuple[int, int, float, float, np.ndarray]] = None
-            for i in range(n - 2):
-                for _si_a, si_b, t_i, t_j, cp in crossing_pairs(
-                    p1[i:i+1], p2[i:i+1], p1[i+2:], p2[i+2:]
-                ):
-                    j = i + 2 + si_b
+            block = max(1, _PAIR_BLOCK // n)
+            for lo in range(0, n - 2, block):
+                hi = min(lo + block, n - 2)
+                rows = np.arange(lo, hi)[:, None]
+                later = np.arange(n)[None, :] >= rows + 2
+                for si_a, j, t_i, t_j, cp in crossing_pairs(p1[lo:hi], p2[lo:hi], p1, p2, later):
+                    i = lo + si_a
                     if best is None or i < best[0] or (i == best[0] and t_i < best[1]):
                         best = (i, j, t_i, t_j, cp)
+                if best is not None:
+                    break
 
             if best is None:
                 break

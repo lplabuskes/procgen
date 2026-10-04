@@ -347,12 +347,15 @@ def _box_filter(texture: np.ndarray, size: int) -> np.ndarray:
     if size <= 1:
         return texture
     r = size // 2
-    padded = np.pad(texture, ((0, 0), (r, r), (r, r), (0, 0)), mode="edge")
+    padded = np.pad(np.asarray(texture, dtype=np.float64), ((0, 0), (r, r), (r, r), (0, 0)), mode="edge")
     _, h, w, _ = texture.shape
+    # Separable: the columns' sums, then the rows' — 2·size passes, not size².
+    cols = np.zeros((padded.shape[0], h + 2 * r, w, padded.shape[3]), dtype=np.float64)
+    for j in range(size):
+        cols += padded[:, :, j:j + w, :]
     total = np.zeros(texture.shape, dtype=np.float64)
     for i in range(size):
-        for j in range(size):
-            total += padded[:, i:i + h, j:j + w, :]
+        total += cols[:, i:i + h, :, :]
     return (total / float(size * size)).astype(texture.dtype)
 
 
@@ -555,24 +558,33 @@ def conserve_smooth(
     one its own samples sit under.  An anchor whose correction no read touches
     has no say over its own mean, and enough of those make the passes diverge.
     """
-    anchors, n = loc.anchors, source.n_anchors
+    # Work over the anchors this map touches — its own and those its stencil
+    # reads — renumbered compactly: the parent has millions, a map a few
+    # thousand, and every per-anchor array below would otherwise span them all.
+    idx, w = source.stencil(loc)
+    renumber = np.zeros(source.n_anchors, dtype=np.int64)
+    renumber[loc.anchors] = 1
+    renumber[idx.reshape(-1)] = 1
+    used = np.flatnonzero(renumber)
+    renumber[used] = np.arange(len(used))
+    anchors, idx, n = renumber[loc.anchors], renumber[idx], len(used)
     tgt = np.zeros((n, targets.shape[1]))
     tgt[anchors] = targets
-    stencil = source.stencil(loc)
     v = np.asarray(values, dtype=np.float64).copy()
+    counts = np.bincount(anchors, weights=np.asarray(weights, dtype=np.float64), minlength=n)
+    live = counts > 0.0
+    # A few anchors collect far more samples than the rest (clamped reads
+    # piling onto a texture's corner), so coverage is judged by the median.
+    well_covered = counts >= 0.5 * np.median(counts[live]) if live.any() else live
     kept, first, best = v, None, np.inf
     for _ in range(max_iterations):
-        means, counts = anchor_means(v, anchors, weights, n)
-        live = counts > 0.0
+        means, _ = anchor_means(v, anchors, weights, n, counts=counts)
         if multiplicative:
             ok = live[:, None] & (means > 1e-12) & (tgt > 1e-12)
             resid = np.where(ok, np.log(np.clip(tgt, 1e-12, None) / np.clip(means, 1e-12, None)), 0.0)
             resid = np.clip(resid, -3.0, 3.0)
         else:
             resid = np.where(live[:, None], tgt - means, 0.0)
-        # A few anchors collect far more samples than the rest (clamped reads
-        # piling onto a texture's corner), so coverage is judged by the median.
-        well_covered = counts >= 0.5 * np.median(counts[live]) if live.any() else live
         worst = float(np.abs(resid[well_covered]).max(initial=0.0))
         if worst >= best:            # a pass stopped helping: keep the best so far
             v = kept
@@ -581,7 +593,7 @@ def conserve_smooth(
         first = worst if first is None else first
         if worst <= tolerance * first:
             break
-        step = _RELAXATION * source.interpolate(resid, loc, stencil)
+        step = _RELAXATION * np.einsum("pk,pkc->pc", w, resid[idx])   # ParentSource.interpolate
         v = v * np.exp(step) if multiplicative else v + step
     finish = conserve_multiplicative if multiplicative else conserve_additive
     return finish(v, anchors, targets, weights, n)
@@ -899,14 +911,12 @@ def refine_fields(
         ).astype(np.float32)
 
     # ── biome: reclassify from the area-averaged refined climate ─────────────
+    climate_avg = None
     if "temperature" in textures and "precipitation" in textures:
         from worldgen.climate.classification import classify_textures
         k = int(params.biome_smoothing)
-        textures["biome"] = classify_textures(
-            _box_filter(textures["temperature"], k),
-            _box_filter(textures["precipitation"], k),
-            np.zeros(m),
-        )
+        climate_avg = (_box_filter(textures["temperature"], k), _box_filter(textures["precipitation"], k))
+        textures["biome"] = classify_textures(*climate_avg, np.zeros(m))
 
     # ── resources, rural density and danger (region/resources.py) ────────────
     shape = (m, tex_size, tex_size)
@@ -922,7 +932,7 @@ def refine_fields(
             slope=refined_slope(elevation[:, 0].reshape(shape), np.sqrt(texel_area_km2)).reshape(-1),
             land=~water_now, anchor_land=~(water.ocean | water.lake),
             texel_km=float(np.sqrt(texel_area_km2)),
-            mine_points=mine_points,
+            mine_points=mine_points, climate_avg=climate_avg,
         ),
         textures, params, resources, fertility_exponent,
         source.danger(loc, flat_pos),

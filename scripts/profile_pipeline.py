@@ -7,8 +7,9 @@ builder code — the duration of a phase is simply the gap between its progress
 message and the next one (the final phase is closed when ``build()`` returns).
 
 Phases are rolled up into top-level stages by recognising each stage's first
-message: six worldgen stages (elevation, climate, hydrology, delta, lake_feedback,
-resources) and four realmgen stages (scoring, placement, population, polity).
+message: nine worldgen stages (elevation, climate, hydrology, delta, lake_feedback,
+coast, resources, danger, cost) and six realmgen stages (scoring, placement,
+population, polity, refine, towns).
 
 Usage:
     python3 scripts/profile_pipeline.py              # seed 42, 1 timed run
@@ -42,16 +43,21 @@ STAGE_MARKERS = [
     ("rivers and lakes", "hydrology"),
     ("river deltas", "delta"),
     ("lake humidity feedback", "lake_feedback"),
+    ("Coast:", "coast"),
     ("terrain ruggedness", "resources"),
+    ("Danger:", "danger"),
+    ("physical layers for cost", "cost"),     # before scoring's "Reading physical layers"
     # realmgen
     ("Reading physical layers", "scoring"),
     ("Building land cost graph", "placement"),
     ("Building trade network", "population"),
     ("Seeding sovereign capitals", "polity"),
+    ("Refining settlement positions", "refine"),
+    ("Siting ", "towns"),
 ]
 STAGE_ORDER = [
-    "elevation", "climate", "hydrology", "delta", "lake_feedback", "resources",
-    "scoring", "placement", "population", "polity",
+    "elevation", "climate", "hydrology", "delta", "lake_feedback", "coast", "resources", "danger", "cost",
+    "scoring", "placement", "population", "polity", "refine", "towns",
 ]
 
 

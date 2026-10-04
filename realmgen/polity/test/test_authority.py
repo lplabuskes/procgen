@@ -61,7 +61,7 @@ class TestAuthorityFields:
         c = [1, 0, 2, 1, 4, 3, 5, 4, 3, 0, 5, 2]
         d = [10, 10, 10, 10, 1, 1, 1, 1, 0.5, 0.5, 0.5, 0.5]
         hybrid = csr_matrix((d, (r, c)), shape=(2 * n, 2 * n), dtype=np.float64)
-        kw = dict(base_range=5.0, range_floor=0.5, sea_range_factor=3.0)
+        kw: dict = dict(base_range=5.0, range_floor=0.5, sea_range_factor=3.0)
         land_only = compute_authority_fields(n, [0], np.array([1.0]), np.array([1.0]), np.array([0.0]),
                                              land, hybrid, **kw)
         sea_rich = compute_authority_fields(n, [0], np.array([1.0]), np.array([1.0]), np.array([1.0]),
@@ -78,7 +78,7 @@ class TestAuthorityFields:
         c = [1, 0, 2, 1, 4, 3, 5, 4, 3, 0, 5, 2]
         d = [10, 10, 10, 10, 1, 1, 1, 1, 0.5, 0.5, 0.5, 0.5]
         hybrid = csr_matrix((d, (r, c)), shape=(2 * n, 2 * n), dtype=np.float64)
-        kw = dict(base_range=5.0, range_floor=0.5, sea_range_factor=3.0)
+        kw: dict = dict(base_range=5.0, range_floor=0.5, sea_range_factor=3.0)
         full = compute_authority_fields(n, [0], np.array([1.0]), np.array([1.0]), np.array([1.0]),
                                         land, hybrid, sea_weight=1.0, **kw)
         half = compute_authority_fields(n, [0], np.array([1.0]), np.array([1.0]), np.array([1.0]),

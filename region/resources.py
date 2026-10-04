@@ -72,6 +72,9 @@ class RefineContext:
     anchor_land: np.ndarray      # the anchor texel is dry on the globe
     texel_km: float = 1.0        # child texel spacing
     mine_points: Optional[np.ndarray] = None   # (K, 3) worked deposits
+    # (temperature, precipitation) box-averaged over params.biome_smoothing, as
+    # the biome was classified from; None to average them here.
+    climate_avg: Optional[tuple[np.ndarray, np.ndarray]] = None
 
     def has(self, key: str) -> bool:
         return self.source.has(key)
@@ -243,9 +246,11 @@ def refine_resources(
     if fertility is not None and ctx.has("dominant_crop") and "temperature" in textures and "precipitation" in textures:
         from worldgen.resources.crops import classify_crops
         k = int(params.biome_smoothing)
+        temperature, precipitation = ctx.climate_avg or (
+            _box_filter(textures["temperature"], k), _box_filter(textures["precipitation"], k))
         out["dominant_crop"] = classify_crops(
-            _box_filter(textures["temperature"], k),
-            _box_filter(textures["precipitation"], k),
+            temperature,
+            precipitation,
             ctx.elevation.reshape(*shape, 1),
             fertility.reshape(*shape, 1),
             (~ctx.land).reshape(*shape, 1).astype(np.float32),

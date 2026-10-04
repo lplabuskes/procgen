@@ -76,6 +76,7 @@ class RefineStage(Stage):
         mesh = world.mesh
         p = self.params
 
+        ctx.report("Refining settlement positions and borders…")
         settlements = world.get_feature("settlements") or []
         if settlements and OCEAN_MASK.present(mesh):
             ocean_tex = OCEAN_MASK.read(mesh)

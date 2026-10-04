@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import math
+import weakref
 from collections import deque
-from typing import List, TYPE_CHECKING
+from typing import Dict, List, Tuple, TYPE_CHECKING
 
 import numpy as np
 
@@ -10,6 +11,7 @@ from utils.simplex import fbm_sum, make_perm
 from core.mesh import PolygonMesh
 
 if TYPE_CHECKING:
+    from scipy.sparse import csr_matrix
     from worldgen.geology.elevation_builder import FaceErosionParams
 
 
@@ -274,6 +276,66 @@ def _wendland_c2(r: np.ndarray) -> np.ndarray:
     return s ** 4 * (4.0 * r + 1.0)
 
 
+# mesh → {(tex_size, support_spacings): (P, N) CSR raster stencil}.  Every
+# texel's normalised kernel weights depend only on the geometry, so a build's
+# many rasters share them; ~0.5 GB at tex_size 16, so the globe pipeline drops
+# them when it finishes (:func:`clear_raster_stencils`).
+_RASTER_STENCILS: "weakref.WeakKeyDictionary[PolygonMesh, Dict[Tuple[int, float], csr_matrix]]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def clear_raster_stencils(mesh: PolygonMesh) -> None:
+    """Free the cached :func:`rasterize_face_values` stencils of ``mesh``."""
+    _RASTER_STENCILS.pop(mesh, None)
+
+
+def _raster_stencil(mesh: PolygonMesh, tex_size: int, support_spacings: float) -> "csr_matrix":
+    """``(P, N)`` sparse matrix of each texel's normalised Wendland weights over the face centroids."""
+    from scipy.sparse import csr_matrix
+    from scipy.spatial import KDTree
+
+    per_mesh = _RASTER_STENCILS.setdefault(mesh, {})
+    key = (int(tex_size), float(support_spacings))
+    cached = per_mesh.get(key)
+    if cached is not None:
+        return cached
+
+    centroids = np.asarray(mesh.face_centroids, dtype=np.float64)
+    centroids = centroids / np.linalg.norm(centroids, axis=1, keepdims=True)
+    N = len(centroids)
+    # Hex lattice of area A: centre-to-centre spacing sqrt(2A / sqrt 3).
+    spacing = math.sqrt(2.0 * float(np.mean(mesh.face_areas)) / math.sqrt(3.0))
+    support = support_spacings * spacing
+    # Enough neighbours to hold every centroid inside the support (π s² / A, ×2 margin).
+    k = int(min(N, max(8, math.ceil(2.0 * math.pi * support_spacings ** 2 * 2.0 / math.sqrt(3.0)) + 1)))
+
+    tree = KDTree(centroids)
+    positions = mesh.face_texture_positions(tex_size, tex_size).reshape(-1, 3).astype(np.float64)
+    P = positions.shape[0]
+    data, cols, counts = [], [], []
+    chunk = 1 << 18
+    for start in range(0, P, chunk):
+        dist, idx = tree.query(positions[start:start + chunk], k=k, workers=-1)
+        idx = np.asarray(idx)
+        w = _wendland_c2(dist / support)
+        total = w.sum(axis=1)
+        # A texel farther than the support from every centroid (a badly
+        # stretched face) falls back to its nearest face.
+        bare = total <= 1e-12
+        w[bare, 0] = 1.0
+        total[bare] = 1.0
+        w /= total[:, None]
+        keep = w > 0.0
+        data.append(w[keep])
+        cols.append(idx[keep].astype(np.int32))
+        counts.append(keep.sum(axis=1))
+    indptr = np.concatenate([[0], np.cumsum(np.concatenate(counts))])
+    stencil = csr_matrix((np.concatenate(data), np.concatenate(cols), indptr), shape=(P, N))
+    per_mesh[key] = stencil
+    return stencil
+
+
 def rasterize_face_values(
     mesh: PolygonMesh,
     face_values: np.ndarray,
@@ -288,40 +350,15 @@ def rasterize_face_values(
     adjacent faces' textures — seams and over-hangs included — agree wherever
     they cover the same ground, and its gradient is continuous: no creases at
     face edges, unlike piecewise-linear interpolation over the polygons.
+    The weights are computed once per mesh and resolution (:func:`_raster_stencil`).
     Returns float32 (N, tex_size, tex_size, K); K=1 when face_values is 1-D.
     """
-    from scipy.spatial import KDTree
-
     values = np.asarray(face_values, dtype=np.float64)
     if values.ndim == 1:
         values = values[:, None]
     N, K = values.shape
-
-    centroids = np.asarray(mesh.face_centroids, dtype=np.float64)
-    centroids = centroids / np.linalg.norm(centroids, axis=1, keepdims=True)
-    # Hex lattice of area A: centre-to-centre spacing sqrt(2A / sqrt 3).
-    spacing = math.sqrt(2.0 * float(np.mean(mesh.face_areas)) / math.sqrt(3.0))
-    support = support_spacings * spacing
-    # Enough neighbours to hold every centroid inside the support (π s² / A, ×2 margin).
-    k = int(min(N, max(8, math.ceil(2.0 * math.pi * support_spacings ** 2 * 2.0 / math.sqrt(3.0)) + 1)))
-
-    tree = KDTree(centroids)
-    positions = mesh.face_texture_positions(tex_size, tex_size).reshape(-1, 3).astype(np.float64)
-    out = np.empty((positions.shape[0], K), dtype=np.float64)
-    chunk = 1 << 18
-    for start in range(0, positions.shape[0], chunk):
-        pts = positions[start:start + chunk]
-        dist, idx = tree.query(pts, k=k, workers=-1)
-        w = _wendland_c2(dist / support)
-        total = w.sum(axis=1)
-        # A texel farther than the support from every centroid (a badly
-        # stretched face) falls back to its nearest face.
-        bare = total <= 1e-12
-        w[bare, 0] = 1.0
-        total[bare] = 1.0
-        out[start:start + chunk] = np.einsum("pk,pkc->pc", w, values[idx]) / total[:, None]
-
-    return out.reshape(N, tex_size, tex_size, K).astype(np.float32)
+    out = _raster_stencil(mesh, tex_size, support_spacings) @ values
+    return np.asarray(out).reshape(N, tex_size, tex_size, K).astype(np.float32)
 
 
 def smooth_texture_seams(

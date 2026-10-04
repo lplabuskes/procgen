@@ -13,6 +13,7 @@ from worldgen.coast.builder import CoastBuilder, CoastParams
 from worldgen.cost.builder import CostBuilder, CostParams
 from worldgen.danger.builder import DangerBuilder, DangerParams
 from worldgen.delta.builder import DeltaBuilder, DeltaParams
+from worldgen.geology.elevation import clear_raster_stencils
 from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams
 from worldgen.hydrology.builder import HydrologyBuilder, HydrologyParams
 from worldgen.resources.builder import ResourcesBuilder, ResourcesParams
@@ -70,6 +71,10 @@ class GlobePipeline(Pipeline):
             self.danger_builder,
             self.cost_builder,
         ])
+
+    def build(self, ctx: BuildContext) -> None:
+        super().build(ctx)
+        clear_raster_stencils(ctx.world.mesh)
 
     @property
     def globe(self) -> Optional[World]:

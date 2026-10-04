@@ -73,6 +73,8 @@ class PolygonMesh:
         # Matched seam pixel pairs depend only on geometry + tex_size, so cache
         # them per resolution (keyed by tex_size) and reuse across all passes.
         self._boundary_pair_cache: Dict[int, Tuple[np.ndarray, ...]] = {}
+        # Likewise every face's texel positions, per (h, w); read-only.
+        self._texture_position_cache: Dict[Tuple[int, int], np.ndarray] = {}
         self.face_adjacency: List[List[int]] = self._build_face_adjacency()
         self.face_centroids: np.ndarray = self._compute_face_centroids()
         self.face_areas: np.ndarray = self._compute_face_areas()
@@ -400,7 +402,19 @@ class PolygonMesh:
         in both faces (continuous across boundaries). Corner pixels outside the polygon are
         assigned to the nearest fan triangle by largest-minimum-barycentric extrapolation.
         Given ``faces``, only those, in that order: ``(len(faces), H, W, 3)``.
+        The full set is cached per ``(h, w)`` and returned read-only.
         """
+        cached = self._texture_position_cache.get((h, w))
+        if cached is not None:
+            return cached if faces is None else cached[np.asarray(faces, dtype=np.int64)]
+        if faces is None:
+            positions = self._face_texture_positions(h, w, None)
+            positions.flags.writeable = False
+            self._texture_position_cache[(h, w)] = positions
+            return positions
+        return self._face_texture_positions(h, w, faces)
+
+    def _face_texture_positions(self, h: int, w: int, faces: Optional[Sequence[int]]) -> np.ndarray:
         u_coords = np.linspace(0.0, 1.0, w, dtype=np.float64)
         v_coords = np.linspace(0.0, 1.0, h, dtype=np.float64)
         uu, vv = np.meshgrid(u_coords, v_coords)

@@ -6,7 +6,7 @@ then recurse each into its directly-held core plus vassal sub-territories.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence
 
 import numpy as np
@@ -15,6 +15,7 @@ from scipy.sparse.csgraph import dijkstra
 
 from core.params import param_field as _f, paramclass
 from realmgen.polity.authority import (
+    ProjectionDistances,
     claim_faces,
     classify_settlements,
     compute_authority_fields,
@@ -95,6 +96,10 @@ class _Ctx:
     base_seed: int
     p: "PolityParams"
     face_to_settlement: Dict[int, int]
+    distances: ProjectionDistances = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.distances = ProjectionDistances(self.land_graph, self.hybrid_graph, self.n)
 
 
 class ForestBuilder:
@@ -259,6 +264,7 @@ class ForestBuilder:
             self.s.land_graph, self.s.hybrid_graph,
             base_range=p.projection.base_range, range_floor=p.projection.range_floor,
             sea_range_factor=p.projection.sea_range_factor, sea_weight=p.projection.sea_weight,
+            distances=self.s.distances,
         )
 
     def _roll(self, capital_sidx, capital_faces) -> Scalars:

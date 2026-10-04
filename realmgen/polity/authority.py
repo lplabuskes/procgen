@@ -6,13 +6,45 @@ cost surface) vs *local power* (its population x terrain defensibility).
 """
 from __future__ import annotations
 
-from typing import Optional, Sequence, Tuple
+from typing import Dict, Optional, Sequence, Tuple
 
 import numpy as np
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import dijkstra as sp_dijkstra
 
 from realmgen.polity.types import ControlClass
+
+
+class ProjectionDistances:
+    """Cost-distance rows from capital faces over the land and hybrid graphs, cached.
+
+    A polity build projects the same capitals again and again (each sovereign,
+    then each subtree, over every fragmentation epoch), and a face's distances
+    depend only on the graphs, so each face's Dijkstra runs once.
+    """
+
+    def __init__(self, land_graph: csr_matrix, hybrid_graph: Optional[csr_matrix], n_faces: int) -> None:
+        self.land_graph = land_graph
+        self.hybrid_graph = hybrid_graph
+        self.n_faces = n_faces
+        self._land: Dict[int, np.ndarray] = {}
+        self._hybrid: Dict[int, np.ndarray] = {}
+
+    def rows(self, faces: np.ndarray) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+        """``(land (C, N), hybrid land-node slice (C, N) or None)`` for ``faces``."""
+        missing = list(dict.fromkeys(int(f) for f in faces if int(f) not in self._land))
+        if missing:
+            land = sp_dijkstra(self.land_graph, directed=False, indices=missing, return_predecessors=False)
+            self._land.update(zip(missing, land))
+            if self.hybrid_graph is not None:
+                hybrid = sp_dijkstra(
+                    self.hybrid_graph, directed=False, indices=missing, return_predecessors=False,
+                )[:, :self.n_faces]  # land-node slice (sea shortcuts through ports)
+                self._hybrid.update(zip(missing, hybrid))
+        land_rows = np.stack([self._land[int(f)] for f in faces])
+        if self.hybrid_graph is None:
+            return land_rows, None
+        return land_rows, np.stack([self._hybrid[int(f)] for f in faces])
 
 
 def compute_authority_fields(
@@ -28,6 +60,7 @@ def compute_authority_fields(
     range_floor: float = 0.5,
     sea_range_factor: float = 3.0,
     sea_weight: float = 1.0,
+    distances: Optional[ProjectionDistances] = None,
 ) -> np.ndarray:
     """Per-capital authority field, ``(C, N)`` in roughly [0, legitimacy].
 
@@ -48,6 +81,9 @@ def compute_authority_fields(
     ``legitimacy * maritime_reach`` across the whole coastal world, and that plateau
     wins the claiming ``argmax`` against every nearer land capital. A modest factor
     (decay comparable to land) plus ``sea_weight < 1`` bounds the maritime edge.
+
+    ``distances`` caches the Dijkstra rows across calls; it must be over the same
+    two graphs.
     """
     caps = np.asarray(capital_faces, dtype=np.int64)
     if caps.size == 0:
@@ -57,14 +93,13 @@ def compute_authority_fields(
     infra = np.asarray(infrastructure, dtype=np.float64)
     mar = np.asarray(maritime_reach, dtype=np.float64)
 
-    land_dist = sp_dijkstra(land_cost_graph, directed=False, indices=caps, return_predecessors=False)
+    if distances is None:
+        distances = ProjectionDistances(land_cost_graph, hybrid_cost_graph, n_faces)
+    land_dist, hybrid_dist = distances.rows(caps)
     land_range = base_range * (range_floor + infra)
     auth_land = leg[:, None] * np.exp(-land_dist / land_range[:, None])
 
-    if hybrid_cost_graph is not None:
-        hybrid_dist = sp_dijkstra(
-            hybrid_cost_graph, directed=False, indices=caps, return_predecessors=False,
-        )[:, :n_faces]  # land-node slice (sea shortcuts through ports)
+    if hybrid_dist is not None:
         sea_range = land_range * float(sea_range_factor)
         auth_sea = float(sea_weight) * (leg * mar)[:, None] * np.exp(-hybrid_dist / sea_range[:, None])
         return np.maximum(auth_land, auth_sea)

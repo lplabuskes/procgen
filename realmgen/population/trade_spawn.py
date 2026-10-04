@@ -29,33 +29,52 @@ from scipy.sparse.csgraph import dijkstra as sp_dijkstra
 
 from realmgen.placement.types import Settlement
 
+try:
+    from numba import njit
+except ImportError:  # pragma: no cover - numba is an optional accelerator
+    def njit(func=None, **_):  # type: ignore[misc]
+        return func if func is not None else (lambda f: f)
 
-def _trace_path(pred_row: np.ndarray, src: int, dst: int, max_steps: int = 10_000) -> list[int]:
-    """Return face sequence from *src* to *dst* via the predecessor map.
 
-    Args:
-        pred_row: predecessor row for source *src*, shape (N,) int32.
-        src: source face id.
-        dst: destination face id.
-        max_steps: loop-break limit for safety.
+@njit(cache=True)
+def _next_waypoint(
+    start: int, order: np.ndarray, k_src: np.ndarray, k_dst: np.ndarray, d_pair: np.ndarray,
+    nodes: np.ndarray, pred: np.ndarray, dist: np.ndarray, forbidden: np.ndarray,
+    suit: np.ndarray, flow: np.ndarray, max_flow: float, min_suit: float, max_steps: int = 10_000,
+) -> tuple[int, int]:
+    """``(position in order, face)`` of the next pair from ``order[start:]`` that
+    gets a waypoint, or ``(len(order), -1)`` when none does.
 
-    Returns:
-        List ``[src, ..., dst]``, or ``[]`` if the path is broken.
+    Each pair's path is walked back from its destination over the source's
+    predecessor row (scipy's -9999 sentinel, or more than ``max_steps`` faces,
+    means no path).  Its waypoint is the face of the path's middle 60% by cost
+    from the source — not forbidden, at least ``min_suit`` suitable — with the
+    highest ``suit × flow / max_flow``; the first along the path on ties.
     """
-    path: list[int] = []
-    cur = dst
-    for _ in range(max_steps):
-        path.append(cur)
-        if cur == src:
-            break
-        p = int(pred_row[cur])
-        if p < 0:   # scipy sentinel -9999 = no predecessor
-            return []
-        cur = p
-    else:
-        return []
-    path.reverse()
-    return path
+    for pos in range(start, len(order)):
+        i = order[pos]
+        ks, kd = k_src[i], k_dst[i]
+        src, cur = nodes[ks], nodes[kd]
+        lo, hi = 0.2 * d_pair[i], 0.8 * d_pair[i]
+        best, best_score = -1, -np.inf
+        for _ in range(max_steps):
+            dc = dist[ks, cur]
+            if lo <= dc <= hi and not forbidden[cur] and suit[cur] >= min_suit:
+                score = suit[cur] * flow[cur] / max_flow
+                if score >= best_score:        # walking backwards: ties go to the earlier face
+                    best, best_score = cur, score
+            if cur == src:
+                break
+            p = pred[ks, cur]
+            if p < 0:
+                best = -1
+                break
+            cur = p
+        else:
+            best = -1
+        if best >= 0:
+            return pos, int(best)
+    return len(order), -1
 
 
 def spawn_trade_settlements(
@@ -161,7 +180,7 @@ def spawn_trade_settlements(
             # Expand forbidden zone to prevent clustering of new hubs.
             d_from_hub = sp_dijkstra(
                 cost_graph, directed=False,
-                indices=[int(face_id)], return_predecessors=False,
+                indices=[int(face_id)], return_predecessors=False, limit=hub_exclusion,
             )[0]
             forbidden |= d_from_hub < hub_exclusion
 
@@ -188,7 +207,7 @@ def spawn_trade_settlements(
             ))
             d_from_port = sp_dijkstra(
                 cost_graph, directed=False,
-                indices=[int(face_id)], return_predecessors=False,
+                indices=[int(face_id)], return_predecessors=False, limit=port_exclusion,
             )[0]
             forbidden |= d_from_port < port_exclusion
 
@@ -215,40 +234,24 @@ def spawn_trade_settlements(
 
     # Collect long pairs, process longest first so the most important routes
     # get first pick of candidate faces.
-    pair_costs: list[tuple[float, int, int]] = []
     n_combined = len(combined)
-    for k_src in range(n_combined):
-        for k_dst in range(k_src + 1, n_combined):
-            d = float(dist2[k_src, int(all_nodes[k_dst])])
-            if np.isfinite(d) and d >= waypoint_min_cost:
-                pair_costs.append((d, k_src, k_dst))
+    pair_dist = dist2[:, all_nodes]                                   # (S, S)
+    k_src, k_dst = np.triu_indices(n_combined, k=1)
+    d_pair = pair_dist[k_src, k_dst]
+    long_pair = np.isfinite(d_pair) & (d_pair >= waypoint_min_cost)
+    k_src, k_dst, d_pair = k_src[long_pair], k_dst[long_pair], d_pair[long_pair]
+    order = np.lexsort((k_dst, k_src, d_pair))[::-1]                  # longest first (then src, dst descending)
 
-    pair_costs.sort(reverse=True)
-
-    for total_cost, k_src, k_dst in pair_costs:
-        src_node = int(all_nodes[k_src])
-        dst_node = int(all_nodes[k_dst])
-
-        path = _trace_path(pred2[k_src], src_node, dst_node)
-        if not path:
-            continue
-
-        # Keep only the middle 60% of the path by cost-distance from the source,
-        # excluding faces too close to existing or newly placed settlements.
-        lo = 0.2 * total_cost
-        hi = 0.8 * total_cost
-        eligible = [
-            f for f in path
-            if (lo <= float(dist2[k_src, f]) <= hi)
-            and not forbidden_wp[f]
-            and float(suit[f]) >= waypoint_min_suitability
-        ]
-        if not eligible:
-            continue
-
-        # Pick the face with the highest combined suitability × normalised flow.
-        best = max(eligible, key=lambda f: float(suit[f]) * float(flow[f]) / max_flow)
-
+    pred2 = np.ascontiguousarray(pred2, dtype=np.int64)
+    pos = 0
+    while True:
+        pos, best = _next_waypoint(
+            pos, order, k_src, k_dst, d_pair, all_nodes.astype(np.int64), pred2, dist2, forbidden_wp,
+            suit, flow, max_flow, float(waypoint_min_suitability),
+        )
+        if best < 0:
+            break
+        pos += 1
         spawned.append(Settlement(
             face_id=int(best),
             position=centroids[int(best)].copy(),
@@ -259,7 +262,7 @@ def spawn_trade_settlements(
         # Mark vicinity of the new waypoint as forbidden for future waypoints.
         d_from_wp = sp_dijkstra(
             cost_graph, directed=False,
-            indices=[int(best)], return_predecessors=False,
+            indices=[int(best)], return_predecessors=False, limit=waypoint_exclusion,
         )[0]
         forbidden_wp |= d_from_wp < waypoint_exclusion
 

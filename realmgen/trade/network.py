@@ -23,6 +23,12 @@ from scipy.sparse.csgraph import dijkstra as sp_dijkstra
 
 from realmgen.placement.types import Settlement
 
+try:
+    from numba import njit
+except ImportError:  # pragma: no cover - numba is an optional accelerator
+    def njit(func=None, **_):  # type: ignore[misc]
+        return func if func is not None else (lambda f: f)
+
 
 # ── Good-type namespace ───────────────────────────────────────────────────────
 
@@ -156,25 +162,68 @@ def _collect_hybrid_edges(
     return rows, cols, data
 
 
-def _accumulate_path(
-    pred_row: np.ndarray,
-    from_node: int,
-    to_node: int,
-    flow: float,
-    edge_flow: dict,
+@njit(cache=True)
+def _accumulate_paths(
+    pred: np.ndarray,
+    job_row: np.ndarray,
+    job_from: np.ndarray,
+    job_to: np.ndarray,
+    job_flow: np.ndarray,
+    indptr: np.ndarray,
+    indices: np.ndarray,
     max_steps: int = 100_000,
-) -> None:
-    """Walk predecessor array from from_node back to to_node, adding flow to each edge."""
-    cur = from_node
-    for _ in range(max_steps):
-        p = int(pred_row[cur])
-        if p < 0:
-            break
-        key = (min(p, cur), max(p, cur))
-        edge_flow[key] = edge_flow.get(key, 0.0) + flow
-        cur = p
-        if cur == to_node:
-            break
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Walk each job's predecessor row from ``job_from`` back to ``job_to``,
+    adding its flow to every undirected edge on the way.
+
+    Edges are slots of the symmetric graph's CSR (``indptr``/``indices``, the
+    row being the lower node).  Returns ``(slot_flow, order, n_edges)``:
+    ``order[:n_edges]`` lists the slots in the order they were first touched.
+    Jobs run in order, so each edge sums its flows in the order they arrive.
+    """
+    slot_flow = np.zeros(len(indices), dtype=np.float64)
+    seen = np.zeros(len(indices), dtype=np.bool_)
+    order = np.empty(len(indices), dtype=np.int64)
+    n_edges = 0
+    for j in range(len(job_row)):
+        row = pred[job_row[j]]
+        flow = job_flow[j]
+        cur = job_from[j]
+        for _ in range(max_steps):
+            p = row[cur]
+            if p < 0:
+                break
+            a, b = (p, cur) if p < cur else (cur, p)
+            slot = -1
+            for q in range(indptr[a], indptr[a + 1]):
+                if indices[q] == b:
+                    slot = q
+                    break
+            if not seen[slot]:
+                seen[slot] = True
+                order[n_edges] = slot
+                n_edges += 1
+            slot_flow[slot] += flow
+            cur = p
+            if cur == job_to[j]:
+                break
+    return slot_flow, order, n_edges
+
+
+@njit(cache=True)
+def _sum_edge_ends(
+    edge_a: np.ndarray, edge_b: np.ndarray, flow: np.ndarray, n: int, ports: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """``(face_flow, landing_flow)`` from per-edge flows, summed in edge order."""
+    face_flow = np.zeros(n, dtype=np.float64)
+    landing_flow = np.zeros(n, dtype=np.float64)
+    for e in range(len(edge_a)):
+        a, b = edge_a[e], edge_b[e]
+        face_flow[a % n] += flow[e]
+        face_flow[b % n] += flow[e]
+        if len(ports) and a < n <= b and not ports[a]:
+            landing_flow[a] += flow[e]
+    return face_flow, landing_flow
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -434,7 +483,11 @@ def compute_trade_network(
     )
 
     decay = float(flow_decay)
-    edge_flow: dict[tuple[int, int], float] = {}
+    # Path walks to run, in order: (pred row, from node, to node, flow).
+    jobs_row: list = []
+    jobs_from: list = []
+    jobs_to: list = []
+    jobs_flow: list = []
     # deposit_goods[k, g] = credited abundance of type g collected at settlement k.
     deposit_goods = np.zeros((len(settlements), n_types), dtype=np.float64)
 
@@ -461,7 +514,10 @@ def compute_trade_network(
         if phase1_flow < 1e-9:
             continue
         goods_flow[k] += phase1_flow
-        _accumulate_path(pred[k], src_node, settlement_nodes[k], phase1_flow, edge_flow)
+        jobs_row.append(k)
+        jobs_from.append(src_node)
+        jobs_to.append(settlement_nodes[k])
+        jobs_flow.append(phase1_flow)
 
     # Phase 2: inter-settlement trade, modulated by local supply per good type.
     # demand_modifier[k, g] = 1 − how saturated settlement k already is with type g.
@@ -474,46 +530,55 @@ def compute_trade_network(
     weighted_goods = deposit_goods * rarity_arr  # (S, n_types)
 
     # Per-pair attribution: pair_flow[src, dst] = trade volume src exports to dst.
-    pair_flow = np.zeros((len(settlements), len(settlements)), dtype=np.float64)
+    # Sum over types: export value weighted by destination's unmet need.
+    nodes = np.asarray(settlement_nodes, dtype=np.int64)
+    pair_dist = dist[:, nodes]                                                   # (S, S)
+    total_goods = (weighted_goods[:, None, :] * demand_modifier[None, :, :]).sum(axis=2)
+    with np.errstate(invalid="ignore"):
+        pair_flow = total_goods * norm_demands[None, :] * np.exp(-decay * pair_dist)
+    trades = (
+        (weighted_goods.sum(axis=1) > 0.0)[:, None]
+        & ~np.eye(len(settlements), dtype=bool)
+        & np.isfinite(pair_dist)
+        & (total_goods > 0.0)
+        & (pair_flow >= 1e-9)
+    )
+    pair_flow = np.where(trades, pair_flow, 0.0)
+    k_src, k_dst = np.nonzero(trades)                                            # row-major: src, then dst
+    np.add.at(goods_flow, k_src, pair_flow[k_src, k_dst])
+    jobs_row.extend(k_src.tolist())
+    jobs_from.extend(nodes[k_dst].tolist())
+    jobs_to.extend(nodes[k_src].tolist())
+    jobs_flow.extend(pair_flow[k_src, k_dst].tolist())
 
-    for k_src in range(len(settlements)):
-        if weighted_goods[k_src].sum() <= 0.0:
-            continue
-        src_node = settlement_nodes[k_src]
-        for k_dst in range(len(settlements)):
-            if k_src == k_dst:
-                continue
-            dst_node = settlement_nodes[k_dst]
-            d = float(dist[k_src, dst_node])
-            if not np.isfinite(d):
-                continue
-            # Sum over types: export value weighted by destination's unmet need.
-            total_goods = float((weighted_goods[k_src] * demand_modifier[k_dst]).sum())
-            if total_goods <= 0.0:
-                continue
-            inter_flow = total_goods * float(norm_demands[k_dst]) * np.exp(-decay * d)
-            if inter_flow < 1e-9:
-                continue
-            pair_flow[k_src, k_dst] = inter_flow
-            goods_flow[k_src] += inter_flow
-            _accumulate_path(pred[k_src], dst_node, src_node, inter_flow, edge_flow)
-
-    if not edge_flow:
+    if not jobs_row:
         return dataclasses.replace(
             empty, deposit_owner=deposit_owner, deposit_cost=deposit_cost, deposit_credit=deposit_credit)
 
-    # Per-face flow: sum contributions from both endpoints of each edge
-    face_flow = np.zeros(n, dtype=np.float64)
-    for (a, b), flow in edge_flow.items():
-        face_flow[a % n] += flow
-        face_flow[b % n] += flow
+    # Walk every path over the graph's undirected edges (the lower node's CSR row).
+    # (From the pattern: zero-cost edges are explicit zeros a sum would drop.)
+    pattern = csr_matrix((np.ones(graph.nnz), graph.indices, graph.indptr), shape=graph.shape)
+    sym = (pattern + pattern.T).tocsr()
+    sym.sort_indices()
+    pred_rows = np.ascontiguousarray(pred, dtype=np.int64)
+    slot_flow, order, n_edges = _accumulate_paths(
+        pred_rows,
+        np.asarray(jobs_row, dtype=np.int64), np.asarray(jobs_from, dtype=np.int64),
+        np.asarray(jobs_to, dtype=np.int64), np.asarray(jobs_flow, dtype=np.float64),
+        sym.indptr.astype(np.int64), sym.indices.astype(np.int64),
+    )
+    if n_edges == 0:
+        return dataclasses.replace(
+            empty, deposit_owner=deposit_owner, deposit_cost=deposit_cost, deposit_credit=deposit_credit)
+    slots = order[:n_edges]
+    edge_a = np.repeat(np.arange(size, dtype=np.int64), np.diff(sym.indptr))[slots]
+    edge_b = sym.indices.astype(np.int64)[slots]
+    edge_flow = slot_flow[slots]
 
-    # Flow over the fallback landings (land node ↔ water node at a non-port).
-    landing_flow = np.zeros(n, dtype=np.float64)
-    if ports is not None:
-        for (a, b), flow in edge_flow.items():
-            if a < n <= b and not ports[a]:
-                landing_flow[a] += flow
+    # Per-face flow: sum contributions from both endpoints of each edge, and the
+    # flow over the fallback landings (land node ↔ water node at a non-port).
+    face_flow, landing_flow = _sum_edge_ends(
+        edge_a, edge_b, edge_flow, n, ports if ports is not None else np.zeros(0, dtype=bool))
 
     # Hub detection
     positive = face_flow[face_flow > 0.0]
@@ -526,7 +591,7 @@ def compute_trade_network(
     threshold = float(min_display_flow) if min_display_flow is not None else 0.0
 
     routes = []
-    for (a, b), flow in edge_flow.items():
+    for a, b, flow in zip(edge_a.tolist(), edge_b.tolist(), edge_flow.tolist()):
         if flow < threshold:
             continue
         routes.append((centroids[a % n].copy(), centroids[b % n].copy(), float(flow)))

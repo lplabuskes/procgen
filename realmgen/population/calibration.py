@@ -232,11 +232,12 @@ def compute_hinterland_shares(
 
     # dist[k, i] = undirected cost-distance from settlements[k] to face i
     # (+inf where unreachable).
+    # Nothing past max_distance (the widest reach) bids, so the search stops there.
+    md = max(float(max_distance), 1e-9)
     dist = sp_dijkstra(
-        cost_graph, directed=False, indices=s_nodes, return_predecessors=False,
+        cost_graph, directed=False, indices=s_nodes, return_predecessors=False, limit=md,
     )  # (S, N)
 
-    md = max(float(max_distance), 1e-9)
     scale = max(float(influence_scale), 1e-9)
     reach = max(float(reach_scale), 1e-9)
     # Per-settlement catchment radius: higher-order centres (lower influence)

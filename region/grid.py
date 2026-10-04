@@ -45,6 +45,7 @@ class RegionHexGrid:
         self.n_cols = int(n_cols)
         self.radius = 1.0 / (1.5 * self.n_cols + 0.5)
         self.centers = self._layout()
+        self._spacing: dict[int, float] = {}
 
     def __len__(self) -> int:
         return len(self.centers)
@@ -164,10 +165,15 @@ class RegionHexGrid:
         return hexes, np.where(inside, rows, 0), np.where(inside, cols, 0), inside
 
     def texel_spacing_rad(self, tex_size: int) -> float:
-        """Mean angular spacing (radians) between neighbouring texels on the sphere."""
+        """Mean angular spacing (radians) between neighbouring texels on the sphere (cached)."""
+        cached = self._spacing.get(tex_size)
+        if cached is not None:
+            return cached
         positions = self.texture_positions(tex_size)
         if positions.size == 0 or tex_size < 2:
             return 0.0
         dx = np.linalg.norm(np.diff(positions, axis=2), axis=-1)
         dy = np.linalg.norm(np.diff(positions, axis=1), axis=-1)
-        return float(np.mean([dx.mean(), dy.mean()]))
+        spacing = float(np.mean([dx.mean(), dy.mean()]))
+        self._spacing[tex_size] = spacing
+        return spacing
