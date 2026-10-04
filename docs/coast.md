@@ -36,7 +36,7 @@ Ruggedness is a sum of terms:
 
 Smoothness is `clip(1 − ruggedness, 0, 1)`, diffused over the face graph
 (`smoothing_passes` 3 of neighbour-mean blending at `smoothing_alpha` 0.5),
-and rasterised by shared-vertex interpolation plus one seam-averaging pass
+and rasterised as a smooth field of position plus one seam-averaging pass
 (`rasterize_face_values` / `smooth_texture_seams`, as for humidity). The
 texture therefore has no steps at face edges, which the bilinear reads one
 tier down rely on.

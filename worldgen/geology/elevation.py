@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from collections import defaultdict, deque
+from collections import deque
 from typing import List, TYPE_CHECKING
 
 import numpy as np
@@ -261,94 +261,67 @@ def face_elevations_from_texture(elevation_textures: np.ndarray) -> np.ndarray:
     return elevation_textures[:, :, :, 0].mean(axis=(1, 2)).astype(np.float64)
 
 
+# Kernel support of rasterize_face_values, in mean face-centroid spacings.  At
+# 2.0 a face's centre keeps ~1/2 of its own value and takes the rest from its six
+# neighbours — about as smooth as the old vertex-averaged raster (1/3), but
+# without its creases.
+RASTER_SUPPORT_SPACINGS = 2.0
+
+
+def _wendland_c2(r: np.ndarray) -> np.ndarray:
+    """Wendland's C² compact kernel on ``r`` = distance / support (0 for r ≥ 1)."""
+    s = np.clip(1.0 - r, 0.0, None)
+    return s ** 4 * (4.0 * r + 1.0)
+
+
 def rasterize_face_values(
     mesh: PolygonMesh,
     face_values: np.ndarray,
     tex_size: int,
+    support_spacings: float = RASTER_SUPPORT_SPACINGS,
 ) -> np.ndarray:
-    """Rasterize per-face scalars to per-pixel textures via vertex averaging + barycentric interp.
+    """Rasterize per-face scalars to per-pixel textures as a smooth field over the sphere.
 
-    Adjacent faces share vertex values, so rasterized values agree continuously across boundaries.
+    Every texel takes the kernel-weighted mean of the face values whose centroids
+    lie within ``support_spacings`` mean centroid spacings of its position
+    (Wendland C², normalised).  The result is a function of position alone, so
+    adjacent faces' textures — seams and over-hangs included — agree wherever
+    they cover the same ground, and its gradient is continuous: no creases at
+    face edges, unlike piecewise-linear interpolation over the polygons.
     Returns float32 (N, tex_size, tex_size, K); K=1 when face_values is 1-D.
     """
+    from scipy.spatial import KDTree
+
     values = np.asarray(face_values, dtype=np.float64)
     if values.ndim == 1:
         values = values[:, None]
     N, K = values.shape
-    n_verts = len(mesh.vertices)
 
-    # Scatter-add face values onto shared vertices, then average.
-    face_sizes = np.array([len(f) for f in mesh.faces])
-    all_verts = np.concatenate([np.asarray(f) for f in mesh.faces])
-    all_face_idx = np.repeat(np.arange(N), face_sizes)
-    vertex_sum = np.zeros((n_verts, K), dtype=np.float64)
-    vertex_count = np.zeros(n_verts, dtype=np.float64)
-    np.add.at(vertex_sum, all_verts, values[all_face_idx])
-    np.add.at(vertex_count, all_verts, 1.0)
-    vertex_vals = vertex_sum / np.maximum(vertex_count[:, None], 1.0)  # (n_verts, K)
+    centroids = np.asarray(mesh.face_centroids, dtype=np.float64)
+    centroids = centroids / np.linalg.norm(centroids, axis=1, keepdims=True)
+    # Hex lattice of area A: centre-to-centre spacing sqrt(2A / sqrt 3).
+    spacing = math.sqrt(2.0 * float(np.mean(mesh.face_areas)) / math.sqrt(3.0))
+    support = support_spacings * spacing
+    # Enough neighbours to hold every centroid inside the support (π s² / A, ×2 margin).
+    k = int(min(N, max(8, math.ceil(2.0 * math.pi * support_spacings ** 2 * 2.0 / math.sqrt(3.0)) + 1)))
 
-    # Pixel UV grid in [0, 1]^2 — identical for every face.
-    u_coords = np.linspace(0.0, 1.0, tex_size, dtype=np.float64)
-    v_coords = np.linspace(0.0, 1.0, tex_size, dtype=np.float64)
-    uu, vv = np.meshgrid(u_coords, v_coords)
-    pixel_uv = np.stack([uu.ravel(), vv.ravel()], axis=1)  # (P, 2)
-    n_pix = pixel_uv.shape[0]
+    tree = KDTree(centroids)
+    positions = mesh.face_texture_positions(tex_size, tex_size).reshape(-1, 3).astype(np.float64)
+    out = np.empty((positions.shape[0], K), dtype=np.float64)
+    chunk = 1 << 18
+    for start in range(0, positions.shape[0], chunk):
+        pts = positions[start:start + chunk]
+        dist, idx = tree.query(pts, k=k, workers=-1)
+        w = _wendland_c2(dist / support)
+        total = w.sum(axis=1)
+        # A texel farther than the support from every centroid (a badly
+        # stretched face) falls back to its nearest face.
+        bare = total <= 1e-12
+        w[bare, 0] = 1.0
+        total[bare] = 1.0
+        out[start:start + chunk] = np.einsum("pk,pkc->pc", w, values[idx]) / total[:, None]
 
-    textures = np.zeros((N, tex_size, tex_size, K), dtype=np.float32)
-
-    # Group faces by degree so every batch shares the same fan-triangle layout,
-    # enabling fully vectorised barycentric solves.
-    degree_groups: dict[int, list[int]] = defaultdict(list)
-    for i, face in enumerate(mesh.faces):
-        degree_groups[len(face)].append(i)
-
-    for degree, fidx_list in degree_groups.items():
-        fidx = np.asarray(fidx_list)
-        B = len(fidx)
-
-        verts_uv = np.stack([
-            mesh._face_vertex_uvs[i].astype(np.float64) for i in fidx_list
-        ])                                                               # (B, degree, 2)
-        batch_verts = np.array([mesh.faces[i] for i in fidx_list])      # (B, degree)
-        vert_v = vertex_vals[batch_verts]                                # (B, degree, K)
-
-        v0_uv = verts_uv[:, 0, :]                                        # (B, 2)
-        e1_uv = verts_uv[:, 1:-1, :] - v0_uv[:, np.newaxis, :]          # (B, n_tris, 2)
-        e2_uv = verts_uv[:, 2:, :] - v0_uv[:, np.newaxis, :]            # (B, n_tris, 2)
-        det = (
-            e1_uv[:, :, 0] * e2_uv[:, :, 1]
-            - e1_uv[:, :, 1] * e2_uv[:, :, 0]
-        )                                                                # (B, n_tris)
-        det = np.where(np.abs(det) < 1e-12, 1.0, det)
-
-        pv = pixel_uv[np.newaxis, :, :] - v0_uv[:, np.newaxis, :]       # (B, P, 2)
-        beta = (
-            pv[:, :, 0:1] * e2_uv[:, np.newaxis, :, 1]
-            - pv[:, :, 1:2] * e2_uv[:, np.newaxis, :, 0]
-        ) / det[:, np.newaxis, :]                                        # (B, P, n_tris)
-        gamma = (
-            e1_uv[:, np.newaxis, :, 0] * pv[:, :, 1:2]
-            - e1_uv[:, np.newaxis, :, 1] * pv[:, :, 0:1]
-        ) / det[:, np.newaxis, :]
-
-        best_tri = np.argmax(
-            np.minimum(1.0 - beta - gamma, np.minimum(beta, gamma)), axis=2
-        )                                                                # (B, P)
-
-        bi = np.arange(B)[:, np.newaxis]
-        pi = np.arange(n_pix)[np.newaxis, :]
-        b_sel = beta[bi, pi, best_tri]                                   # (B, P)
-        g_sel = gamma[bi, pi, best_tri]
-
-        vals = (
-            (1.0 - b_sel - g_sel)[:, :, None] * vert_v[:, 0:1, :]
-            + b_sel[:, :, None] * vert_v[bi, best_tri + 1, :]
-            + g_sel[:, :, None] * vert_v[bi, best_tri + 2, :]
-        )                                                                # (B, P, K)
-
-        textures[fidx] = vals.reshape(B, tex_size, tex_size, K).astype(np.float32)
-
-    return textures
+    return out.reshape(N, tex_size, tex_size, K).astype(np.float32)
 
 
 def smooth_texture_seams(

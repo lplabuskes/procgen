@@ -23,7 +23,7 @@ import numpy as np
 from scipy.spatial import KDTree
 
 from region.resources import _danger_field, refined_slope
-from region.sampling import GlobalSampler
+from region.sampling import GlobalSampler, settle_owners
 
 if TYPE_CHECKING:
     from core.mesh import PolygonMesh
@@ -100,6 +100,15 @@ class ParentSource:
         """``(P, C)`` float64 value of each anchor texel in texture ``key``."""
         raise NotImplementedError
 
+    def owners(self) -> np.ndarray:
+        """``(n_anchors,)`` the anchor owning each parent texel's *position*.
+
+        A texel's own index unless its position lies in a neighbouring texture's
+        territory (over-hang past its hexagon or face); then that neighbour's
+        texel there.
+        """
+        raise NotImplementedError
+
     def stencil(self, loc: Located) -> tuple[np.ndarray, np.ndarray]:
         """``((P, 4) anchors, (P, 4) weights)``: the bilinear read of a per-anchor field.
 
@@ -147,35 +156,18 @@ class GlobalSource(ParentSource):
         self._hw = (gh, gw)
         self.n_anchors = n_faces * gh * gw
         self.spacing_rad = float(np.sqrt(np.mean(mesh.face_areas))) / max(gw - 1, 1)
-        self._owner: Optional[np.ndarray] = None
 
     def has(self, key: str) -> bool:
         return key in self.mesh.face_textures
 
-    def _owners(self) -> np.ndarray:
-        """``(n_anchors,)`` the anchor owning each global texel's position."""
-        if self._owner is None:
-            n, (gh, gw) = self.mesh.face_textures["elevation"].shape[0], self._hw
-            frames = self.mesh.face_tangent_frames()
-            u_axes, v_axes, u_off, v_off, u_rng, v_rng = (
-                np.asarray(f, dtype=np.float64) for f in frames[:6]
-            )
-            centres = np.asarray(self.mesh._tangent_centroids, dtype=np.float64)
-            u = np.linspace(0.0, 1.0, gw)[None, None, :, None]
-            v = np.linspace(0.0, 1.0, gh)[None, :, None, None]
-            pos = (
-                centres[:, None, None, :]
-                + (u_off[:, None, None, None] + u * u_rng[:, None, None, None]) * u_axes[:, None, None, :]
-                + (v_off[:, None, None, None] + v * v_rng[:, None, None, None]) * v_axes[:, None, None, :]
-            ).reshape(n * gh * gw, 3)
-            self._owner = self.locate(pos).anchors
-        return self._owner
+    def owners(self) -> np.ndarray:
+        return self.sampler.owners(*self._hw)
 
     def stencil(self, loc: Located) -> tuple[np.ndarray, np.ndarray]:
         faces, u, v = loc.data
         gh, gw = self._hw
         x, y = GlobalSampler._texel_coords(u, v, gh, gw)
-        return _bilinear_stencil(faces, x, y, gh, gw, self._owners())
+        return _bilinear_stencil(faces, x, y, gh, gw, self.owners())
 
     def locate(self, points: np.ndarray) -> Located:
         faces, u, v = self.sampler.locate(points)
@@ -223,14 +215,24 @@ class RegionSource(ParentSource):
     def has(self, key: str) -> bool:
         return key in self.fields.textures
 
-    def stencil(self, loc: Located) -> tuple[np.ndarray, np.ndarray]:
+    def owners(self) -> np.ndarray:
         if self._owner is None:
-            self._owner = self.locate(self.fields.positions.reshape(-1, 3)).anchors
+            self._owner = settle_owners(self._locate_nearest(self.fields.positions.reshape(-1, 3)).anchors)
+        return self._owner
+
+    def stencil(self, loc: Located) -> tuple[np.ndarray, np.ndarray]:
         hexes, x, y = loc.data
         t = self.fields.tex_size
-        return _bilinear_stencil(hexes, x, y, t, t, self._owner)
+        return _bilinear_stencil(hexes, x, y, t, t, self.owners())
 
     def locate(self, points: np.ndarray) -> Located:
+        # Anchored on the texel *owning* the nearest one, as on the globe
+        # (GlobalSampler.anchors): a point by a hexagon's edge whose nearest
+        # texel is an over-hang one belongs to the neighbour's texel there.
+        loc = self._locate_nearest(points)
+        return Located(self.owners()[loc.anchors], loc.data)
+
+    def _locate_nearest(self, points: np.ndarray) -> Located:
         f = self.fields
         grid, t = f.grid, f.tex_size
         s, tt, _ = f.geometry.ecef_to_local(points)

@@ -24,7 +24,7 @@ River parameters live in `HydrologyParams`, not here.
 
 **`ElevationBuilder`**: A pipeline `Stage`. `build(ctx)` decorates the already-existing dual `PolygonMesh` in `ctx.mesh`:
 
-plates → relax → plate types + velocities → boundary classification → face elevations → volcanism → face erosion → + volcanism × `volcanic_elevation_scale[_oceanic]` → rasterise to textures → fBm simplex noise (`compute_noise_elevation_deltas`, band-limited to the texel grid, × `exp(−|elevation| / noise_coast_sigma)` so it is strongest near sea level and roughens the coastline) → seam smoothing → ocean mask → `world.antimeridian` (`core.antimeridian.find_ideal_antimeridian`).
+plates → relax → plate types + velocities → boundary classification → face elevations → volcanism → face erosion → + volcanism × `volcanic_elevation_scale[_oceanic]` → rasterise to textures (`rasterize_face_values`, below) → fBm simplex noise (`compute_noise_elevation_deltas`, band-limited to the texel grid, × `exp(−|elevation| / noise_coast_sigma)` so it is strongest near sea level and roughens the coastline) → seam smoothing → ocean mask → `world.antimeridian` (`core.antimeridian.find_ideal_antimeridian`).
 
 Stored attributes after build: `mesh`, `plate_ids`, `plate_omegas`, `face_velocities`, `boundary_types`, `boundary_data`, `elevations` (per-face means of the final texture), `elevation_textures` (single-channel `(N, H, W, 1)` float32), `ocean_mask`, `volcanism`, `volcano_positions`, `max_speed`.
 
@@ -41,6 +41,8 @@ Stored attributes after build: `mesh`, `plate_ids`, `plate_omegas`, `face_veloci
 - Returns `float64 (n_faces,)`
 
 **`compute_erosion(mesh, elevations, params)`**: face-level hydraulic (fill sinks → accumulate → erode/deposit) then thermal (talus slumping) passes.
+
+**`rasterize_face_values(mesh, face_values, tex_size, support_spacings=2.0)`**: per-face scalars → `(N, H, W, K)` float32 textures, shared by every stage that rasterises a per-face field (elevation, temperature, humidity, fertility, forest, coast smoothness). Each texel takes the Wendland-C² kernel-weighted mean of the face values whose centroids lie within `support_spacings` mean centroid spacings of its 3-D position (a face's centre keeps ~½ of its own value). The texture is a function of position alone, so faces agree on their seams and over-hangs, and its gradient is continuous. (The earlier piecewise-linear fan interpolation over each polygon creased at every face edge and fan diagonal, and flattened a lone high face into a hexagonal plateau at ⅓ of its height.)
 
 **`compute_ocean_mask_texture(mesh, elevation_textures)`**: pixel-level ocean flood fill. Faces whose max elevation ≤ −0.5 km seed it; it spreads to adjacent faces at or below sea level, then pixel by pixel (4-connected within a face, across faces via matched seam pixel pairs). Sub-sea-level depressions no ocean reaches stay land. The region tier runs a level-constrained version of the same flood over its refined relief.
 

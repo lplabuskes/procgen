@@ -106,9 +106,17 @@ with ~4.5 km texels.
 - `locate(points) → (faces, u, v)` — owning face by nearest centroid (a KD-tree
   over `mesh.face_centroids`), then that face's tangent-frame UV.
 - `sample(texture, faces, u, v)` — **bilinear** read of any `(N, H, W, C)` face
-  texture → `(P, C)`. This is the smooth coarse field.
+  texture → `(P, C)`. This is the smooth coarse field. A point just outside its
+  face's UV square (the Voronoi cell pokes past it near some corners) is
+  extrapolated from the edge texels, not clamped.
 - `anchors(faces, u, v, H, W)` — the flat index `face*H*W + row*W + col` of the
-  **nearest** global texel. The anchor is the conservation target.
+  global texel **owning** the point: the owning face's nearest texel, passed
+  through `owners`. The anchor is the conservation target.
+- `owners(H, W)` — for every global texel, the texel owning its *position*: itself
+  when its centre lies in its own face's territory, else the neighbouring face's
+  texel there (seam duplicates, the over-hang past each polygon). Made
+  idempotent by `settle_owners`, so every anchor owns itself — which
+  `conserve_smooth` needs to converge ([region_fields.md](region_fields.md#refinement-regionupsamplepy)).
 - `anchor_values(texture, anchors)` — that texel's exact global value.
 
 `anchor_means(values, anchors, weights, n_anchors)` reduces per-anchor with the
@@ -120,11 +128,11 @@ the globe ([realm_refine.md](realm_refine.md)).
 `refine_fields` reads the tier above only through a `ParentSource`: `locate`
 (→ a `Located` with each texel's anchor), `coarse` (bilinear read), `anchor_values`,
 `stencil` / `interpolate` (a smooth read of a per-anchor field, its corners mapped
-through an *owner* map so a texture's over-hang reads its neighbour's values),
+through the `owners` map so a texture's over-hang reads its neighbour's values),
 `slope`, `danger`, `has`, `n_anchors` and `spacing_rad`.
 
 - `GlobalSource(globe)` — the mesh's face textures; slope from `global_slope`; danger made continuous by `FaceFanField`.
-- `RegionSource(fields)` — a region's hex textures, for a local map: points are placed in the region's `(s, t)` frame on the nearest hex and read through its over-hang; slope is the refined slope; danger is the region's (already continuous) texture.
+- `RegionSource(fields)` — a region's hex textures, for a local map: points are placed in the region's `(s, t)` frame on the nearest hex and read through its over-hang, and anchored on the texel owning their nearest one, as on the globe; slope is the refined slope; danger is the region's (already continuous) texture.
 
 ## `RegionParams` (`region/params.py`)
 

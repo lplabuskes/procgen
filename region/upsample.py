@@ -549,6 +549,11 @@ def conserve_smooth(
     step then fixes the crumbs — plus the slivers of parent texels a map's rim
     cuts off, which a smooth field can barely reach.  Multiplicative mode works
     in log space, so the field stays positive.
+
+    The passes converge because every anchor owns its own position
+    (:meth:`ParentSource.owners`), so the stencil reading its correction is the
+    one its own samples sit under.  An anchor whose correction no read touches
+    has no say over its own mean, and enough of those make the passes diverge.
     """
     anchors, n = loc.anchors, source.n_anchors
     tgt = np.zeros((n, targets.shape[1]))
@@ -565,7 +570,9 @@ def conserve_smooth(
             resid = np.clip(resid, -3.0, 3.0)
         else:
             resid = np.where(live[:, None], tgt - means, 0.0)
-        well_covered = counts >= 0.5 * counts.max(initial=0.0)
+        # A few anchors collect far more samples than the rest (clamped reads
+        # piling onto a texture's corner), so coverage is judged by the median.
+        well_covered = counts >= 0.5 * np.median(counts[live]) if live.any() else live
         worst = float(np.abs(resid[well_covered]).max(initial=0.0))
         if worst >= best:            # a pass stopped helping: keep the best so far
             v = kept

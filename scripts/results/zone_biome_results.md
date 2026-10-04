@@ -29,21 +29,15 @@ Each row is the average across all seeds in that run.
 | 2026-05-25 | 42 137 999 1713815978 1156185613 466736726 1775032638 2019076478 184151287 916428344 | 22.0% | 20.0% | 13.9% | 15.2% | 2953 | scale=2000mm decay=0.030 evap=1.00 oro_k=0.40 |
 | 2026-05-25 | 42 137 999 1713815978 1156185613 466736726 1775032638 2019076478 184151287 916428344 | 23.0% | 21.0% | 27.4% | 15.2% | 2953 | scale=2000mm decay=0.030 evap=1.00 oro_k=0.40 |
 | 2026-05-25 | 42 137 999 1713815978 1156185613 466736726 1775032638 2019076478 184151287 916428344 | 23.1% | 21.1% | 20.0% | 15.2% | 2953 | scale=2000mm decay=0.030 evap=1.00 oro_k=0.40 |
+| 2026-10-04 | 42 137 999 | 12.9% | 11.4% | 13.6% | 17.1% | 2244 | scale=2000mm decay=0.030 evap=1.00 oro_k=0.40 |
 
 ## Per-Seed Detail (latest run)
 
 | Seed | T±23.5% | T±30.0% | Sav±30% | Des±30% | eq_P(mm) |
 |------|---------|---------|---------|---------|----------|
-| 42 | 22.3% | 22.1% | 11.1% | 0.0% | 3926 |
-| 137 | 21.0% | 18.1% | 16.3% | 23.3% | 1522 |
-| 999 | 22.6% | 18.3% | 15.8% | 28.9% | 4901 |
-| 1713815978 | 5.4% | 4.4% | 9.8% | 21.2% | 1885 |
-| 1156185613 | 22.4% | 19.5% | 14.6% | 12.3% | 3755 |
-| 466736726 | 25.6% | 21.8% | 28.3% | 27.1% | 3237 |
-| 1775032638 | 35.2% | 34.0% | 34.4% | 0.0% | 3030 |
-| 2019076478 | 42.5% | 41.7% | 33.8% | 0.0% | 3175 |
-| 184151287 | 17.1% | 15.9% | 19.2% | 15.3% | 2233 |
-| 916428344 | 16.6% | 15.0% | 16.5% | 24.0% | 1862 |
+| 42 | 13.6% | 12.0% | 15.8% | 28.0% | 1847 |
+| 137 | 11.6% | 11.0% | 7.3% | 0.0% | 2495 |
+| 999 | 13.6% | 11.1% | 17.8% | 23.2% | 2389 |
 
 ### Biome distribution in ±30° land (latest run)
 
@@ -51,139 +45,41 @@ Each row is the average across all seeds in that run.
 
 | Biome | % of ±30° land |
 |-------|---------------|
-| Temperate | 62.0% |
-| Tropical | 22.1% |
-| Savannah | 11.1% |
-| Tundra | 4.8% |
+| Desert | 28.0% |
+| Temperate | 20.7% |
+| Savannah | 15.8% |
+| Steppe | 12.4% |
+| Tropical | 12.0% |
+| Tundra | 6.5% |
+| Semi-Arid | 4.7% |
 | Icecap | 0.0% |
 | Taiga | 0.0% |
-| Steppe | 0.0% |
-| Semi-Arid | 0.0% |
-| Desert | 0.0% |
 
 **seed=137**
 
 | Biome | % of ±30° land |
 |-------|---------------|
-| Desert | 23.3% |
-| Temperate | 21.2% |
-| Tropical | 18.1% |
-| Savannah | 16.3% |
-| Semi-Arid | 10.0% |
-| Steppe | 9.2% |
-| Tundra | 2.0% |
-| Icecap | 0.0% |
+| Temperate | 39.7% |
+| Tundra | 21.2% |
+| Icecap | 17.2% |
+| Tropical | 11.0% |
+| Savannah | 7.3% |
+| Semi-Arid | 1.9% |
+| Steppe | 1.6% |
 | Taiga | 0.0% |
+| Desert | 0.0% |
 
 **seed=999**
 
 | Biome | % of ±30° land |
 |-------|---------------|
-| Temperate | 29.6% |
-| Desert | 28.9% |
-| Tropical | 18.3% |
-| Savannah | 15.8% |
-| Semi-Arid | 7.4% |
-| Icecap | 0.0% |
-| Tundra | 0.0% |
-| Taiga | 0.0% |
-| Steppe | 0.0% |
-
-**seed=1713815978**
-
-| Biome | % of ±30° land |
-|-------|---------------|
-| Temperate | 44.0% |
-| Desert | 21.2% |
-| Semi-Arid | 10.0% |
-| Savannah | 9.8% |
+| Temperate | 31.7% |
+| Desert | 23.2% |
+| Savannah | 17.8% |
+| Tropical | 11.1% |
+| Steppe | 6.1% |
 | Tundra | 5.2% |
-| Steppe | 4.8% |
-| Tropical | 4.4% |
-| Icecap | 0.6% |
-| Taiga | 0.0% |
-
-**seed=1156185613**
-
-| Biome | % of ±30° land |
-|-------|---------------|
-| Temperate | 37.8% |
-| Tropical | 19.5% |
-| Savannah | 14.6% |
-| Desert | 12.3% |
-| Semi-Arid | 5.6% |
-| Steppe | 5.5% |
-| Tundra | 4.7% |
-| Icecap | 0.0% |
-| Taiga | 0.0% |
-
-**seed=466736726**
-
-| Biome | % of ±30° land |
-|-------|---------------|
-| Savannah | 28.3% |
-| Desert | 27.1% |
-| Tropical | 21.8% |
-| Temperate | 16.7% |
-| Semi-Arid | 5.8% |
-| Steppe | 0.4% |
-| Icecap | 0.0% |
-| Tundra | 0.0% |
-| Taiga | 0.0% |
-
-**seed=1775032638**
-
-| Biome | % of ±30° land |
-|-------|---------------|
-| Savannah | 34.4% |
-| Tropical | 34.0% |
-| Temperate | 30.1% |
-| Semi-Arid | 1.6% |
-| Icecap | 0.0% |
-| Tundra | 0.0% |
-| Taiga | 0.0% |
-| Steppe | 0.0% |
-| Desert | 0.0% |
-
-**seed=2019076478**
-
-| Biome | % of ±30° land |
-|-------|---------------|
-| Tropical | 41.7% |
-| Savannah | 33.8% |
-| Temperate | 22.2% |
-| Semi-Arid | 2.3% |
-| Icecap | 0.0% |
-| Tundra | 0.0% |
-| Taiga | 0.0% |
-| Steppe | 0.0% |
-| Desert | 0.0% |
-
-**seed=184151287**
-
-| Biome | % of ±30° land |
-|-------|---------------|
-| Temperate | 22.5% |
-| Savannah | 19.2% |
-| Tropical | 15.9% |
-| Desert | 15.3% |
-| Steppe | 12.9% |
-| Tundra | 8.3% |
-| Semi-Arid | 5.9% |
+| Semi-Arid | 4.9% |
 | Icecap | 0.1% |
-| Taiga | 0.0% |
-
-**seed=916428344**
-
-| Biome | % of ±30° land |
-|-------|---------------|
-| Temperate | 25.1% |
-| Desert | 24.0% |
-| Savannah | 16.5% |
-| Tropical | 15.0% |
-| Semi-Arid | 12.6% |
-| Tundra | 4.2% |
-| Steppe | 2.6% |
-| Icecap | 0.0% |
 | Taiga | 0.0% |
 

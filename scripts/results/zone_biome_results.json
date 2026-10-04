@@ -1222,5 +1222,74 @@
         }
       }
     ]
+  },
+  {
+    "timestamp": "2026-10-04T17:12:41.702199",
+    "params_summary": "scale=2000mm decay=0.030 evap=1.00 oro_k=0.40",
+    "results": [
+      {
+        "seed": 42,
+        "n_land_faces": 4263,
+        "pct_global": 7.4,
+        "pct_23_5": 13.6,
+        "pct_30_0": 12.0,
+        "sav_30_0": 15.8,
+        "des_30_0": 28.0,
+        "mean_eq_precip_mm": 1847.0,
+        "biome_dist_30": {
+          "Icecap": 0.0,
+          "Tundra": 6.5,
+          "Taiga": 0.0,
+          "Temperate": 20.7,
+          "Steppe": 12.4,
+          "Savannah": 15.8,
+          "Tropical": 12.0,
+          "Semi-Arid": 4.7,
+          "Desert": 28.0
+        }
+      },
+      {
+        "seed": 137,
+        "n_land_faces": 1781,
+        "pct_global": 8.1,
+        "pct_23_5": 11.6,
+        "pct_30_0": 11.0,
+        "sav_30_0": 7.3,
+        "des_30_0": 0.0,
+        "mean_eq_precip_mm": 2495.0,
+        "biome_dist_30": {
+          "Icecap": 17.2,
+          "Tundra": 21.2,
+          "Taiga": 0.0,
+          "Temperate": 39.7,
+          "Steppe": 1.6,
+          "Savannah": 7.3,
+          "Tropical": 11.0,
+          "Semi-Arid": 1.9,
+          "Desert": 0.0
+        }
+      },
+      {
+        "seed": 999,
+        "n_land_faces": 5907,
+        "pct_global": 5.3,
+        "pct_23_5": 13.6,
+        "pct_30_0": 11.1,
+        "sav_30_0": 17.8,
+        "des_30_0": 23.2,
+        "mean_eq_precip_mm": 2389.0,
+        "biome_dist_30": {
+          "Icecap": 0.1,
+          "Tundra": 5.2,
+          "Taiga": 0.0,
+          "Temperate": 31.7,
+          "Steppe": 6.1,
+          "Savannah": 17.8,
+          "Tropical": 11.1,
+          "Semi-Arid": 4.9,
+          "Desert": 23.2
+        }
+      }
+    ]
   }
 ]

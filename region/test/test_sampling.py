@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from region.sampling import GlobalSampler, anchor_means
+from region.sampling import GlobalSampler, anchor_means, settle_owners
 
 
 def test_locate_returns_nearest_face(synthetic_globe):
@@ -61,12 +61,31 @@ def test_anchors_are_in_range_and_stable(synthetic_globe):
     anchors = sampler.anchors(faces, u, v, h, w)
     assert anchors.min() >= 0
     assert anchors.max() < len(mesh.faces) * h * w
-    # The anchor's texel value is what a nearest-neighbour read would give.
+    # The anchor's value is its own texel's — usually in the located face, but
+    # a point by a seam may belong to the neighbour's texel there.
     tex = mesh.face_textures["elevation"]
     values = sampler.anchor_values(tex, anchors)
+    a_faces = anchors // (h * w)
     rows = (anchors // w) % h
     cols = anchors % w
-    assert np.allclose(values[:, 0], tex[faces, rows, cols, 0])
+    assert np.allclose(values[:, 0], tex[a_faces, rows, cols, 0])
+    assert np.mean(a_faces == faces) > 0.8
+    # Every anchor owns itself, and its texel centre is near the point: within
+    # a texel normally, two hops of under a texel each for a seam's remap.
+    assert np.array_equal(sampler.owners(h, w)[anchors], anchors)
+    centres = mesh.face_texture_positions(h, w).reshape(-1, 3)[anchors]
+    spacing = np.sqrt(np.mean(mesh.face_areas)) / (w - 1)
+    assert np.max(np.linalg.norm(centres - pts, axis=1)) < 2.0 * spacing
+
+
+def test_owners_are_idempotent_and_mostly_self(synthetic_globe):
+    mesh = synthetic_globe.mesh
+    sampler = GlobalSampler(mesh)
+    h, w = mesh.face_textures["elevation"].shape[1:3]
+    owner = sampler.owners(h, w)
+    assert np.array_equal(owner[owner], owner)
+    # Only the seams and the over-hang past each polygon belong to a neighbour.
+    assert 0.5 < np.mean(owner == np.arange(owner.size)) < 1.0
 
 
 def test_anchor_means_ignores_zero_weight_samples():
@@ -77,3 +96,11 @@ def test_anchor_means_ignores_zero_weight_samples():
     assert means[0, 0] == pytest.approx(2.0)
     assert counts[0] == 2.0
     assert counts[1] == 0.0
+
+
+def test_settle_owners_resolves_chains_and_cycles():
+    # 0 self; 1→0 chain; 2→3→4→2 cycle with 5→2 feeding it; 6↔7 two-cycle.
+    owner = np.array([0, 0, 3, 4, 2, 2, 7, 6])
+    settled = settle_owners(owner)
+    assert np.array_equal(settled[settled], settled)
+    assert np.array_equal(settled, [0, 0, 2, 2, 2, 2, 6, 6])

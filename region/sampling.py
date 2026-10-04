@@ -40,6 +40,7 @@ class GlobalSampler:
         self._u_ranges = np.asarray(frames[4], dtype=np.float64)
         self._v_ranges = np.asarray(frames[5], dtype=np.float64)
         self._tangent_centroids = np.asarray(mesh._tangent_centroids, dtype=np.float64)
+        self._owners: dict[tuple[int, int], np.ndarray] = {}
 
     def locate(self, points: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """``(P, 3)`` unit-sphere points → ``(faces, u, v)``, each ``(P,)``.
@@ -68,10 +69,17 @@ class GlobalSampler:
     def sample(
         self, texture: np.ndarray, faces: np.ndarray, u: np.ndarray, v: np.ndarray
     ) -> np.ndarray:
-        """Bilinear read of an ``(N, H, W, C)`` texture → ``(P, C)`` float64."""
+        """Bilinear read of an ``(N, H, W, C)`` texture → ``(P, C)`` float64.
+
+        A point just outside its face's texture square (the face's Voronoi cell
+        pokes past it near some corners) is extrapolated from the edge texels
+        rather than clamped, so the read keeps its slope there instead of
+        flattening into a wedge.
+        """
         tex = np.asarray(texture)
         _, h, w, c = tex.shape
-        x, y = self._texel_coords(u, v, h, w)
+        x = np.clip(u, -0.5, 1.5) * (w - 1)
+        y = np.clip(v, -0.5, 1.5) * (h - 1)
         x0 = np.clip(np.floor(x).astype(np.int64), 0, max(w - 2, 0))
         y0 = np.clip(np.floor(y).astype(np.int64), 0, max(h - 2, 0))
         x1 = np.minimum(x0 + 1, w - 1)
@@ -89,17 +97,76 @@ class GlobalSampler:
     def anchors(
         self, faces: np.ndarray, u: np.ndarray, v: np.ndarray, h: int, w: int
     ) -> np.ndarray:
-        """``(P,)`` flat index ``face*H*W + row*W + col`` of the nearest global texel."""
+        """``(P,)`` flat index ``face*H*W + row*W + col`` of the global texel owning each point.
+
+        The nearest texel of the owning face, passed through :meth:`owners`: a
+        point within half a texel of a seam can be nearest a texel whose own
+        centre lies across the seam, and then belongs to the neighbour's texel
+        there instead, so every anchor's points sit around its own centre.
+        """
+        return self.owners(h, w)[self._nearest_texels(faces, u, v, h, w)]
+
+    def _nearest_texels(
+        self, faces: np.ndarray, u: np.ndarray, v: np.ndarray, h: int, w: int
+    ) -> np.ndarray:
         x, y = self._texel_coords(u, v, h, w)
         col = np.clip(np.rint(x).astype(np.int64), 0, w - 1)
         row = np.clip(np.rint(y).astype(np.int64), 0, h - 1)
         return faces * (h * w) + row * w + col
+
+    def owners(self, h: int, w: int) -> np.ndarray:
+        """``(N*H*W,)`` the texel owning each global texel's position.
+
+        Its own index when the texel's centre lies in its own face's territory
+        (nearest centroid); otherwise the neighbouring face's texel nearest it.
+        A seam's duplicated edge texels both point at one of the pair; the
+        over-hang past a face's polygon points at the neighbour.  Idempotent:
+        an owner owns itself.
+        """
+        cached = self._owners.get((h, w))
+        if cached is not None:
+            return cached
+        n = len(self._u_axes)
+        uu = np.linspace(0.0, 1.0, w)[None, None, :, None]
+        vv = np.linspace(0.0, 1.0, h)[None, :, None, None]
+        pos = (
+            self._tangent_centroids[:, None, None, :]
+            + (self._u_offsets[:, None, None, None] + uu * self._u_ranges[:, None, None, None])
+            * self._u_axes[:, None, None, :]
+            + (self._v_offsets[:, None, None, None] + vv * self._v_ranges[:, None, None, None])
+            * self._v_axes[:, None, None, :]
+        ).reshape(n * h * w, 3)
+        owner = settle_owners(self._nearest_texels(*self.locate(pos), h, w))
+        self._owners[(h, w)] = owner
+        return owner
 
     @staticmethod
     def anchor_values(texture: np.ndarray, anchors: np.ndarray) -> np.ndarray:
         """``(P, C)`` value of each anchor texel in an ``(N, H, W, C)`` texture."""
         tex = np.asarray(texture)
         return tex.reshape(-1, tex.shape[3])[anchors].astype(np.float64)
+
+
+def settle_owners(owner: np.ndarray) -> np.ndarray:
+    """Make a texel → owning-texel map idempotent (every owner owns itself).
+
+    An owner's own centre can lie just across another seam, so ownership forms
+    chains — and, where duplicated seam texels each sit a hair inside the
+    other's territory, cycles.  Chains are followed to the cycle they end on
+    (a fixed point is a cycle of one), and each cycle goes to its smallest member.
+    """
+    owner = np.asarray(owner, dtype=np.int64)
+    landed = owner.copy()
+    for _ in range(16):                       # owner^(2^16): every chain reaches its cycle
+        nxt = landed[landed]
+        if np.array_equal(nxt, landed):
+            return landed
+        landed = nxt
+    rep, cur = landed.copy(), owner[landed]
+    for _ in range(16):                       # min over each (short) cycle
+        rep = np.minimum(rep, cur)
+        cur = owner[cur]
+    return rep
 
 
 def anchor_means(

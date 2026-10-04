@@ -39,7 +39,14 @@ stops helping. Then the exact constant step (`conserve_additive` /
 a map's rim cuts off. The stencil's corners go through an *owner* map (the
 anchor owning each parent texel's position), so a texture's over-hang reads its
 neighbour's residual and the correction stays continuous across hex and face
-seams. Precipitation runs in log space, so it stays positive.
+seams. The passes only converge because every anchor owns its own position
+(`ParentSource.owners`): an anchor whose correction no stencil reads has no say
+over its own mean, and when ~10% of anchors were like that (a child sample's
+nearest global texel often being a seam duplicate or over-hang texel) the passes
+diverged after two or three, leaving ~10 m rms — and hundreds of metres along
+face seams — to the exact step, which drew every parent texel as a block.
+Owner-anchored, they shrink the residual ~2× per pass and the exact step is
+~0.1 m. Precipitation runs in log space, so it stays positive.
 
 **Elevation is the only field with a noise stream.** Everything else is a
 physical consequence of the refined relief, or is copied verbatim. Independent

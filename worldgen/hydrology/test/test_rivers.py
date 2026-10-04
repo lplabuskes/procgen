@@ -160,9 +160,10 @@ def _make_rivers_for_seed(seed: int) -> list[River]:
 # accumulation tree and each river is smoothed independently, so where two
 # smoothed arcs intersect nothing removes them (the old flow-based truncation
 # was dropped because it chopped long modest-flow rivers at high-flow crossings).
-# These per-seed counts are the baseline at the time truncation was removed; the
-# test is a ratchet that only fails if a change makes the overlaps *worse*.
-_MAX_INTER_RIVER_CROSSINGS = {0: 5, 7: 9, 42: 7}
+# These per-seed counts are the baseline since the smooth (kernel) face-value
+# rasteriser replaced the piecewise-linear one (was 5/9/7 before it); the test is
+# a ratchet that only fails if a change makes the overlaps *worse*.
+_MAX_INTER_RIVER_CROSSINGS = {0: 6, 7: 2, 42: 3}
 
 
 @pytest.fixture(scope="module", params=[0, 7, 42])
