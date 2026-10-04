@@ -30,6 +30,7 @@ source .venv/bin/activate
 ```bash
 python3 main.py               # full world viewer (globe + settlements)
 python3 main.py --debug       # same, with extra diagnostic color schemes
+python3 main.py --projection=mollweide   # robinson (default), mollweide, mercator, equirectangular
 python3 main.py world.npz     # load a previously saved world
 ```
 

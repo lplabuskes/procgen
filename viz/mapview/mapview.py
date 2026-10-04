@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QPushButton,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -25,7 +26,7 @@ from region.display import describe_texel
 from region.geometry import RegionGeometry, cell_border_polylines, ecef_to_cell
 from viz.mapview.legend import draw_legend
 from viz.mapview.overlays import draw_overlays
-from viz.mapview.projections import ALL_PROJECTIONS, RobinsonProjection, Projection
+from viz.mapview.projections import RobinsonProjection, Projection
 from viz.mapview.regionview import RegionView
 
 # (face, uv, local) -> status fragments; see ``MapWindow.set_hover_parts``.
@@ -780,7 +781,7 @@ class MapWidget(QWidget):
 
 
 class MapWindow(QMainWindow):
-    def __init__(self, mesh: Optional[PolygonMesh] = None, debug: bool = False) -> None:
+    def __init__(self, mesh: Optional[PolygonMesh] = None, projection: Optional[Projection] = None) -> None:
         super().__init__()
         self.setWindowTitle("Map Viewer")
         self.resize(900, 500)
@@ -798,18 +799,6 @@ class MapWindow(QMainWindow):
         self._save_btn.setVisible(False)
         self._has_save_callback = False
         toolbar_layout.addWidget(self._save_btn)
-
-        self._proj_label = QLabel("Projection:")
-        self._proj_label.setVisible(debug)
-        toolbar_layout.addWidget(self._proj_label)
-        self._combo = QComboBox()
-        for proj in ALL_PROJECTIONS:
-            self._combo.addItem(proj.name)
-        self._combo.currentIndexChanged.connect(
-            lambda i: self._map.set_projection(ALL_PROJECTIONS[i])
-        )
-        self._combo.setVisible(debug)
-        toolbar_layout.addWidget(self._combo)
 
         self._color_label = QLabel("Coloration:")
         self._color_combo = QComboBox()
@@ -863,8 +852,10 @@ class MapWindow(QMainWindow):
         self._prev_status = ""
         self._status_label = QLabel("")
         self._status_label.setStyleSheet("color: #aaaaaa; font-size: 11px;")
-        bottom_layout.addWidget(self._status_label)
-        bottom_layout.addStretch()
+        # Long (hover) text is clipped, never widens the window: a minimum width
+        # above the window's own makes macOS squash the whole UI horizontally.
+        self._status_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        bottom_layout.addWidget(self._status_label, stretch=1)
         self._params_btn = QPushButton("Parameters…")
         self._params_btn.setVisible(False)
         self._has_params_callback = False
@@ -875,6 +866,8 @@ class MapWindow(QMainWindow):
         bottom_layout.addWidget(self._rerun_btn)
 
         self._map = MapWidget()
+        if projection is not None:
+            self._map.set_projection(projection)
         self._region_view = RegionView()
         self._color_combo.currentTextChanged.connect(self._on_scheme_changed)
         self._hover_parts: Optional[HoverPartsFn] = None

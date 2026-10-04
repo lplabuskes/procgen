@@ -68,7 +68,7 @@ Splits a unit-sphere polygon at a cut meridian.
 
 Hosts the views with a toolbar and bottom bar.
 
-**Toolbar**: Save button, Projection combo (`ALL_PROJECTIONS`; `--debug` only), Coloration combo (scheme names), Overlays dropdown menu (one checkable `QAction` per overlay), Regions toggle, Back button ("← World Map" in a region, "← Region" on a local map), **Local maps** toggle (in a region: click a hex to open its local map), zoom −/+/Reset (routed to whichever view is showing).
+**Toolbar**: Save button, Coloration combo (scheme names), Overlays dropdown menu (one checkable `QAction` per overlay), Regions toggle, Back button ("← World Map" in a region, "← Region" on a local map), **Local maps** toggle (in a region: click a hex to open its local map), zoom −/+/Reset (routed to whichever view is showing).
 
 **Views**: a `QStackedWidget` of the world map, a `RegionView` for the region and a second `RegionView` for local maps — see [viz_regionview.md](viz_regionview.md) for how they are entered, kept in sync and tuned.
 
@@ -124,7 +124,7 @@ All projections share a `Projection` base class with `project(ecef_vertices)`, `
 - **`MollweideProjection`**: Equal-area pseudocylindrical; auxiliary angle θ solved by 10 Newton iterations; u = √2·(lon/π)·cos θ, v = √2·sin θ.
 - **`RobinsonProjection`**: Table-based compromise; parallel lengths and y-offsets interpolated from Robinson lookup tables at 5° latitude steps. The default.
 
-`ALL_PROJECTIONS` is the ordered list used to populate the projection combo.
+`ALL_PROJECTIONS` lists them; `projection_by_name(name)` (case-insensitive) resolves `main.py --projection=NAME`, which is passed to `MapWindow(projection=...)` (Robinson when omitted).
 
 ---
 
@@ -144,7 +144,7 @@ What it does:
 
 ## `viz/mapview/main.py` — Dev entry point
 
-Creates an `icosphere(depth=4)`, deregularises it, computes its dual, builds a radial-gradient per-face texture tinted by each face's random colour, and opens a `MapWindow` (`debug=True`). Used for testing the projection and rendering stack without running the full pipeline.
+Creates an `icosphere(depth=4)`, deregularises it, computes its dual, builds a radial-gradient per-face texture tinted by each face's random colour, and opens a `MapWindow`. Used for testing the projection and rendering stack without running the full pipeline.
 
 ---
 

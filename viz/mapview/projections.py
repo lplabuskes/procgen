@@ -144,3 +144,12 @@ ALL_PROJECTIONS: list[Projection] = [
     MercatorProjection(),
     EquirectangularProjection(),
 ]
+
+
+def projection_by_name(name: str) -> Projection:
+    """The projection called ``name`` (case-insensitive), e.g. for a command-line flag."""
+    for proj in ALL_PROJECTIONS:
+        if proj.name.lower() == name.lower():
+            return proj
+    choices = ", ".join(p.name.lower() for p in ALL_PROJECTIONS)
+    raise ValueError(f"unknown projection {name!r} (choose from {choices})")

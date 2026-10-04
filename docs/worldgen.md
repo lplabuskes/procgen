@@ -36,3 +36,4 @@ On each run: creates `World(globe_params.mesh, seed=...)` (a random seed is draw
 - **Parameters** opens `AppParamsDialog`; an edit that only touches `region` / `local` re-refines the views, anything else rebuilds the world.
 - **Save** writes a `.npz` with `core.persistence.save_world` over the `AppPipeline` + `AppParams`; `python3 main.py path.npz` loads one (`load_world`, then each stage's `load`).
 - `--debug` enables the debug layers and overlays.
+- `--projection=NAME` picks the world map's projection (`robinson` — the default — `mollweide`, `mercator`, `equirectangular`).

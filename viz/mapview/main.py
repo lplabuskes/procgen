@@ -27,6 +27,6 @@ if __name__ == "__main__":
     alpha = np.ones((N, H, W, 1), dtype=np.float32)
     dual.set_face_textures("default", np.concatenate([color_data, alpha], axis=3))
 
-    window = MapWindow(mesh=dual, debug=True)
+    window = MapWindow(mesh=dual)
     window.show()
     sys.exit(app.exec())

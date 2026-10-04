@@ -9,6 +9,7 @@ from core.persistence import load_world, save_world
 from core.pipeline import BuildContext, Pipeline
 from core.world import World
 from viz.mapview.mapview import MapWindow
+from viz.mapview.projections import projection_by_name
 from viz.params_dialog import ParamsDialog
 from realmgen.builder import RealmParams, RealmPipeline
 from localmap.params import LocalParams
@@ -58,10 +59,13 @@ class AppParamsDialog(ParamsDialog):
 def main() -> None:
     debug = "--debug" in sys.argv
     file_arg = next((a for a in sys.argv[1:] if not a.startswith("-")), None)
+    # --projection=NAME picks the world map's projection; Robinson when absent.
+    proj_arg = next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--projection=")), None)
+    projection = projection_by_name(proj_arg) if proj_arg is not None else None
 
     app = QApplication(sys.argv)
 
-    window = MapWindow(debug=debug)
+    window = MapWindow(projection=projection)
     window.setWindowTitle("Procedural World")
 
     current_params: list[AppParams] = [AppParams()]
