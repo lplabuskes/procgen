@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from region.rivers import RegionRiverParams, RegionRivers, RiverPath
 
 # Edge cost multiplier for a branch over water before its mouth.
-_WATER_COST = 50.0
+WATER_COST = 50.0
 # A branch's guide is bent through one control point this far along it.
 _BEND_AT = 0.5
 # Mouths closer than this many raster nodes to one already taken are dropped.
@@ -188,7 +188,7 @@ def _node_cost(raster: Raster, plain: np.ndarray, params: DistributaryParams) ->
     else:
         mean, spread = 0.0, 1.0
     cost = np.exp(np.clip(float(params.valley_seeking) * (anomaly - mean) / spread, -20.0, 20.0))
-    return np.where(raster.water, cost * _WATER_COST, cost)
+    return np.where(raster.water, cost * WATER_COST, cost)
 
 
 def _route_branch(

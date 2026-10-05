@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
+from scipy.spatial import KDTree
 
 from core.params import param_field as _f, paramclass
 from region.corridor import node_spacing_rad, raster_frame
@@ -23,6 +24,9 @@ from region.upsample import RegionFields
 
 if TYPE_CHECKING:
     from core.world import World
+
+# Chord under which two path vertices are one point (~0.6 m; region vertices are float32).
+_SAME_POINT = 1e-7
 
 
 @paramclass
@@ -51,16 +55,34 @@ def _runs(inside: np.ndarray) -> list[tuple[int, int]]:
     return list(zip(starts.tolist(), ends.tolist()))
 
 
+def _starts_on_path(rivers: list[RiverPath]) -> np.ndarray:
+    """Per path, whether its first vertex is a vertex of another path (a delta branch leaving its parent)."""
+    out = np.zeros(len(rivers), dtype=bool)
+    owner = np.concatenate([np.full(len(p[0]), k) for k, p in enumerate(rivers)] or [np.zeros(0, np.int64)])
+    if owner.size == 0:
+        return out
+    tree = KDTree(np.concatenate([np.asarray(p[0], dtype=np.float64).reshape(-1, 3) for p in rivers]))
+    for k, (positions, _, _) in enumerate(rivers):
+        if len(positions):
+            near = tree.query_ball_point(np.asarray(positions[0], dtype=np.float64), _SAME_POINT)
+            out[k] = bool(np.any(owner[near] != k))
+    return out
+
+
 def _region_paths(
     local: RegionFields, rivers: list[RiverPath], lo: float, hi: float, minor: bool = False,
 ) -> list[StreamPath]:
     """The region's river paths inside the local raster, largest flow first.
 
     One run per visit to the raster; a run ``ends_here`` (on a sink or stem, not
-    the raster edge) only when it holds the region path's last vertex.
+    the raster edge) only when it holds the region path's last vertex.  Each
+    keeps to land where the region's path is drawn, and a run holding the first
+    vertex of a path that starts on another (a delta distributary) starts on its
+    re-route.
     """
     out: list[StreamPath] = []
-    for positions, flows, _ in rivers:
+    starts = _starts_on_path(rivers)
+    for k, (positions, flows, in_water) in enumerate(rivers):
         pts = np.asarray(positions, dtype=np.float64)
         f = np.asarray(flows, dtype=np.float64)
         if len(pts) < 2:
@@ -73,6 +95,8 @@ def _region_paths(
             out.append(StreamPath(
                 s=s[i:j + 1], t=t[i:j + 1], edge_flows=np.maximum.accumulate(f[i:j]),
                 ends_here=j == len(pts) - 1, minor=minor,
+                hidden_edges=np.asarray(in_water, dtype=bool)[i:j],
+                starts_on_path=i == 0 and bool(starts[k]),
             ))
     out.sort(key=lambda p: -float(p.edge_flows.max()))
     return out

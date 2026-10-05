@@ -5,7 +5,7 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
 
-from localmap.rivers import build_local_rivers
+from localmap.rivers import _starts_on_path, build_local_rivers
 from localmap.roads import build_local_roads
 from localmap.test.conftest import local_params
 from localmap.upsample import build_local_fields
@@ -60,6 +60,14 @@ def test_local_rivers_are_deterministic(local, region, region_rivers, globe, riv
     assert len(again.paths) == len(rivers.paths)
     for (a, _, _), (b, _, _) in zip(rivers.paths, again.paths):
         assert np.array_equal(a, b)
+
+
+def test_branches_are_told_by_starting_on_another_path():
+    a = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], dtype=np.float32)
+    branch = np.array([[0.0, 1.0, 0.0], [0.6, 0.8, 0.0]], dtype=np.float32)
+    lone = np.array([[0.6, 0.0, 0.8], [0.8, 0.0, 0.6]], dtype=np.float32)
+    paths = [(p, np.ones(len(p) - 1), np.zeros(len(p) - 1, dtype=bool)) for p in (a, branch, lone)]
+    assert _starts_on_path(paths).tolist() == [False, True, False]
 
 
 def test_no_region_rivers_no_local_rivers(local, region, globe):

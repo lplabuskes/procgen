@@ -2,7 +2,10 @@
 import numpy as np
 import pytest
 
-from region.rivers import RegionRiverParams, _hide_reentries, build_region_rivers
+from region.corridor import Raster
+from region.rivers import (
+    RegionRiverParams, _hide_reentries, _route_run, _start_on_drawn, _water_factor, build_region_rivers,
+)
 from region.upsample import RegionUpsampleParams, build_region_fields
 
 REGION_ID = 40   # coast, a lake and a peak (see conftest)
@@ -130,3 +133,36 @@ def test_leaving_and_reentering_one_lake_stays_hidden():
     bodies = np.array([0, 1, 1, 0, 0, 1, 0, 0, 2, 0])
     hidden = _hide_reentries(bodies > 0, bodies)
     assert hidden.tolist() == [False, True, True, True, True, True, False, False, True, False]
+
+
+def _bay_raster(n: int = 21) -> Raster:
+    """Unit-step raster, ground falling eastward into a bay (cols ≥ 12, rows 5–15)."""
+    rows, cols = np.divmod(np.arange(n * n), n)
+    ocean = (cols >= 12) & (rows >= 5) & (rows <= 15)
+    return Raster(lo=0.0, step=1.0, n=n, sampled=np.ones(n * n, dtype=bool), positions=np.zeros((n * n, 3)),
+                  values={}, anomaly=-0.1 * cols, ocean=ocean, lake=np.zeros(n * n, dtype=bool))
+
+
+def test_a_reroute_keeps_to_land_where_its_parent_does():
+    raster = _bay_raster()
+    s, t = np.full(2, 10.0), np.array([0.0, 20.0])
+    no_sinks = np.zeros(raster.n ** 2, dtype=bool)
+    params = RegionRiverParams()
+    free = _route_run(raster, s, t, 3.0, no_sinks, False, params)
+    assert free is not None and raster.water[free].any()      # valley-seeking hugs the bay
+    dry = _route_run(raster, s, t, 3.0, no_sinks, False, params, _water_factor(raster, s, t, np.zeros(1, bool), 3.0))
+    assert dry is not None and not raster.water[dry].any()
+    # Within the corridor of a stretch where the parent itself is under water, water is free.
+    wet = _water_factor(raster, s, t, np.ones(1, dtype=bool), 3.0)
+    cols = np.arange(raster.n ** 2) % raster.n
+    assert np.all(wet[np.abs(cols - 10) <= 3] == 1.0) and np.all(wet[raster.water & (cols > 13)] > 1.0)
+
+
+def test_a_branch_starts_on_the_nearest_drawn_node():
+    raster = _bay_raster()
+    on_path = np.zeros(raster.n ** 2, dtype=np.int64)
+    on_path[7 * raster.n + 4] = 1                              # row 7, col 4
+    s, t = _start_on_drawn(raster, on_path, np.array([5.0, 9.0]), np.array([8.0, 2.0]), 3.0)
+    assert (s[0], t[0]) == (4.0, 7.0) and (s[1], t[1]) == (9.0, 2.0)
+    far, _ = _start_on_drawn(raster, on_path, np.array([15.0, 9.0]), np.array([8.0, 2.0]), 3.0)
+    assert far[0] == 15.0

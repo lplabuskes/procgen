@@ -107,8 +107,14 @@ region river within `corridor_parent_texels` (1) regional texels of its line ove
 local relief, with the region's loop (`region.rivers.route_stream_paths`) and
 valley-seeking cost. A path leaving and re-entering the raster is routed once per
 visit; the visit holding its last vertex ends on whatever it drains into (stem,
-lake, local coast). Flow is the region's. Delta distributaries are ordinary
-region paths ([region_features.md](region_features.md#delta-distributaries-regiondistributariespy)).
+lake, local coast). Flow is the region's. Water costs ×50 (the distributaries'
+`WATER_COST`) except within a corridor of the region path's own hidden stretches
+(lake crossings, the run to its mouth), so a re-route keeps to land where its
+parent does — on a flattened delta plain valley-seeking would otherwise hug the
+refined shore and be hidden as a sea re-entry. Delta distributaries are ordinary
+region paths ([region_features.md](region_features.md#delta-distributaries-regiondistributariespy)),
+except that one starting on another path (`starts_on_path`) starts on the
+nearest node of that path's local re-route, its first point snapped onto it.
 
 **Region streams.** The world network stops at `stream_flow_threshold` (coarse
 for villages); `build_local_map` re-traces the region's own streams

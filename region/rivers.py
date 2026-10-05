@@ -29,12 +29,13 @@ from core.params import param_field as _f, paramclass
 from region.corridor import (
     EdgeCost,
     Raster,
+    corridor_reach,
     node_spacing_rad,
     raster_frame,
     route_corridor,
     sample_raster,
 )
-from region.distributaries import DistributaryParams, add_distributaries
+from region.distributaries import WATER_COST, DistributaryParams, add_distributaries
 from region.upsample import EARTH_RADIUS_KM, RegionFields
 from worldgen.hydrology.rivers import main_stem_paths
 from worldgen.hydrology.types import StreamNetwork, laplacian_smooth_sphere
@@ -90,8 +91,11 @@ class RegionRivers:
 # ── re-routing ───────────────────────────────────────────────────────────────
 
 
-def _valley_cost(raster: Raster, valley_seeking: float) -> EdgeCost:
-    """Edge cost exponential in the sub-grid anomaly, normalised by its corridor spread."""
+def _valley_cost(raster: Raster, valley_seeking: float, node_factor: Optional[np.ndarray] = None) -> EdgeCost:
+    """Edge cost exponential in the sub-grid anomaly, normalised by its corridor spread.
+
+    ``node_factor`` (``(n²,)``) multiplies each node's cost.
+    """
     cache: dict = {}
 
     def edge_cost(sub: np.ndarray, a: np.ndarray, b: np.ndarray, length: np.ndarray) -> np.ndarray:
@@ -99,7 +103,8 @@ def _valley_cost(raster: Raster, valley_seeking: float) -> EdgeCost:
             anomaly = raster.anomaly[sub]
             spread = max(float(anomaly.std()), 1e-6)
             cache["sub"] = sub
-            cache["cost"] = np.exp(np.clip(valley_seeking * (anomaly - anomaly.mean()) / spread, -20.0, 20.0))
+            cost = np.exp(np.clip(valley_seeking * (anomaly - anomaly.mean()) / spread, -20.0, 20.0))
+            cache["cost"] = cost if node_factor is None else cost * node_factor[sub]
         cost = cache["cost"]
         return length * 0.5 * (cost[a] + cost[b])
 
@@ -114,6 +119,7 @@ def _route_run(
     sinks: np.ndarray,
     ends_here: bool,
     params: RegionRiverParams,
+    node_factor: Optional[np.ndarray] = None,
 ) -> Optional[np.ndarray]:
     """Least-cost node path along one in-raster stretch, within ``radius_nodes`` of the world line.
 
@@ -121,7 +127,7 @@ def _route_run(
     corridor of the mouth (the joined stem may sit a corridor width off).
     """
     return route_corridor(
-        raster, s, t, radius_nodes, _valley_cost(raster, float(params.valley_seeking)),
+        raster, s, t, radius_nodes, _valley_cost(raster, float(params.valley_seeking), node_factor),
         sinks=sinks if ends_here else None, mouth_radius=2.0 * radius_nodes,
     )
 
@@ -149,6 +155,10 @@ class StreamPath:
     edge_flows: np.ndarray       # (len - 1,) world flow, monotonic
     ends_here: bool              # ends on a sink or a stem, not at the raster edge
     minor: bool = False          # a regional stream (goes to RegionRivers.streams)
+    # (len - 1,) the parent's hidden (under-water) segments; off them water is dear. None: water free.
+    hidden_edges: Optional[np.ndarray] = None
+    # Starts on another path (a delta distributary): starts on that path's re-route.
+    starts_on_path: bool = False
 
 
 def _stream_paths(
@@ -213,6 +223,41 @@ def _hidden_nodes(raster: Raster, nodes: np.ndarray) -> np.ndarray:
     return _fill_short_gaps(water, _SPECKLE_NODES)
 
 
+def _water_factor(
+    raster: Raster, s: np.ndarray, t: np.ndarray, hidden_edges: np.ndarray, radius_nodes: float,
+) -> np.ndarray:
+    """``(n²,)`` node cost factor: water dear except within the corridor of the parent's hidden stretches.
+
+    A re-route keeps to land wherever its parent ran on land, so it neither
+    hugs a refined shore nor gets hidden as a re-entry (:func:`_hide_reentries`).
+    """
+    free = np.zeros(raster.n * raster.n, dtype=bool)
+    wet = np.flatnonzero(np.asarray(hidden_edges, dtype=bool))
+    if wet.size:
+        runs = np.split(wet, np.flatnonzero(np.diff(wet) > 1) + 1)
+        lines = [(s[r[0]:r[-1] + 2], t[r[0]:r[-1] + 2]) for r in runs]
+        free = corridor_reach(lines, raster.lo, raster.step, raster.n, radius_nodes)
+    return np.where(raster.water & ~free, WATER_COST, 1.0)
+
+
+def _start_on_drawn(
+    raster: Raster, on_path: np.ndarray, s: np.ndarray, t: np.ndarray, reach_nodes: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """``(s, t)`` with its first vertex moved to the nearest drawn path node within ``reach_nodes``."""
+    cand = np.flatnonzero(on_path > 0)
+    if cand.size == 0:
+        return s, t
+    rows, cols = np.divmod(cand, raster.n)
+    gap = np.hypot(cols - (s[0] - raster.lo) / raster.step, rows - (t[0] - raster.lo) / raster.step)
+    k = int(np.argmin(gap))
+    if gap[k] > reach_nodes:
+        return s, t
+    s, t = s.copy(), t.copy()
+    s[0] = raster.lo + raster.step * cols[k]
+    t[0] = raster.lo + raster.step * rows[k]
+    return s, t
+
+
 def _to_path(
     raster: Raster, nodes: np.ndarray, flows: np.ndarray, hidden: np.ndarray, params: RegionRiverParams,
 ) -> RiverPath:
@@ -268,22 +313,34 @@ def route_stream_paths(
     on_path = np.zeros(n * n, dtype=np.int64)
     routed: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
     minor: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+    starts_on: list[bool] = []
     for p in paths:
         sinks = occupied | raster.ocean | raster.lake
-        nodes = _route_run(raster, p.s, p.t, radius_nodes, sinks, p.ends_here, params)
+        s, t = p.s, p.t
+        if p.starts_on_path:
+            s, t = _start_on_drawn(raster, on_path, s, t, 2.0 * radius_nodes)
+        factor = None if p.hidden_edges is None else _water_factor(raster, s, t, p.hidden_edges, radius_nodes)
+        nodes = _route_run(raster, s, t, radius_nodes, sinks, p.ends_here, params, factor)
         if nodes is None or len(nodes) < 2:
             continue
         hidden = _hidden_nodes(raster, nodes)
-        flows = _run_flows(raster, nodes, p.s, p.t, p.edge_flows)
+        flows = _run_flows(raster, nodes, s, t, p.edge_flows)
         (minor if p.minor else routed).append((nodes, flows, hidden))
         occupied[nodes[~hidden]] = True
         if not p.minor:
             on_path[nodes[~hidden]] += 1
+            starts_on.append(p.starts_on_path)
 
     # A path ending on another one's drawn stretch is a confluence.
     ends = [int(nodes[-1]) for nodes, _, hidden in routed
             if on_path[nodes[-1]] - (0 if hidden[-1] else 1) > 0]
     drawn = [_to_path(raster, nodes, flows, hidden, params) for nodes, flows, hidden in routed]
+    # A branch's first point exactly on the line it leaves, as the region draws it.
+    for i in np.flatnonzero(starts_on):
+        others = [drawn[j][0] for j in range(len(drawn)) if j != i]
+        if others:
+            line = np.concatenate(others)
+            drawn[i][0][0] = line[int(np.argmin(np.linalg.norm(line - drawn[i][0][0][None, :], axis=1)))]
     at_sea = [i for i, (nodes, _, _) in enumerate(routed) if raster.ocean[nodes[-1]]]
     return RegionRivers(
         region_id=fields.region_id,
