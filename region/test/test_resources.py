@@ -172,8 +172,9 @@ def test_danger_keeps_the_smooth_fields_texel_means(fields, globe):
 
 def test_danger_is_higher_on_rugged_ground(globe):
     """With the gain on, steeper texels in the same global texel carry more danger
-    (read per texel: the score's area averaging off)."""
-    params = RegionUpsampleParams(n_cols=6, tex_size=TEX_SIZE, biome_smoothing=0)
+    (read per texel: the score's area averaging off).  Relief is pinned well above
+    the default so slope, not forest, dominates the score whatever the tuning."""
+    params = RegionUpsampleParams(n_cols=6, tex_size=TEX_SIZE, biome_smoothing=0, relief_factor=3.0)
     fields = build_region_fields(globe, REGION_ID, params)
     slope = refined_slope(fields.textures["elevation"][..., 0], np.sqrt(fields.texel_area_km2)).reshape(-1)
     d = fields.textures["danger"][..., 0].reshape(-1)

@@ -6,6 +6,7 @@ import pytest
 
 from core.display import SchemeSpec, TextureRecipe
 from region.display import build_layer_texture, describe_texel, has_refined_layer, snap_to_land
+from region.towns import _neighbour_any
 from region.upsample import RegionUpsampleParams, build_region_fields
 from worldgen.climate.display import (
     ANNUAL_TEMPERATURE_RECIPE,
@@ -173,9 +174,7 @@ def _is_wet(fields, points):
 def test_snap_moves_a_near_shore_point_onto_land_and_leaves_land_alone(fields):
     water = _water(fields)
     land = fields.in_hex & ~water
-    shore = fields.in_hex & water & (
-        np.roll(land, 1, axis=1) | np.roll(land, -1, axis=1)
-        | np.roll(land, 1, axis=2) | np.roll(land, -1, axis=2))
+    shore = fields.in_hex & water & _neighbour_any(land)
     # Inside the cell square (hexes spill past it) and seen as water there.
     shore_pts = fields.positions[shore]
     wet_pt = shore_pts[_is_wet(fields, shore_pts)][:1]

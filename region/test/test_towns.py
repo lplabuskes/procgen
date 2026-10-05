@@ -36,7 +36,8 @@ def world(fields, synthetic_globe):
     river towns), and a city on one of them; installed for one test."""
     centroids = _unit_centroids(synthetic_globe)
     faces = np.unique(fields.faces[fields.in_hex])
-    faces = faces[synthetic_globe.mesh.face_textures["ocean_mask"][faces, 3, 3, 0] < 0.5]
+    tex = synthetic_globe.mesh.face_textures
+    faces = faces[(tex["ocean_mask"][faces, 3, 3, 0] < 0.5) & (tex["lake_mask"][faces, 3, 3, 0] < 0.5)]
     towns = Towns(
         positions=centroids[faces].copy(),
         population=np.linspace(6_000.0, 1_000.0, len(faces)),

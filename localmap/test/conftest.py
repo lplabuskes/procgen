@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from localmap.upsample import LocalUpsampleParams
+from region.geometry import ecef_to_cell
 from region.rivers import build_region_rivers
 from region.test.conftest import synthetic_globe  # noqa: F401
 from region.test.test_resources import globe  # noqa: F401
@@ -30,8 +31,12 @@ def region_rivers(region, globe):  # noqa: F811
 
 
 @pytest.fixture(scope="module")
-def lake_hex(region) -> int:
-    return int(np.argmax((region.textures["lake_mask"][..., 0] > 0.5).sum(axis=(1, 2))))
+def lake_hex(region, globe) -> int:  # noqa: F811
+    """The regional hex with the most lake, among those whose centre lies in the region's own cell."""
+    counts = (region.textures["lake_mask"][..., 0] > 0.5).sum(axis=(1, 2))
+    centers = region.geometry.local_to_ecef(region.grid.centers[:, 0], region.grid.centers[:, 1])
+    here = ecef_to_cell(centers, globe.antimeridian) == region.region_id
+    return int(np.argmax(np.where(here, counts, -1)))
 
 
 @pytest.fixture(scope="module")
