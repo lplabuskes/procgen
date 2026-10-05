@@ -7,9 +7,8 @@ Phase 2: each settlement routes goods to all others, modulated by rarity and des
     flow = Σ_g(goods[src,g] × rarity[g] × demand_modifier[dst,g])
            × settlement_demand[dst] × exp(−flow_decay × cost)
 
-A settlement rich in silk has low silk demand but high spice demand, producing realistic
-long-distance routes for rare goods. One undirected multi-source Dijkstra from all
-settlements covers both phases. Land node i = i; sea node i = i + N.
+One undirected multi-source Dijkstra from all settlements covers both phases.
+Land node i = i; sea node i = i + N.
 """
 from __future__ import annotations
 
@@ -32,14 +31,12 @@ except ImportError:  # pragma: no cover - numba is an optional accelerator
 
 # ── Good-type namespace ───────────────────────────────────────────────────────
 
-# Minerals occupy type IDs 0..N_MINERAL_TYPES-1.
-# Rare bio occupy N_MINERAL_TYPES..N_MINERAL_TYPES+N_RARE_BIO_TYPES-1.
-# These must match the offsets used in realmgen.builder when tagging good_sources.
+# Minerals are type IDs 0..N_MINERAL_TYPES-1, rare bio follow.  Must match the
+# offsets used when tagging good_sources.
 N_MINERAL_TYPES = 9
 RARE_BIO_TYPE_OFFSET = N_MINERAL_TYPES
 
-# Per-type rarity multiplier.  Higher → more inter-settlement flow and longer routes.
-# Values reflect historical long-distance trade importance, not physical abundance.
+# Per-type rarity multiplier: historical long-distance trade importance, not abundance.
 GOOD_RARITY_WEIGHTS: dict[int, float] = {
     0: 1.0,   # Iron        — utilitarian, widely distributed
     1: 1.5,   # Copper
@@ -70,14 +67,12 @@ class TradeResult:
     face_flow: np.ndarray   # (N,) float32 — aggregate trade flow across all good types
     hub_mask: np.ndarray    # (N,) bool — high-flow junction faces
     routes: list            # [(start_3d, end_3d, flow)] segments above display threshold
-    # (S, S) float32 — Phase-2 flow from settlement i (exporter) to j (importer); index-aligned with settlements arg
+    # (S, S) float32 — Phase-2 flow from settlement i (exporter) to j (importer)
     pair_flow: np.ndarray = field(default_factory=lambda: np.zeros((0, 0), dtype=np.float32))
-    # (N,) float32 — flow crossing between land and water at each land face that
-    # is not a port (the fallback landings); all zero without landings.
+    # (N,) float32 — land↔water flow at each non-port land face (fallback landings).
     landing_flow: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.float32))
-    # (D,) per good source (aligned with the ``good_sources`` arg): the settlement
-    # that works it (-1 = none can reach it), the route cost there, and the
-    # abundance credited to that settlement after ``deposit_decay``.
+    # (D,) per good source: working settlement (-1 = unreachable), route cost, and
+    # abundance credited after ``deposit_decay``.
     deposit_owner: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int32))
     deposit_cost: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.float64))
     deposit_credit: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.float64))
@@ -101,15 +96,11 @@ def _collect_hybrid_edges(
     ports: np.ndarray | None = None,
     landing_cost: float = np.inf,
 ) -> tuple[list, list, list]:
-    """Return (rows, cols, data) for all hybrid graph edges.
+    """Return (rows, cols, data) for the base (2N, 2N) hybrid graph (no virtual source).
 
-    Builds the base (2N, 2N) graph — land surface, sea surface, amphibious
-    river switches, and port transitions.  Virtual-source edges are NOT included.
-
-    ``ports`` (``(N,)`` bool) limits the land↔water transitions — port edges and
-    river switches — to those faces at their usual cost; every other coastal or
-    river face gets them at ``landing_cost`` instead, or not at all when it is
-    infinite.  ``None`` allows them everywhere.
+    ``ports`` (``(N,)`` bool) limits land↔water transitions (port edges and river
+    switches) to those faces; elsewhere they cost ``landing_cost`` (``inf`` = none).
+    ``None`` allows them everywhere.
     """
     rows: List[int] = []
     cols: List[int] = []
@@ -176,10 +167,8 @@ def _accumulate_paths(
     """Walk each job's predecessor row from ``job_from`` back to ``job_to``,
     adding its flow to every undirected edge on the way.
 
-    Edges are slots of the symmetric graph's CSR (``indptr``/``indices``, the
-    row being the lower node).  Returns ``(slot_flow, order, n_edges)``:
-    ``order[:n_edges]`` lists the slots in the order they were first touched.
-    Jobs run in order, so each edge sums its flows in the order they arrive.
+    Edges are slots of the symmetric graph's CSR (row = lower node).  Returns
+    ``(slot_flow, order, n_edges)``; ``order[:n_edges]`` lists slots in first-touch order.
     """
     slot_flow = np.zeros(len(indices), dtype=np.float64)
     seen = np.zeros(len(indices), dtype=np.bool_)
@@ -242,11 +231,8 @@ def build_base_hybrid_graph(
 ) -> csr_matrix:
     """Build the base ``(2N, 2N)`` hybrid land/sea cost graph (no virtual source).
 
-    Land nodes ``0..N-1``, sea nodes ``N..2N-1``; port edges bridge coastal
-    land↔adjacent-sea, amphibious switches at navigable-river faces.  This is the
-    surface the polity stage projects sea authority over (Dijkstra from capital
-    land nodes, read back the land-node slice).  Mirrors the graph
-    :func:`compute_trade_network` builds internally.
+    Land nodes ``0..N-1``, sea nodes ``N..2N-1``.  The polity stage projects sea
+    authority over it.  Mirrors the graph :func:`compute_trade_network` builds.
     """
     size = 2 * n
     rows, cols, data = _collect_hybrid_edges(
@@ -348,67 +334,43 @@ def compute_trade_network(
 ) -> TradeResult:
     """Accumulate trade flow in two phases.
 
-    **Phase 1** — each deposit routes to its nearest settlement (by hybrid cost).
-    That settlement is credited ``abundance × exp(−deposit_decay × dist)`` of
-    good *g* — a far deposit yields little, since working it means hauling
-    supplies out and ore back — and the haul on the path is that credit
-    ``× rarity[g] × exp(−flow_decay × dist)``.
+    **Phase 1** — each deposit routes to its nearest settlement (by hybrid cost),
+    which is credited ``abundance × exp(−deposit_decay × dist)`` of good *g* (a far
+    deposit means hauling supplies out and ore back); the haul on the path is that
+    credit ``× rarity[g] × exp(−flow_decay × dist)``.
 
-    **Phase 2** — each settlement with goods routes to every other settlement.
-    Demand for good type *g* at the destination is modulated by how well the
-    destination already supplies *g* locally::
+    **Phase 2** — each settlement with goods routes to every other settlement::
 
         demand_modifier[dst, g] = 1 − deposit_goods[dst, g] / global_max[g]
         inter_flow = Σ_g(goods[src,g] × rarity[g] × demand_modifier[dst,g])
                      × settlement_demand[dst] × exp(−flow_decay × cost)
 
-    This produces long-distance routes for rare goods that destinations lack,
-    while keeping short-distance routes for common goods.  The directional
-    ``inter_flow`` between every settlement pair is retained in
-    :attr:`TradeResult.pair_flow` so downstream consumers can attribute a
-    settlement's trade wealth to specific partners.
+    The directional ``inter_flow`` is kept in :attr:`TradeResult.pair_flow`.
 
     Args:
         mesh: ``PolygonMesh`` — provides ``face_adjacency`` and ``face_centroids``.
-        settlements: list of :class:`~realmgen.placement.types.Settlement`.
-        good_sources: list of ``(face_id, abundance, good_type_id)`` tuples.
-            ``face_id`` is a land-face index; ``abundance`` is a non-negative
-            float; ``good_type_id`` is an integer key into ``rarity_weights``
-            (use :data:`RARE_BIO_TYPE_OFFSET` to separate mineral and bio IDs).
-        land_edge_costs: from ``build_land_edge_costs``, len N.
-        land_passable: ``(N,)`` bool.
-        sea_edge_costs: from ``build_sea_edge_costs``, len N.
-        sea_passable: ``(N,)`` bool.
-        port_cost: one-time loading/unloading cost at a coastal transition.
-        river_switch_cost: cost to switch surfaces at a navigable river face.
-        settlement_ports: goods move between land and water only at a
-            settlement's face — a coastal settlement is a port, one on a
-            navigable river a river port.  Rivers are water all the way to their
-            mouths, so an inland river city ships straight out to sea.
-            ``False`` allows the transition at every coastal and river face.
+        good_sources: ``(face_id, abundance, good_type_id)`` tuples; ``good_type_id``
+            keys ``rarity_weights`` (bio IDs start at :data:`RARE_BIO_TYPE_OFFSET`).
+        land_edge_costs / sea_edge_costs: from ``build_land_edge_costs`` /
+            ``build_sea_edge_costs``, len N.
+        settlement_ports: goods cross land↔water only at a settlement's face
+            (coastal port or river port; rivers are water to their mouths, so an
+            inland river city ships straight out to sea).  ``False`` allows the
+            transition at every coastal and river face.
         landing_cost: with ``settlement_ports``, the cost of a fallback landing
-            anywhere else (``inf`` = none).  The relaxation loop uses it to find
-            where trade wants a port that does not exist yet.
-        settlement_demands: optional ``(S,)`` per-settlement demand weights.
-            When provided, overrides each settlement's ``demand`` field — used
-            by the population relaxation loop to substitute population-
-            proportional demands.
-        flow_decay: exponential decay factor applied to both phase-1 and
-            phase-2 routes with increasing cost distance.
-        deposit_decay: exponential decay of a deposit's credited yield with its
-            cost distance from the settlement that works it (0 = full yield at
-            any distance).
-        hub_display_quantile: percentile of positive face flows above which a
-            face is flagged as a trade hub for display.
-        min_display_flow: minimum edge flow to include in the route list for
-            display; defaults to 0.0 (all positive-flow edges included — the
-            renderer's width calculation handles visual thinning).
-        rarity_weights: per-type rarity multipliers; defaults to
-            :data:`GOOD_RARITY_WEIGHTS`.  Unknown type IDs get weight 1.0.
+            elsewhere (``inf`` = none); the relaxation loop uses it to find where
+            trade wants a port that does not exist yet.
+        settlement_demands: optional ``(S,)`` demand weights overriding equal demand
+            (the relaxation loop passes population-proportional ones).
+        deposit_decay: decay of a deposit's credited yield with cost distance
+            (0 = full yield at any distance).
+        hub_display_quantile: quantile of positive face flows above which a face
+            is a display hub.
+        min_display_flow: minimum edge flow for the display route list (default 0).
+        rarity_weights: defaults to :data:`GOOD_RARITY_WEIGHTS`; unknown IDs get 1.0.
 
     Returns:
-        :class:`TradeResult`, including ``pair_flow`` — the ``(S, S)`` directional
-        inter-settlement trade matrix index-aligned with ``settlements``.
+        :class:`TradeResult`; ``pair_flow`` is ``(S, S)``, index-aligned with ``settlements``.
     """
     n = len(mesh.faces)
     s = len(settlements)
@@ -430,9 +392,6 @@ def compute_trade_network(
 
     centroids = np.asarray(mesh.face_centroids, dtype=np.float64)
 
-    # Normalised demand weights per settlement.
-    # settlement_demands (population-proportional, from relaxation passes) takes
-    # priority; without it, all settlements are treated as equally attractive.
     if settlement_demands is not None:
         raw_demands = np.asarray(settlement_demands, dtype=np.float64)
     else:
@@ -441,7 +400,6 @@ def compute_trade_network(
     norm_demands = raw_demands / max_d if max_d > 0 else raw_demands.copy()
     settlement_nodes = [s.face_id for s in settlements]
 
-    # Build (2N, 2N) hybrid graph (no virtual source)
     size = 2 * n
     ports = None
     if settlement_ports:
@@ -464,20 +422,16 @@ def compute_trade_network(
     else:
         graph = csr_matrix((size, size), dtype=np.float64)
 
-    # Single undirected multi-source Dijkstra from all settlement land nodes.
-    # dist[k, node] = shortest (undirected) distance from settlement k to node.
-    # pred[k, node] = predecessor of node on shortest path from settlement k.
+    # dist/pred[k, node]: shortest distance / predecessor from settlement k.
     dist, pred = sp_dijkstra(
         graph, directed=False, indices=settlement_nodes, return_predecessors=True,
     )
 
-    # Determine good-type array size from sources and weights.
     max_type = max(int(gs[2]) for gs in good_sources)
     if weights:
         max_type = max(max_type, max(weights.keys()))
     n_types = max_type + 1
 
-    # Rarity array indexed by type ID; unknown types default to 1.0.
     rarity_arr = np.array(
         [float(weights.get(g, 1.0)) for g in range(n_types)], dtype=np.float64
     )
@@ -491,7 +445,7 @@ def compute_trade_network(
     # deposit_goods[k, g] = credited abundance of type g collected at settlement k.
     deposit_goods = np.zeros((len(settlements), n_types), dtype=np.float64)
 
-    # Phase 1: route each deposit to its nearest settlement
+    # Phase 1
     n_src = len(good_sources)
     deposit_owner = np.full(n_src, -1, dtype=np.int32)
     deposit_cost = np.full(n_src, np.inf)
@@ -519,18 +473,15 @@ def compute_trade_network(
         jobs_to.append(settlement_nodes[k])
         jobs_flow.append(phase1_flow)
 
-    # Phase 2: inter-settlement trade, modulated by local supply per good type.
-    # demand_modifier[k, g] = 1 − how saturated settlement k already is with type g.
+    # Phase 2
     global_max = deposit_goods.max(axis=0)  # (n_types,)
     global_max = np.where(global_max > 0.0, global_max, 1.0)
     local_frac = deposit_goods / global_max  # (S, n_types) in [0, 1]
     demand_modifier = 1.0 - local_frac      # (S, n_types): 0 = saturated, 1 = none locally
 
-    # Rarity-weighted goods: how much value each settlement can export per type.
     weighted_goods = deposit_goods * rarity_arr  # (S, n_types)
 
-    # Per-pair attribution: pair_flow[src, dst] = trade volume src exports to dst.
-    # Sum over types: export value weighted by destination's unmet need.
+    # pair_flow[src, dst] = trade volume src exports to dst.
     nodes = np.asarray(settlement_nodes, dtype=np.int64)
     pair_dist = dist[:, nodes]                                                   # (S, S)
     total_goods = (weighted_goods[:, None, :] * demand_modifier[None, :, :]).sum(axis=2)
@@ -555,8 +506,7 @@ def compute_trade_network(
         return dataclasses.replace(
             empty, deposit_owner=deposit_owner, deposit_cost=deposit_cost, deposit_credit=deposit_credit)
 
-    # Walk every path over the graph's undirected edges (the lower node's CSR row).
-    # (From the pattern: zero-cost edges are explicit zeros a sum would drop.)
+    # Symmetrise from the sparsity pattern: zero-cost edges are explicit zeros a sum would drop.
     pattern = csr_matrix((np.ones(graph.nnz), graph.indices, graph.indptr), shape=graph.shape)
     sym = (pattern + pattern.T).tocsr()
     sym.sort_indices()
@@ -575,19 +525,13 @@ def compute_trade_network(
     edge_b = sym.indices.astype(np.int64)[slots]
     edge_flow = slot_flow[slots]
 
-    # Per-face flow: sum contributions from both endpoints of each edge, and the
-    # flow over the fallback landings (land node ↔ water node at a non-port).
     face_flow, landing_flow = _sum_edge_ends(
         edge_a, edge_b, edge_flow, n, ports if ports is not None else np.zeros(0, dtype=bool))
 
-    # Hub detection
     positive = face_flow[face_flow > 0.0]
     hub_threshold = float(np.quantile(positive, hub_display_quantile)) if positive.size > 0 else np.inf
     hub_mask = face_flow >= hub_threshold
 
-    # Route segments for display.
-    # min_display_flow=None includes all positive-flow edges; the renderer's
-    # per-segment width calculation already provides visual filtering.
     threshold = float(min_display_flow) if min_display_flow is not None else 0.0
 
     routes = []

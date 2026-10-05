@@ -21,11 +21,7 @@ TROPICAL = 6
 
 
 def _default_kwargs(**overrides) -> dict[str, Any]:
-    """Return the keyword args for ``compute_fertility`` — i.e. ``params=<FertilityParams>``.
-
-    ``overrides`` set individual ``FertilityParams`` fields (e.g.
-    ``_default_kwargs(optimal_temperature_c=5.0)``).
-    """
+    """``compute_fertility`` kwargs (``params=<FertilityParams>``), with ``overrides`` setting fields."""
     defaults = dict(
         optimal_temperature_c=18.0,
         temperature_sigma_c=12.0,
@@ -176,8 +172,7 @@ class TestComputeFertility:
         assert f_near.max() > f_far.max()
 
     def test_biome_multiplier_constants_ordered(self):
-        # Sanity check that desert ≤ semi-arid ≤ steppe ≤ savannah etc.
-        # (Pin a couple of relative orderings rather than the exact values.)
+        # Pin a few relative orderings rather than exact values.
         m = BIOME_FERTILITY_MULT
         assert m[DESERT] < m[7]               # Desert < Semi-Arid
         assert m[7] < m[4]                    # Semi-Arid < Steppe

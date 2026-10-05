@@ -31,9 +31,7 @@ def sites(fields, rivers, synthetic_globe):
 
 @pytest.fixture
 def world(fields, sites, synthetic_globe):
-    """Per face with a refined coast: a harbour city a little inland of it (as if
-    the world's shoreline had been off).  Plus one city in another region.
-    Installed for one test."""
+    """A harbour city a little inland of each refined-coast face, plus one in another region."""
     reach = global_texel_rad(synthetic_globe)
     cities, coast_of = [], []
     for face in np.unique(sites.face[sites.coast]):

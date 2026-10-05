@@ -1,15 +1,9 @@
 """Pipeline vocabulary — Stage, Pipeline, and BuildContext.
 
-A ``Pipeline`` is an ordered list of ``Stage`` objects run against a shared
-``World`` via a ``BuildContext``. Orchestration, display, and persistence all
-become ``for stage in pipeline: stage.<hook>(...)`` — so adding a generation
-stage is one new class appended to the list, with no edits to central
-god-functions.
-
-``BuildContext`` carries the world, a progress callback, and a deterministic
-per-stage RNG fan-out: ``ctx.rng("climate")`` returns a reproducible stream
-derived from the context seed and the stage name (order-independent), so stages
-stop managing their own seed bookkeeping.
+A ``Pipeline`` runs an ordered list of ``Stage`` objects against a shared
+``World`` via a ``BuildContext``; build, display and persistence are each a walk
+over the stages.  ``ctx.rng(name)`` gives a stream derived from the seed and the
+name, independent of call order.
 """
 from __future__ import annotations
 
@@ -41,12 +35,9 @@ class BuildContext:
     """Shared state threaded through every stage's ``build``.
 
     Args:
-        world:    The container stages read/write. It owns its ``mesh`` from
-                  construction; stages decorate it and read it via ``ctx.mesh``.
+        world:    The container stages read/write (its mesh via ``ctx.mesh``).
         seed:     Base seed for the per-stage RNG fan-out. ``None`` → the
-                  world's seed; if that is also ``None``, a random base is drawn
-                  once at construction (reproducible within this context,
-                  random across runs).
+                  world's seed, else a random base drawn once here.
         progress: Optional status callback.
     """
     world: World
@@ -67,19 +58,15 @@ class BuildContext:
         self.progress(msg)
 
     def rng(self, name: str) -> np.random.Generator:
-        """Deterministic per-name RNG: stable for a given (seed, name) pair,
-        independent of call order across stages."""
+        """Deterministic RNG per (seed, name), independent of call order."""
         h = int.from_bytes(hashlib.sha256(name.encode("utf-8")).digest()[:8], "little")
         return np.random.default_rng(np.random.SeedSequence([self._base, h]))
 
 
 class Stage(ABC):
-    """One unit of world generation.
+    """One unit of world generation; display and persistence hooks default to no-ops.
 
-    Subclasses must implement ``build``; the display and persistence hooks
-    default to no-ops so a stage overrides only what it needs. ``requires`` /
-    ``provides`` may declare the channels a stage consumes/produces for optional
-    ordering validation (deferred).
+    ``requires`` / ``provides`` declare channels consumed/produced (validation deferred).
     """
 
     name: str = "stage"
@@ -103,14 +90,8 @@ class Stage(ABC):
 
 
 class Pipeline(Stage):
-    """An ordered collection of stages run against a shared ``BuildContext``.
-
-    A ``Pipeline`` *is* a ``Stage`` — its ``build``/``register_display``/
-    ``serialize``/``load`` hooks delegate to its children — so pipelines nest:
-    an app-level pipeline can hold a worldgen sub-pipeline and a realm
-    sub-pipeline as ordinary stages, and the whole tree builds, displays, and
-    serializes through one uniform walk.
-    """
+    """An ordered collection of stages; itself a ``Stage`` whose hooks delegate
+    to its children, so pipelines nest."""
 
     name: str = "pipeline"
 
@@ -147,8 +128,7 @@ class Pipeline(Stage):
         self.world = ctx.world
 
     def apply_display(self, window, *, debug: bool = False) -> None:
-        """Build one ``DisplayRegistry`` from every (nested) stage and wire it
-        into ``window`` in a single pass."""
+        """Build one ``DisplayRegistry`` from every (nested) stage and wire it into ``window``."""
         from viz.mapview.registry import apply_registry
         from core.display import DisplayRegistry
 

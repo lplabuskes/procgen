@@ -1,14 +1,8 @@
-"""Pack/unpack helpers for realm-stage serialization.
+"""Pack/unpack helpers for realm *feature* objects (settlements, polities, routes, borders).
 
-The generic persistence framework (``core/persistence.py``) already round-trips
-per-face metadata (suitability, population, polity_id, …) and textures
-(``polity_fill``). What it can't reach are the realm's *feature* objects — the
-``Settlement`` / ``Polity`` lists and the route / border geometry. These helpers
-flatten those into npz-friendly arrays and rebuild them on load, mirroring the
-flat-plus-offsets idiom the hydrology stage uses for rivers.
-
-Each helper namespaces its keys (``settle_*`` / ``pol_*`` / ``route_*`` /
-``border_*``) so the per-stage dicts merge without collision.
+Per-face metadata and textures round-trip through ``core/persistence.py``; these
+flatten the features into npz arrays.  Keys are namespaced (``settle_*`` /
+``pol_*`` / ``route_*`` / ``border_*``) so per-stage dicts merge without collision.
 """
 from __future__ import annotations
 

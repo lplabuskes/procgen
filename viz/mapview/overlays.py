@@ -1,17 +1,11 @@
 """Feature overlays, drawn the same way on the world map and the region view.
 
-Every overlay feature is stored on the sphere (ECEF unit vectors), so the only
-thing a view has to supply is how sphere points land on its screen — an
-:class:`OverlayProjector`.  The world map projects through its map projection
-(splitting at the antimeridian); the region view goes through the cell's local
-frame and its north-up rotation.  Styling, filtering and size-vs-zoom rules live
-here once, so the two views cannot drift apart.
+Features are stored as ECEF unit vectors; each view supplies an
+:class:`OverlayProjector` mapping them to its screen, so styling lives here once.
 
-Marker sizes, line widths and wind/current arrow lengths all scale with
-``projector.zoom``: the world map's magnification, or, for a region, the world
-map zoom that would show the same ground at the same pixel size.  Rivers are
-the exception: each map level sizes them on its own scale (``view_zoom``), and a
-local map draws them at their physical width (``px_per_km``).
+Marker sizes, line widths and arrow lengths scale with ``projector.zoom`` (the
+world-map-equivalent zoom).  Rivers instead use ``view_zoom``, or their physical
+width on a local map (``px_per_km``).
 """
 from __future__ import annotations
 
@@ -39,8 +33,7 @@ class OverlayProjector(Protocol):
 
     @property
     def view_zoom(self) -> float:
-        """Magnification relative to this view's own unzoomed extent (the world
-        map's zoom on the world map, the region view's own zoom in a region)."""
+        """Magnification relative to this view's own unzoomed extent."""
         ...
 
     @property
@@ -55,9 +48,8 @@ class OverlayProjector(Protocol):
         ...
 
     def on_land(self, key: str, ecef: np.ndarray) -> np.ndarray:
-        """Settlement positions ``(N, 3)`` as this view should place them: moved
-        off any water the view draws finer than the globe (``key`` names the
-        feature, so a view can cache the result). Identity on the world map."""
+        """Settlement positions ``(N, 3)`` moved off any water the view draws finer than the
+        globe (``key`` is a cache key). Identity on the world map."""
         ...
 
     def points(self, ecef: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -89,17 +81,11 @@ def draw_overlays(
 ) -> None:
     """Draw every visible overlay the globe has data for, in a fixed stacking order.
 
-    ``refined`` holds a view's own finer version of a feature, in the world
-    feature's form, drawn in its place (the region view's rivers, roads and
-    deltas; a local map's also its towns at local positions). Widths and
-    thresholds still come from the world feature, so a refined feature is drawn
-    exactly as heavily as the world's.  ``refined["villages"]`` (a local map's
-    :class:`localmap.villages.Villages`) is drawn under the towns.
-
-    On a local map (a view with ``px_per_km``) towns take the ring that marks
-    cities in a region, and ``refined["cities"]`` — ``(city_index, positions,
-    footprints)``, a :class:`localmap.cities.CityFootprints` over the world
-    ``settlements`` at ``city_index`` — draws each city as its built-up ground.
+    ``refined`` maps a feature name to a view's finer version of it, in the world
+    feature's form, drawn in its place.  Widths and thresholds still come from the
+    world feature.  Local-map extras: ``refined["villages"]``
+    (:class:`localmap.villages.Villages`) and ``refined["cities"]`` =
+    ``(city_index, positions, CityFootprints)``, drawn as built-up ground.
     """
     refined = refined or {}
     local = proj.px_per_km is not None
@@ -161,8 +147,7 @@ def _draw_points(
     painter: QPainter, globe: "World", proj: OverlayProjector, feature_name: str,
     pen_color: QColor, brush_color: QColor, base_r: float, positions: Optional[np.ndarray] = None,
 ) -> None:
-    """A uniformly-styled circle at each position of a point feature (or at
-    ``positions``, a view's refined version of it)."""
+    """A circle at each position of a point feature (or at refined ``positions``)."""
     if positions is None:
         positions = globe.get_feature(feature_name)
     if positions is None or len(positions) == 0:
@@ -182,8 +167,7 @@ def _draw_resource(
     draw_shape: Callable[[QPainter, float, float, float], None],
     feature: Optional[tuple] = None,
 ) -> None:
-    """A palette-per-kind resource overlay, sized by abundance (``feature``, a
-    view's ``(positions, kinds, abundances)``, in place of the world's)."""
+    """A palette-per-kind resource overlay, sized by abundance; ``feature`` overrides the world's."""
     if feature is None:
         feature = globe.get_feature(feature_name)
     if feature is None:
@@ -252,7 +236,6 @@ def _draw_danger_sources(painter: QPainter, globe: "World", proj: OverlayProject
         r_fill, g_fill, b_fill = int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255)
         painter.setPen(QPen(QColor(max(0, r_fill - 70), max(0, g_fill - 70), max(0, b_fill - 70), 230), 1.5))
         painter.setBrush(QBrush(QColor(r_fill, g_fill, b_fill, 210)))
-        # Downward-pointing triangle.
         px, py = float(sx[i]), float(sy[i])
         painter.drawPolygon(QPolygonF([
             QPointF(px, py + r),
@@ -275,9 +258,8 @@ _CITY_WALL_PX = 2.5
 def settlement_markers(
     globe: "World", proj: OverlayProjector,
 ) -> Optional[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
-    """``(sx, sy, keep, tiers, radii)`` of the city markers as ``_draw_settlements``
-    draws them (radius in px, without the region's white ring); None when there
-    are no cities."""
+    """``(sx, sy, keep, tiers, radii)`` of the city markers (radius px, excluding the white ring);
+    None without cities."""
     from realmgen.placement.types import TIER_RADII, population_display_tier
     feature = globe.get_feature("settlements")
     if not feature:
@@ -288,14 +270,12 @@ def settlement_markers(
     tiers = np.array([population_display_tier(float(p), max_pop) for p in pops], dtype=np.int32)
     sx, sy, keep = proj.points(proj.on_land("settlements", positions))
     zoom_scale = max(1.0, proj.zoom ** 0.3)
-    # Population-scaled radii: sqrt(pop / max_pop) in [0.6, 1.0] relative to the
-    # tier base radius so the shape of the distribution is visible.
+    # sqrt(pop / max_pop) mapped to [0.6, 1.0] of the tier radius.
     if max_pop > 0:
         pop_scale = np.sqrt(np.clip(pops / max_pop, 0.0, 1.0)) * 0.4 + 0.6
     else:
         pop_scale = np.ones(len(feature), dtype=np.float64)
-    # In a region, cities share the map with the towns: draw them bigger (never
-    # smaller than twice the largest town).
+    # In a region, cities are drawn bigger: at least twice the largest town.
     regional = proj.regional
     size_scale = _REGION_CITY_SCALE if regional else 1.0
     min_r = 2.0 * _TOWN_MAX_RADIUS * proj.zoom ** 0.3 if regional else 0.0
@@ -310,8 +290,7 @@ def _draw_settlements(painter: QPainter, globe: "World", proj: OverlayProjector)
     if markers is None:
         return
     sx, sy, keep, tiers, all_radii = markers
-    # In a region, cities are opaque and ringed dark-then-white so they read
-    # as a different class of place rather than big towns.
+    # In a region, cities are opaque and ringed so they don't read as big towns.
     regional = proj.regional
     painter.save()
     for tier_idx in range(len(TIER_COLORS)):
@@ -352,10 +331,8 @@ def _draw_city_footprints(
 ) -> None:
     """A local map's cities as their built-up ground, in their tier colour.
 
-    A footprint smaller on screen than the floor marker (twice the largest town)
-    is drawn as that marker instead, so a city never vanishes or reads smaller
-    than a town at low zoom; it is "walled" (dark, white, dark rings, a dark
-    centre dot) to stand apart from the ringed towns.
+    A footprint smaller on screen than the floor marker (twice the largest town) is
+    drawn as a "walled" marker instead, so it never reads smaller than a town.
     """
     from realmgen.placement.types import TIER_COLORS, population_display_tier
     settlements = globe.get_feature("settlements") or []
@@ -369,8 +346,7 @@ def _draw_city_footprints(
     qx, qy, qkeep = proj.points(corners.reshape(-1, 3))
     qx, qy = qx.reshape(-1, 4), qy.reshape(-1, 4)
     qkeep = qkeep.reshape(-1, 4).all(axis=1)
-    # Grow each texel a little about its centre: texels of neighbouring hexes do
-    # not tile exactly, and the union must not show hairline seams.
+    # Grow each texel slightly: neighbouring hexes' texels don't tile exactly.
     mx, my = qx.mean(axis=1, keepdims=True), qy.mean(axis=1, keepdims=True)
     qx, qy = mx + _FOOTPRINT_GROW * (qx - mx), my + _FOOTPRINT_GROW * (qy - my)
     outline = QPen(QColor(25, 22, 18, 235), 1.2)
@@ -384,8 +360,6 @@ def _draw_city_footprints(
         if mine.size == 0 or r_px < floor_r:
             if not ckeep[c]:
                 continue
-            # Walled: a white band inside a second dark ring, where a town's
-            # ring stops at the white — so the marker never reads as a big town.
             x, y = float(csx[c]), float(csy[c])
             wall = floor_r + _CITY_WALL_PX
             painter.setPen(QPen(QColor(25, 22, 18, 245), 2.0))
@@ -394,15 +368,12 @@ def _draw_city_footprints(
             painter.setPen(outline)
             painter.setBrush(QBrush(fill))
             painter.drawEllipse(QRectF(x - floor_r, y - floor_r, 2 * floor_r, 2 * floor_r))
-            # A dark keep at the centre: no town has one.
             keep_r = 0.35 * floor_r
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(QColor(25, 22, 18, 245)))
             painter.drawEllipse(QRectF(x - keep_r, y - keep_r, 2 * keep_r, 2 * keep_r))
             continue
-        # Union on the pixel grid: texels of one hex share edges only to float
-        # noise, and neighbouring hexes' texels overlap, so a float union leaves
-        # slivers along both.
+        # Union on the pixel grid: a float union leaves slivers along texel edges.
         region = QRegion()
         for k in mine:
             quad = QPolygonF([QPointF(float(qx[k, j]), float(qy[k, j])) for j in range(4)])
@@ -416,8 +387,7 @@ def _draw_city_footprints(
 
 
 def town_markers(towns, proj: OverlayProjector) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """``(sx, sy, keep, radii)`` of the town dots as ``_draw_towns`` draws them
-    (radius in px, without a local map's ring)."""
+    """``(sx, sy, keep, radii)`` of the town dots (radius px, excluding a local map's ring)."""
     sx, sy, keep = proj.points(proj.on_land("towns", towns.positions))
     pop = towns.population
     lo, hi = float(pop.min()), float(pop.max())
@@ -427,9 +397,8 @@ def town_markers(towns, proj: OverlayProjector) -> tuple[np.ndarray, np.ndarray,
 
 
 def _draw_towns(painter: QPainter, towns, proj: OverlayProjector, ringed: bool = False) -> None:
-    """Small kind-coloured dots, sized by population; only in the region view.
-    ``ringed`` (a local map) circles each one dark-then-white, as cities are in
-    a region, so towns read as a class above the villages."""
+    """Kind-coloured dots sized by population; region views only.  ``ringed`` (local map)
+    rings them so they read above the villages."""
     from realmgen.towns.types import TOWN_KIND_COLORS
     if towns is None or len(towns) == 0 or not proj.regional:
         return
@@ -459,8 +428,7 @@ _VILLAGE_COLORS = (
     QColor(214, 190, 120), QColor(110, 170, 235), QColor(90, 205, 190), QColor(200, 150, 110),
     QColor(165, 150, 175),
 )
-# Dot radius (px) for the smallest and largest village: under the towns'
-# ``_TOWN_MAX_RADIUS`` scale, so a village never reads as a town.
+# Dot radius (px) for the smallest and largest village; below ``_TOWN_MAX_RADIUS``.
 _VILLAGE_RADIUS = (1.3, 2.4)
 
 
@@ -590,8 +558,7 @@ def _discharge_scale(globe: "World") -> float:
     return scale
 
 
-# The narrowest line a local map draws a river with, so a river narrower than a
-# pixel still shows as a hairline.
+# Narrowest river line on a local map, so sub-pixel rivers still show.
 _MIN_PHYSICAL_RIVER_PX = 1.0
 # Region-view rivers are drawn this much heavier than the world map's.
 _REGION_RIVER_SCALE = 1.5
@@ -600,11 +567,9 @@ _REGION_RIVER_SCALE = 1.5
 def _river_widths(flows: np.ndarray, max_flow: float, proj: OverlayProjector, discharge_scale: float) -> np.ndarray:
     """Screen width (px) of each river segment carrying ``flows``; ≤ 1 px is not drawn.
 
-    On a local map (``proj.px_per_km`` set) a river is as wide as its channel:
-    discharge from the flow, width from the hydraulic geometry, at least a
-    hairline.  Elsewhere the width is cartographic — by flow relative to the
-    world's largest river, on this map level's own zoom — so the world map and a
-    region at the same zoom draw the same line weights.
+    On a local map (``proj.px_per_km`` set) this is the physical channel width.
+    Elsewhere it is cartographic: by flow relative to the world's largest river,
+    on this map level's own zoom.
     """
     flows = np.asarray(flows, dtype=np.float64)
     px_per_km = proj.px_per_km
@@ -620,8 +585,7 @@ def _river_widths(flows: np.ndarray, max_flow: float, proj: OverlayProjector, di
 def _draw_rivers(
     painter: QPainter, river_paths: Sequence, max_flow: float, proj: OverlayProjector, discharge_scale: float = 0.0,
 ) -> None:
-    """River polylines, width by flow (see :func:`_river_widths`). ``max_flow``
-    is the world's largest, so a refined river keeps its world river's weight."""
+    """River polylines, width by flow; ``max_flow`` is the world's largest."""
     if not river_paths or max_flow <= 0.0:
         return
     painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -665,8 +629,8 @@ def _position_key(pos) -> tuple[float, float, float]:
 
 
 def _moved_settlements(globe: "World", proj: OverlayProjector) -> dict:
-    """``{position_key: drawn position}`` for settlements the view moved onto
-    land (``proj.on_land``), so trade routes still end at their markers."""
+    """``{position_key: drawn position}`` for settlements moved by ``proj.on_land``, so routes
+    still end at their markers."""
     feature = globe.get_feature("settlements")
     if not feature:
         return {}
@@ -680,9 +644,8 @@ def _moved_settlements(globe: "World", proj: OverlayProjector) -> dict:
 def _draw_trade_routes(
     painter: QPainter, globe: "World", proj: OverlayProjector, refined: Optional[list] = None,
 ) -> None:
-    """Route hops, width by flow. ``refined`` (a view's re-routed roads, already
-    ending on the settlements' drawn markers) replaces the world's hops; the
-    width scale and the drawing threshold are the world's either way."""
+    """Route hops, width by flow.  ``refined`` replaces the world's hops; the width scale and
+    threshold stay the world's."""
     world_routes = globe.get_feature("trade_routes")
     if not world_routes:
         return

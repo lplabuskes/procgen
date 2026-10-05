@@ -1,7 +1,4 @@
-"""Unit tests for realmgen.polity.authority — projection, claiming, classify.
-
-Lightweight stub graphs, no worldgen run.
-"""
+"""Unit tests for realmgen.polity.authority — projection, claiming, classify (stub graphs)."""
 from __future__ import annotations
 
 from typing import Any

@@ -1,42 +1,19 @@
 """Population & Calibration — Stage 4 of the realm layer.
 
-Populations are in **real people**.  Three distinct quantities:
+Populations are in real people:
 
-* **Rural population** — per *face*: ``D_max · fertility^γ · area_km²``, the
-  Malthusian ceiling of the countryside (the food base).  γ ≈ 2 restores the
-  density contrast a linear law flattens: fertile river valleys run ~13
-  people/km², marginal land near zero, while the world total stays anchored
-  to a medieval-Earth scale (~400 M).
-* **Carrying capacity** — per *settlement*: the food base summed over its
-  claimed hinterland shares.  This is the food the region grows, **not** the
-  settlement's population.
-* **Urban population** — per *settlement*:
-  ``s · carrying_cap + β · trade_flow``.  The agricultural surplus rate *s*
-  (~0.1–0.2) converts regional food into city mouths; the **additive** trade
-  term lets a thin-hinterland chokepoint grow large on imported grain
-  (Constantinople/Venice).  A settlement exists as a city only if its urban
-  population clears an absolute floor.
+* **Rural population** — per face: ``D_max · fertility^γ · area_km²``, the
+  countryside's Malthusian ceiling (the food base).  γ ≈ 2 keeps fertile valleys
+  dense while the world total stays medieval-Earth scale (~400 M).
+* **Carrying capacity** — per settlement: the food base summed over its
+  hinterland shares — the food the region grows, not the city's population.
+* **Urban population** — ``s · carrying_cap + β · trade_flow``.  The additive trade
+  term lets a thin-hinterland chokepoint grow on imported grain
+  (Constantinople/Venice).  Below an absolute floor a settlement is culled.
 
-Mechanisms:
-
-1. **Hinterland assignment** — soft, fractional.  Each settlement bids for
-   every face within ``max_distance`` cost-distance; the bid combines a
-   linear proximity falloff with an influence-derived pull, and each face's
-   food base is split among bidders in proportion to their bids.  A small
-   city beside a large one therefore still captures a share of the
-   surrounding land instead of being shut out.  The *displayed* hinterland is
-   the single highest bidder per face.  When the caller supplies a
-   *water-permeable* cost graph (the population stage does), a coastal
-   settlement also bids for a *limited* band of nearby ocean/lake, pulling
-   its fishing-grounds productivity (the aquatic component of
-   ``fertility_mean``) into its food base; the band stays small because water
-   steps are made deliberately expensive.
-
-2. **Iterative relaxation** — carrying capacity and trade flow combine into
-   a per-settlement urban population.  Running trade → population → trade for
-   a few passes lets hub reinforcement stabilise without solving the loop
-   analytically.  After each pass, settlements below the urban-formation
-   floor are culled.
+Hinterlands are soft: each face's food base is split among bidding settlements,
+so a small city beside a large one still gets a share.  The population stage
+relaxes trade → population → trade for a few passes.
 """
 from __future__ import annotations
 
@@ -62,21 +39,13 @@ def compute_food_base(
 ) -> np.ndarray:
     """Per-face food base in people: ``D_max · fertility^γ · area_km²``.
 
-    The number of people a face's land (or fishing grounds — coastal water
-    faces carry aquatic productivity in ``fertility_mean``) can feed at a
-    medieval tech level.  ``fertility_exponent`` γ > 1 restores density
-    contrast: the fertility field spans ~1 order of magnitude while real
-    population density spans ~3, so a linear law cannot give both a realistic
-    world total and a dense agricultural core.
+    γ > 1 because fertility spans ~1 order of magnitude while real density spans
+    ~3; a linear law can't give both a realistic total and a dense core.
 
     Args:
-        fertility: (N,) float in [0, 1] — per-face ``fertility_mean``.
-        face_areas: (N,) float64 — per-face solid-angle areas (steradians).
-        density_max: people/km² on perfectly fertile land (fertility = 1).
-        fertility_exponent: γ — fertility→density contrast (γ ≈ 2).
-
-    Returns:
-        (N,) float64 — people each face can feed.
+        fertility: (N,) in [0, 1].
+        face_areas: (N,) solid-angle areas (steradians).
+        density_max: people/km² at fertility 1.
     """
     fert = np.clip(np.asarray(fertility, dtype=np.float64), 0.0, 1.0)
     area_km2 = np.asarray(face_areas, dtype=np.float64) * KM2_PER_STERADIAN
@@ -90,13 +59,12 @@ def split_fertility(
     """Each face's farmland and fishing grounds, from its texture.
 
     Args:
-        fertility_tex: (N, H, W) fertility; water pixels hold aquatic fertility.
-        water_tex: (N, H, W) bool — ocean ∪ lake pixels.
+        fertility_tex: (N, H, W); water pixels hold aquatic fertility.
+        water_tex: (N, H, W) bool — ocean ∪ lake.
 
     Returns:
-        ``(land_fertility, land_fraction, water_fertility, water_fraction)``,
-        each (N,) float64: the mean fertility over the face's land (water)
-        pixels and the share of its pixels that are land (water).
+        ``(land_fertility, land_fraction, water_fertility, water_fraction)``, each
+        (N,): mean fertility over land (water) pixels and their pixel share.
     """
     fert = np.clip(np.asarray(fertility_tex, dtype=np.float64), 0.0, 1.0)
     water = np.asarray(water_tex, dtype=bool)
@@ -117,16 +85,10 @@ def compute_farm_and_fish_food(
     fishing_density_max: float,
     fertility_exponent: float = 2.0,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Per-face food base split into farmland and fishing grounds, in people.
+    """Per-face ``(farm, fish)`` food base in people, each (N,).
 
-    Each is :func:`compute_food_base` over its own part of the face: the land
-    pixels at ``density_max``, the water pixels (aquatic fertility) at
-    ``fishing_density_max``.  A coastal land face's shallows thus feed fishers
-    who live on its shore, and a water face's fishing grounds feed the cities
-    whose hinterland reaches them.
-
-    Returns:
-        ``(farm, fish)`` — (N,) float64 each.
+    :func:`compute_food_base` over the land pixels at ``density_max`` and the
+    water pixels at ``fishing_density_max``.
     """
     land_fert, land_frac, water_fert, water_frac = split_fertility(fertility_tex, water_tex)
     areas = np.asarray(face_areas, dtype=np.float64)
@@ -141,19 +103,7 @@ def compute_rural_population(
     food_base: np.ndarray,
     is_water: np.ndarray,
 ) -> np.ndarray:
-    """Per-face rural population: the food base, masked to land.
-
-    The countryside fills to its Malthusian ceiling, so rural population *is*
-    the food base on land faces.  Water faces feed people (fishing grounds)
-    but house none.
-
-    Args:
-        food_base: (N,) float64 from :func:`compute_food_base`.
-        is_water: (N,) bool — ocean ∪ lake mask.
-
-    Returns:
-        (N,) float64 — rural people living on each face.
-    """
+    """Per-face rural population: the food base, masked to land (water faces house none)."""
     return np.where(np.asarray(is_water, dtype=bool), 0.0, np.asarray(food_base, dtype=np.float64))
 
 
@@ -168,8 +118,7 @@ def compute_hinterland_shares(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Soft hinterland assignment — fractional capacity shares + display owner.
 
-    Runs undirected multi-source Dijkstra from all settlement nodes, then has
-    each settlement *k* bid for every face *i*::
+    Each settlement *k* bids for every face *i*::
 
         influence[k]    = log(max_pop / pop[k])          # 0 for top settlement
         reach[k]        = max_distance * exp(-influence[k] / reach_scale)
@@ -177,43 +126,19 @@ def compute_hinterland_shares(
         pull[k]         = exp(-influence[k] / influence_scale)   # in (0, 1]
         bid[k, i]       = proximity[k, i] * pull[k]
 
-    ``influence`` is derived from each settlement's current population: the
-    highest-population settlement gets influence 0 (widest reach, strongest
-    pull) and lower-population settlements get proportionally larger influence.
-    This means hinterland priority emerges from population rather than from
-    fixed tier labels.
-
-    ``max_distance`` caps the largest market area (the top-population settlement
-    at influence 0).  ``reach_scale`` controls how steeply catchment radius
-    shrinks with influence; smaller values give more differentiation.
-    ``influence_scale`` controls how steeply pull decays; smaller values
-    widen the pull gap between large and small settlements.
-
-    Each face's carrying capacity is divided among its bidders in proportion to
-    their bids, so a low-pull village next to a high-pull city still claims a
-    nonzero share of the nearby land (and can survive culling).
+    Each face's capacity is split among bidders in proportion to their bids, so a
+    village next to a city still claims a nonzero share (and can survive culling).
 
     Args:
-        n_faces: number of mesh faces (N).
-        settlements: list of :class:`~realmgen.placement.types.Settlement`
-            (reads ``face_id`` and ``population``).
-        cost_graph: (N, N) directed land-cost CSR matrix — used undirected. Pass
-            a water-permeable variant to let coastal settlements claim a limited
-            band of ocean/lake for fishing grounds.
-        max_distance: hard cap (cost-distance) on the widest hinterland reach.
-        influence_scale: e-folding scale for ``pull``; smaller widens the pull
-            gap between settlements.
-        reach_scale: e-folding scale for catchment radius; smaller gives higher-
-            population centres a proportionally larger market area.
+        cost_graph: (N, N) land-cost CSR, used undirected.  A water-permeable
+            variant lets coastal settlements claim fishing grounds.
+        max_distance: cost-distance reach of the top settlement.
+        influence_scale / reach_scale: e-folding scales of pull / reach; smaller
+            widens the gap between large and small settlements.
 
     Returns:
-        ``(shares, owner)`` where:
-
-        * ``shares`` is ``(S, N)`` float64 — fraction of face *i*'s capacity
-          claimed by settlement *k*; each column sums to 1 where any settlement
-          is in range, else all zero.
-        * ``owner`` is ``(N,)`` int32 — index of the single highest bidder per
-          face (for display), or -1 where no settlement is within range.
+        ``(shares, owner)``: ``shares`` (S, N), each column summing to 1 where any
+        settlement is in range, else 0; ``owner`` (N,) int32 highest bidder, -1 if none.
     """
     if not settlements:
         return (
@@ -230,8 +155,6 @@ def compute_hinterland_shares(
         min_pop = max_pop * 1e-3
         influence = np.log(max_pop / np.maximum(populations, min_pop))
 
-    # dist[k, i] = undirected cost-distance from settlements[k] to face i
-    # (+inf where unreachable).
     # Nothing past max_distance (the widest reach) bids, so the search stops there.
     md = max(float(max_distance), 1e-9)
     dist = sp_dijkstra(
@@ -240,8 +163,7 @@ def compute_hinterland_shares(
 
     scale = max(float(influence_scale), 1e-9)
     reach = max(float(reach_scale), 1e-9)
-    # Per-settlement catchment radius: higher-order centres (lower influence)
-    # draw from a proportionally larger market area. reach_scale=inf → uniform md.
+    # reach_scale=inf → uniform md.
     md_k = md * np.exp(-influence / reach)                  # (S,)
     proximity = np.maximum(1.0 - dist / md_k[:, np.newaxis], 0.0)   # (S, N); inf → 0
     pull = np.exp(-influence / scale)                       # (S,)
@@ -260,21 +182,9 @@ def compute_carrying_capacity(
     shares: np.ndarray,
     food_base: np.ndarray,
 ) -> np.ndarray:
-    """Per-settlement carrying capacity from fractional hinterland shares.
+    """``cap[k] = Σ_i shares[k, i] · food_base[i]`` — (S,) people the hinterland feeds.
 
-    ``cap[k] = Σ_i shares[k, i] · food_base[i]`` — the people the settlement's
-    claimed hinterland can feed.  This is the *food base* of the region, not
-    the settlement's population; the urban headcount is the surplus this
-    ceiling throws off (see :func:`compute_urban_population`).
-
-    Args:
-        shares: (S, N) float64 from :func:`compute_hinterland_shares`.
-        food_base: (N,) float64 from :func:`compute_food_base` (includes
-            aquatic fishing productivity on coastal ocean/lake faces, so water
-            claimed via a permeable hinterland graph contributes here).
-
-    Returns:
-        (S,) float64 — people the hinterland feeds.
+    This is the region's food base, not the settlement's population.
     """
     shares = np.asarray(shares, dtype=np.float64)
     if shares.size == 0:
@@ -286,15 +196,7 @@ def compute_trade_wealth(
     settlements: List[Settlement],
     face_flow: np.ndarray,
 ) -> np.ndarray:
-    """Extract trade flow at each settlement's face as a wealth proxy.
-
-    Args:
-        settlements: list of :class:`~realmgen.placement.types.Settlement`.
-        face_flow: (N,) float — cumulative trade flow per face.
-
-    Returns:
-        (S,) float64 — per-settlement trade wealth (non-negative).
-    """
+    """(S,) trade flow at each settlement's face, as a wealth proxy."""
     flow = np.asarray(face_flow, dtype=np.float64)
     return np.array([float(flow[s.face_id]) for s in settlements], dtype=np.float64)
 
@@ -306,27 +208,10 @@ def compute_urban_population(
     surplus_rate: float = 0.15,
     trade_food_weight: float = 0.0,
 ) -> np.ndarray:
-    """Urban headcount: local agricultural surplus plus imported food.
+    """Urban headcount ``s · carrying_cap + β · trade_wealth``, (S,) people.
 
-    Formula::
-
-        urban_pop = s · carrying_cap + β · trade_wealth
-
-    The surplus rate *s* is the urbanization ceiling — the fraction of the
-    region's food that feeds city mouths rather than the farmers growing it.
-    The trade term is **additive**: imported grain adds carrying capacity, it
-    does not multiply the local harvest, so a poor-but-strategic chokepoint
-    (Constantinople, Venice) can sustain a large urban core its own land could
-    never feed.
-
-    Args:
-        carrying_cap: (S,) people from :func:`compute_carrying_capacity`.
-        trade_wealth: (S,) trade flow from :func:`compute_trade_wealth`.
-        surplus_rate: s — agricultural surplus rate (~0.10–0.20).
-        trade_food_weight: β — people fed per unit of trade flow.
-
-    Returns:
-        (S,) float64 — urban population in people.
+    The trade term is additive (imported grain doesn't multiply the local harvest),
+    so a poor-but-strategic chokepoint can outgrow what its land could feed.
     """
     cap = np.maximum(carrying_cap, 0.0)
     wealth = np.maximum(trade_wealth, 0.0)
@@ -346,27 +231,21 @@ def compute_miners(
 ) -> np.ndarray:
     """Miners per deposit, ``(D,)`` people, taken out of the cities that work them.
 
-    A city's trade-fed people (``trade_people``) live on the flow at its face;
-    ``own_goods_share`` of that flow is its own goods (deposit hauls in, exports
-    out). The ``workable`` deposits' share of the value it owns
-    (``deposit_value`` = credited abundance × rarity) is the part that comes out
-    of the ground, and ``mining_share`` of those people dig it instead of
-    living in the city: they live at the deposits, in proportion to each one's
-    value. No city is cut below ``city_min``.
+    Of a city's ``trade_people``, the part fed by its own goods
+    (``own_goods_share``) times the ``workable`` deposits' share of its owned value
+    comes out of the ground; ``mining_share`` of those live at the deposits instead,
+    split by value.  No city is cut below ``city_min``.
 
     Args:
         population: (S,) city people before the miners leave.
-        trade_people: (S,) ``β · trade_wealth`` — the trade-fed part of it.
+        trade_people: (S,) ``β · trade_wealth``.
         own_goods_share: (S,) in [0, 1].
-        deposit_owner: (D,) settlement index working each deposit, -1 for none.
-        deposit_value: (D,) credited value of each deposit to its owner.
+        deposit_owner: (D,) settlement index, -1 for none.
+        deposit_value: (D,) credited abundance × rarity.
         workable: (D,) bool — deposits that employ miners (minerals on land).
-        mining_share: share of the mined goods' trade people who are miners.
-        city_min: floor no city is cut below.
 
     Returns:
-        (D,) float64 — miners at each deposit; their sum per owner is what that
-        city loses.
+        (D,) miners; their sum per owner is what that city loses.
     """
     pop = np.asarray(population, dtype=np.float64)
     n_s = pop.size
@@ -391,23 +270,11 @@ def cull_settlements(
     *,
     min_population: float = 0.0,
 ) -> tuple[list[Settlement], np.ndarray, np.ndarray]:
-    """Remove settlements below the urban-formation floor.
-
-    Any settlement with ``population < min_population`` (people) is dropped —
-    a region without the surplus or trade to feed a genuine city has villages
-    but no city, and disappears from the cities layer.  Culling is
-    unconditional — display tiers are re-derived from population at render
-    time, so there is nothing to downgrade.
-
-    Args:
-        settlements: list of :class:`~realmgen.placement.types.Settlement`.
-        population: (S,) float64 aligned with *settlements*.
-        min_population: absolute urban-population floor (people) to survive.
+    """Drop settlements with ``population < min_population`` (people).
 
     Returns:
-        ``(settlements, population, kept)`` — filtered list, the aligned
-        ``(S',)`` population array, and the ``(S,)`` boolean keep mask over the
-        input (for filtering other settlement-aligned arrays).
+        ``(settlements, population, kept)`` — filtered list, ``(S',)`` population,
+        and the ``(S,)`` keep mask (for filtering other aligned arrays).
     """
     pop = np.asarray(population, dtype=np.float64)
     kept = pop >= float(min_population)
@@ -419,14 +286,6 @@ def apply_population_to_settlements(
     settlements: List[Settlement],
     population: np.ndarray,
 ) -> list[Settlement]:
-    """Return a new list with ``Settlement.population`` set from *population*.
-
-    Args:
-        settlements: original list.
-        population: (S,) float64 aligned with *settlements*.
-
-    Returns:
-        New list of :class:`Settlement` objects with ``population`` filled in.
-    """
+    """Return a new list with ``Settlement.population`` set from *population* (S,)."""
     pop = np.asarray(population, dtype=np.float64)
     return [dataclasses.replace(s, population=float(p)) for s, p in zip(settlements, pop)]

@@ -75,14 +75,11 @@ def measure_seed(seed: int) -> dict:
     elevations = elev_builder.elevations          # (N,) km
     n_faces = len(mesh.faces)
 
-    # Face latitudes in degrees.
     z = np.clip(mesh.face_centroids[:, 2], -1.0, 1.0)
     lat_deg = np.degrees(np.arcsin(z))            # (N,)
 
-    # Land mask: elevation above sea level.
     is_land = elevations > 0.0                    # (N,) bool
 
-    # Per-face biome index and annual precipitation from metadata.
     biomes = np.empty(n_faces, dtype=np.int8)
     precip_annual = np.empty(n_faces, dtype=np.float64)
     for i, meta in enumerate(mesh.face_metadata):
@@ -109,8 +106,7 @@ def measure_seed(seed: int) -> dict:
     eq_mask = is_land & (np.abs(lat_deg) < 5.0)
     mean_eq_precip = float(precip_annual[eq_mask].mean()) if eq_mask.any() else 0.0
 
-    # Biome distribution (as %) for ±30° land — useful for diagnosing
-    # which biome is "consuming" what share.
+    # Biome distribution (%) for ±30° land.
     in_30 = is_land & (np.abs(lat_deg) < 30.0)
     n_in_30 = max(int(in_30.sum()), 1)
     biome_dist_30 = {
@@ -173,7 +169,6 @@ def print_table(rows: list[dict]) -> None:
 def print_detail(rows: list[dict]) -> None:
     for r in rows:
         print(f"\n  Biome distribution in ±30° land (seed={r['seed']}):")
-        # Sort by descending share for readability.
         sorted_items = sorted(r["biome_dist_30"].items(), key=lambda x: -x[1])
         for name, pct in sorted_items:
             bar = "█" * int(pct / 2)

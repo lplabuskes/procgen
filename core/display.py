@@ -1,13 +1,8 @@
 """DisplayRegistry — the Qt-free surface stages contribute visualization to.
 
-Each stage's ``register_display`` adds named color schemes (callables over a
-face's metadata dict), feature overlays, and hover contributors here. A viz
-adapter (in the ``viz`` layer) later walks the registry and wires it into a
-concrete ``MapWindow`` — keeping all Qt/OpenGL out of ``core``.
-
-Hover is decomposed: every stage registers a contributor returning a list of
-status fragments for a hovered face; the registry concatenates them, so the old
-monolithic hover callback dissolves into per-stage pieces.
+Each stage's ``register_display`` adds color schemes, feature overlays and hover
+contributors (whose status fragments are concatenated); ``viz`` wires the
+registry into a ``MapWindow``, keeping Qt/OpenGL out of ``core``.
 """
 from __future__ import annotations
 
@@ -30,8 +25,7 @@ Legend = Tuple[str, list]
 
 
 # Reserved recipe source: ``(N, H, W, 3)`` unit-sphere texel positions, for layers
-# that are a function of position rather than of stored data. A region view
-# supplies its own texel positions under this key.
+# that are a function of position; a region view supplies its own.
 POSITIONS_KEY = "positions"
 
 
@@ -39,11 +33,8 @@ POSITIONS_KEY = "positions"
 class TextureRecipe:
     """How a scheme's RGBA texture is made from data textures.
 
-    ``fn`` maps a ``{key: (N, H, W, C)}`` texture dict to ``(N, H, W, 4)`` RGBA.
-    It is written once, by the stage that owns the layer, and applied to any
-    texture set on the same keys: the globe's face textures for the world map,
-    or a region's refined textures for the region view — so both views colour
-    a layer identically by construction.
+    ``fn`` maps ``{key: (N, H, W, C)}`` to ``(N, H, W, 4)`` RGBA, applied to the
+    globe's textures or a region's refined ones, so both views colour alike.
     """
 
     fn: Callable[[Mapping[str, np.ndarray]], np.ndarray]
@@ -70,8 +61,7 @@ class SchemeSpec:
 @dataclass
 class HoverSpec:
     fn: HoverFn
-    # Face-texture keys this contributor reports. A regional view that has
-    # refined all of them shows its own values in place of this contributor.
+    # Face-texture keys reported; a regional view with all of them refined shows its own values.
     refined: Tuple[str, ...] = ()
     # Shown on the world map only; a regional view describes this itself.
     world_only: bool = False
@@ -102,12 +92,8 @@ class DisplayRegistry:
         legend: Optional[Legend] = None,
         recipe: Optional[TextureRecipe] = None,
     ) -> None:
-        """Register a colour scheme.
-
-        ``texture`` names a per-face RGBA texture drawn in place of ``fn``;
-        ``recipe`` is how that texture is made, which lets a regional view
-        rebuild the layer from its own refined data.
-        """
+        """Register a colour scheme.  ``texture`` (a per-face RGBA texture) is drawn
+        in place of ``fn``; ``recipe`` lets a regional view rebuild it from refined data."""
         self.schemes[name] = SchemeSpec(fn, texture, legend, recipe)
 
     def add_overlay(
@@ -121,12 +107,8 @@ class DisplayRegistry:
         self.overlays.append(OverlaySpec(feature, label, checked, legend))
 
     def add_hover(self, fn: HoverFn, *, refined: Tuple[str, ...] = (), world_only: bool = False) -> None:
-        """Register a hover contributor.
-
-        ``refined`` names the face textures it reports on (e.g. ``("elevation",)``);
-        see ``hover``'s ``local``.  ``world_only`` drops it from a regional view
-        (one that passes ``local``), which describes that content itself.
-        """
+        """Register a hover contributor.  ``refined``: face textures it reports
+        (see ``hover``'s ``local``); ``world_only`` drops it from regional views."""
         self.hover_fns.append(HoverSpec(fn, tuple(refined), world_only))
 
     def hover(
@@ -136,12 +118,10 @@ class DisplayRegistry:
         world: "World",
         local: Optional[LocalHoverFn] = None,
     ) -> List[str]:
-        """Concatenate every registered contributor's fragments for a face.
+        """Concatenate every contributor's fragments for a face.
 
-        ``local`` lets a regional view substitute its refined values: for each
-        contributor with ``refined`` keys, ``local(keys)`` is tried first and, if
-        it returns fragments, they replace the contributor's global ones in place;
-        ``world_only`` contributors are skipped.
+        With ``local`` (a regional view), ``local(spec.refined)`` replaces a
+        contributor's fragments when not ``None``; ``world_only`` ones are skipped.
         """
         parts: List[str] = []
         for spec in self.hover_fns:

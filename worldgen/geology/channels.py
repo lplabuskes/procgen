@@ -6,11 +6,9 @@ import numpy as np
 from core.channels import MetaChannel, TextureChannel
 
 # ── Per-face metadata ────────────────────────────────────────────────────────
-# Ocean classification (written in elevation_builder; consumed by resources,
-# cost, realmgen).
+# Consumed by resources, cost, realmgen.
 IS_OCEAN = MetaChannel("is_ocean", dtype=np.bool_, default=False)
-# Per-face elevation in km (the tectonic+erosion value, not the texture). The
-# texture ELEVATION below is the per-pixel field; this is the scalar aggregate
+# Per-face tectonic+erosion elevation in km (pre-noise, not the texture mean);
 # consumed by the resources placement models.
 ELEVATION_FACE = MetaChannel("elevation", dtype=np.float64)
 # Plate classification ("oceanic"/"continental") and boundary classification

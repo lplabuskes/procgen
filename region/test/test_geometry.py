@@ -131,12 +131,7 @@ def test_local_to_lonlat_consistent_with_ecef():
 
 @pytest.mark.parametrize("antimeridian", ANTIMERIDIANS)
 def test_local_frame_is_right_handed(antimeridian):
-    """``(ds, dt)`` must be east/north-handed like the sphere itself:
-    ``ds x dt`` points outward (same way as the cell centre), on every
-    region. A face whose gnomonic ``u`` axis is a mirror image of its
-    neighbours would flip this sign — a real bug, not a rendering artefact,
-    since a screen rotation can't undo a reflection.
-    """
+    """``ds x dt`` points outward on every region: a mirrored face can't be fixed by screen rotation."""
     eps = 1e-4
     c = 0.5
     for region_id in range(N_REGIONS):
@@ -155,9 +150,7 @@ def test_local_frame_is_right_handed(antimeridian):
 
 @pytest.mark.parametrize("antimeridian", ANTIMERIDIANS)
 def test_up_direction_matches_true_north_or_antimeridian(antimeridian):
-    """``up_direction()`` must resolve to true north, or — only where north
-    is undefined, i.e. the cell centred on a pole — to the antimeridian
-    tangent, for every region."""
+    """``up_direction()`` is true north, or the antimeridian tangent on a pole-centred cell."""
     eps = 1e-4
     c = 0.5
     for region_id in range(N_REGIONS):
@@ -195,10 +188,7 @@ def test_up_direction_equatorial_faces_need_no_rotation():
 def test_up_direction_pole_regions_agree_on_the_antimeridian():
     """Both pole-centred regions render the same real-world direction as up.
 
-    Their raw ``(ds, dt)`` coefficients need not match — the two faces do not
-    share an axis convention (``_cube_face_gnomonic`` negates ``u`` on some
-    faces to keep every face right-handed) — only the actual sphere direction
-    those coefficients pick out.
+    Only the sphere direction must match, not the raw ``(ds, dt)`` (axis conventions differ).
     """
     eps = 1e-4
     c = 0.5

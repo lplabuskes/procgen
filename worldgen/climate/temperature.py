@@ -12,11 +12,7 @@ if TYPE_CHECKING:
 def annual_mean_temperature(latitudes_rad: np.ndarray,
                             equator_c: float,
                             pole_c: float) -> np.ndarray:
-    """Latitude-only annual mean temperature in °C.
-
-    Parabolic in |latitude| so equator gets `equator_c` and the poles get
-    `pole_c`.
-    """
+    """Annual mean °C, parabolic in |latitude| from `equator_c` to `pole_c`."""
     frac = np.abs(latitudes_rad) / (np.pi / 2.0)
     return equator_c - (equator_c - pole_c) * (frac ** 2)
 
@@ -40,14 +36,10 @@ def surface_temperatures(latitudes_rad: np.ndarray,
                          ) -> np.ndarray:
     """Compute (N, K) per-face seasonal temperatures in °C.
 
-    Annual mean is a parabolic-in-latitude profile. The seasonal anomaly is
-    derived from insolation departures from the annual mean, scaled by
-    `params.anomaly_scale`, then damped by an ocean-vs-land thermal inertia
-    factor. Lapse rate cools high faces uniformly across seasons.
-
-    `params` is a `TemperatureParams`. `coastal_current_temp_delta` (shape
-    `(N, K)` in °C) is added at the end as a hook for the currents stage; pass
-    None for the no-current pass.
+    Seasonal anomaly = insolation departure × `anomaly_scale`, damped by
+    ocean-vs-land thermal inertia; lapse rate applies to all seasons.
+    `coastal_current_temp_delta` ((N, K) °C) is added last; None for the
+    no-current pass.
     """
     p = params
     t_annual = annual_mean_temperature(latitudes_rad, p.equator_annual_c, p.pole_annual_c)  # (N,)
@@ -59,8 +51,7 @@ def surface_temperatures(latitudes_rad: np.ndarray,
         distance_to_coast_km, p.ocean_inertia, p.land_inertia, p.inertia_distance_km
     )                                                                                     # (N,)
 
-    # Lapse rate applies above sea level only — sub-sea-level faces are at the
-    # water surface for thermodynamic purposes, not at their bathymetric depth.
+    # Sub-sea-level faces sit at the water surface, not their bathymetric depth.
     elev_for_lapse = np.maximum(face_elevations_km, 0.0)
     t_face = (
         t_annual[:, None]
@@ -81,11 +72,9 @@ def per_pixel_temperatures(face_temperatures_c: np.ndarray,
                            mesh) -> np.ndarray:
     """Rasterize per-face temperatures to per-pixel via shared-vertex barycentric interpolation.
 
-    Face temperatures are averaged onto shared vertices so adjacent faces
-    interpolate from the same boundary values, eliminating hard seams.
-    The lapse-rate correction is applied per-pixel using the same vertex-
-    averaged reference elevation, keeping it consistent with the temperature
-    field.  Sub-sea-level pixels are pinned to sea level for lapse purposes.
+    Shared vertices make adjacent faces agree at seams. The per-pixel lapse
+    correction is relative to the same vertex-averaged reference elevation;
+    sub-sea-level pixels count as sea level.
 
     Args:
         face_temperatures_c: (N, K) per-face seasonal temperatures, °C.

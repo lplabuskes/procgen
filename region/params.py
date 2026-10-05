@@ -10,12 +10,10 @@ from region.upsample import RegionUpsampleParams
 
 @paramclass
 class RegionParams:
-    """Region-tier params: the field refinement, the regional rivers and roads,
-    and town and city refinement.
+    """Region-tier params (fields, rivers, roads, settlements); none touches the world build.
 
-    None of it touches the world build. Changing it re-refines the region on
-    screen and puts every refined town and city back on its stage site, to be
-    refined again when its region is next visited.
+    Changing them re-refines the region and resets refined towns and cities to
+    their stage sites.
     """
 
     upsample: RegionUpsampleParams = field(

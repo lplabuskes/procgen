@@ -61,11 +61,7 @@ def test_texture_positions_on_unit_sphere():
 
 
 def test_centers_map_into_their_own_region():
-    """Interior hexagon centres lie in the region they were built for.
-
-    Centres exactly on the cell edge (s or t of 0 or 1) are shared with the
-    neighbouring region and may resolve either way, so they are excluded.
-    """
+    """Interior hexagon centres lie in their region (edge centres may resolve either way)."""
     for region_id in (0, 13, 20, 53):
         grid = RegionHexGrid(RegionGeometry(region_id, np.pi), 6)
         interior = np.all((grid.centers > 1e-6) & (grid.centers < 1.0 - 1e-6), axis=1)

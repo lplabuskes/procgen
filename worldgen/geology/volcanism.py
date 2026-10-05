@@ -25,7 +25,7 @@ def _boundary_volcanic_intensity(
         if my_type == "continental" and "oceanic" in neighbor_types:
             return 0.9 * rate  # volcanic arc, oceanic subducts under continental
         if my_type == "oceanic" and "oceanic" in neighbor_types:
-            return 0.4 * rate  # potential island arc (both sides get moderate intensity)
+            return 0.4 * rate  # island arc, both sides
 
     return 0.0
 
@@ -42,23 +42,11 @@ def compute_volcanism(
 ) -> np.ndarray:
     """Compute volcanic activity per face.
 
-    Sources are boundary-driven (divergent ridges/rifts and convergent arc faces)
-    plus random hotspot sources. Activity propagates outward via BFS with
-    exponential decay; the maximum contribution wins at each face.
-
-    Args:
-        mesh: The dual polygon mesh.
-        plate_types_by_face: Per-face plate type ('oceanic' or 'continental').
-        boundary_data: Per-face dicts from classify_plate_boundaries().
-        n_hotspots: Number of random hotspot sources placed at random faces.
-        decay_rate: Exponential decay rate per BFS hop.
-        max_hops: Maximum hops each source can influence.
-        rate_norm: Normalizer for convergence/divergence rate.
-        seed: RNG seed for hotspot placement.
+    Sources are ridges/rifts, convergent arcs and random hotspots; activity
+    spreads by BFS with exponential decay per hop, max contribution wins.
 
     Returns:
-        float64 array of shape (n_faces,) with volcanic activity in [0, 1].
-        Most faces will be exactly 0.
+        (n_faces,) float64 activity in [0, 1]; mostly exactly 0.
     """
     n_faces = len(mesh.faces)
     adjacency = mesh.face_adjacency
@@ -110,8 +98,7 @@ def generate_volcano_positions(
 ) -> np.ndarray:
     """Return unit-sphere positions of above-sea-level volcano peaks.
 
-    A face qualifies if its activity exceeds `threshold`, its elevation is
-    above sea level, and no immediate neighbor has strictly higher activity.
+    A peak has activity ≥ `threshold`, elevation ≥ 0 and no neighbour with higher activity.
 
     Returns:
         float32 (K, 3) array of unit-sphere positions (may be empty).

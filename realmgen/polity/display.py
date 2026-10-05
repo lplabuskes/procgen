@@ -32,15 +32,9 @@ _CONTROL_COLORS = {
 
 
 def make_polity_tree_color(polities: List["Polity"]):
-    """Return a color scheme that tints vassals away from their sovereign's base color.
-
-    Sovereign territories render in the pure palette color.  Each vassal gets a
-    hue jitter (±20°) and a lightness boost derived from its polity_id, so all
-    subjects of the same sovereign are clearly related but individually distinct.
-    """
+    """Color scheme: sovereigns in their palette color, vassals hue-jittered and lightened by depth."""
     depth_of: dict[int, int] = {pol.polity_id: pol.depth for pol in polities}
 
-    # Pre-convert each sovereign's palette color to HLS once.
     sov_hls: dict[int, tuple] = {}
     for pol in polities:
         if pol.liege is None:
@@ -61,10 +55,9 @@ def make_polity_tree_color(polities: List["Polity"]):
         depth = depth_of.get(pid, 0)
 
         if depth > 0:
-            # Hue jitter ±10° — stable, unique per polity_id.
+            # Hue jitter ±10°, stable per polity_id.
             t = ((pid * 2654435761) & 0xFFFF) / 0xFFFF  # 0..1
             h = (h + (t - 0.5) * (20.0 / 360.0)) % 1.0
-            # Lighten toward white with depth so vassals are visually lighter.
             lit = min(lit + 0.08 + depth * 0.05, 0.82)
 
         r, g, b = colorsys.hls_to_rgb(h, lit, s)

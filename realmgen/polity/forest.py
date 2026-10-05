@@ -128,11 +128,7 @@ class ForestBuilder:
         self._renumber_sovereign_first()
 
     def _renumber_sovereign_first(self) -> None:
-        """Reassign polity IDs so all sovereigns occupy the lowest slots.
-
-        Keeps encounter order within each group so POLITY_COLORS[sovereign_id % N]
-        assigns consecutive palette entries with no accidental overlap from vassal IDs.
-        """
+        """Renumber so sovereigns take the lowest ids (consecutive POLITY_COLORS entries)."""
         old = self.polities
         sov_ids = [p.polity_id for p in old if p.liege is None]
         vas_ids = [p.polity_id for p in old if p.liege is not None]
@@ -188,8 +184,7 @@ class ForestBuilder:
             )
             prev = partition
 
-            # Project from the capital's raw power, not the whole-domain sum (which
-            # would let a big empire hold everything).
+            # Capital's raw power, not the domain sum (which would let a big empire hold everything).
             cap_power = s.populations[np.asarray(capital_sidx, dtype=np.int64)]
             gain = cohesion_to_gain(
                 scalars.cohesion,
@@ -210,8 +205,7 @@ class ForestBuilder:
                 int(x) for x in np.flatnonzero(control == int(ControlClass.INDEPENDENT)).tolist()
                 if int(x) not in existing
             ]
-            # On the final pass we must not extend after rolling, or the returned
-            # scalars/fields/partition would be stale (shorter than capital_sidx).
+            # Don't extend on the final pass, or the returned scalars/fields would be stale.
             last_pass = outer == n_outer - 1
             if not new_caps or last_pass:
                 report(
@@ -229,11 +223,7 @@ class ForestBuilder:
     def _loyalty_modifiers(self, partition: np.ndarray, capital_sidx: List[int]):
         """``(loyalty_mult, force_independent)`` for the current claim partition.
 
-        Economic grip scales each settlement's secession-resistance ratio up by its
-        intra-polity trade fraction; peripheral-wealth secession flags rich,
-        outward-trading settlements to break away as new sovereigns. Both read the
-        ``trade_attribution`` matrix; either is ``None`` when its lever is disabled
-        or no trade attribution is available.
+        Either is ``None`` when its lever is disabled or no trade attribution exists.
         """
         s, lp = self.s, self.s.p.loyalty
         grip_on = lp.economic_grip > 0.0
@@ -285,7 +275,6 @@ class ForestBuilder:
         """Greedily group vassal members within `threshold` cost distance of one another."""
         s = self.s
         source_faces = [int(s.settlement_faces[m]) for m in vassal_members]
-        # dists[i, face] = cost distance from source_faces[i] to face
         dists = dijkstra(s.land_graph, directed=False, indices=source_faces)
         n = len(vassal_members)
         assigned = np.zeros(n, dtype=bool)
@@ -321,7 +310,7 @@ class ForestBuilder:
         cap_face = int(s.settlement_faces[cap_sidx])
         domain_raw = float(s.populations[members].sum()) if members else 0.0
 
-        # Which members aren't firmly held → vassalize (authority-vs-local here).
+        # Members not firmly held (authority vs local power) become vassals.
         vassal_members: List[int] = []
         vassal_autonomy: Dict[int, float] = {}
         if depth < int(p.hierarchy.max_recursion_depth) and len(members) > 1:

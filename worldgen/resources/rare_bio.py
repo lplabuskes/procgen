@@ -1,23 +1,8 @@
 """Rare biological resource placement.
 
-Ten rare biological resources are placed based on narrow ecological criteria
-(biome, temperature, precipitation, elevation) plus independent fBm noise
-draws per type.  A global cap on each type enforces world-level rarity — only
-the top-scoring faces within the eligible zone are kept.
-
-Land resources (excluded from ocean and lake faces):
-  Spices     Tropical lowland, very hot + very wet
-  Tea        Tropical/Temperate highland, cool + wet
-  Silk       Temperate/warm, moderate climate (mulberry belt)
-  Ivory      Savannah/tropical plains, warm + moderate rain
-  Furs       Tundra/Taiga, cold boreal zone
-  Incense    Arid highlands (frankincense / myrrh hillsides)
-  Dyes       Warm subtropical, broad climate (indigo / madder)
-  Amber      Coastal boreal/temperate forest, low elevation
-  Rubber     Tropical wet lowland (Hevea brasiliensis)
-
-Ocean resource:
-  Pearls     Warm shallow coastal ocean (oyster beds), within 2 hops of land
+Each type has a narrow ecological habitat mask (biome, temperature, precipitation, elevation; Pearls
+in warm coastal ocean, the rest on land) and an independent fBm noise draw; a per-type global cap
+keeps only the top-scoring faces.
 """
 from __future__ import annotations
 
@@ -41,7 +26,7 @@ if TYPE_CHECKING:
     from worldgen.resources.builder import RareBioParams
 
 
-# Biome index constants — must match worldgen/climate/classification.py BIOME_NAMES order.
+# Must match BIOME_NAMES order.
 _ICECAP, _TUNDRA, _TAIGA, _TEMPERATE, _STEPPE, _SAVANNAH, _TROPICAL, _SEMI_ARID, _DESERT = range(9)
 
 
@@ -78,10 +63,7 @@ RARE_BIO_PALETTE = np.array([
 
 
 def _fbm_noise(centroids: np.ndarray, frequency: float, seed: int, octaves: int = 3) -> np.ndarray:
-    """fBm simplex noise at unit-sphere centroids, normalized to [0, 1].
-
-    Returns (N,) float32.
-    """
+    """(N,) float32 fBm simplex noise at unit-sphere centroids, normalized to [0, 1]."""
     perm = make_perm(seed % (2 ** 31))
     xyz = centroids.astype(np.float64)
     amp, freq, total = 1.0, float(frequency), 0.0
@@ -101,7 +83,7 @@ def _fbm_noise(centroids: np.ndarray, frequency: float, seed: int, octaves: int 
 
 
 def _cap_to_top_n(deposit_mask: np.ndarray, scores: np.ndarray, max_count: int) -> np.ndarray:
-    """Return a new mask keeping only the top max_count faces by score."""
+    """Mask keeping only the top ``max_count`` faces by score."""
     n_deposits = int(deposit_mask.sum())
     if n_deposits <= max_count:
         return deposit_mask
@@ -121,13 +103,6 @@ def place_rare_bio_resources(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Place rare biological resource deposits on the globe.
 
-    Args:
-        mesh: fully-built dual mesh (geology + climate + hydrology metadata present).
-        params: RareBioParams — noise frequency, base threshold, and the per-type
-            global caps (``max_spices`` … ``max_pearls``).
-        seed: base RNG seed; each resource type gets seed + offset so their
-            noise draws are spatially independent.
-
     Returns:
         positions:   (M, 3) float32  — unit-sphere face centroids of deposits.
         kinds:       (M,)   int8     — RARE_BIO_* index.
@@ -137,7 +112,6 @@ def place_rare_bio_resources(
     n = len(mesh.faces)
     centroids = mesh.face_centroids.astype(np.float32)
 
-    # ── read face metadata into flat arrays ─────────────────────────────────
     biome = BIOME.read(mesh)
     t_annual = TEMPERATURE_ANNUAL.read(mesh).astype(np.float32)
     p_annual = PRECIPITATION_ANNUAL.read(mesh).astype(np.float32)
@@ -149,7 +123,6 @@ def place_rare_bio_resources(
         else np.full(n, 9999.0, dtype=np.float32)
     )
 
-    # Exclude both ocean faces and lake faces from land-resource eligibility.
     lake_mask_tex = LAKE_MASK.read(mesh) if LAKE_MASK.present(mesh) else None
     if lake_mask_tex is not None:
         is_lake = lake_containing_faces(lake_mask_tex)
@@ -158,13 +131,8 @@ def place_rare_bio_resources(
 
     land = ~is_ocean & ~is_lake
 
-    # BFS hops from all non-ocean faces — used to find coastal ocean for Pearls.
-    # Ocean faces adjacent to land have hops == 1; second ring == 2, etc.
+    # Hops from land, for Pearls: ocean faces next to land are 1.
     coastal_hops = face_hops_from_seeds(mesh, ~is_ocean, max_hops=3)
-
-    # ── ecological candidate masks ───────────────────────────────────────────
-    # Each mask gates a narrow but plausible habitat; independent noise then
-    # clusters actual deposit sites within that habitat.
 
     # Spices (black pepper, cardamom, cinnamon, cloves): tropical lowland, very hot + wet.
     spices_mask = (
@@ -279,7 +247,6 @@ def place_rare_bio_resources(
         if not deposit_mask.any():
             continue
 
-        # Apply global cap: keep only the top-scoring faces.
         deposit_mask = _cap_to_top_n(deposit_mask, noise, max_count)
 
         excess = noise[deposit_mask] - p.base_threshold

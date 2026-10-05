@@ -46,7 +46,6 @@ def zonal_winds(face_centroids: np.ndarray,
 
     trade = band_dist < 30.0
     westerly = (band_dist >= 30.0) & (band_dist < 60.0)
-    # polar is the fallthrough
 
     # Direction in (east, north) basis. Trade & polar blow toward (W, equator);
     # westerlies blow toward (E, pole). Equatorward = -hemi_sign in `north`.
@@ -61,7 +60,6 @@ def zonal_winds(face_centroids: np.ndarray,
     speed = np.where(trade, p.trade_speed,
                      np.where(westerly, p.westerly_speed, p.polar_speed))   # (N, K)
 
-    # Compose 3D vectors: w = speed * (u_east * east_hat + v_north * north_hat)
     winds = (
         (speed * u_east)[..., None] * east[:, None, :]
         + (speed * v_north)[..., None] * north[:, None, :]
@@ -77,12 +75,9 @@ def pressure_winds(face_centroids: np.ndarray,
                    earth_radius_km: float = EARTH_RADIUS_KM) -> np.ndarray:
     """Cookbook pressure-gradient wind contribution from land/sea thermal contrast.
 
-    Uses a temperature-anomaly proxy for pressure: cold anomaly = high pressure,
-    warm anomaly = low pressure. The wind is purely cross-isobar (no Coriolis
-    rotation), so air flows from high to low — i.e. ``wind = K * grad(T - T_annual)``,
-    which yields ocean→land flow in summer and land→ocean flow in winter at
-    monsoonal latitudes. The ocean's larger thermal inertia means its anomaly is
-    near-zero, so the strongest contributions arise on coasts of large landmasses.
+    Temperature anomaly proxies pressure (cold = high). Purely cross-isobar, no
+    Coriolis: ``wind = K * grad(T - T_annual)`` — summer onshore, winter offshore
+    monsoons, strongest on large-landmass coasts (ocean anomaly is near zero).
 
     Args:
         face_centroids: (N, 3) unit-sphere face positions.

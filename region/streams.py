@@ -1,29 +1,19 @@
 """Regional streams — the region's own drainage network below the world's.
 
-The world's stream network stops at the hydrology stage's
-``stream_flow_threshold`` (≈ 100 global texels, ~20,000 km² of catchment), and a
-region draws only that (:mod:`region.rivers`).  A local map is fine enough to
-want the brooks between those streams, and only the region's refined relief can
-say where they run.  So, once per region:
+The world's network stops at ``stream_flow_threshold`` (~20,000 km² catchment);
+local maps want the brooks below it.  Once per region, on the rivers' raster:
 
-- Flow is routed over the region's refined elevation on the rivers' raster:
-  priority-flood from the outlets — refined sea and lakes, the region's re-routed
-  rivers, the raster edge — each node draining to the neighbour it was flooded
-  from (its lowest), which fills depressions so every node drains to an outlet.
-- Each node contributes its catchment at its annual precipitation over the
-  world's mean, in the world's flow units (one global texel at mean rain), so a
-  regional stream reads on the world's scale.  Flow is capped at the world's
-  stream threshold: anything larger is a world stream the world routed
-  elsewhere, and the region does not overrule it.
-- Nodes above ``min_catchment_km2`` are channels, cut into main stems with the
-  global stage's :func:`worldgen.hydrology.rivers.main_stem_paths`.  A stem ends
-  on the river, lake or coast it drains into.
+- Priority-flood from the outlets (refined sea and lakes, the re-routed rivers,
+  the raster edge); each node drains to the neighbour it was flooded from.
+- Each node contributes catchment × precipitation / world mean, in world flow
+  units (one global texel at mean rain).  Flow is capped at the world's stream
+  threshold: anything larger the world routed elsewhere.
+- Nodes above ``min_catchment_km2`` are channels, cut into main stems with
+  :func:`worldgen.hydrology.rivers.main_stem_paths`.
 
-The streams end *on* the region's rivers, so they never cross one, and every
-local map of a region re-routes the same network (:mod:`localmap.rivers`), so
-neighbouring local maps agree on which brooks there are.  The region view does
-not draw them.  They are not conserved against anything: the world has no
-channels this small to conserve.
+Streams end on the region's rivers, so never cross one, and every local map of
+a region re-routes the same network (:mod:`localmap.rivers`).  The region view
+doesn't draw them; nothing is conserved (the world has no channels this small).
 """
 from __future__ import annotations
 
@@ -52,8 +42,7 @@ if TYPE_CHECKING:
 class RegionStreamParams:
     """Tuning for the regional stream network the local maps draw."""
 
-    # Smallest catchment that makes a channel, km².  The raster is a regional
-    # texel (~4.5 km) apart, so much below ~100 km² is a handful of nodes.
+    # Smallest channel catchment, km² (raster nodes are ~4.5 km apart).
     min_catchment_km2: float = _f(300.0, label="Min catchment (km²)", min=20.0, max=5000.0, step=10.0)
     # Stems shorter than this many raster nodes are dropped as stubs.
     min_nodes: int = _f(3, label="Min stream length (texels)", min=2, max=20)
@@ -66,9 +55,8 @@ class RegionStreamParams:
 def _flood(elevation: np.ndarray, outlet: np.ndarray, n: int) -> tuple[np.ndarray, np.ndarray]:
     """Priority-flood an ``n × n`` grid (8-connected) from the ``outlet`` nodes.
 
-    Returns ``(parent, order)``: the node each was flooded from (its lowest
-    neighbour on the filled surface; -1 at an outlet) and the flood order, so
-    reversed it runs every node before the one it drains into.
+    Returns ``(parent, order)``: the node each was flooded from (-1 at an
+    outlet) and the flood order (reversed: upstream first).
     """
     size = n * n
     parent = np.full(size, -1, dtype=np.int64)
@@ -142,10 +130,8 @@ def build_region_streams(
 ) -> list[RiverPath]:
     """The region's streams below the world's network, ending on ``rivers``.
 
-    Paths are raster-node polylines in the world ``"rivers"`` feature's
-    ``(positions, flows, in_lake)`` form, headwater → outlet, largest flow
-    first.  Empty for a world without a ``"streams"`` feature (no threshold to
-    stay below) or without precipitation.  Deterministic.
+    ``(positions, flows, in_lake)`` polylines, headwater → outlet, largest flow
+    first.  Empty without a ``"streams"`` feature or precipitation.
     """
     params = params or RegionStreamParams()
     streams = globe.get_feature("streams")

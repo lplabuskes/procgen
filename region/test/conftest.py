@@ -1,15 +1,10 @@
 """Shared fixtures: a tiny synthetic globe with smooth analytic fields.
 
-Small enough to build in a test (a depth-3 icosphere dual), but structurally
-identical to the real thing — face textures on the same ``(N, H, W, C)`` grid the
-pipeline writes — so the upsampler is exercised on its real contract.
+A depth-3 icosphere dual with face textures on the pipeline's ``(N, H, W, C)`` grid.
 
-The water fields are *self-consistent* the way the pipeline's are, because the
-regional shoreline refinement re-floods them against the refined relief: the
-ocean is exactly the below-sea-level set, and the lake is a level set of a carved
-bowl sitting on a highland, with ``filled_height`` holding its surface.  A mask
-that did not agree with its own elevation field would make the refinement look
-broken when it is not.
+The water fields are self-consistent (the refinement re-floods them): the ocean
+is exactly the below-sea-level set, and the lake a level set of a carved bowl on
+a highland, with ``filled_height`` holding its surface.
 """
 from __future__ import annotations
 
@@ -21,28 +16,20 @@ from core.world import World
 from region.geometry import ecef_to_cell
 from worldgen.hydrology.rivers import RiverGenerator
 
-# Deliberately coarse: the tests need a *global* grid that a small test-sized
-# region grid can genuinely refine, so each global texel collects many regional
-# samples (the real pipeline gets there with 10k faces instead).
+# Coarse, so each global texel collects many samples from a small test region grid.
 GLOBAL_TEX_SIZE = 8
 
-# The lake is carved into the highest ground of this region — the one the upsample
-# tests refine — so it has a rim on every side and its shore is inside the refined
-# grid.  Region 40 is the one with both a real coastline and a decent peak.
+# The lake is carved into this region's highest ground (it has a coastline and a
+# decent peak), so it has a rim on every side inside the refined grid.
 LAKE_REGION = 40
-# A flat-bottomed pan (hence the sixth power), not a cone: real lakes are shallow
-# — a median ~40 m of water over the bed — which is what makes refining their mask
-# against sub-grid relief interesting.
+# A flat-bottomed pan (sixth power), as real lakes are shallow (median ~40 m).
 LAKE_DEPTH_KM = 0.6
 LAKE_RADIUS_RAD = 0.08
 # The water stands this far below the rim it is walled in by, leaving ~50 m of it.
 LAKE_FREEBOARD_KM = 0.55
-# The level set alone would also catch low ground far away; the cap keeps the mask
-# to the crater.  Far outside it the terrain is thirty-odd regional texels away —
-# much further than the shoreline is ever allowed to travel.
+# Keeps the level set to the crater (far beyond any shoreline travel).
 LAKE_CAP_RAD = 0.15
-# Stream threshold for the synthetic stream network (upstream texels at mean
-# rain): low enough for a few dozen channels in the test region.
+# Upstream texels at mean rain: a few dozen channels in the test region.
 STREAM_THRESHOLD = 8.0
 
 

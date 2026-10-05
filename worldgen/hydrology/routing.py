@@ -1,21 +1,8 @@
-"""Hydrological routing algorithms.
+"""Priority-Flood depression filling (Planchon & Darboux, 2001) and D-infinity
+flow routing (Tarboton, 1997).
 
-Priority-Flood depression filling (Planchon & Darboux, 2001) and
-D-infinity multi-directional flow routing (Tarboton, 1997).
-
-Public API:
-    priority_flood(elevations, ocean_mask, nbr_indptr, nbr_flat) -> (eff, was_raised)
-    compute_dinf_flow(eff, n_nodes, n_faces, pixels_per_face, resolution)
-        -> (receiver1, receiver2, frac1, frac2, flow_angle)
-    inter_face_fallback(receiver1, receiver2, frac1, frac2, flow_angle, eff,
-                        inter_adj, ocean_mask, positions, u_axes, v_axes,
-                        pixels_per_face) -> None
-    accumulate_flow(receiver1, receiver2, frac1, frac2, eff,
-                    precip_weights=None) -> flow_accum
-
-`priority_flood` and `accumulate_flow` are the two sequential per-node loops that
-dominate hydrology runtime; both are JIT-compiled with numba when available and
-fall back to equivalent pure-Python loops otherwise (bit-identical output).
+`priority_flood` and `accumulate_flow` dominate hydrology runtime; both use numba
+when available, with bit-identical pure-Python fallbacks.
 """
 from __future__ import annotations
 
@@ -75,9 +62,8 @@ if _HAVE_NUMBA:
     def _priority_flood_njit(elevations, ocean_mask, nbr_indptr, nbr_flat, eps):
         """JIT Priority-Flood with a manual binary min-heap.
 
-        The heap orders by ``(priority, node_index)`` lexicographically, exactly
-        replicating Python ``heapq``'s ``(float, int)`` tuple comparison, so the
-        pop order — and therefore eff/was_raised — match the pure-Python path.
+        Orders by ``(priority, node_index)`` like ``heapq``'s tuple comparison,
+        so pop order (and output) matches the pure-Python path.
         """
         n = elevations.shape[0]
         elev64 = elevations.astype(np.float64)   # reads, matching float(elevations[i])
@@ -158,14 +144,9 @@ def priority_flood(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Planchon-Darboux depression filling. Returns (eff, was_raised).
 
-    was_raised[i] is True for land nodes inside a topographic depression.
-    Per-step epsilon tilts the filled surface toward the spill point so the
-    bilinear gradient doesn't go to zero inside lakes.
-
-    Neighbours come from a precomputed CSR adjacency (``nbr_indptr``,
-    ``nbr_flat``): node ``key``'s neighbours are
-    ``nbr_flat[nbr_indptr[key]:nbr_indptr[key + 1]]``. Uses the numba kernel
-    when available, else an equivalent pure-Python loop.
+    was_raised[i] marks land nodes inside a depression. A per-step epsilon
+    tilts filled surfaces toward the spill point so gradients never vanish in lakes.
+    Neighbours are CSR: ``nbr_flat[nbr_indptr[key]:nbr_indptr[key + 1]]``.
     """
     if _HAVE_NUMBA:
         return _priority_flood_njit(elevations, ocean_mask, nbr_indptr, nbr_flat, _EPS)
@@ -199,10 +180,9 @@ def compute_dinf_flow(
 
     face_offsets = (np.arange(n_faces, dtype=np.int64) * pixels_per_face)[:, None, None]
 
-    # Each facet: (cardinal_dr, cardinal_dc, diag_dr, diag_dc, base, sign).
-    # +V (row+1) is north, +U (col+1) is east. `base` is the global UV angle
-    # of the cardinal direction; `sign` indicates whether the diagonal lies
-    # CCW (+1) or CW (-1) from the cardinal in the (U east, V north) frame.
+    # (cardinal_dr, cardinal_dc, diag_dr, diag_dc, base, sign). +V (row+1) is
+    # north, +U (col+1) east; `base` is the cardinal's UV angle, `sign` +1 if the
+    # diagonal is CCW of it.
     facets = [
         (0, +1, +1, +1, 0.0,            +1.0),   # E + NE
         (+1, 0, +1, +1, np.pi / 2,      -1.0),   # N + NE
@@ -283,9 +263,7 @@ def inter_face_fallback(
     v_axes: np.ndarray,
     pixels_per_face: int,
 ) -> None:
-    """Route boundary nodes with no descending intra-face facet to their
-    steepest inter-face neighbour (D8 single receiver). Updates in place.
-    """
+    """Route boundary nodes with no intra-face descent to the steepest inter-face neighbour, in place."""
     if not inter_adj:
         return
     for src, neighbors in inter_adj.items():
@@ -347,9 +325,8 @@ def _accumulate_flow_py(
 if _HAVE_NUMBA:
     @njit(cache=True)
     def _accumulate_flow_njit(receiver1, receiver2, frac1, frac2, order, flow_accum):
-        # Each increment is formed in float64, cast to float32, then added in
-        # float32 — exactly numpy 2.x (NEP 50) `float32[i] += python_float`
-        # semantics, so the result is bit-identical to the pure-Python path.
+        # float64 increment cast to float32 then added in float32 — NEP 50
+        # `float32[i] += python_float` semantics, bit-identical to the Python path.
         for i in range(order.shape[0]):
             key = order[i]
             r1 = receiver1[key]
@@ -375,9 +352,7 @@ def accumulate_flow(
 ) -> np.ndarray:
     """Multi-receiver accumulation in eff-descending order.
 
-    The ``argsort`` is done in NumPy (passed into the kernel) so the addition
-    order — and therefore the float result — is identical to the pure-Python
-    path regardless of which backend runs the loop.
+    The ``argsort`` runs in NumPy so addition order is identical on either backend.
     """
     n = len(eff)
     if precip_weights is not None:

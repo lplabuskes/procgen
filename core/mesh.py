@@ -7,8 +7,7 @@ import numpy as np
 class GeometryStore(Protocol):
     """Persistent home for a mesh's derived geometry (see ``core.mesh_cache``).
 
-    ``load`` returns the arrays saved under ``key``, or ``None`` when there are
-    none (or they are stale); ``save`` may silently fail.
+    ``load`` returns ``None`` when absent or stale; ``save`` may silently fail.
     """
 
     def load(self, key: str) -> Optional[Tuple[np.ndarray, ...]]: ...
@@ -43,8 +42,7 @@ def _edge_pixels(
     return [(float(ts[i]), int(rows[i]), int(cols[i])) for i in order]
 
 
-# Target element count for one batched (chunk, tex_size²) band array. Bounds
-# peak memory of the vectorised seam matching (~32 MB per float64 array).
+# Element budget for one (chunk, tex_size²) band array: ~32 MB per float64 array.
 _BAND_BATCH_ELEMS = 4_000_000
 
 
@@ -82,13 +80,10 @@ class PolygonMesh:
 
         self.face_textures: Dict[str, np.ndarray] = {}
         self.face_metadata: List[Dict[str, Any]] = [{} for _ in range(n_faces)]
-        # Matched seam pixel pairs depend only on geometry + tex_size, so cache
-        # them per resolution (keyed by tex_size) and reuse across all passes.
+        # Seam pixel pairs per tex_size and texel positions per (h, w): geometry-only, read-only.
         self._boundary_pair_cache: Dict[int, Tuple[np.ndarray, ...]] = {}
-        # Likewise every face's texel positions, per (h, w); read-only.
         self._texture_position_cache: Dict[Tuple[int, int], np.ndarray] = {}
-        # Where both of those persist across loads of the same mesh, if anywhere
-        # (set by ``core.mesh_cache``; bump its GEOMETRY_VERSION when either changes).
+        # Persists both across loads (set by ``core.mesh_cache``; bump its GEOMETRY_VERSION on change).
         self.geometry_store: Optional[GeometryStore] = None
         self.face_adjacency: List[List[int]] = self._build_face_adjacency()
         self.face_centroids: np.ndarray = self._compute_face_centroids()
@@ -379,10 +374,7 @@ class PolygonMesh:
         )
 
     def boundary_pixel_pairs(self, tex_size: int) -> Tuple[np.ndarray, ...]:
-        """Cached (face_a, face_b, row_a, col_a, row_b, col_b) matched seam pixel pairs.
-
-        Computed once per tex_size and cached; result is read-only.
-        """
+        """Cached, read-only (face_a, face_b, row_a, col_a, row_b, col_b) matched seam pixel pairs."""
         cached = self._boundary_pair_cache.get(tex_size)
         if cached is not None:
             return cached
@@ -418,11 +410,9 @@ class PolygonMesh:
     def face_texture_positions(self, h: int, w: int, faces: Optional[Sequence[int]] = None) -> np.ndarray:
         """Return float32 (N, H, W, 3) unit-sphere positions for each face's pixel grid.
 
-        Adjacent faces share edge vertices, so shared-edge pixels map to the same 3D point
-        in both faces (continuous across boundaries). Corner pixels outside the polygon are
-        assigned to the nearest fan triangle by largest-minimum-barycentric extrapolation.
-        Given ``faces``, only those, in that order: ``(len(faces), H, W, 3)``.
-        The full set is cached per ``(h, w)`` and returned read-only.
+        Shared-edge pixels map to the same point in both faces; corner pixels outside
+        the polygon extrapolate from the fan triangle with the largest minimum barycentric.
+        Given ``faces``, only those, in that order.  The full set is cached read-only.
         """
         cached = self._texture_position_cache.get((h, w))
         if cached is not None:
@@ -465,7 +455,6 @@ class PolygonMesh:
             e1_3d = verts_3d[1:-1] - v0_3d   # (n_tris, 3)
             e2_3d = verts_3d[2:] - v0_3d     # (n_tris, 3)
 
-            # 2D signed-area determinant per triangle.
             det = e1_uv[:, 0] * e2_uv[:, 1] - e1_uv[:, 1] * e2_uv[:, 0]
             det = np.where(np.abs(det) < 1e-12, 1.0, det)
 
@@ -478,9 +467,8 @@ class PolygonMesh:
             gamma = e1_cross_pv / det[None, :]
             alpha = 1.0 - beta - gamma
 
-            # Pick the triangle a pixel lies in (all bary >= 0). Outside-the-polygon
-            # pixels get the triangle they're "closest to" — i.e. the one with the
-            # largest minimum barycentric coordinate. This extrapolates linearly.
+            # The containing triangle, or for outside pixels the one with the largest
+            # minimum barycentric (linear extrapolation).
             min_bary = np.minimum(alpha, np.minimum(beta, gamma))
             best_tri = np.argmax(min_bary, axis=1)
             b_sel = beta[pix_idx, best_tri]
@@ -498,13 +486,11 @@ class PolygonMesh:
     def face_texture_in_polygon(
         self, h: int, w: int, *, eps: float = 1e-9, faces: Optional[Sequence[int]] = None,
     ) -> np.ndarray:
-        """Return a bool ``(N, H, W)`` mask: which texels fall *inside* each face's
-        rendered polygon (vs. the square texture's over-hanging corners).
+        """Bool ``(N, H, W)``: texels inside each face's rendered polygon (vs. the
+        square texture's over-hanging corners).
 
-        A texel is inside iff its center or any of its four corners lies within one
-        of the face's fan triangles (all barycentric coords >= -eps).  This errs on
-        the side of inclusion for texels that straddle the polygon boundary.
-        Given ``faces``, only those, in that order: ``(len(faces), H, W)``.
+        Inside iff the centre or any corner is in a fan triangle (barycentrics >= -eps),
+        so straddling texels count as inside.  Given ``faces``, only those, in that order.
         """
         u_coords = np.linspace(0.0, 1.0, w, dtype=np.float64)
         v_coords = np.linspace(0.0, 1.0, h, dtype=np.float64)
@@ -555,7 +541,6 @@ class Mesh(PolygonMesh):
         super().__init__(sorted_vertices, remapped_faces)
 
     def mesh_dual(self) -> PolygonMesh:
-        # First compute the centroids of each face
         dual_vertices = []
         for face in self.faces:
             pts = self.vertices[np.array(face)]
@@ -564,7 +549,6 @@ class Mesh(PolygonMesh):
             dual_vertices.append(centroid)
         dual_vertices = np.array(dual_vertices)
 
-        # Now, for each vertex in the original mesh, find all faces that include it
         dual_faces_dict: Dict[int, list[int]] = {}
         for face_idx, face in enumerate(self.faces):
             for v in face:
@@ -573,11 +557,8 @@ class Mesh(PolygonMesh):
                 else:
                     dual_faces_dict[v].append(face_idx)
 
-        # Reorder the face indices in each dual face to be CCW when viewed from outside.
-        # We project each face centroid onto the tangent plane at the vertex and
-        # sort by angle in that local 2D frame. Using the global XY projection
-        # (arctan2 of the raw x/y components) fails for equatorial vertices because
-        # it ignores the z-component of the displacement vectors.
+        # Order each dual face CCW from outside by angle in the vertex's tangent plane
+        # (a global XY arctan2 fails for equatorial vertices).
         dual_faces = []
         for v_idx, face_indices in dual_faces_dict.items():
             v = self.vertices[v_idx]
@@ -688,7 +669,6 @@ class Mesh(PolygonMesh):
                 add_face(fi2, new_f2)
 
             # --- Spring relaxation phase ---
-            # Build directed edge arrays for vectorized mean-neighbor computation
             src_list, dst_list = [], []
             for v in range(n_verts):
                 for u in adj[v]:
@@ -705,7 +685,6 @@ class Mesh(PolygonMesh):
                 verts += stiffness * (target - verts)
                 verts /= np.linalg.norm(verts, axis=1, keepdims=True)
 
-        # Commit results
         self.vertices = verts.astype(np.float32)
         self.faces = faces
         n_faces = len(faces)

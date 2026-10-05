@@ -1,22 +1,12 @@
-"""Annually-averaged surface ocean currents and their climate feedback.
+"""Annual-mean surface ocean currents and their climate feedback.
 
-Barotropic Stommel streamfunction model (with β-plane western intensification):
+Barotropic Stommel model: per-ocean-face streamfunction ψ (ψ=0 on land, closing
+each basin) solving L·ψ − β·∂ψ/∂e = −curl(τ), with τ the quadratic-drag wind
+stress, L the Voronoi-weighted graph Laplacian (≈ −∇²) and β = 2Ω·cos(φ)/R.
+Velocity u = k̂ × ∇ψ is divergence-free with western intensification; it
+advects insolation into an SST anomaly that decays inland.
 
-- A scalar streamfunction ψ is defined per ocean face, with ψ=0 on the
-  ocean–land boundary so each basin is naturally closed.
-- The streamfunction satisfies L·ψ − β·∂ψ/∂e = −curl(τ), where τ is the
-  quadratic-drag wind stress (C_D·|u|·u), L is the Voronoi-weighted graph
-  Laplacian (FVM approximation of −∇²), and β = 2Ω·cos(φ)/R is the
-  planetary vorticity gradient. The non-symmetric system is solved by GMRES.
-- Velocity is recovered from ψ via u = k̂ × ∇ψ on each ocean face, giving
-  a divergence-free flow with western-boundary intensification.
-- The advection step (insolation → SST anomaly) and the inland-decay
-  step are unchanged: they only consume the velocity vector.
-
-No seasonal breakdown — the model produces a single per-face (N,)
-anomaly that the climate builder broadcasts across seasons via the
-`coastal_current_temp_delta` and `current_wet_delta` hooks already
-exposed by `surface_temperatures` and `surface_precipitation`.
+Output is a single (N,) anomaly; the climate builder broadcasts it across seasons.
 """
 from __future__ import annotations
 
@@ -49,17 +39,15 @@ def _adjacency_pairs(mesh) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _voronoi_edges(mesh, is_ocean: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """``(src, dst, w)`` for each directed ocean→any edge: w = edge_len / centroid_dist.
+    """``(src, dst, w)`` per directed ocean→any edge, w = edge_len / centroid_dist.
 
-    In adjacency order, ocean faces only. A neighbour sharing no polygon edge
-    (degenerate topology) is skipped.
+    Adjacency order; neighbours sharing no polygon edge are skipped.
     """
     n = len(mesh.faces)
     verts = np.asarray(mesh.vertices, dtype=np.float64)
     centroids = np.asarray(mesh.face_centroids, dtype=np.float64)
 
-    # Every polygon edge, keyed by its sorted vertex pair; a key held by two
-    # faces is the edge they share.
+    # Polygon edges keyed by sorted vertex pair; a key held twice is a shared edge.
     sizes = np.fromiter((len(f) for f in mesh.faces), dtype=np.int64, count=n)
     fv = np.fromiter((v for f in mesh.faces for v in f), dtype=np.int64, count=int(sizes.sum()))
     face_of = np.repeat(np.arange(n, dtype=np.int64), sizes)
@@ -125,14 +113,11 @@ def _solve_streamfunction(mesh: PolygonMesh,
                           max_iter: int = 200) -> np.ndarray:
     """Sparse solve of (L - β·D_east)·ψ = rhs on the ocean face graph, ψ=0 on land.
 
-    L is the Voronoi-weighted graph Laplacian (w = edge_len / centroid_dist).
-    The β·D_east term (Stommel planetary vorticity gradient) breaks symmetry,
-    producing western-boundary intensification. Land rows are identity.
+    The β·D_east term breaks symmetry → western intensification. Land rows are identity.
     """
     n = len(mesh.faces)
     centroids = face_centroids.astype(np.float64)
 
-    # Voronoi-weighted Laplacian
     src, dst, w = _voronoi_edges(mesh, is_ocean)
     if not src.size:
         return np.zeros(n, dtype=np.float64)
@@ -153,14 +138,14 @@ def _solve_streamfunction(mesh: PolygonMesh,
         shape=(n, n),
     )
 
-    # β-plane east-derivative: finite difference to nearest-east neighbour
+    # β-plane east-derivative: finite difference to the most-eastward neighbour.
     lat = np.arcsin(np.clip(centroids[:, 2], -1.0, 1.0))
     beta_arr = beta_scale * 2.0 * EARTH_ROTATION_RAD_S * np.cos(lat) / EARTH_RADIUS_KM
 
     east_axes, _ = _tangent_frames(centroids)
     a_src, a_dst = _adjacency_pairs(mesh)
     proj = np.sum((centroids[a_dst] - centroids[a_src]) * east_axes[a_src], axis=1) * EARTH_RADIUS_KM
-    # Each face's most-eastward neighbour (the first, on a tie).
+    # First on a tie.
     order = np.lexsort((np.arange(a_src.size), -proj, a_src))
     first = order[np.flatnonzero(np.r_[True, a_src[order][1:] != a_src[order][:-1]])]
     east_dst = np.full(n, -1, dtype=np.int64)
@@ -178,17 +163,13 @@ def _solve_streamfunction(mesh: PolygonMesh,
         shape=(n, n),
     )
 
-    # Stommel operator: A = L - diag(β) · D_east
     A = L - sp.diags(beta_arr) @ D_east
 
-    # Scale rhs by EARTH_RADIUS_KM so that ψ has the same magnitude as the
-    # old 1/d Laplacian (which had units 1/km, making L*ψ match curl(τ) in
-    # (m²/s²)/km; here L is dimensionless so we restore the km factor explicitly).
+    # L is dimensionless but curl(τ) is per km: the km factor keeps ψ's calibrated magnitude.
     b = np.zeros(n, dtype=np.float64)
     b[is_ocean] = rhs[is_ocean] * EARTH_RADIUS_KM
 
-    # Direct solve; every ocean basin borders land, which pins ψ. Only a world
-    # with no land leaves A singular — fall back to GMRES's best effort there.
+    # Land pins ψ in every basin; only a landless world is singular → GMRES fallback.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", spla.MatrixRankWarning)
         psi = np.asarray(spla.spsolve(A.tocsc(), b), dtype=np.float64)
@@ -218,11 +199,8 @@ def _build_advection_edges(mesh: PolygonMesh,
                            ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Build sparse flow edges (src, dst, weight) on the ocean-only face graph.
 
-    Each edge weight is `max(0, current[src] · direction_to_dst)` — the
-    component of the source's current vector that actually points toward
-    the destination. Normalisation happens at the destination side inside
-    `_advect_field` so each face takes a weighted *average* of its inflow
-    rather than a sum (which would blow up at convergence sinks).
+    Weight is `max(0, current[src] · direction_to_dst)`. `_advect_field`
+    normalises per destination (average, not sum, so convergence sinks stay bounded).
     """
     centroids = mesh.face_centroids.astype(np.float64)
     src_list: list[int] = []
@@ -239,7 +217,7 @@ def _build_advection_edges(mesh: PolygonMesh,
             if not is_ocean[nb]:
                 continue
             d = centroids[nb] - n_hat
-            d -= d.dot(n_hat) * n_hat            # project onto tangent plane at f
+            d -= d.dot(n_hat) * n_hat            # tangent plane at f
             dn = float(np.linalg.norm(d))
             if dn < 1e-12:
                 continue
@@ -268,12 +246,9 @@ def _advect_field(local: np.ndarray,
 
     advected[f] = (1-α)·local[f] + α·(Σ_in w·advected[upstream] / Σ_in w)
 
-    Per-destination normalisation keeps the operator row-stochastic over
-    faces with any inflow (zero rows elsewhere), so the steady state is
-    bounded between min and max of `local`. The (1-α) anchor also keeps
-    the system contracting in the presence of cycles. Faces with no
-    inflow (sources / blocked-by-land currents) are pinned to their own
-    local value — they emit but do not absorb.
+    Row-stochastic over faces with inflow, so the result stays within
+    [min, max] of `local`; the (1-α) anchor keeps cycles contracting. Faces
+    with no inflow are pinned to `local`.
     """
     n = len(local)
     advected = local.copy().astype(np.float64)
@@ -288,8 +263,6 @@ def _advect_field(local: np.ndarray,
     inv_inflow = np.zeros(n, dtype=np.float64)
     inv_inflow[has_inflow] = 1.0 / inflow_total[has_inflow]
 
-    # Normalise weights by destination inflow total and build a sparse
-    # row-stochastic matrix W so each iteration is a single sparse matvec.
     norm_w = weights * inv_inflow[dst]
     W = sp.csr_matrix((norm_w, (dst, src)), shape=(n, n))
 
@@ -307,15 +280,13 @@ def _propagate_inland(ocean_delta: np.ndarray,
                       decay_km: float) -> tuple[np.ndarray, np.ndarray]:
     """Dijkstra from every ocean face, tracking the source ocean for each land face.
 
-    Returns (full_delta, distance_km). For ocean faces, full_delta equals
-    `ocean_delta`. For land faces it is `ocean_delta[parent] · exp(-d/decay)`.
-    Unreachable land (none in practice) ends up at zero.
+    Returns (full_delta, distance_km): `ocean_delta` on ocean, and
+    `ocean_delta[parent] · exp(-d/decay)` on land (0 if unreachable).
     """
     n = len(mesh.faces)
     centroids = mesh.face_centroids.astype(np.float64)
 
-    # Build face-distance graph + virtual multi-source node at index n (weight 0
-    # to every ocean face) for single-call multi-source Dijkstra.
+    # Virtual node n with 0-weight edges to every ocean face → one multi-source Dijkstra.
     rows: list[int] = []
     cols: list[int] = []
     data: list[float] = []
@@ -339,8 +310,7 @@ def _propagate_inland(ocean_delta: np.ndarray,
     dist = dist_full[:n]
     pred = pred_full[:n]
 
-    # Walk the predecessor tree in distance order to assign each face the
-    # nearest ocean face as its parent (ocean faces are their own parents).
+    # Distance order guarantees a predecessor's parent is set first.
     ocean_parent = np.full(n, -1, dtype=np.int64)
     for f in np.argsort(dist):
         if is_ocean[f]:
@@ -376,12 +346,8 @@ def compute_currents(mesh: PolygonMesh,
         face_elev_km: (N,) per-face elevation in km.
         face_centroids: (N, 3) unit-sphere face positions.
         winds_per_season: (N, K, 3) seasonal wind vectors from `zonal_winds`.
-        face_insolation: (N,) annual-mean insolation in W/m² (mean of the
-            seasonal `seasonal_insolation` output along the season axis).
-        params: CurrentsParams — β scale, advection mixing/iterations, the
-            temperature/precipitation feedback scales, and inland decay.
-        sea_level: elevation threshold defining the ocean mask.
-        is_ocean: optional precomputed ocean mask; derived from sea_level if None.
+        face_insolation: (N,) annual-mean insolation in W/m².
+        is_ocean: optional ocean mask; derived from sea_level if None.
     """
     p = params
     n = len(mesh.faces)
@@ -391,8 +357,6 @@ def compute_currents(mesh: PolygonMesh,
     annual_winds = winds_per_season.astype(np.float64).mean(axis=1)         # (N, 3)
     centroids = face_centroids.astype(np.float64)
 
-    # Stommel balance: L·ψ − β·∂ψ/∂e = −curl(τ), where L is the Voronoi
-    # Laplacian (≈ −∇²) and the β term drives western-boundary intensification.
     curl_tau = _wind_stress_curl(centroids, mesh.face_adjacency, annual_winds)
     psi = _solve_streamfunction(mesh, centroids, is_ocean, -curl_tau,
                                 beta_scale=p.beta_scale)

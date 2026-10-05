@@ -1,18 +1,9 @@
 """Per-pixel forest density texture.
 
-Forest density is biome-gated, then modulated by precipitation, capped by a
-treeline cutoff, lifted slightly near rivers/lakes, and given a small noise
-component for visual variation:
-
     forest = clip(biome_baseline × P_modulation × treeline + riparian + noise, 0, 1)
 
-When `mesh` is supplied to `compute_forest_density`, the three per-face inputs
-(biome baseline, biome precipitation reference, and the riparian bonus) are
-rasterized via `rasterize_face_values` — averaged onto shared vertices and
-barycentric-interpolated within fan triangles — so adjacent biomes blend
-continuously instead of producing a blocky per-face appearance.
-
-Ocean pixels are zeroed via `ocean_mask`.
+With a `mesh`, the per-face inputs (biome baseline, precipitation reference, riparian bonus) are
+rasterized via `rasterize_face_values` so adjacent biomes blend.  Ocean pixels are zeroed.
 """
 from __future__ import annotations
 
@@ -28,10 +19,7 @@ if TYPE_CHECKING:
     from worldgen.resources.builder import ForestDensityParams
 
 
-# Biome index → forest density baseline. Indices follow `BIOME_NAMES` in
-# `worldgen/climate/classification.py`:
-#   0 Icecap, 1 Tundra, 2 Taiga, 3 Temperate, 4 Steppe,
-#   5 Savannah, 6 Tropical, 7 Semi-Arid, 8 Desert.
+# Biome index (`BIOME_NAMES`) → forest density baseline.
 BIOME_FOREST_BASELINE = np.array([
     0.00,  # Icecap
     0.00,  # Tundra
@@ -44,9 +32,7 @@ BIOME_FOREST_BASELINE = np.array([
     0.00,  # Desert
 ], dtype=np.float32)
 
-# Reference annual precipitation (mm) used to centre per-pixel modulation
-# around each biome's "normal" wetness. Pixels with P notably above the
-# reference get a small density boost; pixels notably below get a small cut.
+# Each biome's "normal" annual precipitation (mm); wetter pixels gain density, drier ones lose it.
 BIOME_PRECIP_REFERENCE_MM = np.array([
     100.0,  # Icecap
     250.0,  # Tundra
@@ -68,19 +54,7 @@ def _value_noise(
     lacunarity: float = 2.0,
     persistence: float = 0.5,
 ) -> np.ndarray:
-    """fBm simplex noise sampled at `positions`, normalised to roughly [-1, 1].
-
-    Args:
-        positions: (N, H, W, 3) float32 unit-sphere positions.
-        seed: int — controls the permutation table.
-        octaves: number of fBm octaves to sum.
-        base_frequency: spatial frequency of the lowest octave (cycles/unit).
-        lacunarity: frequency multiplier between octaves.
-        persistence: amplitude multiplier between octaves.
-
-    Returns:
-        (N, H, W) float32.
-    """
+    """(N, H, W) float32 fBm simplex noise at (N, H, W, 3) unit positions, roughly in [-1, 1]."""
     n, h, w, _ = positions.shape
     flat = positions.reshape(-1, 3).astype(np.float64)
     perm = make_perm(seed)
@@ -116,16 +90,10 @@ def compute_forest_density(
         precipitation_tex: (N, H, W, K) float32 mm/season.
         elevation_tex: (N, H, W, 1) float32 km.
         ocean_mask_tex: (N, H, W, 1) uint8; 1=ocean.
-        face_biome: (N,) int — per-face biome index.
-        riparian_hops: (N,) int — face-graph hops from any river/lake face.
-        pixel_positions: (N, H, W, 3) float32 unit-sphere positions, or None
-            to skip the noise component entirely.
-        params: ForestDensityParams — precipitation/treeline/riparian/noise knobs.
-        seed: noise seed (from the top-level resources seed).
-        mesh: optional PolygonMesh. When provided, per-face baseline / P_ref /
-            riparian-bonus values are rasterized via `rasterize_face_values`
-            so adjacent biomes blend continuously instead of looking blocky.
-            When omitted, each value is broadcast per face.
+        face_biome: (N,) int biome index.
+        riparian_hops: (N,) int — face hops from any river/lake face.
+        pixel_positions: (N, H, W, 3) unit-sphere positions, or None to skip noise.
+        mesh: if given, per-face inputs are rasterized smoothly; otherwise broadcast per face.
 
     Returns:
         (N, H, W, 1) float32 in [0, 1].

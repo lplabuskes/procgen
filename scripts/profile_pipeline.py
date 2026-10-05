@@ -1,15 +1,7 @@
 """Profile where time goes in the full worldgen + realmgen pipeline.
 
-Every stage builder threads a ``progress(msg)`` callback that is called once at
-the start of each internal phase. By wrapping that callback with a timer we get
-a per-phase wall-clock breakdown of the entire pipeline without touching any
-builder code — the duration of a phase is simply the gap between its progress
-message and the next one (the final phase is closed when ``build()`` returns).
-
-Phases are rolled up into top-level stages by recognising each stage's first
-message: nine worldgen stages (elevation, climate, hydrology, delta, lake_feedback,
-coast, resources, danger, cost) and six realmgen stages (scoring, placement,
-population, polity, refine, towns).
+Times the gaps between the builders' ``progress(msg)`` callbacks for a per-phase
+wall-clock breakdown, rolled up into stages by each stage's first message.
 
 Usage:
     python3 scripts/profile_pipeline.py              # seed 42, 1 timed run
@@ -64,8 +56,7 @@ STAGE_ORDER = [
 class PhaseTimer:
     """Records the wall-clock duration of each progress phase.
 
-    Each call marks the boundary between the previous phase and the next one.
-    Call ``finish()`` after the pipeline returns to close the final phase.
+    Each call marks a phase boundary; ``finish()`` closes the final phase.
     """
 
     def __init__(self) -> None:
@@ -138,9 +129,7 @@ def aggregate(runs: list[list[tuple[str, str, float]]]) -> tuple[OrderedDict, Or
 def run_cprofile(seed: int, module: str, top: int) -> None:
     """Run one build under cProfile and print the hottest functions.
 
-    Reports both by total time (time inside the function itself) and cumulative
-    time (function + everything it calls). If ``module`` is given, the listing is
-    filtered to functions defined under worldgen/<module>/.
+    Reports by total and cumulative time, optionally filtered to ``module``.
     """
     params = GlobeParams()
     params.seed = seed
@@ -155,8 +144,7 @@ def run_cprofile(seed: int, module: str, top: int) -> None:
 
     restriction: tuple = (top or 25,)
     if module:
-        # Accept bare name (e.g. "hydrology" → "worldgen/hydrology/")
-        # or a full sub-path (e.g. "realmgen/polity" used as-is).
+        # Bare name ("hydrology" → "worldgen/hydrology/") or a full sub-path.
         path_filter = module if "/" in module else f"worldgen/{module}/"
         restriction = (path_filter, top or 25)
 

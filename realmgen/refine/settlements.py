@@ -1,31 +1,15 @@
 """Texel-level settlement siting.
 
-A settlement's face-level position is its face centroid. This module moves it to
-the best site among its face's owned land texels (see
-:mod:`realmgen.refine.sites`), scored as a weighted sum:
+Moves each settlement from its face centroid to the best owned land texel of its
+face, scored as a weighted sum of harbour (ocean, else lake), confluence or
+river (additive with coast, so a river mouth beats a bare shore), 3×3
+fertility, a mild pull to the face centre (keeps cities off seams), and a small
+per-``(seed, face)`` jitter (avoids a visible lattice at region scale).
 
-- **Harbour** — land adjacent to ocean (``SITE_OCEAN``), or failing that to a
-  lake (``SITE_LAKE``). Worth the most: ports are where medieval cities grew.
-- **River confluence** (``SITE_CONFLUENCE``), or any **river** (``SITE_RIVER``).
-  Additive with the coast, so a river mouth beats a bare shore.
-- **Fertility** — the local (3×3) soil around the texel (``SITE_FERTILITY``).
-- **Centrality** — a mild pull toward the face centre (``SITE_CENTRE``, at the
-  face's circumradius), so among equals a city does not sit on the seam.
-- **Jitter** — a small per-``(seed, face)`` random term (``SITE_JITTER``), so
-  otherwise-uniform inland faces do not all put their city in the same spot of
-  the texel grid (which reads as a lattice at region scale).
-
-**Spacing.** Cities are sited largest first, and a site closer than
-``min_spacing`` to an already-sited city is rejected — so two cities on adjacent
-faces cannot crowd the shared edge. The bigger city gets its pick; the smaller
-one takes its best remaining site. If every site is too close, it takes the one
-farthest from its neighbours.
-
-Positions are mutated in place on the ``Settlement`` objects, which also keep
-what the chosen site offered (``Settlement.site_kind``) so the region and local
-tiers can re-site the city without losing its harbour or river.  The function
-returns the ``{old_position_key: new_position}`` map so dependent geometry (trade
-routes) can be remapped without re-deriving which settlement moved.
+Cities are sited largest first; sites within ``min_spacing`` of an already-sited
+city are rejected (if all are, the farthest is taken). ``Settlement.site_kind``
+records what the site offered so the region/local tiers can re-site without
+losing a harbour or river.
 """
 from __future__ import annotations
 
@@ -129,8 +113,7 @@ def refine_settlement_positions(
 
 
 def remap_routes(routes, moved: dict) -> list:
-    """Return a copy of trade routes with endpoints moved to refined settlement
-    positions.  Endpoints not matching a moved settlement are left unchanged."""
+    """Copy of trade routes with endpoints moved to refined settlement positions."""
     if not routes:
         return routes
     out = []

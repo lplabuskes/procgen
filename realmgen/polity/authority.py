@@ -18,9 +18,8 @@ from realmgen.polity.types import ControlClass
 class ProjectionDistances:
     """Cost-distance rows from capital faces over the land and hybrid graphs, cached.
 
-    A polity build projects the same capitals again and again (each sovereign,
-    then each subtree, over every fragmentation epoch), and a face's distances
-    depend only on the graphs, so each face's Dijkstra runs once.
+    The same capitals are projected repeatedly (per subtree, per epoch), so each
+    face's Dijkstra runs once.
     """
 
     def __init__(self, land_graph: csr_matrix, hybrid_graph: Optional[csr_matrix], n_faces: int) -> None:
@@ -67,23 +66,16 @@ def compute_authority_fields(
         land_range = base_range * (range_floor + infrastructure)
         auth_land  = legitimacy * exp(-land_dist / land_range)
 
-    ``land_dist`` is the undirected multi-source cost-distance from all capitals.
-    Cheap terrain carries the field far; rugged/dangerous terrain (baked into the
-    edge costs) pinches it, creating the interior **saddles** where vassalage
-    concentrates. With a hybrid land/sea graph, a sea channel
-    (``sea_weight * legitimacy * maritime_reach``, range x ``sea_range_factor``) is
-    max-combined in, so a high-maritime coastal capital beads authority along
-    coastlines.
+    Rugged/dangerous terrain (baked into edge costs) pinches the field, creating
+    the interior saddles where vassalage concentrates. With a hybrid graph a sea
+    channel (``sea_weight * legitimacy * maritime_reach``, range x
+    ``sea_range_factor``) is max-combined in.
 
-    ``sea_range_factor`` and ``sea_weight`` keep the sea channel a *local coastal
-    supplement* rather than a global plateau: when the sea range is a large
-    multiple of the land range, cheap sea travel flattens ``auth_sea`` to ~constant
-    ``legitimacy * maritime_reach`` across the whole coastal world, and that plateau
-    wins the claiming ``argmax`` against every nearer land capital. A modest factor
-    (decay comparable to land) plus ``sea_weight < 1`` bounds the maritime edge.
+    Keep ``sea_range_factor`` modest and ``sea_weight <= 1``: a large sea range
+    flattens ``auth_sea`` into a world-wide coastal plateau that wins the claiming
+    ``argmax`` against every nearer land capital.
 
-    ``distances`` caches the Dijkstra rows across calls; it must be over the same
-    two graphs.
+    ``distances`` caches Dijkstra rows; it must be over the same two graphs.
     """
     caps = np.asarray(capital_faces, dtype=np.int64)
     if caps.size == 0:
@@ -118,12 +110,10 @@ def claim_faces(
 ) -> Tuple[np.ndarray, int]:
     """Assign each eligible face to its strongest projector, ``-1`` if none.
 
-    Pure ``argmax_k field[k, face]``, except the incumbent claimant's field gets a
-    ``(1 + hysteresis)`` bonus so contested faces stick rather than flicker;
-    iterated to a fixed point (fields are static, so 1-3 passes). Faces outside
-    ``eligible_mask`` (water, or outside the parent territory during recursion) or
-    reached by no capital stay ``-1``. Each capital always rules its own seat.
-    ``prev`` carries an incumbent assignment across outer passes.
+    ``argmax_k field[k, face]`` with a ``(1 + hysteresis)`` bonus for the
+    incumbent so contested faces don't flicker; iterated to a fixed point. Faces
+    outside ``eligible_mask`` or unreached stay ``-1``; each capital rules its own
+    seat. ``prev`` carries an incumbent assignment across outer passes.
 
     Returns ``(polity_of_face (N,) int32, n_iters)``.
     """
@@ -181,21 +171,16 @@ def classify_settlements(
         loc = population**e * defensibility[face]
         r   = eff / loc * loyalty_mult  ->  r>=direct: DIRECT;  r>=vassal_floor: VASSAL;  else INDEPENDENT
 
-    ``projecting_power`` is the claimant *capital's* own strength (not the whole
-    domain) — so a sprawling realm with a modest capital cannot hold its far
-    provinces directly. A capital is always DIRECT; an unclaimed face INDEPENDENT.
+    ``projecting_power`` is the claimant capital's own strength, not the domain's,
+    so a sprawling realm with a modest capital can't hold far provinces directly.
+    Capitals are always DIRECT; unclaimed faces INDEPENDENT.
 
-    Both population terms are raised to ``power_exponent`` (``e``) before the
-    comparison. ``e=1`` is the raw population ratio, which spans ~70x across the
-    Zipf city distribution and swamps the geographic decay; ``e<1`` compresses it
-    (``e=0.5`` -> ~8x) so ``field`` (distance) drives the decision, as intended.
+    ``power_exponent`` < 1 compresses the ~70x Zipf population spread (``e=0.5``
+    -> ~8x) so distance, not raw size, drives the decision.
 
-    ``loyalty_mult`` (``(S,)``, optional) scales the ratio per settlement — the
-    Stage-4 **economic-grip** lever raises it for trade-bloc-bound cities so they
-    resist secession without changing the field. ``force_independent`` (``(S,)``
-    bool, optional) overrides any non-capital settlement to INDEPENDENT — the
-    Stage-4 **peripheral-wealth secession** trigger. Capitals are pinned DIRECT
-    last, so neither lever can dislodge a seat.
+    ``loyalty_mult`` ``(S,)`` scales the ratio (Stage-4 economic grip);
+    ``force_independent`` ``(S,)`` bool forces INDEPENDENT (Stage-4 secession).
+    Capitals are pinned DIRECT last, so neither lever can dislodge a seat.
 
     Returns ``(control_class (S,) int32, ratio (S,) float64)``.
     """

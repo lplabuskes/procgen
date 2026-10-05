@@ -1,11 +1,8 @@
 """Measure polity-forest structure — sovereign/vassal mix and consolidation.
 
-The physical world does not depend on realm params, so we build it once per seed
-and cache it to ``saved_worlds/world_<seed>.npz`` (gitignored), then re-run only
-the realm stage. Reports the shape of the polity *forest* produced by the
-rewritten PolityStage (Stages 0-3): how many sovereigns/vassals, how consolidated
-the map is (largest-domain face fraction), and whether the infrastructure /
-cohesion axes drive per-realm fragmentation as intended (Song ↔ Mongol).
+Caches the physical world per seed in ``saved_worlds/`` and re-runs only the
+realm stage.  Reports sovereign/vassal counts, consolidation (largest-domain face
+fraction), and whether infrastructure drives per-realm fragmentation.
 
 Usage:
     python3 scripts/measure_polities.py                 # seeds 4, 31, 35
@@ -14,16 +11,14 @@ Usage:
     python3 scripts/measure_polities.py --detail        # per-sovereign dump
     python3 scripts/measure_polities.py --rebuild-cache # force rebuild worlds
 
-Tuning workflow: edit PolityParams (nested sub-paramclasses in
-``realmgen/polity/builder.py`` and ``realmgen/polity/forest.py``) —
-``projection.sea_range_factor`` (sea decay vs land) is the dominant domain-consolidation
-knob: a large factor flattens the maritime field into a global plateau that lets one
-sea power out-claim every nearer land capital. ``projection.base_range`` sets overall
-reach; ``hierarchy.direct_threshold`` sets where the (post-sea-taming) field puts the
-direct/vassal cutoff; ``hierarchy.vassal_floor`` sets the secession cutoff — re-run, compare.
-``fragmentation`` (Stage 5) runs historical shocks that break over-extended low-cohesion
-empires into successor states: ``n_epochs`` (0 = off), ``shock_scale`` (shock magnitude),
-``size_reference`` (domain face count demanding full cohesion — lower fragments more).
+Tuning knobs (PolityParams, ``realmgen/polity/``):
+    projection.sea_range_factor   dominant consolidation knob; too large lets one sea
+                                  power out-claim every nearer land capital
+    projection.base_range         overall reach
+    hierarchy.direct_threshold    direct/vassal cutoff
+    hierarchy.vassal_floor        secession cutoff
+    fragmentation.*               n_epochs (0 = off), shock_scale, size_reference
+                                  (lower fragments more)
 
 Texture targets (qualitative, from docs/plans/polity_generation_brief.md):
     - a believable mix: a dominant empire + competing kingdoms + city-states;
@@ -57,8 +52,7 @@ def measure_seed(seed: int, rebuild: bool, detail: bool) -> None:
     n_vassal_seats = len(vas)
     single_city_vassals = sum(1 for p in vas if len(p.member_settlement_faces) == 1)
     single_city_frac = single_city_vassals / n_vassal_seats if n_vassal_seats else 0.0
-    # Largest *domain* (sovereign + all its vassals), not just directly-held faces —
-    # this is the consolidation number the "one realm eats the world" complaint is about.
+    # Largest domain (sovereign + all its vassals), not just directly-held faces.
     sof = ps.sovereign_of_face
     assert sof is not None
     domain_counts = np.bincount(sof[sof >= 0]) if claimed else np.zeros(1, dtype=int)

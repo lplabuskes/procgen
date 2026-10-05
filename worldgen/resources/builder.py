@@ -1,13 +1,6 @@
-"""Resources stage orchestrator — ResourcesParams and ResourcesBuilder.
+"""Resources stage: fertility, forest density, crops, mineral deposits and rare biological resources.
 
-Runs after climate + hydrology (with lake feedback already applied). Reads the
-`temperature`, `precipitation`, `elevation`, `ocean_mask`, and `lake_mask` face
-textures plus the per-face `biome` and `volcanic_activity` metadata. Attaches
-`fertility` and `forest_density` single-channel textures to the mesh, writes
-per-face `fertility_mean` / `forest_density_mean` aggregates, and places mineral
-deposits (stored as `self.minerals` for the globe builder to register as a feature).
-
-See docs/plans/resources_generation_spec.md for full design details.
+Runs after hydrology and the climate lake-feedback pass.  See docs/resources.md.
 """
 from __future__ import annotations
 
@@ -84,8 +77,7 @@ class FertilityParams:
     lake_river_max_hops: int = _f(6, label="Lake river max hops", min=0, max=16)
     lake_optimal_temperature_c: float = _f(15.0, label="Lake optimal T (°C)", min=-5.0, max=30.0)
     lake_temperature_sigma_c: float = _f(10.0, label="Lake T σ (°C)", min=1.0, max=30.0)
-    # River deltas: the silt plain is raised toward this (× the temperature
-    # bell), its seaward marsh docked by the penalty.
+    # Delta plains are raised toward this (× the temperature bell); marsh is docked by the penalty.
     delta_fertility: float = _f(0.9, label="Delta fertility", min=0.0, max=1.0)
     delta_marsh_penalty: float = _f(0.4, label="Delta marsh penalty", min=0.0, max=1.0)
 
@@ -163,15 +155,7 @@ class ResourcesParams:
 
 
 def _face_modal_crop(crop_tex: np.ndarray, ocean_mask: np.ndarray) -> np.ndarray:
-    """Return the most-common non-ocean crop index per face.
-
-    Args:
-        crop_tex: (N, H, W) uint8 crop indices.
-        ocean_mask: (N, H, W) uint8; 1 = ocean.
-
-    Returns:
-        (N,) int — modal crop index per face (0 = None if all ocean).
-    """
+    """(N,) modal land crop index per face from (N, H, W) crops and ocean mask (0 = None if all ocean)."""
     n = crop_tex.shape[0]
     result = np.zeros(n, dtype=np.int32)
     land = ocean_mask == 0                                      # (N, H, W) bool
@@ -185,14 +169,8 @@ def _face_modal_crop(crop_tex: np.ndarray, ocean_mask: np.ndarray) -> np.ndarray
 
 
 class ResourcesBuilder(Stage):
-    """Runs the resources stage (a pipeline ``Stage``) on a built world.
-
-    ``build(ctx)`` runs after hydrology + the climate lake-feedback pass, reading
-    the mesh textures/metadata and the ``"river_objects"`` world feature. Attaches
-    `fertility` and `forest_density` single-channel textures, writes
-    `fertility_mean` / `forest_density_mean` per-face metadata, and registers the
-    ``"minerals"`` and ``"rare_bio"`` features.
-    """
+    """Resources stage: writes ``fertility`` / ``forest_density`` / ``dominant_crop`` textures, their
+    per-face means, and the ``"minerals"``, ``"mineral_sites"`` and ``"rare_bio"`` features."""
 
     name = "resources"
 
@@ -306,8 +284,7 @@ class ResourcesBuilder(Stage):
             current_temp_delta=current_temp_delta,
             params=fp,
         )                                                          # (N,) float32
-        # A land face's own sea or lake pixels are the neighbouring water's
-        # fishing grounds, so they take its aquatic fertility rather than 0.
+        # A land face's own sea/lake pixels take the neighbouring water's aquatic fertility (fishing grounds).
         ocean_fert = neighbour_water_fertility(aquatic_fert, is_ocean, mesh.face_adjacency)
         lake_fert = neighbour_water_fertility(aquatic_fert, is_lake_face & ~is_ocean, mesh.face_adjacency)
         fert_arr = fertility[..., 0]                               # (N, H, W)
@@ -333,7 +310,6 @@ class ResourcesBuilder(Stage):
 
         fertility_mean = fertility[..., 0].mean(axis=(1, 2)).astype(np.float32)
         forest_mean = forest[..., 0].mean(axis=(1, 2)).astype(np.float32)
-        # Per-face dominant crop: mode of land pixels.
         dominant_crop_face = _face_modal_crop(dominant_crop[..., 0], ocean_mask_tex[..., 0])
         FERTILITY_MEAN.write(mesh, fertility_mean)
         mesh.apply_metadata_channel("forest_density_mean", forest_mean.tolist())

@@ -1,15 +1,9 @@
-"""Local roads: the region's re-routed roads re-routed again over the local terrain.
+"""Local roads: :mod:`region.roads` one tier down.
 
-The region turned the world's face-graph trade routes into roads over its
-refined terrain (:mod:`region.roads`); a local map takes those road polylines
-and re-traces each within ``corridor_parent_texels`` regional texels of it, with
-the world's own land-cost model evaluated per local raster node
-(:func:`region.roads.route_polyline`): biome, forest and danger per face-width,
-climbing per km, and the local rivers' fords and along-river discount.  Ends at
-a settlement land exactly on it.
-
-Sea legs and the routes the world map does not draw are passed through, straight,
-as the region has them (those that cross the local raster).
+Each regional road polyline is re-traced within ``corridor_parent_texels``
+regional texels of it (:func:`region.roads.route_polyline`), with the world's
+land-cost model per local raster node plus the local rivers' fords and
+along-river discount.  Sea legs and undrawn routes pass through straight.
 """
 from __future__ import annotations
 
@@ -36,8 +30,7 @@ class LocalRoadParams:
     # Raster spacing as a multiple of the local texel spacing.
     raster_texels: float = _f(2.0, label="Road raster spacing (texels)", min=1.0, max=6.0, step=0.5)
     margin: float = _f(0.03, label="Road raster margin", min=0.0, max=0.2, step=0.01)
-    # Half-width of the corridor a regional road may move within, in regional
-    # texels: the region routed it on a raster two of its texels apart.
+    # Corridor half-width, in regional texels (the region's road raster is 2 texels).
     corridor_parent_texels: float = _f(
         2.0, label="Corridor half-width (regional texels)", min=0.25, max=6.0, step=0.25)
     smoothing_iterations: int = _f(6, label="Road smoothing iterations", min=0, max=20)
@@ -75,9 +68,8 @@ def build_local_roads(
     """Re-route ``region_roads``' land roads over the local map ``local`` of ``region``.
 
     ``land``, ``danger_scale`` and ``land_reach`` are as for
-    :func:`region.roads.build_region_roads` (``land_reach`` defaulting to six
-    local texels); ``moved = (old, new)`` moves a road end at a city's region
-    position to where the local map re-sited it.
+    :func:`region.roads.build_region_roads` (``land_reach`` defaults to six local
+    texels); ``moved = (old, new)`` moves road ends at re-sited cities.
     """
     from worldgen.cost.builder import LandCostParams
     params = params or LocalRoadParams()
@@ -89,7 +81,6 @@ def build_local_roads(
     spacing = local.grid.texel_spacing_rad(local.tex_size)
     land_reach = 6.0 * spacing if land_reach is None else float(land_reach)
 
-    # The region's polylines that come near the raster, with their local coords.
     node_rad = node_spacing_rad(local, step)
     radius_nodes = max(
         float(params.corridor_parent_texels) * region.grid.texel_spacing_rad(region.tex_size) / node_rad, 1.5
@@ -115,8 +106,7 @@ def build_local_roads(
     polylines: list[np.ndarray] = []
     polyline_flows: list[np.ndarray] = []
     for verts, flows in polys:
-        # A road's ends are settlements (or the region's coast points): moved off
-        # the local water, like the region moves them off its own.
+        # Ends are settlements or coast points: move them off the local water.
         verts = verts.copy()
         verts[[0, -1]] = snap_to_land(local, move_points(verts[[0, -1]], moved), land_reach)
         for path, edge_flows in route_polyline(

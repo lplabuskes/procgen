@@ -22,15 +22,11 @@ TOWN_KIND_COLORS: list[tuple[float, float, float, float]] = [
 class Towns:
     """Every town on the globe, as parallel arrays (``K`` towns).
 
-    ``parent`` is the index into the ``settlements`` feature of the city whose
-    hinterland holds the town's face (``-1`` outside every hinterland).
-
-    ``site_positions`` is where the town stage put each town, on a global texel.
-    ``positions`` is where the town actually is, at the finest tier that has
-    refined it: the same as the site, until a region view refines it onto the
-    region's finer terrain and streams (``refined``, ``region_positions``) — within
-    about one global texel of its site (``region/towns.py``) — and then its local
-    map refines that in turn (``local_refined``; ``localmap/settlements.py``).
+    ``parent`` indexes the ``settlements`` city whose hinterland holds the town
+    (``-1`` if none). ``site_positions`` is the stage's global-texel site;
+    ``positions`` is the finest refinement so far: region (``refined``,
+    ``region_positions``, within ~one global texel; ``region/towns.py``), then
+    local (``local_refined``; ``localmap/settlements.py``).
     """
 
     positions: np.ndarray    # (K, 3) unit-sphere, current (refined where ``refined``)

@@ -1,12 +1,8 @@
 """A local map's frame: one regional hexagon, blown up to its own ``[0, 1]²``.
 
-The local square is the parent hex's texture square — side ``2·R`` in the
-region's ``(s, t)`` frame, centred on the hex — mapped affinely onto ``[0, 1]²``.
-Everything geometric is borrowed from the region: its frame extends smoothly
-past the cell (so a hex hanging over the cell edge is fine), it is right-handed,
-and ``up_direction`` / ``local_to_lonlat`` / ``center_ecef`` all work through
-:meth:`local_to_ecef` unchanged.  The parent hexagon is flat-top with
-circumradius 0.5 around ``(0.5, 0.5)`` in local units.
+The parent hex's texture square (side ``2·R`` in the region's ``(s, t)``, centred
+on the hex) maps affinely onto ``[0, 1]²``.  Everything else goes through the
+region's frame, which extends smoothly past the cell edge and is right-handed.
 """
 from __future__ import annotations
 

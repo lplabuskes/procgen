@@ -1,39 +1,21 @@
 """Per-pixel fertility texture.
 
-Fertility is a multiplicative product of five factors, each in roughly [0, 1+],
-optionally docked by a small per-pixel forest penalty:
     fertility = clip((climate × terrain × water × geology × biome_mod)
                      × (1 - forest_penalty_strength × forest_density), 0, 1)
 
-- `climate` (per-face): bell-curve in per-face mean growing-season T and
-  log-precipitation. Computed as a per-face scalar so it can be rasterized
-  (blended across face boundaries) instead of using raw per-pixel textures
-  that are not continuous at face edges.
-- `terrain` (per-face): penalty for rugged faces, using per-face pixel
-  elevation range as a proxy for "is this a mountainous area". We deliberately
-  avoid per-pixel slope from the elevation texture — at default resolution,
-  pixel-spacing slope is dominated by the noise overlay rather than real
-  terrain (see docs/plans/resources_generation_spec.md).
-- `water` (per-face): floodplain bonus decayed by hop count on the face
-  adjacency graph from river/lake faces.
-- `geology` (per-face): volcanic-soil bonus decayed by hop count from faces
-  with `volcanic_activity` above threshold.
-- `biome_mod` (per-face): coarse multiplier reflecting that desert / tundra /
-  icecap biomes don't produce fertile soil regardless of inputs.
-- `forest_density` (per-pixel, optional): dense forest sequesters nutrients in
-  biomass, leaving soils poor for agriculture once cleared (classic tropical
-  rainforest problem). A small multiplicative penalty proportional to the
-  forest-density texture from `compute_forest_density`.
+The first five factors are per-face:
 
-All five per-face factors are combined into a single per-face multiplier. When
-`mesh` is supplied to `compute_fertility`, that multiplier is rasterized via
-`rasterize_face_values` — averaged onto shared vertices and barycentric-
-interpolated within each face's fan triangles — so adjacent faces blend
-continuously instead of producing a blocky per-face appearance. Without a
-mesh (e.g. in unit tests with synthetic inputs) the multiplier is simply
-broadcast across each face's pixels.
+- `climate`: bell curves in growing-season T and log-precipitation (per-face means, so the product can
+  be rasterized smoothly rather than inheriting per-pixel seams).
+- `terrain`: ruggedness penalty from the face's pixel elevation range (per-pixel slope is
+  noise-dominated at default resolution).
+- `water` / `geology`: floodplain / volcanic-soil bonuses decayed by face hops from river-lake /
+  volcanic faces.
+- `biome_mod`: desert, tundra and icecap soils are poor regardless.
 
-Ocean pixels are zeroed via `ocean_mask`.
+`forest_density` is per-pixel: dense forest locks nutrients in biomass.  With a `mesh` the per-face
+product is rasterized via `rasterize_face_values` so faces blend; without one (tests) it is broadcast.
+Ocean pixels are zeroed.
 """
 from __future__ import annotations
 
@@ -48,10 +30,7 @@ if TYPE_CHECKING:
     from worldgen.resources.builder import FertilityParams
 
 
-# Biome index → fertility multiplier. Indices follow `BIOME_NAMES` in
-# `worldgen/climate/classification.py`:
-#   0 Icecap, 1 Tundra, 2 Taiga, 3 Temperate, 4 Steppe,
-#   5 Savannah, 6 Tropical, 7 Semi-Arid, 8 Desert.
+# Biome index (`BIOME_NAMES`) → fertility multiplier.
 BIOME_FERTILITY_MULT = np.array([
     0.00,  # Icecap
     0.20,  # Tundra
@@ -66,14 +45,7 @@ BIOME_FERTILITY_MULT = np.array([
 
 
 def _growing_season_temperature_pixel(temperature_tex: np.ndarray) -> np.ndarray:
-    """Per-pixel mean temperature over growing seasons (T > 5°C), else the annual mean.
-
-    Args:
-        temperature_tex: (N, H, W, K) float32 °C.
-
-    Returns:
-        (N, H, W) float32 °C.
-    """
+    """(N, H, W) mean °C over growing seasons (T > 5°C), else the annual mean; input (N, H, W, K)."""
     t = temperature_tex.astype(np.float32)
     mask = t > 5.0                                               # (N, H, W, K)
     weight = mask.sum(axis=-1).astype(np.float32)               # (N, H, W)
@@ -83,17 +55,7 @@ def _growing_season_temperature_pixel(temperature_tex: np.ndarray) -> np.ndarray
 
 
 def _growing_season_temperature_face(temperature_tex: np.ndarray) -> np.ndarray:
-    """Per-face mean temperature over growing seasons (T > 5°C).
-
-    Averages over H and W after selecting growing-season pixels, then falls
-    back to the annual mean for faces where no season qualifies.
-
-    Args:
-        temperature_tex: (N, H, W, K) float32 °C.
-
-    Returns:
-        (N,) float32 °C.
-    """
+    """(N,) face mean of :func:`_growing_season_temperature_pixel`."""
     return _growing_season_temperature_pixel(temperature_tex).mean(axis=(1, 2)).astype(np.float32)
 
 
@@ -106,12 +68,7 @@ def _climate_term_face(
     optimal_precipitation_mm: float,
     precipitation_sigma_log: float,
 ) -> np.ndarray:
-    """Bell-curve climate suitability per face, in [0, 1].
-
-    Uses per-face means so the result can be rasterized (blended across face
-    boundaries) rather than being computed from raw per-pixel textures that are
-    discontinuous at face edges.
-    """
+    """Bell-curve climate suitability per face, in [0, 1], from per-face means."""
     t_grow_face = _growing_season_temperature_face(temperature_tex)   # (N,)
     t_term = np.exp(
         -0.5 * ((t_grow_face - optimal_temperature_c) / max(temperature_sigma_c, 1e-3)) ** 2
@@ -128,17 +85,7 @@ def _climate_term_face(
 
 
 def _hop_bonus(hops: np.ndarray, bonus: float, decay_per_hop: float, max_hops: int) -> np.ndarray:
-    """Exponential-decay bonus from per-face hop counts.
-
-    Args:
-        hops: (N,) int — hop counts from `face_hops_from_seeds`.
-        bonus: amplitude at hop=0.
-        decay_per_hop: exponent so that `factor = 1 + bonus * exp(-hops * decay)`.
-        max_hops: faces beyond this contribute zero.
-
-    Returns:
-        (N,) float32 multiplier ≥ 1.
-    """
+    """(N,) multiplier ``1 + bonus · exp(-hops · decay_per_hop)``; 1 beyond ``max_hops``."""
     h = hops.astype(np.float32)
     factor = 1.0 + bonus * np.exp(-h * decay_per_hop)
     factor[hops > max_hops] = 1.0
@@ -157,29 +104,12 @@ def compute_aquatic_fertility(
 ) -> np.ndarray:
     """Per-face fishing productivity in [0, 1] for ocean and lake faces.
 
-    Ocean: coastal_proximity × SST_factor × (1 + upwelling_bonus).
-      - Coastal proximity decays exponentially with BFS hops from shore.
-      - SST factor peaks in cold-temperate water (~8 °C); open tropical ocean scores low.
-      - Upwelling bonus scales with negative current temperature delta (cold currents).
+    - Ocean: coastal proximity (decays with hops from shore) × SST bell (peaks cold-temperate, ~8 °C)
+      × (1 + upwelling from cold currents, i.e. negative ``current_temp_delta``).
+    - Lake: base × river-fed bonus (decays with ``river_hops``) × temperature bell.
 
-    Lake: base × river_proximity × temperature_factor.
-      - River-proximity bonus rewards lakes fed by rivers (nutrient input).
-      - Temperature factor penalises permanently frozen lakes.
-
-    Land faces return 0.
-
-    Args:
-        temperature_tex: (N, H, W, K) float32 °C.
-        is_ocean: (N,) bool — per-face ocean flag.
-        is_lake: (N,) bool — per-face lake flag (≥5 % of pixels lake).
-        ocean_depth_hops: (N,) int — BFS hops from coastal ocean faces.
-        river_hops: (N,) int — BFS hops from river-traversed faces only.
-        current_temp_delta: (N,) float32 or None — ocean-current ΔT; None when
-            currents are disabled.
-        params: FertilityParams — aquatic knobs.
-
-    Returns:
-        (N,) float32 in [0, 1].
+    Land faces return 0.  ``temperature_tex`` is (N, H, W, K) °C; ``current_temp_delta`` is None when
+    currents are disabled.
     """
     p = params
     n = len(is_ocean)
@@ -226,11 +156,10 @@ def neighbour_water_fertility(
     is_water_face: np.ndarray,
     adjacency: list[list[int]],
 ) -> np.ndarray:
-    """Aquatic fertility for the water pixels of every face, ``(N,)`` float32.
+    """``(N,)`` aquatic fertility for each face's water pixels.
 
-    A water face keeps its own value. Any other face — a coastal land face with
-    a sliver of sea in its texture — takes the mean of its neighbouring water
-    faces, since its shallows are the same fishing grounds; 0 if it has none.
+    Water faces keep their own value; other faces take the mean of their water neighbours (the same
+    fishing grounds), or 0.
     """
     out = np.where(is_water_face, aquatic, 0.0).astype(np.float32)
     for f in np.flatnonzero(~is_water_face):
@@ -259,15 +188,11 @@ def compute_fertility(
         temperature_tex: (N, H, W, K) float32 °C.
         precipitation_tex: (N, H, W, K) float32 mm/season.
         ocean_mask_tex: (N, H, W, 1) uint8; 1=ocean.
-        face_biome: (N,) int — per-face biome index (from `mesh.face_metadata`).
+        face_biome: (N,) int biome index.
         face_elev_range_km: (N,) float32 — pixel elevation span per face.
-        water_hops: (N,) int — face-graph hops from any river/lake face.
-        volcanism_hops: (N,) int — face-graph hops from any volcanic face.
-        params: FertilityParams — the climate/terrain/water/geology tuning knobs.
-        mesh: optional PolygonMesh. When provided, the per-face multiplier is
-            rasterized via `rasterize_face_values` so adjacent faces blend
-            continuously instead of looking blocky. When omitted, the multiplier
-            is broadcast as a single value per face.
+        water_hops: (N,) int — face hops from any river/lake face.
+        volcanism_hops: (N,) int — face hops from any volcanic face.
+        mesh: if given, the per-face multiplier is rasterized smoothly; otherwise broadcast per face.
 
     Returns:
         (N, H, W, 1) float32 in [0, 1].
@@ -336,11 +261,9 @@ def apply_delta_fertility(
 ) -> np.ndarray:
     """Raise the river deltas' silt plains toward ``delta_fertility``.
 
-    A delta is watered and re-silted by its river whatever the rain, so the
-    precipitation, biome and floodplain terms do not limit it; only the
-    growing-season temperature bell does (a polar delta stays poor).  Its
-    seaward marsh is docked by ``delta_marsh_penalty``.  Fertility is only
-    ever raised, by ``plain × (target − fertility)``.
+    The river waters and re-silts a delta whatever the rain, so only the growing-season temperature bell
+    limits it; marsh is docked by ``delta_marsh_penalty``.  Fertility is only ever raised, by
+    ``plain × (target − fertility)``.
 
     Args:
         fertility: (N, H, W, 1) float32 in [0, 1].

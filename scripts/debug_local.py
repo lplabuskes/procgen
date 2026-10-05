@@ -1,20 +1,12 @@
 """Visual check on a local map — coarse vs. refined, features, villages, conservation.
 
-A local map is one regional hex refined the way a region refines the globe
-(``docs/local.md``): the region's fields upsampled onto the local hex textures,
-detail added above the region's Nyquist, and every regional texel's average
-forced back to its exact value; then the region's rivers and roads re-routed
-over it and villages sited on it.  This renders one, side by side:
+Renders one local map (``docs/local.md``) side by side: left the region's fields
+upsampled only (no added relief, water masks copied), right the real local map
+with its rivers, roads, towns, cities and villages.
 
-  • left — the region's fields upsampled only (no added relief, the water
-    masks copied from the regional texel), so the detail is visible by contrast;
-  • right — the real local map, with its rivers, roads, towns, cities and
-    villages drawn over it (villages coloured by kind, as in the viewer).
-
-and prints the local statistics, the **conservation report** against the region
-(per regional texel; must stay at float32 noise), the shoreline movement, and
-the **village budget report** (rural + villages per global texel ∩ map; must be
-exact) with the village counts, sizes and spacing.
+Prints the local statistics, shoreline movement, the **conservation report**
+against the region (per regional texel; float32 noise), and the **village budget
+report** (rural + villages per global texel ∩ map; exact).
 
 Usage:
     python3 scripts/debug_local.py                     # seed 4, the densest land's hex

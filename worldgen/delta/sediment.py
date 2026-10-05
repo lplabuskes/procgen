@@ -1,19 +1,9 @@
 """Sediment load — how much of a river's flow still carries silt to its mouth.
 
-A delta is built from the sediment a river delivers, not its water.  A lake on
-the way stills the current, and the silt settles on the lake floor: what flows
-out of a lake is nearly clear water (Brune: large lakes trap 90 % or more of the
-load reaching them).  So a river leaving a lake builds a small delta below it,
-or none, until fresh tributaries load it up again.
-
-The load is accumulated down the stream network's tree like the flow itself, in
-the same units: each node adds its *own* runoff (its flow less what drains into
-it), and across a lake outlet — an edge from a lake node to one off the lake —
-only ``1 − trap_efficiency`` of the load passes.  Loads are counted where the
-river meets the water, so a delta into a lake gets the full load arriving there.
-
-A lake can only hold so much: when its deltas reach the lake's size cap, the
-silt they could not lay down *spills* — it passes the outlet untrapped.
+Lakes trap most silt (Brune: 90 %+ for large lakes), so a river leaving one builds little or no delta
+until tributaries reload it.  Load accumulates down the stream tree in flow units, each node adding
+its own runoff; across a lake outlet only ``1 − trap_efficiency`` passes.  Silt a full lake's deltas
+could not lay down (the size cap) *spills* through the outlet untrapped.
 """
 from __future__ import annotations
 
@@ -50,10 +40,8 @@ def sediment_load(
 ) -> np.ndarray:
     """``(K,)`` sediment load at each stream node, in river flow units (≤ its flow).
 
-    ``lake`` is per node: a bool mask (any lake) or lake labels (> 0 a lake, one
-    number per lake).  ``spill`` (by label) is load a lake could not hold — its
-    deltas reached the lake's size cap — which passes its outlet untrapped.
-    ``order`` is :func:`downstream_order`, if already known.
+    ``lake`` is per node: a bool mask or lake labels (> 0).  ``spill`` (by label) passes the outlet
+    untrapped.  ``order`` is :func:`downstream_order`, if already known.
     """
     n = len(streams)
     receiver = np.asarray(streams.receiver, dtype=np.int64)

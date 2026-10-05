@@ -2,10 +2,8 @@
 
 Gradient table and skewing/unskewing constants from Gustavson 2012.
 
-`simplex3_vec` is the single-octave vectorized numpy implementation.
-`fbm_sum` sums an arbitrary set of octaves and is JIT-compiled with numba when
-available (fused scalar kernel, `prange` over points), falling back to a
-numpy octave loop otherwise. The two paths are bit-identical.
+`simplex3_vec` is single-octave numpy; `fbm_sum` sums octaves, numba-JIT when
+available, else a numpy loop.  The two paths are bit-identical.
 """
 
 import numpy as np
@@ -208,13 +206,9 @@ if _HAVE_NUMBA:
 
 
 def fbm_sum(xyz: np.ndarray, perm: np.ndarray, freqs: np.ndarray, amps: np.ndarray) -> np.ndarray:
-    """Sum ``amps[o] * simplex3_vec(xyz * freqs[o])`` over octaves.
+    """Un-normalized ``(N,) float64`` sum of ``amps[o] * simplex3_vec(xyz * freqs[o])``.
 
-    Returns the un-normalized fBm sum as ``(N,) float64`` — callers handle
-    amplitude normalization and reshaping. ``freqs`` and ``amps`` are 1-D
-    arrays, one entry per octave (already filtered for any band-limiting).
-
-    Bit-identical between the numba kernel and the numpy fallback.
+    ``freqs`` / ``amps``: 1-D, one entry per octave (already band-limited).
     """
     freqs = np.ascontiguousarray(freqs, dtype=np.float64)
     amps = np.ascontiguousarray(amps, dtype=np.float64)

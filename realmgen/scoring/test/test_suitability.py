@@ -1,9 +1,4 @@
-"""Tests for realmgen.suitability and RealmPipeline.
-
-Each pure-function test uses a lightweight stub mesh so there is no dependency
-on a full worldgen run.  The integration tests at the bottom use a real (small)
-dual mesh built by the full GlobePipeline pipeline.
-"""
+"""Tests for realmgen.scoring.suitability (stub mesh) plus GlobePipeline integration tests."""
 from __future__ import annotations
 
 from dataclasses import dataclass

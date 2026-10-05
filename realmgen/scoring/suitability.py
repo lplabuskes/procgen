@@ -1,30 +1,9 @@
-"""Per-face settlement suitability scorer.
+"""Per-face settlement suitability in [0, 1].
 
-Four independent factors combine into one [0, 1] suitability scalar per land
-face, then a ruggedness penalty is applied multiplicatively.  Each factor is
-computed by a pure function that takes pre-extracted arrays (no Globe coupling),
-making them easy to test against a lightweight stub mesh.
-:func:`combine_suitability` does the final weighted merge and zeros water faces;
-:func:`compute_ruggedness_penalty` is multiplied in afterward.
-
-Factor overview (default weights; all tunable via ``SuitabilityParams``):
-
-  * **water proximity**  (w = 0.30) — BFS hop-decay from river + lake seed faces,
-    plus an exponential coastal-access term scaled by ocean distance.
-  * **climate**          (w = 0.30) — piecewise-linear scores on T_warmest,
-    T_coldest, and P_annual, multiplied together (all three must be adequate).
-  * **fertility**        (w = 0.25) — direct read of ``fertility_mean`` metadata,
-    already in [0, 1] from the resources stage.
-  * **resource access**  (w = 0.15) — BFS hop-decay from faces containing mineral
-    or rare-bio deposits.
-
-Ruggedness (local elevation span) is a **multiplicative penalty** applied to the
-combined score: flat terrain has no penalty; rugged terrain reduces suitability
-proportionally, regardless of how good the other factors are.  Defensibility
-(ruggedness as a *bonus*) belongs in the static situational-value scorer.
-
-The combination is a weighted sum so that poor resource access does not zero out
-an otherwise ideal site — each factor can compensate within its budget.
+A weighted sum (so one weak factor doesn't zero a site) of water proximity,
+climate habitability, fertility, and resource access, zeroed on water, then
+multiplied by a ruggedness penalty.  Ruggedness as a defensive *bonus* belongs
+in the situational-value scorer, not here.
 """
 from __future__ import annotations
 
@@ -52,40 +31,22 @@ def compute_water_proximity(
     *,
     params: "WaterProximityParams",
 ) -> np.ndarray:
-    """Fresh-water and coastal access score in [0, 1].
+    """Fresh-water and coastal access score, (N,) float32 in [0, 1].
 
-    Freshwater component uses BFS hop-decay from any river or lake face
-    (``freshwater_mask``). Coastal component uses exponential decay over
-    ``dist_to_coast_km`` (the climate stage's land → ocean distance in km).
-
-    Combined: ``clip(freshwater_score + coast_weight * coastal_score, 0, 1)``.
-    A face adjacent to a river scores ~1.0; a pure coastal face scores
-    ``coast_weight`` (default 0.4); a face with both scores are additive up to
-    the clip.
-
-    Args:
-        mesh: object with ``faces`` and ``face_adjacency``.
-        freshwater_mask: (N,) bool — seed faces for BFS (rivers + lakes).
-        dist_to_coast_km: (N,) float — land-to-ocean distance in km (0 = coast).
-        params: WaterProximityParams — freshwater hop-decay/cap and coastal
-            scale/weight.
-
-    Returns:
-        (N,) float32 in [0, 1].
+    ``clip(exp(-hops · decay) + coast_weight · exp(-dist_to_coast_km / scale), 0, 1)``,
+    hops counted from the ``freshwater_mask`` (rivers + lakes) faces.
     """
     p = params
     n = len(mesh.faces)
     freshwater_mask = np.asarray(freshwater_mask, dtype=bool)
     dist = np.asarray(dist_to_coast_km, dtype=np.float64)
 
-    # Freshwater: BFS hop-decay from river/lake seed faces.
     if freshwater_mask.any():
         hops = face_hops_from_seeds(mesh, freshwater_mask, max_hops=p.freshwater_max_hops)
         fw_score = np.exp(-hops.astype(np.float64) * p.freshwater_decay)
     else:
         fw_score = np.zeros(n, dtype=np.float64)
 
-    # Coastal: exponential decay with land-to-ocean distance.
     coast_score = np.exp(-np.maximum(dist, 0.0) / max(p.coast_scale_km, 1e-9))
     coast_score = np.clip(coast_score, 0.0, 1.0)
 
@@ -103,49 +64,24 @@ def compute_climate_habitability(
     *,
     params: "ClimateHabitabilityParams",
 ) -> np.ndarray:
-    """Climate habitability score in [0, 1], product of three sub-scores.
+    """Climate habitability, (N,) float32 in [0, 1]: product of three piecewise-linear scores.
 
-    All three sub-scores must be adequate — if any is 0, the result is 0.
-
-    Growing-season score (T_warmest):
-      * below ``t_grow_min_c``: 0 (nothing grows)
-      * ``t_grow_min_c`` → ``t_grow_opt_c``: linear 0 → 1
-      * above ``t_grow_opt_c``: 1 (warm enough is warm enough)
-
-    Cold-tolerance score (T_coldest):
-      * below ``t_cold_min_c``: 0 (uninhabitable cold)
-      * ``t_cold_min_c`` → 0°C: linear 0 → 1
-      * above 0°C: 1
-
-    Precipitation score (P_annual):
-      * below ``p_dry_mm``: 0 (desert)
-      * ``p_dry_mm`` → ``p_opt_mm``: linear 0 → 1
-      * ``p_opt_mm`` → ``p_wet_mm``: linear 1 → 0.5 (wet but liveable)
-      * above ``p_wet_mm``: 0.5 (very wet; still habitable)
-
-    Args:
-        t_warmest: (N,) float °C — warmest-month temperature per face.
-        t_coldest: (N,) float °C — coldest-month temperature per face.
-        p_annual:  (N,) float mm/yr — annual precipitation per face.
-        params: ClimateHabitabilityParams — the growing/cold/precip thresholds.
-
-    Returns:
-        (N,) float32 in [0, 1].
+    * Growing season (T_warmest °C): 0 below ``t_grow_min_c``, ramps to 1 at ``t_grow_opt_c``.
+    * Cold tolerance (T_coldest °C): 0 below ``t_cold_min_c``, ramps to 1 at 0 °C.
+    * Precipitation (mm/yr): 0 below ``p_dry_mm``, 1 at ``p_opt_mm``, then down to
+      0.5 at and beyond ``p_wet_mm`` (wet but liveable).
     """
     p = params
     tw = np.asarray(t_warmest, dtype=np.float64)
     tc = np.asarray(t_coldest, dtype=np.float64)
     pa = np.asarray(p_annual, dtype=np.float64)
 
-    # Growing-season score.
     grow_range = max(p.t_grow_opt_c - p.t_grow_min_c, 1e-9)
     t_grow = np.clip((tw - p.t_grow_min_c) / grow_range, 0.0, 1.0)
 
-    # Cold-tolerance score.
     cold_range = max(0.0 - p.t_cold_min_c, 1e-9)
     t_cold = np.clip((tc - p.t_cold_min_c) / cold_range, 0.0, 1.0)
 
-    # Precipitation score — piecewise.
     dry_range = max(p.p_opt_mm - p.p_dry_mm, 1e-9)
     wet_range = max(p.p_wet_mm - p.p_opt_mm, 1e-9)
     p_score = np.where(
@@ -170,24 +106,11 @@ def compute_ruggedness_penalty(
     *,
     penalty_scale_km: float = 1.0,
 ) -> np.ndarray:
-    """Ruggedness penalty multiplier in (0, 1] — applied after combine_suitability.
-
-    ``exp(-range / scale)``: flat terrain (range = 0) gives 1.0 (no penalty);
-    penalty grows smoothly, reaching exp(-1) ≈ 0.37 at one scale-length. Rugged
-    terrain (mountains, gorges) is hard to build on and cultivate, so it reduces
-    suitability regardless of how good the climate or fertility are.
-
-    Defensibility (ruggedness as a *bonus*) belongs in the static
-    situational-value scorer, not here.
+    """Ruggedness multiplier ``exp(-range / scale)``, (N,) float32 in (0, 1].
 
     Args:
-        face_elev_range_km: (N,) float — per-face pixel elevation span (km),
-            the ruggedness proxy (per-pixel slope is noise-dominated).
-        penalty_scale_km: e-folding relief; at this elevation span the penalty
-            factor is exp(-1) ≈ 0.37.
-
-    Returns:
-        (N,) float32 in (0, 1].
+        face_elev_range_km: (N,) per-face pixel elevation span (km) — the ruggedness
+            proxy, since per-pixel slope is noise-dominated.
     """
     r = np.maximum(np.asarray(face_elev_range_km, dtype=np.float64), 0.0)
     return np.exp(-r / max(penalty_scale_km, 1e-9)).astype(np.float32)
@@ -197,18 +120,9 @@ def compute_ruggedness_penalty(
 
 
 def _positions_to_face_ids(positions: np.ndarray, face_centroids: np.ndarray) -> np.ndarray:
-    """Nearest-centroid face index for each 3D unit-sphere position.
+    """(M,) nearest-centroid face index for each (M, 3) unit-sphere position.
 
-    Uses the dot-product approximation (maximising cosine similarity = nearest
-    on the unit sphere). Cost: O(M × N) — fine for a few hundred deposits and
-    ~10k faces.
-
-    Args:
-        positions:      (M, 3) float — unit-sphere points.
-        face_centroids: (N, 3) float — face centroid unit vectors.
-
-    Returns:
-        (M,) int — face indices in [0, N).
+    Brute-force max dot product, O(M × N).
     """
     pos = np.asarray(positions, dtype=np.float64)
     cen = np.asarray(face_centroids, dtype=np.float64)
@@ -225,19 +139,10 @@ def compute_resource_proximity(
     resource_decay: float = 0.2,
     resource_max_hops: int = 16,
 ) -> np.ndarray:
-    """Resource-access score in [0, 1] via BFS hop-decay from deposit faces.
+    """Resource-access score, (N,) float32 in [0, 1], via BFS hop-decay from deposit faces.
 
-    Args:
-        mesh: object with ``faces`` and ``face_adjacency``.
-        resource_mask: (N,) bool — faces containing a mineral or rare-bio
-            deposit (typically sparse).
-        resource_decay: BFS hop-decay exponent (slower decay than water since
-            resources are exploited via trade routes, not proximity alone).
-        resource_max_hops: BFS depth cap.
-
-    Returns:
-        (N,) float32 in [0, 1]. Returns all-zeros when no deposits exist
-        anywhere (caller may choose to skip this factor by setting weight = 0).
+    ``resource_decay`` is slower than water's since resources travel by trade.
+    All zeros when there are no deposits.
     """
     resource_mask = np.asarray(resource_mask, dtype=bool)
     n = len(mesh.faces)
@@ -259,27 +164,9 @@ def combine_suitability(
     *,
     params: "SuitabilityWeightParams",
 ) -> np.ndarray:
-    """Weighted-average suitability in [0, 1]; water faces are forced to 0.
+    """Weight-normalised suitability, (N,) float32 in [0, 1]; water faces 0.
 
-    Uses a weighted sum (not product) so that modest resource access does not
-    zero out an otherwise ideal site. The weight vector sums to 1 by
-    construction (the function normalises it), so changing individual weights
-    is safe without also adjusting the others.
-
-    Multiply the result by :func:`compute_ruggedness_penalty` afterward to
-    apply the ruggedness penalty.
-
-    Args:
-        is_water:        (N,) bool — open water (ocean ∪ lake); these faces
-            receive 0 regardless of factor scores.
-        water_proximity: (N,) float32 in [0, 1].
-        climate:         (N,) float32 in [0, 1].
-        fertility:       (N,) float32 in [0, 1].
-        resource_access: (N,) float32 in [0, 1].
-        params: SuitabilityWeightParams — the four factor weights.
-
-    Returns:
-        (N,) float32 in [0, 1].
+    Factors are (N,) in [0, 1].  Multiply by :func:`compute_ruggedness_penalty` afterwards.
     """
     p = params
     total_w = p.water_weight + p.climate_weight + p.fertility_weight + p.resource_weight

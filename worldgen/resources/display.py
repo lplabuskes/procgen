@@ -62,7 +62,6 @@ def forest_density_legend_entries() -> list[tuple[str, tuple]]:
 
 
 # Crop palette — one RGBA per CROP_NAMES entry.
-# None: muted gray; crops: visually distinct natural hues.
 _CROP_PALETTE = np.array([
     [0.70, 0.70, 0.65, 1.0],  # 0  None      — muted gray
     [0.20, 0.65, 0.50, 1.0],  # 1  Rice       — teal-green (flooded paddies)
@@ -135,8 +134,7 @@ def build_dominant_crop_display_texture(
     return apply_water_masks(rgba, ocean_mask_tex=ocean_mask_tex, lake_mask_tex=lake_mask_tex)
 
 
-# The resource layers as recipes, for the world map and (from refined data)
-# regions alike.
+# Resource layers as recipes, for the world map and refined regions alike.
 def _water(tex) -> dict:
     return dict(
         elevation_tex=tex.get("elevation"), ocean_mask_tex=tex.get("ocean_mask"),

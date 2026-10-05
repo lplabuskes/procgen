@@ -1,7 +1,4 @@
-"""Scoring stage — suitability and situational-value computation.
-
-Params and stage for the first phase of the realm pipeline.
-"""
+"""Scoring stage — suitability and situational value (first realm phase)."""
 from __future__ import annotations
 
 from typing import Optional
@@ -314,8 +311,7 @@ class ScoringStage(Stage):
         reg.add_hover(_suitability_hover)
 
     def load(self, arrays, ctx: BuildContext) -> None:
-        # Suitability / situational value round-trip via per-face metadata; just
-        # re-attach the stage attrs so register_display fires.
+        # Values round-trip via metadata; re-attach the attrs so register_display fires.
         mesh = ctx.mesh
         if SUITABILITY.present(mesh):
             self.suitability = SUITABILITY.read(mesh)

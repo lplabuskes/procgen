@@ -1,56 +1,30 @@
 """Regional refinement of the global fields — upsampling with conservation.
 
-Implements the mechanism in ``docs/plans/regional_local_maps_design.md``: a
-region is a *refinement* of the global map, never a replacement.  For every
-field the recipe is
+See ``docs/plans/regional_local_maps_design.md``.  For every field:
 
-1. read the global texture smoothly (bilinear) at each regional texel;
-2. add fine detail that exists only above the global grid's Nyquist limit;
-3. force each global texel's average back to its exact global value.
+1. read the global texture bilinearly at each regional texel;
+2. add detail above the global grid's Nyquist limit;
+3. force each global texel's average back to its global value
+   (:func:`conserve_smooth`, a smooth correction, so no steps at parent texel edges).
 
-Step 3 is what makes the result legal: downsampling a region by averaging
-recovers the global map bit-for-bit (see :func:`conservation_report`).  For the
-continuous fields it is a *smooth* correction (:func:`conserve_smooth`) rather
-than a per-anchor constant, so it leaves no steps at the parent's texel edges.
+Downsampling a region therefore recovers the global map (:func:`conservation_report`).
 
-**Elevation is the only field with a noise stream of its own.**  Every other
-field is a physical consequence of the refined relief, or is copied verbatim.
-That is deliberate: ``biome`` is a threshold classifier over temperature and
-precipitation, so an *independent* noise stream in either input makes neighbouring
-texels land on opposite sides of a cut at random — the boundary dissolves into
-speckle.  Driving both from the same relief instead makes biome boundaries follow
-ridges and valleys, which is both prettier and closer to the truth.
+Elevation is the only field with its own noise stream.  ``biome`` thresholds
+temperature and precipitation, so independent noise in either would dissolve
+biome boundaries into speckle; deriving both from the relief makes them follow
+ridges and valleys instead.
 
-Field-by-field:
+- **Elevation** — slope-proportional fBm with a floor, faded under shallow water;
+  near water the coast smoothness restyles it (:func:`coast_style`).  Additive.
+- **Temperature** — lapse-rate correction on the refined relief.  Additive.
+- **Precipitation** — orographic response to the relief.  Multiplicative.
+- **Biome** — reclassified from the refined climate with the global classifier.
+- **Ocean / lake masks** — water surfaces are taken from the globe (sea level, a
+  lake's Priority-Flood level); only the shoreline moves, by a level-constrained
+  flood seeded from the global mask.
 
-- **Elevation** — slope-proportional fBm.  Amplitude follows the local gradient
-  of the coarse field (flat plains stay flat, mountains get rugged), with a floor
-  so nowhere is glassy, and fades out under shallow water so a lake bed cannot
-  poke back through its own surface.  Near water, the globe's coast smoothness
-  sets the fBm's persistence and how far the shoreline wanders
-  (:func:`coast_style`), so shores range from sweeping beaches to crenellated,
-  rugged coasts.  Conserved
-  additively.
-- **Temperature** — no noise: the refined elevation drives a lapse-rate
-  correction, which is exactly the physical signal a finer grid should reveal.
-  Conserved additively.
-- **Precipitation** — no noise: an orographic response to the refined relief
-  (high ground catches more rain), applied multiplicatively and conserved
-  multiplicatively so values stay positive.
-- **Biome** — reclassified per regional texel from the refined climate, using the
-  same classifier the global stage uses.
-- **Ocean / lake masks** — re-flooded against the refined relief.  A water body's
-  *surface* is a global fact (the ocean sits at sea level, a lake at the fill
-  level Priority-Flood gave it), so the level is taken verbatim from the globe and
-  only the shoreline moves: a regional texel is water when the refined elevation
-  lies below the surface of a water body it is connected to.  This is the same
-  level-constrained flood fill ``compute_ocean_mask_texture`` runs on the global
-  grid, seeded from the global mask instead of from deep-ocean faces.
-
-The detail band is honest about resolution: octaves start at the global grid's
-Nyquist and stop at the regional grid's, so a region no finer than the globe
-gets no detail at all (``RegionFields.detail_octaves == 0``) rather than fake
-structure.
+Octaves run from the global grid's Nyquist to the regional grid's, so a region no
+finer than the globe gets no detail (``RegionFields.detail_octaves == 0``).
 """
 from __future__ import annotations
 
@@ -74,11 +48,9 @@ if TYPE_CHECKING:
 
 EARTH_RADIUS_KM = 6371.0
 
-# The elevation the global stages call the shore (worldgen.geology.elevation and
-# worldgen.hydrology.builder both hard-code it).
+# Hard-coded as the shore by worldgen.geology.elevation and worldgen.hydrology.builder.
 SEA_LEVEL_KM = 0.0
 
-# Elevation is the only field with a noise stream; see the module docstring.
 _SEED_SALT_ELEVATION = 0x9E37
 _SEED_SALT_COAST = 0xC0A5
 
@@ -88,77 +60,57 @@ class RegionUpsampleParams:
     """Tuning for regional detail generation."""
 
     n_cols: int = _f(14, label="Hex columns per region", min=4, max=64)
-    # 64 puts regional texels ~4 km across against the globe's ~15 km, which is
-    # what buys the detail band its two octaves; see build_region_fields.
+    # 64 gives ~4 km texels vs the globe's ~15 km: two detail octaves.
     tex_size: int = _f(64, label="Hex texture size", min=4, max=128)
-    # Detail amplitude is relief_factor × (detail wavelength) × (local slope), so
-    # the factor reads as "sub-grid relief per unit of grid-scale slope".  The
-    # global field is smooth at ~15 km, where even mountain slopes only reach
-    # ~0.007 km/km — hence the small saturation point and the factor above 1.
+    # Amplitude = relief_factor × detail wavelength × local slope.  Global slopes
+    # at ~15 km only reach ~0.007 km/km, hence the small saturation point.
     relief_factor: float = _f(1.0, label="Detail relief factor", min=0.0, max=8.0)
     slope_reference: float = _f(
         0.005, label="Slope saturation (km/km)", min=0.0005, max=0.05, step=0.0005
     )
     slope_floor: float = _f(0.10, label="Flat-ground detail floor", min=0.0, max=1.0)
     max_relief_km: float = _f(1.0, label="Max detail relief (km)", min=0.0, max=5.0)
-    # Precipitation has no noise of its own — it responds to the refined relief.
-    # 0.5/km means a 400 m sub-grid ridge catches ~20% more rain than the global
-    # texel it sits in, and the matching hollow ~20% less.  0 disables it.
+    # 0.5/km: a 400 m sub-grid ridge catches ~20% more rain, a hollow ~20% less.
     orographic_gain: float = _f(
         0.5, label="Orographic precip gain (/km)", min=0.0, max=3.0, step=0.05
     )
     lapse_rate_c_per_km: float = _f(6.5, label="Lapse rate (°C/km)", min=0.0, max=15.0)
-    # Sub-grid relief fades out under water as the depth runs out, so a shallow
-    # lake bed cannot poke back through its own surface.  0.1 km clears the real
-    # lake-depth distribution (median ~40 m); 0 disables the fade.
+    # Detail fades over this depth so shallow lake beds stay submerged (median
+    # lake depth ~40 m); 0 disables the fade.
     water_relief_depth_km: float = _f(
         0.1, label="Underwater detail fade (km)", min=0.0, max=2.0, step=0.05
     )
-    # Water surfaces are global facts; only the shoreline is refined.  Off, the
-    # masks are copied from the anchor texel and the coast stays blocky.
+    # Off: masks are copied from the anchor texel and the coast stays blocky.
     refine_water_masks: bool = _f(True, label="Refine shoreline", min=0, max=1)
-    # How far water may advance into a texel the globe called land, in regional
-    # texels.  The refined shoreline should stay inside the global texels the
-    # coast already runs through, so this wants to be about one global texel —
-    # ~4 regional texels at the default resolutions.
+    # How far water may advance into global land texels, in regional texels;
+    # about one global texel keeps the shore inside the coast's own texels.
     water_spread_texels: int = _f(4, label="Shoreline spread (texels)", min=0, max=16)
-    # Biome is a hard threshold classifier, and the refined temperature swings
-    # ~1 °C between neighbouring texels — enough to fray every boundary into a
-    # dithered band.  A biome is a property of a neighbourhood rather than of one
-    # texel, so the classifier reads an area average; the temperature and
-    # precipitation layers themselves stay sharp.  0 or 1 disables it.
+    # The biome classifier reads box-averaged climate: ~1 °C texel-to-texel swings
+    # would otherwise dither every boundary.  The climate layers stay sharp.
+    # 0 or 1 disables it.
     biome_smoothing: int = _f(5, label="Biome climate averaging (texels)", min=0, max=15)
     octaves: int = _f(4, label="Detail octaves (max)", min=0, max=8)
     lacunarity: float = _f(2.0, label="Detail lacunarity", min=1.1, max=4.0)
     persistence: float = _f(0.5, label="Detail persistence", min=0.1, max=0.95)
     nyquist_safety: float = _f(0.5, label="Nyquist safety factor", min=0.1, max=1.0)
-    # ── coast style: the globe's ``coast_smoothness`` restyles the detail near
-    # water.  Coasts are nearly flat at the parent's scale (metres of elevation
-    # over a parent texel), so a slope-saturated amplitude swamps them and the
-    # shore just takes the sign of the noise out to the spread cap.  Near water
-    # the amplitude is instead ``wander × detail wavelength × parent slope``: the
-    # shoreline moves about ``wander`` wavelengths whatever the gradient.  Smooth
-    # coasts (1) wander little with a low persistence — long sweeping shores;
-    # rugged ones (0) wander far with a high persistence — headlands, coves and,
-    # since the underwater fade is lifted over the sea here, skerries.  The style
-    # blends in over the parent texels either side of the shore (a parent water
-    # fraction within ``coast_band`` of all-water or all-land fades it out).
+    # ── coast style (from ``coast_smoothness``).  Coasts are nearly flat at the
+    # parent's scale, so near water the amplitude is ``wander × detail wavelength ×
+    # parent slope`` and the shore moves ~``wander`` wavelengths whatever the
+    # gradient.  Smooth (1): little wander, low persistence; rugged (0): far
+    # wander, high persistence, and skerries (no underwater fade over the sea).
+    # Fades out where the parent water fraction is within ``coast_band`` of 0 or 1.
     coast_band: float = _f(0.25, label="Coast style band (water fraction)", min=0.01, max=0.5, step=0.01)
     coast_persistence_smooth: float = _f(0.25, label="Smooth-coast persistence", min=0.05, max=0.95, step=0.05)
     coast_persistence_rugged: float = _f(0.8, label="Rugged-coast persistence", min=0.05, max=0.95, step=0.05)
     coast_wander_smooth: float = _f(0.03, label="Smooth-coast wander (wavelengths)", min=0.0, max=2.0, step=0.01)
     coast_wander_rugged: float = _f(0.5, label="Rugged-coast wander (wavelengths)", min=0.0, max=2.0, step=0.01)
-    # ── shore reshaping, sea and lakes (reshape_coast).  Conservation pins a coast's
-    # contour to the parent's texel staircase, so the detail above can only
-    # fringe it.  Instead a *target* coastline is drawn — the contour of the
-    # elevation box-blurred over ``coast_blur_texels`` parent texels (curves
-    # through the steps) with its fine detail kept in proportion to the coast's
-    # ruggedness, plus, on rugged coasts, noise one octave below the
-    # detail band (bays and headlands larger than the fringe) — and the conserved
-    # elevation is edited to match it: texels on the wrong side are set just
-    # across the water surface and the rest of their parent texel absorbs the difference
-    # by scaling, so every parent mean stays exact.  A parent texel whose dry (or
-    # wet) side would have to grow by more than ``coast_max_scale`` is left alone.
+    # ── shore reshaping (sea and lakes).  Conservation pins a coast to the
+    # parent's texel staircase, so a target coastline is drawn instead: the
+    # elevation box-blurred over ``coast_blur_texels`` parent texels, fine detail
+    # kept by ruggedness, plus bay-scale noise one octave below the detail band on
+    # rugged coasts.  Wrong-side texels are set just across the surface and the
+    # rest of their parent texel absorbs the difference by scaling (parent means
+    # exact).  Parent texels needing more than ``coast_max_scale`` are left alone.
     reshape_coast: bool = _f(True, label="Reshape shores", min=0, max=1)
     coast_blur_texels: float = _f(1.5, label="Coast blur (parent texels)", min=0.0, max=4.0, step=0.25)
     coast_target_wander_smooth: float = _f(
@@ -168,18 +120,15 @@ class RegionUpsampleParams:
         0.5, label="Rugged-coast bay size (wavelengths)", min=0.0, max=2.0, step=0.05
     )
     coast_max_scale: float = _f(1.0, label="Coast edit max scale", min=0.0, max=5.0, step=0.1)
-    # How far past sea level an edited texel is set (km): at least the first,
-    # at most the second.
+    # Bounds on how far past the surface an edited texel is set (km).
     coast_edit_min_km: float = _f(0.001, label="Coast edit min depth/height (km)", min=0.0, max=0.05, step=0.001)
     coast_edit_max_km: float = _f(0.02, label="Coast edit max depth/height (km)", min=0.0, max=0.2, step=0.005)
     # ── resources, population and danger (region/resources.py) ──
-    # Refined slope (km/km) at which the slope-driven terms saturate.  Sub-grid
-    # relief is tens to hundreds of metres over ~5-15 km, hence the small value.
+    # Refined slope (km/km) at which slope-driven terms saturate.
     slope_saturation: float = _f(
         0.02, label="Slope saturation, resources (km/km)", min=0.002, max=0.2, step=0.002
     )
-    # Fertility gained per km the ground lies below the coarse surface (alluvial
-    # valley floors), lost per km above it.
+    # Fertility gained per km below the coarse surface (valley floors), lost above.
     fertility_valley_gain: float = _f(
         2.0, label="Fertility valley gain (/km)", min=0.0, max=10.0, step=0.25
     )
@@ -187,18 +136,15 @@ class RegionUpsampleParams:
     fertility_slope_penalty: float = _f(
         0.5, label="Fertility slope penalty", min=0.0, max=1.0, step=0.05
     )
-    # Danger is multiplied by exp(gain · (slope + forest)) before renormalising
-    # per global texel: rugged, forested ground more dangerous, open flats less.
+    # Danger × exp(gain · (slope + forest)), renormalised per global texel.
     danger_terrain_gain: float = _f(
         1.0, label="Danger terrain gain", min=0.0, max=4.0, step=0.1
     )
-    # How far inland of the refined shoreline the fishers' share of the rural
-    # density lives.
+    # Inland band of the refined shore holding the fishers' rural density.
     fishing_shore_km: float = _f(
         2.0, label="Fishing shore band (km)", min=0.1, max=20.0, step=0.1
     )
-    # How far from its deposit the miners' share of the rural density spreads
-    # (the Gaussian scale of their camps around the mine).
+    # Gaussian scale of the miners' rural density around their deposit.
     mining_camp_km: float = _f(
         3.0, label="Mining camp radius (km)", min=0.1, max=20.0, step=0.1
     )
@@ -206,16 +152,12 @@ class RegionUpsampleParams:
 
 @dataclass
 class RegionFields:
-    """Refined per-hex textures for one region (or local map), mirroring
-    ``mesh.face_textures``.
+    """Refined per-hex textures for one region (or local map), mirroring ``mesh.face_textures``.
 
-    ``textures`` maps the same keys the globe uses (``"elevation"``,
-    ``"temperature"``, ``"precipitation"``, ``"biome"``, ``"ocean_mask"``,
-    ``"lake_mask"``, ``"filled_height"``, ``"forest_density"``, ``"fertility"``,
-    ``"dominant_crop"``, ``"rural_density"``) to ``(M, T, T, C)`` arrays over the
-    map's ``M`` hexagons, plus ``"danger"`` — per face on the globe, a texture
-    only here.  ``filled_height`` is a lake's water surface on its texels and the
-    ground elsewhere, as on the globe: the tier below reads its lake levels there.
+    ``textures`` uses the globe's keys as ``(M, T, T, C)`` arrays over the map's
+    ``M`` hexagons, plus ``"danger"`` (per face on the globe, a texture here).
+    ``filled_height`` is the lake surface on lake texels and ground elsewhere;
+    the tier below reads its lake levels there.
     """
 
     region_id: int
@@ -230,10 +172,9 @@ class RegionFields:
     textures: dict[str, np.ndarray]
     detail_octaves: int
     texel_area_km2: float
-    # Local maps only (None on a region): each texel's anchor on the *region*
-    # (``hex*T*T + row*T + col``) — the conservation target one tier up, while
-    # ``anchors``/``faces`` stay global — and which texels lie inside the parent
-    # hexagon, the map's own domain.
+    # Local maps only: each texel's anchor on the region (``hex*T*T + row*T + col``),
+    # the conservation target one tier up (``anchors``/``faces`` stay global), and
+    # which texels lie inside the parent hexagon.
     parent_anchors: Optional[np.ndarray] = None   # (M, T, T)
     in_map: Optional[np.ndarray] = None           # (M, T, T) bool
 
@@ -243,8 +184,7 @@ class RegionFields:
 
     @property
     def domain(self) -> np.ndarray:
-        """(M, T, T) bool: the texels this map aggregates over — inside their own
-        hexagon and, on a local map, inside the parent hexagon too."""
+        """(M, T, T) bool: texels inside their hexagon (and, on a local map, the parent hexagon)."""
         return self.in_hex if self.in_map is None else self.in_hex & self.in_map
 
 
@@ -281,8 +221,7 @@ def _normalized_fbm(
 def _varying_persistence_fbm(
     points: np.ndarray, seed: int, freqs: np.ndarray, persistence: np.ndarray
 ) -> np.ndarray:
-    """:func:`_normalized_fbm` with a per-point persistence: octave ``k`` weighs
-    ``persistence ** k``, normalised per point by the weights' sum."""
+    """:func:`_normalized_fbm` with per-point persistence (octave ``k`` weighs ``persistence ** k``)."""
     if freqs.size == 0:
         return np.zeros(len(points), dtype=np.float64)
     perm = make_perm(seed)
@@ -309,12 +248,10 @@ class CoastStyle:
 def coast_style(
     source: ParentSource, loc: Located, params: RegionUpsampleParams
 ) -> Optional[CoastStyle]:
-    """The near-shore detail style, or None when the parent has no
-    ``coast_smoothness`` (an older world) — the detail is then the plain fBm.
+    """The near-shore detail style, or None without ``coast_smoothness`` (plain fBm).
 
-    ``near`` is a tent on the parent's bilinear water fraction: full where the
-    parent's texels are mixed, faded to nothing within ``coast_band`` of
-    all-land or all-water.
+    ``near`` is a tent on the parent's bilinear water fraction, zero within
+    ``coast_band`` of all-land or all-water.
     """
     if not source.has("coast_smoothness"):
         return None
@@ -340,16 +277,13 @@ def coast_style(
 def _box_filter(texture: np.ndarray, size: int) -> np.ndarray:
     """``size``×``size`` mean over each hex texture of an ``(M, T, T, C)`` array.
 
-    Edges replicate.  That is fine even at the hexagon's rim: the texture
-    over-hangs its hexagon, so the visible border averages over real neighbouring
-    data, and only the invisible corners see the replicated edge.
+    Edges replicate; only the invisible over-hang corners see that.
     """
     if size <= 1:
         return texture
     r = size // 2
     padded = np.pad(np.asarray(texture, dtype=np.float64), ((0, 0), (r, r), (r, r), (0, 0)), mode="edge")
     _, h, w, _ = texture.shape
-    # Separable: the columns' sums, then the rows' — 2·size passes, not size².
     cols = np.zeros((padded.shape[0], h + 2 * r, w, padded.shape[3]), dtype=np.float64)
     for j in range(size):
         cols += padded[:, :, j:j + w, :]
@@ -370,18 +304,9 @@ def _effective_slope(slope: np.ndarray, params: RegionUpsampleParams) -> np.ndar
 def _shallow_water_damping(depth: np.ndarray, params: RegionUpsampleParams) -> np.ndarray:
     """Fade the detail out as the water above the ground shallows (1 = full detail).
 
-    Without this, refining the masks turns every shallow lake into confetti.  A
-    lake bed sits within a few tens of metres of its own surface (median depth on
-    a real world is ~40 m, against ~15–30 m of sub-grid relief), so zero-mean
-    noise pokes half of it back into the air and the mask, being a threshold on
-    the refined elevation, dithers across the whole water body rather than only
-    along its shore.
-
-    Scaling the amplitude by the depth keeps the bump strictly smaller than the
-    water it sits under, so shallow water stays water and only the *edge* — where
-    the depth genuinely runs out — moves.  It costs nothing visible: submerged
-    relief is painted over by the water anyway.  The deep ocean (median 3.4 km) is
-    far past the fade and keeps its full detail.
+    Lake beds sit ~40 m below their surface against ~15–30 m of sub-grid relief,
+    so unscaled noise would turn shallow lakes into confetti.  Scaling by depth
+    keeps bumps below the surface so only the shoreline moves.
     """
     scale = float(params.water_relief_depth_km)
     if scale <= 0.0:
@@ -410,22 +335,13 @@ def flood_to_level(
 ) -> np.ndarray:
     """Grow water from ``seed`` texels into neighbours that lie below its surface.
 
-    All arrays are ``(M, T, T)`` over the region's hex textures.  ``seed`` marks
-    the texels the *global* mask calls water and ``level`` carries that water
-    body's surface elevation (km); a seed texel is water only if the refined
-    ``elevation`` is still below its own surface, which is what lets a sub-grid
-    rise inside a global water texel emerge as an island.
-
-    Growth is a level-constrained flood — the same rule
-    ``worldgen.geology.elevation.compute_ocean_mask_texture`` uses one level up —
-    so water spreads through low ground but stops at any ridge above the surface,
-    rather than teleporting over it the way a plain dilation would.  ``iterations``
-    caps how far it can travel; ``blocked`` texels are never taken (they belong to
-    another water body).
-
-    Each hex texture is flooded on its own.  The textures over-hang their
-    hexagons, so the visible area is grown from real neighbouring data as long as
-    ``iterations`` stays well inside the over-hang.
+    All arrays are ``(M, T, T)``.  ``seed`` is the parent's water mask, ``level``
+    its surface (km); a seed texel stays water only below its surface, so sub-grid
+    rises become islands.  A level-constrained flood (as
+    ``compute_ocean_mask_texture``): stops at ridges above the surface.
+    ``iterations`` caps the travel; ``blocked`` texels belong to another water body.
+    Each hex texture floods on its own, which is fine while ``iterations`` stays
+    inside the over-hang.
     """
     return _flood(elevation, seed, level, iterations, blocked)[0]
 
@@ -437,8 +353,7 @@ def _flood(
     iterations: int,
     blocked: Optional[np.ndarray] = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """:func:`flood_to_level`, also returning each water texel's surface level
-    (``+inf`` on dry texels)."""
+    """:func:`flood_to_level`, also returning each texel's surface level (``+inf`` when dry)."""
     elev = np.asarray(elevation, dtype=np.float64)
     water = np.asarray(seed, dtype=bool) & (elev <= level)
     water_level = np.where(seed, level, np.inf)
@@ -463,16 +378,12 @@ def reshape_to_target(
 ) -> np.ndarray:
     """Edit ``elevation`` so its side of ``level`` matches ``target``'s, keeping every anchor's mean.
 
-    ``level`` is the water surface, a scalar or one per texel; only ``active``
-    texels with a finite level take part (default: all with a finite level).
-    A texel on the wrong side is set to ``target`` clipped to ``[min_offset,
-    max_offset]`` past the level.  The change to its anchor's weighted mean is
-    then taken back from the anchor's active texels on the side that can absorb
-    it without crossing the level — the dry ones raised, or the wet ones
-    lowered, in proportion to their height above (depth below) the level — so
-    the result is exact and no other texel changes side.  An anchor needing more
-    than ``max_scale`` (×) of that height, or with nothing to absorb it, keeps
-    its original values.
+    ``level`` is the water surface (scalar or per texel); only ``active`` texels
+    with a finite level take part.  Wrong-side texels are set to ``target``
+    clipped to ``[min_offset, max_offset]`` past the level; the anchor's mean
+    change is absorbed by scaling its texels on the side that can take it without
+    crossing (dry raised or wet deepened, proportional to height/depth).  Anchors
+    needing more than ``max_scale`` ×, or with nothing to absorb, are unchanged.
     """
     e0 = np.asarray(elevation, dtype=np.float64)
     lvl = np.broadcast_to(np.asarray(level, dtype=np.float64), e0.shape)
@@ -515,8 +426,7 @@ def conserve_multiplicative(
 ) -> np.ndarray:
     """Scale each anchor group so its weighted mean equals the global value.
 
-    Used for strictly-positive fields, where an additive shift could go negative.
-    Groups whose mean is ~0 (or which received no in-hex sample) are left alone.
+    For strictly-positive fields.  Groups with mean ~0 or no in-hex sample are left alone.
     """
     means, counts = anchor_means(values, anchors, weights, n_anchors)
     sample_means = means[anchors]
@@ -529,9 +439,8 @@ def conserve_multiplicative(
     return values * scale
 
 
-# Over-relaxation of each smoothing pass: a bilinear read gives back between
-# ~1/4 (checkerboard residuals) and all (smooth ones) of a residual, so a step a
-# bit larger than 1 converges ~1.5x faster without overshooting either end.
+# Over-relaxation per smoothing pass: a bilinear read returns ~1/4 (checkerboard)
+# to all (smooth) of a residual, so 1.4 converges ~1.5x faster without overshoot.
 _RELAXATION = 1.4
 
 
@@ -540,27 +449,18 @@ def conserve_smooth(
     weights: np.ndarray, *, multiplicative: bool = False,
     tolerance: float = 0.01, max_iterations: int = 16,
 ) -> np.ndarray:
-    """:func:`conserve_additive` / :func:`conserve_multiplicative` with a *smooth* correction.
+    """:func:`conserve_additive` / :func:`conserve_multiplicative` with a smooth correction.
 
-    A per-anchor constant leaves a step at every parent-texel edge wherever the
-    groups need different nudges — which is everywhere the parent is curved, as
-    a bilinear read never averages back to its own texels.  Instead the
-    per-anchor residuals are read back smoothly, like the parent itself
-    (:meth:`ParentSource.interpolate`), and added; each pass removes about
-    half of what is left.  Passes stop once the well-covered anchors' worst
-    residual is ``tolerance`` of where it started, and the exact per-anchor
-    step then fixes the crumbs — plus the slivers of parent texels a map's rim
-    cuts off, which a smooth field can barely reach.  Multiplicative mode works
-    in log space, so the field stays positive.
+    A per-anchor constant leaves steps at parent-texel edges.  Instead residuals
+    are read back smoothly (:meth:`ParentSource.interpolate`) and added, each pass
+    halving them, until the well-covered anchors' worst residual is ``tolerance``
+    of its start; an exact per-anchor step then fixes the crumbs (and rim
+    slivers).  Multiplicative mode works in log space.
 
-    The passes converge because every anchor owns its own position
-    (:meth:`ParentSource.owners`), so the stencil reading its correction is the
-    one its own samples sit under.  An anchor whose correction no read touches
-    has no say over its own mean, and enough of those make the passes diverge.
+    Convergence relies on every anchor owning its own position
+    (:meth:`ParentSource.owners`); anchors no read touches can make it diverge.
     """
-    # Work over the anchors this map touches — its own and those its stencil
-    # reads — renumbered compactly: the parent has millions, a map a few
-    # thousand, and every per-anchor array below would otherwise span them all.
+    # Renumber compactly to the anchors this map touches (the parent has millions).
     idx, w = source.stencil(loc)
     renumber = np.zeros(source.n_anchors, dtype=np.int64)
     renumber[loc.anchors] = 1
@@ -573,8 +473,7 @@ def conserve_smooth(
     v = np.asarray(values, dtype=np.float64).copy()
     counts = np.bincount(anchors, weights=np.asarray(weights, dtype=np.float64), minlength=n)
     live = counts > 0.0
-    # A few anchors collect far more samples than the rest (clamped reads
-    # piling onto a texture's corner), so coverage is judged by the median.
+    # Clamped reads pile samples onto texture corners, so judge coverage by the median.
     well_covered = counts >= 0.5 * np.median(counts[live]) if live.any() else live
     kept, first, best = v, None, np.inf
     for _ in range(max_iterations):
@@ -604,30 +503,22 @@ def conserve_smooth(
 
 @dataclass
 class _AnchorWater:
-    """What the parent tier says about the water at each texel's anchor.
+    """The parent's water at each texel's anchor; flat ``(P,)`` arrays.
 
-    ``surface`` is the water-surface elevation (km) — sea level under the ocean,
-    the Priority-Flood fill height under a lake — and ``+inf`` where there is no
-    water, or where a lake's level is unknown because the world has no hydrology.
-    All arrays are flat ``(P,)`` over the region's texels.
+    ``surface`` is the water surface (km): sea level, a lake's fill height, or
+    ``+inf`` for no water or an unknown lake level (no hydrology).
     """
 
     ocean: np.ndarray
     lake: np.ndarray
     surface: np.ndarray
-    # Which of the parent's textures actually existed — a child must not invent a
-    # mask its parent does not have.
+    # Which parent textures exist: a child must not invent a mask.
     has_ocean: bool
     has_lake: bool
     has_lake_levels: bool
 
     def depth(self, elevation: np.ndarray) -> np.ndarray:
-        """How deep the water stands over ``elevation`` (km).
-
-        ``+inf`` on dry ground (no surface above it) and negative where ground
-        already pokes out of a water texel, so callers can treat "deep" and "not
-        underwater at all" the same way.
-        """
+        """Water depth over ``elevation`` (km): ``+inf`` on dry ground, negative where ground pokes out."""
         return self.surface - elevation
 
 
@@ -665,18 +556,11 @@ def _refine_water_masks(
 ) -> dict[str, np.ndarray]:
     """Re-flood ``ocean_mask``/``lake_mask`` against the ``(M, T, T)`` refined relief.
 
-    Each water body keeps the surface elevation the globe gave it — sea level for
-    the ocean, the Priority-Flood fill height for a lake — so the two tiers agree
-    on *where the water is*, and disagree only on the sub-texel shape of the
-    shore.  Ocean and lake are flooded separately and neither may take the
-    other's texels, which keeps a coastal lake sitting below sea level from being
-    swallowed by the sea it is walled off from on the world map.
-
-    A lake's surface lives in the ``filled_height`` texture the hydrology stage
-    writes; without it (a world built with elevation only) lakes fall back to the
-    anchor mask verbatim.  With it, ``filled_height`` is written back too — the
-    lake surface on lake texels, the refined ground elsewhere — so the tier below
-    can refine this one's lakes the same way.
+    Water surfaces are the parent's; only the shore shape changes.  Ocean and
+    lake flood separately and may not take each other's texels, so a
+    below-sea-level coastal lake isn't swallowed by the sea.  Without
+    ``filled_height`` (no hydrology) lakes copy the anchor mask; with it,
+    ``filled_height`` is written back for the tier below.
     """
     shape = elevation.shape
     masks: dict[str, np.ndarray] = {}
@@ -722,12 +606,9 @@ def _reshape_coasts(
 ) -> np.ndarray:
     """Draw the target shores and edit the conserved ``(P, 1)`` elevation to them.
 
-    See ``RegionUpsampleParams.reshape_coast``.  Two passes, each within its own
-    shore band (the tent on the parent's ocean / lake fraction): the sea against
-    sea level, then the lakes against their surfaces.  A lake's surface is known
-    on its own texels only, so it is carried a few texels onto the shore around
-    it — about the blur's reach — by taking the lowest neighbouring surface, the
-    way the flood that later re-draws the lake spreads it.
+    See ``RegionUpsampleParams.reshape_coast``.  Two passes, each in its shore
+    band: the sea against sea level, then lakes against their surfaces, which
+    are spread ~the blur's reach onto the shore (lowest neighbouring surface).
     """
     m, tex_size = shape
     n_t = float(source.spacing_rad / max(spacing_rad, 1e-12))
@@ -739,10 +620,7 @@ def _reshape_coasts(
     if not any(b is not None and b.any() for b in (sea_band, lake_band)):
         return elevation
 
-    # The conserved elevation's contour sits on the parent's texel staircase
-    # (the correction puts it there), so the target starts from that elevation
-    # blurred over the staircase, then adds back its fine detail as far as the
-    # coast is rugged — smooth coasts lose the fringe, rugged ones keep it.
+    # Blur the staircase away, then add back fine detail in proportion to ruggedness.
     e = elevation[:, 0]
     blur = int(round(float(params.coast_blur_texels) * n_t))
     wide = e
@@ -753,8 +631,7 @@ def _reshape_coasts(
     w_rugged, w_smooth = float(params.coast_target_wander_rugged), float(params.coast_target_wander_smooth)
     wander = w_rugged + (w_smooth - w_rugged) * style.smooth
     if np.any(wander > 0.0):
-        # One octave below the detail band and the next: the scales conservation
-        # removes from the elevation itself, so the coast can carry them.
+        # The scales conservation removes from the elevation itself.
         freqs = np.array([0.5 * base_frequency, base_frequency])
         bays = _varying_persistence_fbm(flat_pos, seed ^ _SEED_SALT_COAST, freqs, style.persistence)
         goal = goal + bays * np.clip(wander * 2.0 * feature_length_km * slope, 0.0, float(params.max_relief_km))
@@ -798,13 +675,10 @@ def refine_fields(
     """Refine ``source``'s fields onto a child tier's ``(M, T, T, 3)`` texels.
 
     Tier-agnostic: a region refines the globe (:class:`GlobalSource`), a local
-    map refines a region (:class:`region.source.RegionSource`).  ``weights`` is
-    the ``(M, T, T)`` aggregation mask (the over-hang, and anything outside the
-    child map, weighted out), ``spacing_rad`` the child's texel spacing and
-    ``seed`` the elevation noise stream.  Returns ``(textures, located,
-    detail_octaves)``, ``located`` holding each texel's parent anchor.
-    ``mine_points`` are the worked deposits (unit vectors) the miners' share of
-    the rural density gathers around.
+    map a region (:class:`region.source.RegionSource`).  ``weights`` is the
+    ``(M, T, T)`` aggregation mask, ``spacing_rad`` the child's texel spacing.
+    ``mine_points`` are worked deposits (unit vectors) for the miners' density.
+    Returns ``(textures, located, detail_octaves)``.
     """
     m, tex_size = positions.shape[0], positions.shape[1]
     flat_pos = positions.reshape(-1, 3)
@@ -812,7 +686,6 @@ def refine_fields(
     loc = source.locate(flat_pos)
     anchors, n_anchors = loc.anchors, source.n_anchors
 
-    # Detail band: from the parent grid's Nyquist up to the child grid's.
     base_frequency = 0.5 / max(source.spacing_rad, 1e-12)
     max_frequency = (
         float(params.nyquist_safety) / spacing_rad if spacing_rad > 0 else 0.0
@@ -833,10 +706,8 @@ def refine_fields(
     amplitude = np.clip(
         float(params.relief_factor) * feature_length_km * eff_slope, 0.0, float(params.max_relief_km),
     ) * damping
-    # Near water the globe's coast smoothness restyles the detail: its
-    # persistence (how crenellated) and an amplitude set by how far the shore
-    # should wander.  Over the sea the underwater fade is lifted, so rugged
-    # coasts can raise islands; a lake keeps it (see _shallow_water_damping).
+    # Near water: coast-style persistence and wander amplitude; the underwater
+    # fade is lifted over the sea (islands) but kept for lakes.
     if style is None:
         noise = _normalized_fbm(flat_pos, seed ^ _SEED_SALT_ELEVATION, freqs, amps)
     else:
@@ -854,8 +725,7 @@ def refine_fields(
         )
     textures["elevation"] = elevation.reshape(m, tex_size, tex_size, 1).astype(np.float32)
 
-    # The sub-grid relief, in km: the one signal every derived field reads from.
-    # ~Zero-mean inside each anchor group, so it perturbs without biasing.
+    # Sub-grid relief (km), ~zero-mean per anchor: drives every derived field.
     relief_anomaly = elevation[:, 0] - elev_coarse[:, 0]
 
     # ── water masks: the water surface is the parent's, the shoreline is refined
@@ -865,15 +735,13 @@ def refine_fields(
         )
     )
 
-    # The style field itself is copied (bilinear, not conserved) so the tier below
-    # styles its shores the same way.
+    # Copied (bilinear, not conserved) so the tier below styles its shores alike.
     if style is not None:
         textures["coast_smoothness"] = source.coarse("coast_smoothness", loc).reshape(
             m, tex_size, tex_size, 1
         ).astype(np.float32)
 
-    # The world's river deltas, copied the same way: the plain the
-    # distributaries are sited on (region.distributaries), and its marsh.
+    # Delta plain and marsh, copied likewise (for region.distributaries).
     if source.has("delta"):
         textures["delta"] = np.clip(source.coarse("delta", loc), 0.0, 1.0).reshape(
             m, tex_size, tex_size, -1
@@ -882,8 +750,7 @@ def refine_fields(
     # ── temperature: lapse rate on the refined relief ────────────────────────
     if source.has("temperature"):
         t_coarse = source.coarse("temperature", loc)                        # (P, K)
-        # Sub-sea-level ground is pinned to sea level for lapse, as in the
-        # global temperature stage.
+        # Sub-sea-level ground counts as sea level, as in the global stage.
         delta_elev = np.maximum(elevation[:, 0], 0.0) - np.maximum(elev_coarse[:, 0], 0.0)
         temperature = t_coarse - float(params.lapse_rate_c_per_km) * delta_elev[:, None]
         temperature = conserve_smooth(
@@ -894,10 +761,6 @@ def refine_fields(
         ).astype(np.float32)
 
     # ── precipitation: orographic response to the refined relief ─────────────
-    # Deliberately *not* an independent noise stream: precipitation feeds a
-    # threshold classifier (biome), and uncorrelated noise there turns every
-    # near-threshold area into speckle.  Sharing the relief instead puts the
-    # moisture bands on the contours.
     if source.has("precipitation"):
         p_coarse = source.coarse("precipitation", loc)                      # (P, K)
         wobble = np.clip(float(params.orographic_gain) * relief_anomaly, -0.9, 0.9)
@@ -961,10 +824,8 @@ def build_region_fields(
 ) -> RegionFields:
     """Refine the global fields inside one region onto its hex-texture grid.
 
-    Deterministic: the noise streams are seeded with ``world.seed XOR region_id``,
-    so the same region always regenerates identically.  ``resources`` and
-    ``fertility_exponent`` (the population model's γ) are the world's own tuning,
-    which the resource and rural-density refinement reuse.
+    Seeded with ``world.seed XOR region_id``.  ``resources`` and
+    ``fertility_exponent`` (the population model's γ) are the world's tuning.
     """
     params = params or RegionUpsampleParams()
     source = GlobalSource(globe)
@@ -976,9 +837,8 @@ def build_region_fields(
     in_hex = grid.texture_in_hexagon(tex_size)                   # (M, T, T)
     m = len(grid)
 
-    # The local frame is equal-area (the cell is the unit square), so a texel's
-    # area is its share of that square.  Dividing the cell area by the in-hex
-    # texel count would undercount: the hexes spill past the cell edge.
+    # Equal-area frame: a texel's area is its share of the unit-square cell (the
+    # in-hex count would undercount, as hexes spill past the cell edge).
     region_area_km2 = 4.0 * np.pi * EARTH_RADIUS_KM ** 2 / N_REGIONS
     texel_area_km2 = float(region_area_km2 * (2.0 * grid.radius / tex_size) ** 2)
 
@@ -1006,13 +866,10 @@ def build_region_fields(
 
 
 def conservation_report(fields: RegionFields, globe: "World") -> dict[str, dict[str, float]]:
-    """Residuals of the critical invariant: does downsampling recover the globe?
+    """Per-global-texel residual of the regional mean vs the global value.
 
-    For every global texel that received in-hexagon regional samples, compare the
-    regional mean against the global value.  Returns ``{field: {"max": …, "mean": …,
-    "n_anchors": …}}`` in each field's own units.  Rural density is an areal
-    total like the physical fields; fertility and forest density are densities
-    of land, so they are compared over the texels dry on both maps.
+    Returns ``{field: {"max": …, "mean": …, "n_anchors": …}}`` in field units.
+    Fertility and forest density are compared over texels dry on both maps.
     """
     return anchor_residuals(fields.textures, fields.anchors, fields.domain, globe.mesh.face_textures)
 
@@ -1023,8 +880,7 @@ def anchor_residuals(
     domain: np.ndarray,
     parent_textures: dict[str, np.ndarray],
 ) -> dict[str, dict[str, float]]:
-    """:func:`conservation_report` against any parent tier: ``anchors`` index the
-    ``(N, H, W, C)`` ``parent_textures``, ``domain`` weights the child texels."""
+    """:func:`conservation_report` against any parent tier's ``(N, H, W, C)`` textures."""
     anchors = np.asarray(anchors).reshape(-1)
     in_hex = np.asarray(domain).reshape(-1).astype(np.float64)
     water = np.zeros(len(anchors), dtype=bool)

@@ -1,16 +1,8 @@
 """Measure the river *length distribution* vs Earth's great rivers.
 
-Motivation: the generated worlds feel short on "great rivers of the world" —
-the Rhine / Nile / Mississippi class of multi-thousand-km channels. This harness
-quantifies that. It runs elevation → climate → hydrology (the lake-feedback,
-resources, and cost stages do not change rivers, so they are skipped) and reports
-the source-to-mouth length distribution of the generated rivers.
-
-Each ``River`` object is one main stem or tributary from the Hack decomposition:
-a chain from a headwater down to the sea, an endorheic sink, or the confluence
-where it joins a larger stem. So a river's polyline length is its source-to-mouth
-(or source-to-confluence) length — comparable to how real-world river lengths are
-quoted.
+Runs elevation → climate → hydrology (later stages don't change rivers).  Each
+``River`` is one Hack main stem or tributary, so its polyline length is its
+source-to-mouth (or source-to-confluence) length, as real river lengths are quoted.
 
 Usage:
     python3 scripts/measure_rivers.py              # vetted seeds 4, 31, 35
@@ -24,8 +16,7 @@ Earth reference — notable main-stem lengths (km):
     Yangtze               ~6300      Rhine                ~1233
     Mississippi-Missouri  ~6275      Seine                 ~777
 
-Rough global counts of rivers exceeding a length (land-area dependent, so these
-are order-of-magnitude anchors, not hard targets):
+Rough global counts of rivers exceeding a length (order-of-magnitude anchors):
     > 1000 km: ~150     > 2000 km: ~60     > 3000 km: ~30     > 4000 km: ~17
 """
 from __future__ import annotations
@@ -90,7 +81,7 @@ def _hist_labels() -> list[str]:
 def _river_length_km(positions: np.ndarray) -> float:
     """Great-circle length (km) of a polyline of unit-sphere positions.
 
-    Matches the delta-length formula in hydrology/builder.py for consistency.
+    Matches the delta-length formula in hydrology/builder.py.
     """
     if len(positions) < 2:
         return 0.0
@@ -127,8 +118,7 @@ def measure_seed(seed: int) -> dict:
         positions = np.stack(poly)
         lengths.append(_river_length_km(positions))
         mouth_flows.append(float(river.segments[-1].flow_rate))
-        # Classify the mouth as sea-reaching by sampling the ocean mask at the
-        # mouth pixel (same mapping the delta-tagging logic uses).
+        # Sea-reaching: ocean mask at the mouth pixel (as delta tagging samples it).
         if river.mouth is None:
             continue
         face = int(river.mouth.face_id)
@@ -368,8 +358,7 @@ def main() -> None:
                         help="Print per-seed length histogram and longest rivers")
     args = parser.parse_args()
 
-    # Default tuning set: chosen for Earth-like land fraction (~29%) and a
-    # continent-scale landmass, so river length isn't capped by geography.
+    # Earth-like land fraction (~29%) and a continent-scale landmass.
     seeds = resolve_seeds(args, [4, 31, 35])
 
     print(f"\nRiver length distribution — {len(seeds)} seed(s)\n")

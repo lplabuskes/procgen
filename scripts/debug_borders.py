@@ -1,18 +1,11 @@
 """Visual border-drawing troubleshooter — fill vs. traced lines, at texel resolution.
 
-Renders a *zoomed*, faithful raster of one region so the texel fill and the
-traced border polylines can be compared directly, pixel for pixel.
+Renders a zoomed raster of one region: the polity fill (``fill.PolityLabelField``)
+and the border polylines contoured from it (``borders.py``).  Only texels inside
+``mesh.face_texture_in_polygon`` are drawn, as the renderer clips the rest;
+``--show-overhang`` adds the clipped over-hang (faded, red-edged).
 
-Each face's 16×16 texture is a square that over-hangs its hexagon, and the
-renderer clips every texel outside ``mesh.face_texture_in_polygon``. This script
-therefore draws ONLY visible (in-polygon) texels by default — what you see is
-what ships — and with ``--show-overhang`` also the invisible over-hang texels
-(faded, red-edged). The fill labels come from the polity label field
-(``fill.PolityLabelField``) and the borders are contoured from that same field
-(``borders.py``), both from the current code.
-
-Open endpoints in the printed diagnostics should all be coastal terminations: the
-lattice contour has no other way to end a line.
+Open endpoints in the printed diagnostics should all be coastal.
 
 Usage:
     python3 scripts/debug_borders.py                      # seed 4, auto-pick a busy border region
@@ -157,14 +150,10 @@ def main() -> None:
     center = center / np.linalg.norm(center)
     east, north = local_basis(center)
     rad = np.radians(args.radius)
-    # Generous cull radius for *what to consider*; the square axis limits
-    # (±sin(rad)) do the actual cropping. Culling exactly at `rad` (a circle)
-    # would clip any texel/border segment straddling that circle — fabricating
-    # false gaps right where a border crosses the view edge. rad×1.6 fully covers
-    # the square (whose corners sit at ~rad×1.41), so nothing visible is dropped.
+    # Cull generously (the square's corners sit at ~rad×1.41); the axis limits do
+    # the cropping.  Culling at `rad` would fake gaps where borders cross the edge.
     cull = np.cos(rad * 1.6)
 
-    # Faces whose centroid is within the cull radius.
     in_view = np.where(centroids @ center > cull)[0]
     cmap = label_colors(polities)
 
@@ -172,10 +161,8 @@ def main() -> None:
         return np.column_stack([P @ east, P @ north])
 
     # ── gather visible / over-hang texels as quads ──────────────────────────
-    # Each texel is drawn as an actual quad (its 4 corners), not a square marker:
-    # the texel grid inside a face is rotated arbitrarily relative to the view, so
-    # axis-aligned markers leave stripes — corner quads tile at any orientation and
-    # mirror exactly the polygon the renderer fills.
+    # Texels as corner quads: the texel grid is arbitrarily rotated, so square
+    # markers would leave stripes.
     def face_corners(C: np.ndarray) -> np.ndarray:
         """(H, W, 3) texel centres → (H+1, W+1, 3) cell corners (edge-extrapolated)."""
         H_, W_, _ = C.shape
@@ -243,8 +230,7 @@ def main() -> None:
         if segs is None or not len(segs):
             continue
         a, b = segs[:, :3], segs[:, 3:]
-        # OR (not AND): keep a segment if *either* end is in range so segments
-        # crossing the view edge aren't dropped (the axis box crops the overflow).
+        # Either end in range, so segments crossing the view edge are kept.
         keep = (a @ center > cull) | (b @ center > cull)
         if not keep.any():
             continue

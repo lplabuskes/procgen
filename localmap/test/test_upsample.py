@@ -43,10 +43,8 @@ def test_rural_people_are_the_parent_hexs(local, region, lake_hex):
         (region.textures["rural_density"][lake_hex, ..., 0] * region.in_hex[lake_hex]).sum() * region.texel_area_km2
     )
     assert parent > 0.0
-    # Not exact: each tier counts the regional texels on the parent hexagon's
-    # rim differently (a texel is in or out of the region's hex by its centre,
-    # in or out of the local map by its children's).  That is a ~1/T effect —
-    # a few % at this test's T=16, ~0.03% at the real T=64.
+    # Not exact: the tiers count rim texels differently (by centre vs by children),
+    # a ~1/T effect — a few % at T=16, ~0.03% at the real T=64.
     assert people == pytest.approx(parent, rel=0.05)
 
 

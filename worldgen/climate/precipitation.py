@@ -30,14 +30,14 @@ def per_pixel_precipitation(pixel_humidity: np.ndarray,
     """
     n, h, w = pixel_elevations_km.shape
 
-    # Per-pixel slope (∂h/∂u, ∂h/∂v) in km/km.
+    # Slope in km/km.
     dh_dv, dh_du = np.gradient(pixel_elevations_km, axis=(1, 2))
     pix_du_km = face_u_ranges_km[:, None, None] / max(w - 1, 1)
     pix_dv_km = face_v_ranges_km[:, None, None] / max(h - 1, 1)
     slope_u = dh_du / np.maximum(pix_du_km, 1e-9)                  # (N, H, W)
     slope_v = dh_dv / np.maximum(pix_dv_km, 1e-9)                  # (N, H, W)
 
-    # Wind components in face UV frame: (N, K).
+    # Wind in face UV frame: (N, K).
     wind_u = np.einsum("nkj,nj->nk", face_winds, face_u_axes)
     wind_v = np.einsum("nkj,nj->nk", face_winds, face_v_axes)
 

@@ -1,34 +1,24 @@
 """Refining the world's towns onto a region's (or a local map's) finer terrain and streams.
 
-The town stage sites every town on a global texel (~14 km), favouring rivers,
-the smaller streams of the hydrology stream network, coasts, routes and mines
-(:mod:`realmgen.towns`).  That choice is a world fact.  A region refines only what
-its finer grid can see — *where in that texel* the town stands — and the result
-becomes the town's actual position (``Towns.positions``, flagged ``refined``,
-saved with the world):
+The town stage (:mod:`realmgen.towns`) sites each town on a global texel; a region
+refines where in that texel it stands, saved as ``Towns.positions`` (flagged
+``refined``):
 
-- a town moves at most ``refine_radius_global_texels`` global texels from its
-  site, and stays on dry land in its own face;
-- the site weight is the stage's own (:func:`site_log_weight_and_kind`), with the
-  river and confluence flags taken from the region's re-routed stream network
-  (:mod:`region.rivers`), the route flag from its re-routed roads
-  (:mod:`region.roads`), the coast from the refined shoreline and the rural
-  density from the refined one;
-- a town keeps its kind, and a river town (on a river or stream) or port lands on
-  the drawn river or the refined coast whenever one is in reach;
-- spacing to every other town and city is kept, against wherever they stand now.
+- a town moves at most ``refine_radius_global_texels``, staying on dry land in its face;
+- the site weight is the stage's own (:func:`site_log_weight_and_kind`) with
+  river/confluence, route, coast and rural density from the refined tier;
+- a town keeps its kind: river towns and ports land on a drawn river or the
+  refined coast when one is in reach;
+- spacing to every other town and city is kept against where they stand now.
 
-Each town is refined by exactly one region — the one containing its site — and
-only once, so the result does not depend on which region was visited first or
-on the overlap between neighbouring regions.  Site noise is seeded per town.
-Cities are refined the same way, before the towns (``region/cities.py``).
+Each town is refined once, by the region containing its site, so results don't
+depend on visit order.  Site noise is seeded per town.  Cities are refined first
+(``region/cities.py``).
 
-**The local tier** refines again, from the region's position, with the same
-rules at the local map's spacing (:func:`refine_towns` with ``LOCAL_TIER``; the
-local map that owns a town is chosen in ``localmap/settlements.py``).  Spacing
-there is kept against the others' *region* positions, so the result does not
-depend on which local maps were opened first either.  The site features here
-(:func:`tier_sites`) serve both tiers and the cities.
+The local tier refines again from the region position (:func:`refine_towns`
+with ``LOCAL_TIER``; ownership in ``localmap/settlements.py``), with spacing
+against others' region positions so open order doesn't matter.
+:func:`tier_sites` serves both tiers and the cities.
 """
 from __future__ import annotations
 
@@ -64,7 +54,7 @@ REGION_TIER, LOCAL_TIER = 1, 2
 class RegionSettlementParams:
     """Tuning for refining town and city positions in a region."""
 
-    # How far a town or city may move from the site the world gave it, in global texels.
+    # Max move from the world site, in global texels.
     refine_radius_global_texels: float = _f(
         1.0, label="Refinement radius (global texels)", min=0.0, max=2.0, step=0.25)
 
@@ -90,8 +80,7 @@ def _tree(points: Optional[np.ndarray]) -> Optional[KDTree]:
 
 
 def _river_points(rivers: RegionRivers, step: float, streams: bool = False) -> Optional[np.ndarray]:
-    """Points along every drawn (not under-water) stretch of the regional rivers
-    (and of a local map's :attr:`RegionRivers.streams`, given ``streams``)."""
+    """Points along every drawn (not under-water) river stretch, plus ``RegionRivers.streams`` if ``streams``."""
     runs = []
     for positions, _, in_water in [*rivers.paths, *(rivers.streams if streams else [])]:
         pts = np.asarray(positions, dtype=np.float64)
@@ -131,9 +120,7 @@ def tier_sites(
     fields: RegionFields, rivers: RegionRivers, globe: "World", sc, river_threshold_factor: float,
     roads: Optional[RegionRoads] = None,
 ) -> _Sites:
-    """The dry in-hexagon texels of ``fields`` (a region or a local map) and what
-    each offers.  Without ``sc`` (a town site context) no texel is on a route or
-    by a mine."""
+    """The dry in-hexagon texels of ``fields`` and what each offers (no route/mine without ``sc``)."""
     ocean = fields.textures.get("ocean_mask")
     lake = fields.textures.get("lake_mask")
     ocean = ocean[..., 0] > 0.5 if ocean is not None else np.zeros(fields.in_hex.shape, dtype=bool)
@@ -190,12 +177,9 @@ def refine_region_towns(
 ) -> int:
     """Refine the not-yet-refined towns whose site lies in this region, in place.
 
-    Moves ``globe``'s ``towns`` feature positions and sets their ``refined``
-    flag; returns how many towns were refined (0 without towns).
-    ``river_threshold_factor`` × the regional texel spacing is how close a site
-    must be to a river or confluence to count as on it — the town stage's rule at
-    the finer spacing.  With ``roads`` the route flag reads the region's roads
-    instead of the world's straight routes.
+    Returns how many towns were refined.  ``river_threshold_factor`` × the
+    regional texel spacing is the on-river distance.  With ``roads`` the route
+    flag reads the region's roads instead of the world's straight routes.
     """
     towns: Optional[Towns] = globe.get_feature("towns")
     if towns is None or len(towns) == 0:
@@ -223,9 +207,7 @@ def refine_towns(
     river_threshold_factor: float = 1.5,
     roads: Optional[RegionRoads] = None,
 ) -> None:
-    """Re-site towns ``todo`` on ``fields`` at ``tier``, in place: each moves at
-    most ``reach`` (chord) from its position at the tier above, staying on dry
-    land in its own face, and is flagged refined at ``tier``."""
+    """Re-site towns ``todo`` on ``fields`` at ``tier`` in place, within ``reach`` (chord) of their parent sites."""
     towns: Optional[Towns] = globe.get_feature("towns")
     if towns is None or len(todo) == 0:
         return
@@ -235,10 +217,8 @@ def refine_towns(
     seed = int(globe.seed or 0)
     sc = town_site_context(globe, p, pp)
     sites = tier_sites(fields, rivers, globe, sc, river_threshold_factor, roads)
-    # Where each settlement stood at the tier above (what a town refines from),
-    # and where its neighbours are held to count for spacing: wherever they stand
-    # now in a region; at their region positions on a local map, so a local map's
-    # result does not depend on which others were opened first.
+    # Parent positions, and neighbour positions for spacing: current in a region,
+    # region positions on a local map (order-independent).
     parents = towns.site_positions if region else towns.region_positions
     neighbours = towns.positions if region else towns.region_positions
     settlements = globe.get_feature("settlements") or []
@@ -251,7 +231,7 @@ def refine_towns(
     city_tree = _tree(city_pos)
     candidate_tree = KDTree(sites.positions) if len(sites.positions) else None
 
-    # Largest first, like the stage: the biggest towns take the best spots.
+    # Largest first, like the stage.
     for i in todo[np.argsort(-towns.population[todo], kind="stable")].tolist():
         if region:
             towns.refined[i] = True
@@ -271,13 +251,12 @@ def refine_towns(
             sites.rho[cand], coast, conf, river, np.zeros_like(river),
             sites.route[cand], sites.mine[cand], p,
         )
-        # Keep what the world chose the site for, where this tier can show it.
+        # Keep the site's kind where this tier can show it.
         if towns.kind[i] == TOWN_RIVER and (river | conf).any():
             log_w = np.where(river | conf, log_w, -np.inf)
         elif towns.kind[i] == TOWN_PORT and coast.any():
             log_w = np.where(coast, log_w, -np.inf)
 
-        # Spacing against every town and city near it.
         radius = town_radii[i]
         near = np.asarray(parent_tree.query_ball_point(parents[i], max_pair + 2.0 * reach), dtype=np.int64)
         near = near[near != i]

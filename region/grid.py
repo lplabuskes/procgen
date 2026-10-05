@@ -1,19 +1,14 @@
 """Hexagonal scaffolding inside a region cell.
 
-The region's local ``[0, 1]**2`` frame (see :mod:`region.geometry`) is tiled with
-flat-top hexagons.  Each hexagon carries a **square texture** that over-hangs it,
-mirroring the globe one level down: a mesh face is a hexagon whose square texture
-spills into its neighbours, and so is a region hex.  Those per-hex textures are
-where regional detail lives (:mod:`region.upsample`), and each hexagon is the
-future footprint of a local map.
+The local ``[0, 1]**2`` frame (:mod:`region.geometry`) is tiled with flat-top
+hexagons, each carrying an over-hanging square texture like a mesh face.  Each
+hexagon is also the footprint of a local map.
 
-Texture layout (deliberately *not* the mesh's endpoint convention):
+Texture layout (*not* the mesh's endpoint convention):
 
-- Texels are **cell-centred** — texel ``(r, c)`` samples the centre of its own
-  little square, so a texel's value is an area sample and a plain mean over
-  texels is an unbiased area mean.  Aggregate conservation depends on that.
-- Row 0 is the **top** (largest ``t``), so a texture array can be handed to an
-  image blitter without a flip.
+- Texels are **cell-centred**, so a plain texel mean is an unbiased area mean
+  (conservation depends on that).
+- Row 0 is the **top** (largest ``t``), for blitting without a flip.
 """
 from __future__ import annotations
 
@@ -24,18 +19,14 @@ import numpy as np
 
 from region.geometry import RegionGeometry
 
-# Local-frame half-width of a hex texture, as a multiple of the circumradius.
-# 1.0 makes the texture the smallest square containing the hexagon.
+# Hex texture half-width in circumradii (1.0: smallest square containing the hexagon).
 _TEXTURE_HALF_WIDTH = 1.0
 
 
 class RegionHexGrid:
     """Flat-top hexagons tiling one region cell's local ``[0, 1]**2`` frame.
 
-    ``n_cols`` hexagon columns span the local s-axis; rows follow from the
-    hexagon aspect ratio.  Only hexagons whose centre falls inside the cell
-    square are kept, so the union covers the cell with a little spill at the
-    edges (the same over-hang idea as face textures).
+    ``n_cols`` hexagon columns span the local s-axis; rows follow from the aspect ratio.
     """
 
     def __init__(self, geometry: RegionGeometry, n_cols: int = 14) -> None:
@@ -53,11 +44,8 @@ class RegionHexGrid:
     def _layout(self) -> np.ndarray:
         """(M, 2) hexagon centres in local coords, column-major, s then t.
 
-        A hexagon is kept when it *overlaps* the cell square, not merely when its
-        centre is inside — so the hexagons cover the whole cell and no sliver of
-        the world is left without one.  Neighbouring regions therefore overlap
-        slightly at their shared edges, which is fine: each region is an
-        independent cell and every texel is anchored to the global grid anyway.
+        Hexagons overlapping the cell are kept, so the whole cell is covered;
+        neighbouring regions overlap slightly, which is fine as texels anchor globally.
         """
         R = self.radius
         hex_h = math.sqrt(3.0) * R      # full height of a flat-top hex
@@ -118,9 +106,7 @@ class RegionHexGrid:
     def texture_in_hexagon(self, tex_size: int) -> np.ndarray:
         """(M, T, T) bool mask: which texels fall inside their own hexagon.
 
-        The complement is the over-hang, which neighbouring hexagons cover.  Only
-        in-hexagon texels are counted when aggregating, so the over-hang never
-        double-counts.
+        Only these count when aggregating, so the over-hang never double-counts.
         """
         local = self.texture_local(tex_size)
         d = local - self.centers[:, None, None, :]
@@ -137,8 +123,7 @@ class RegionHexGrid:
     def texel_at(self, s: float, t: float, tex_size: int) -> Optional[tuple[int, int, int]]:
         """``(hex, row, col)`` of the texel drawn at local point ``(s, t)``, or None.
 
-        The owning hexagon is the one with the nearest centre (a regular hex
-        tiling is the Voronoi diagram of its centres); ``None`` outside the cell.
+        The owning hexagon is the one with the nearest centre; ``None`` outside the cell.
         """
         hexes, rows, cols, inside = self.texels_at(np.array([s]), np.array([t]), tex_size)
         if not inside[0]:
@@ -148,8 +133,7 @@ class RegionHexGrid:
     def texels_at(
         self, s: np.ndarray, t: np.ndarray, tex_size: int,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """:meth:`texel_at` for arrays: ``(hex, row, col, inside)``; entries with
-        ``inside`` False (outside the cell) hold zeros."""
+        """:meth:`texel_at` for arrays: ``(hex, row, col, inside)``, zeros outside the cell."""
         s = np.asarray(s, dtype=np.float64).ravel()
         t = np.asarray(t, dtype=np.float64).ravel()
         inside = (s >= 0.0) & (s <= 1.0) & (t >= 0.0) & (t <= 1.0) & (len(self) > 0)

@@ -12,9 +12,8 @@ from core.params import param_field as _f, paramclass
 
 _CACHE_DIR = Path(__file__).parent.parent.parent / "mesh_cache"
 _N_CACHED = 5
-# Version of the derived geometry saved beside each mesh (texel positions,
-# boundary pixel pairs): bump it whenever ``PolygonMesh`` changes how either is
-# computed, so stale files are recomputed rather than read.
+# Version of the derived geometry saved beside each mesh (texel positions, boundary
+# pixel pairs): bump whenever ``PolygonMesh`` changes how either is computed.
 GEOMETRY_VERSION = 1
 
 
@@ -39,11 +38,8 @@ def _save(mesh: PolygonMesh, path: Path) -> None:
 
 
 class _SidecarStore:
-    """Derived geometry of a cached mesh, in ``mesh_<i>.<key>.npz`` beside it.
-
-    Each file is stamped with ``GEOMETRY_VERSION`` and the mesh file's size and
-    mtime, so rebuilding the meshes or changing the computation invalidates it.
-    """
+    """Derived geometry of a cached mesh, in ``mesh_<i>.<key>.npz`` beside it,
+    stamped with ``GEOMETRY_VERSION`` and the mesh file's size and mtime."""
 
     def __init__(self, mesh_path: Path) -> None:
         self._path = mesh_path

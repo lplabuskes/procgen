@@ -1,18 +1,12 @@
 """Delta stage — the land large rivers build at their mouths.
 
-Runs right after hydrology (which finds the rivers) and before the climate's
-lake-feedback pass (which re-derives precipitation and biomes from the edited
-relief, so the new land gets its own).  For each big river reaching the sea it
-deposits a delta (:mod:`worldgen.delta.deposit`): a low plain over the river's
-lower course and built out into the shallow sea, with the rivers carried across
-it to the new front.  Big rivers entering a lake build one there too.
+Runs after hydrology and before the climate lake-feedback pass (so the new land gets its own climate).
+Big rivers reaching the sea or a lake deposit a delta (:mod:`worldgen.delta.deposit`), with the rivers
+carried across it to the new front.
 
-Writes back the ``elevation``, ``ocean_mask``, ``lake_mask`` and ``filled_height`` textures,
-the per-face ``is_ocean`` / ``elevation`` aggregates, the extended river objects,
-river polylines and stream network; adds the ``delta`` texture, the per-face
-``delta_fraction`` / ``marsh_fraction``, and the ``"delta_fans"`` and
-``"deltas"`` (new mouths) features.  Resources (fertility), danger and cost
-(marsh) and realm scoring (the apex as a city site) read them.
+Rewrites the relief and water textures, per-face ``is_ocean`` / ``elevation``, rivers and streams;
+adds the ``delta`` texture, ``delta_fraction`` / ``marsh_fraction``, and the ``"delta_fans"`` and
+``"deltas"`` (new mouths) features.  See docs/delta.md.
 """
 from __future__ import annotations
 
@@ -40,13 +34,11 @@ class DeltaParams:
     # Size: area_km2 · (flow / 1000) ** area_exponent.
     area_km2: float = _f(1500.0, label="Area at flow 1000 (km²)", min=0.0, max=20000.0, step=100.0)
     area_exponent: float = _f(0.7, label="Area exponent", min=0.0, max=1.5, step=0.05)
-    # The share of the sediment reaching a lake that settles there (the outflow
-    # carries the rest on); a river's supply is its flow × the share still in it.
+    # Share of the sediment reaching a lake that settles there; supply = flow × share still carried.
     lake_trap_efficiency: float = _f(0.2, label="Lake sediment trapping", min=0.0, max=1.0, step=0.05)
     # The share of a lake's area its deltas may fill, all together.
     max_lake_share: float = _f(0.25, label="Max lake share filled", min=0.0, max=1.0, step=0.05)
-    # Shape.  The apex (head of the delta) lies this far up the river from the
-    # mouth, and the flood looks this far past the mouth, both × √area.
+    # Apex distance up the river and flood reach past the mouth, both × √area.
     apex_distance: float = _f(0.5, label="Apex distance (× √area)", min=0.0, max=3.0, step=0.05)
     reach: float = _f(2.5, label="Reach (× √area)", min=0.5, max=6.0, step=0.1)
     # Priority multipliers: off the axis (1 − cos), on land, per depth.
@@ -75,9 +67,8 @@ class DeltaParams:
     birdfoot_below: float = _f(0.3, label="Bird's-foot below (wave dominance)", min=0.0, max=1.0, step=0.05)
     cuspate_above: float = _f(0.7, label="Cuspate above (wave dominance)", min=0.0, max=1.0, step=0.05)
     shape_blend: float = _f(0.1, label="Shape blend width", min=0.0, max=0.5, step=0.05)
-    # Bird's-foot fingers: how many (at flow 1000, more per tenfold flow), fanned
-    # how wide, how long (× √area, the longest; the rest up to ``finger_jitter``
-    # shorter), how wide (texels either side) and how dear it is to leave them.
+    # Bird's-foot fingers: count (at flow 1000, plus per tenfold flow), spread, length (× √area, the
+    # longest; others up to ``finger_jitter`` shorter), half-width (texels) and cost of leaving them.
     finger_base: float = _f(2.0, label="Fingers at flow 1000", min=2.0, max=8.0, step=1.0)
     finger_per_decade: float = _f(1.0, label="More fingers per 10× flow", min=0.0, max=4.0, step=0.5)
     finger_max: int = _f(5, label="Max fingers", min=2, max=8)
@@ -86,8 +77,7 @@ class DeltaParams:
     finger_jitter: float = _f(0.5, label="Finger length jitter", min=0.0, max=0.9, step=0.05)
     finger_half_width: float = _f(0.4, label="Finger half-width (texels)", min=0.0, max=3.0, step=0.1)
     finger_cost: float = _f(8.0, label="Finger cost", min=1.0, max=20.0, step=0.5)
-    # Cuspate: the angle between the two beaches meeting at the mouth, and the
-    # marsh left (× the arcuate marsh) on its sandy, wave-built front.
+    # Cuspate: angle between the two beaches, and marsh left (× arcuate marsh) on the sandy front.
     cusp_angle_deg: float = _f(140.0, label="Cusp angle (°)", min=60.0, max=175.0, step=5.0)
     cuspate_marsh: float = _f(0.4, label="Cuspate marsh (×)", min=0.0, max=1.0, step=0.05)
 
@@ -188,8 +178,7 @@ class DeltaBuilder(Stage):
         reg.add_hover(_delta_hover)
 
     # ── Persistence ──────────────────────────────────────────────────────────
-    # The textures and per-face fractions are saved with the mesh; the edited
-    # rivers and streams with the hydrology stage.
+    # Textures and fractions are saved with the mesh; rivers and streams with hydrology.
 
     def serialize(self) -> dict:
         if not self.fans:

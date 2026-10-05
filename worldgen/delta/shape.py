@@ -1,39 +1,19 @@
 """Delta shape — whether the river or the waves win at its mouth.
 
-A delta's plan is set by the balance between the sediment its river delivers
-and the waves that rework it (Galloway's triangle; tides are not modelled):
+Galloway's triangle without tides: river-dominated → bird's-foot fingers (Mississippi), balanced →
+arcuate fan (Nile), wave-dominated → cuspate, a blunt cusp with straight beach flanks (Tiber, Ebro).
 
-- **River-dominated → bird's-foot.**  In calm, sheltered water the river's
-  channels build long levee-fringed fingers straight out to sea, with open bays
-  between them (Mississippi).
-- **Balanced → arcuate.**  A rounded fan (Nile, Niger).
-- **Wave-dominated → cuspate.**  Waves sweep the sediment along shore into
-  beach ridges, so the delta barely protrudes: a blunt cusp at the mouth with
-  straight flanks running along the coast (São Francisco, Tiber, Ebro).
-
-**Wave power** at a mouth comes from the onshore wind over the open water in
-front of it: for bearings within 90° of the fan's axis, a ray is marched over
-the water the river runs into until it meets land (the *fetch*, capped at
-``fetch_cap_km``), and each bearing contributes
-``cos φ · (onshore wind³ + swell³) · fetch / cap`` (deep-water wave power grows
-as the wind speed cubed).  ``swell_speed`` stands in for the swell distant
-storms send in, whatever the local wind; a lake has none, and its fetch is
-measured over its own texels, so most lake deltas come out river-dominated.
-**River power** is ``(flow / 1000) ** river_exponent``.  The **wave dominance**
-is ``W / (W + river_weight · R)``, with ``W`` the wave power over ``(7 m/s)³``:
-0 is all river, 1 all wave.
-
-The flood's priority is a blend of three shape metrics, weighted by where the
-dominance falls between ``birdfoot_below`` and ``cuspate_above`` (with a soft
-``shape_blend`` either side):
-
-- *arcuate* — distance from the apex, raised off the axis (the original fan);
-- *bird's-foot* — seaward of the old mouth, distance along the nearest of a few
-  *finger* rays fanned out from the mouth, with leaving the finger's narrow
-  band or running past its length dear (``finger_cost``);
-- *cuspate* — seaward of the old mouth, distance forward plus distance along
-  the coast × ``cot(cusp_angle / 2)``, so the front is two straight beaches
-  meeting at a blunt point.
+- **Wave power**: for bearings within 90° of the fan's axis, march a ray over the receiving water to
+  land (the fetch, capped at ``fetch_cap_km``); each contributes
+  ``cos φ · (onshore wind³ + swell³) · fetch / cap``.  Lakes have no swell and measure fetch over their
+  own texels, so most lake deltas are river-dominated.
+- **Wave dominance** ``W / (W + river_weight · R)``, with ``W`` in ``(7 m/s)³`` and
+  ``R = (flow / 1000) ** river_exponent``: 0 all river, 1 all wave.
+- **Flood priority** blends three metrics by where dominance falls between ``birdfoot_below`` and
+  ``cuspate_above`` (softened by ``shape_blend``): *arcuate* (distance from the apex, raised off
+  axis); *bird's-foot* (distance along the nearest finger ray from the old mouth, leaving its band or
+  overrunning its length costing ``finger_cost``); *cuspate* (forward distance + lateral distance ×
+  ``cot(cusp_angle / 2)``).
 """
 from __future__ import annotations
 
@@ -51,8 +31,7 @@ EARTH_RADIUS_KM = 6371.0
 _REFERENCE_WIND = 7.0
 # Bearings sampled across the seaward half-plane.
 _N_BEARINGS = 13
-# Fetch rays step this many face spacings, and start this far out (the mouth's
-# own face is usually land-majority).
+# Fetch ray step and start, in face spacings (the mouth's own face is usually land-majority).
 _FETCH_STEP_FACES = 0.5
 _FETCH_START_FACES = 0.75
 
@@ -76,11 +55,9 @@ def _smoothstep(lo: float, hi: float, x: float) -> float:
 class WaveField:
     """Open water and winds, for measuring wave power at a coast.
 
-    The water is sampled at ``points`` (face centroids for the sea, texels for
-    lakes).  ``sea`` is either a bool mask or integer water-body labels (-1 is
-    land); a ray's fetch ends where it leaves the body it started in, or strays
-    more than a step from every point.  ``point_face`` maps each point to the
-    face whose winds blow there (default: point ``i`` is face ``i``).
+    ``points`` are face centroids (sea) or texels (lakes); ``sea`` is a bool mask or water-body labels
+    (-1 land).  A fetch ends on leaving its starting body or straying over a step from every point.
+    ``point_face`` maps points to the face whose winds apply (default identity).
     """
 
     def __init__(self, points: np.ndarray, sea: np.ndarray, winds: Optional[np.ndarray],

@@ -1,7 +1,4 @@
-"""Population stage — trade network, relaxation loop, and population calibration.
-
-Params and stage for the third phase of the realm pipeline.
-"""
+"""Population stage — trade network, relaxation loop, and population calibration."""
 from __future__ import annotations
 
 import dataclasses
@@ -55,13 +52,11 @@ from worldgen.resources.channels import FERTILITY_MEAN, MINERALS, RARE_BIO
 class TradeParams:
     port_cost: float = _f(5.0, label="Port cost", min=0.0, max=50.0)
     river_switch_cost: float = _f(0.0, label="River switch cost", min=0.0, max=10.0)
-    # Goods move between land and water only at a settlement.  While the
-    # settlements relax, a landing anywhere else costs this much; where trade
+    # Cost of a land↔water landing away from a settlement while relaxing; where trade
     # still pays it, a port town is founded.  The final network has no landings.
     landing_cost: float = _f(12.0, label="Fallback landing cost", min=0.0, max=200.0)
     flow_decay: float = _f(0.05, label="Flow decay", min=0.001, max=1.0)
-    # A deposit's yield to the city that works it falls off with the route cost
-    # between them (~1 per 100 km of open land, ~2 on icecap).
+    # Route cost is ~1 per 100 km of open land, ~2 on icecap.
     deposit_decay: float = _f(0.2, label="Deposit yield decay with distance", min=0.0, max=2.0)
     hub_display_quantile: float = _f(0.90, label="Hub display quantile", min=0.5, max=0.99)
 
@@ -83,21 +78,19 @@ class TradeSpawnParams:
 class PopulationParams:
     relaxation_passes: int = _f(2, label="Relaxation passes", min=1, max=5)
     rural_density_max: float = _f(14.0, label="Max rural density (people/km² at fertility 1)", min=1.0, max=100.0)
-    # People per km² of fishing grounds at aquatic fertility 1: a land face's own
-    # shallows feed fishers on its shore; a water face's feed the cities that reach it.
+    # A land face's own shallows feed fishers on its shore; a water face's feed the
+    # cities that reach it.
     fishing_density_max: float = _f(
         8.0, label="Max fishing density (people/km² of water at aquatic fertility 1)", min=0.0, max=100.0)
     fertility_exponent: float = _f(2.0, label="Fertility exponent γ (density contrast)", min=0.5, max=4.0)
     surplus_rate: float = _f(0.15, label="Agricultural surplus rate s", min=0.0, max=0.5)
-    # ``s × cap`` is the urban headroom of the *whole region* — it also feeds the
-    # towns and small cities below this layer's resolution. The modeled major city
-    # gets only a share; the remainder is reserved for the future town pipeline
-    # (see docs/plans/city_population_rework_plan.md §5 — don't double-count).
+    # ``s × cap`` is the whole region's urban headroom; the major city gets only this
+    # share, the rest feeds towns (docs/plans/city_population_rework_plan.md §5 —
+    # don't double-count).
     city_surplus_share: float = _f(0.04, label="Major-city share of regional surplus", min=0.0, max=1.0)
     trade_food_weight: float = _f(1500.0, label="Trade food weight β (people per flow unit)", min=0.0, max=10_000.0)
     city_min: float = _f(7_000.0, label="City existence floor (people)", min=0.0, max=100_000.0)
-    # Of the trade people a city's own mineral goods feed, the share who are
-    # miners living at its deposits rather than in the city.
+    # Share of the trade people fed by a city's own minerals who live at the deposits.
     mining_share: float = _f(0.5, label="Share of mineral-trade people who are miners", min=0.0, max=1.0)
     hinterland_max_distance: float = _f(40.0, label="Hinterland max distance", min=5.0, max=200.0)
     hinterland_influence_scale: float = _f(4.5, label="Hinterland influence scale", min=0.1, max=10.0)
@@ -183,8 +176,7 @@ class PopulationStage(Stage):
         self.population: Optional[np.ndarray] = None
         self.hinterland: Optional[np.ndarray] = None
         self.rural_population: Optional[np.ndarray] = None
-        # Final-pass diagnostics, aligned with ``settlements``/``population`` —
-        # the exact inputs that produced the final urban populations.
+        # Final-pass inputs to the urban populations, aligned with ``settlements``.
         self.carrying_cap: Optional[np.ndarray] = None
         self.trade_wealth: Optional[np.ndarray] = None
         # (M,) miners at each deposit of the ``minerals`` feature (index-aligned).
@@ -210,10 +202,8 @@ class PopulationStage(Stage):
             if DANGER_ARRAY.present(world):
                 danger = DANGER_ARRAY.read(world).astype(np.float32)
 
-        # Per-face food base (people) and rural population. The countryside fills
-        # to its Malthusian ceiling independent of where cities end up: a land
-        # face houses the farmers of its land and the fishers of its own
-        # shallows; water faces feed people (fishing grounds) but house none.
+        # The countryside fills to its Malthusian ceiling regardless of cities: a land
+        # face houses its farmers and its shallows' fishers; water faces house none.
         fert_tex = mesh.face_textures.get("fertility")
         if fert_tex is not None and OCEAN_MASK.present(mesh):
             water_tex = OCEAN_MASK.read(mesh)[..., 0] > 0.5
@@ -242,14 +232,9 @@ class PopulationStage(Stage):
         self.settlements = list(world.get_feature("settlements"))
 
         # ── Cost graphs (land + sea) ─────────────────────────────────────────
-        # ``edge_costs`` is the land surface as worldgen produces it: open water is
-        # impassable. ``hinterland_edge_costs`` is a *hinterland-only* variant that
-        # makes water passable at a steep, tunable per-step cost so a coastal
-        # settlement can pull a *limited* band of ocean into its carrying capacity
-        # (fishing grounds — coastal ocean already carries aquatic fertility in
-        # ``fertility_mean``). The band is naturally bounded by ``hinterland_max_distance``
-        # and the steep water cost; the permeability is unique to the hinterland
-        # and never leaks into trade, placement, or polity formation.
+        # ``hinterland_edge_costs`` alone makes water passable, at a steep per-step
+        # cost, so coastal settlements reach a limited band of fishing grounds.  It
+        # must never leak into trade, placement, or polity formation.
         danger_scale = (
             float(self.danger_params.movement_scale) if self.danger_params is not None else 0.0
         )
@@ -310,8 +295,7 @@ class PopulationStage(Stage):
         hinterland_cost_graph = build_cost_graph(mesh.face_adjacency, hinterland_edge_costs)
 
         # ── Good sources (minerals + rare bio) ──────────────────────────────
-        # Minerals first, so the first ``n_minerals`` sources are the
-        # ``minerals`` feature's deposits in order.
+        # Minerals first: the first ``n_minerals`` sources are the ``minerals`` deposits in order.
         good_sources: list[tuple] = []
         n_minerals = 0
         for channel, type_offset in ((MINERALS, 0), (RARE_BIO, RARE_BIO_TYPE_OFFSET)):
@@ -324,7 +308,6 @@ class PopulationStage(Stage):
                     if channel is MINERALS:
                         n_minerals = len(positions)
 
-        # Tier configs reused by trade-spawn for initial_population of new settlements.
         tier_configs = [
             (sp.tier0.exclusion_radius, sp.tier0.score_threshold, sp.tier0.initial_population),
             (sp.tier1.exclusion_radius, sp.tier1.score_threshold, sp.tier1.initial_population),
@@ -345,7 +328,6 @@ class PopulationStage(Stage):
                 settlement_demands=settlement_demands,
             )
 
-        # Initialize population from seeded initial values (set at placement time).
         population = np.array([s.population for s in self.settlements], dtype=np.float64)
         carrying_cap = np.zeros_like(population)
         trade_wealth = np.zeros_like(population)
@@ -364,7 +346,7 @@ class PopulationStage(Stage):
         for pass_idx in range(n_passes):
             ctx.report(f"Relaxation pass {pass_idx + 1}/{n_passes}…")
 
-            # Sync s.population so hinterland sees the latest values this pass.
+            # Sync s.population so hinterland sees this pass's values.
             self.settlements = [
                 dataclasses.replace(s, population=float(p))
                 for s, p in zip(self.settlements, population)
@@ -402,7 +384,6 @@ class PopulationStage(Stage):
             )
             population = compute_urban_population(
                 carrying_cap, trade_wealth,
-                # The city's effective rate is its share of the regional surplus.
                 surplus_rate=pp.surplus_rate * pp.city_surplus_share,
                 trade_food_weight=pp.trade_food_weight,
             )
@@ -426,7 +407,6 @@ class PopulationStage(Stage):
         self.carrying_cap = carrying_cap
         self.trade_wealth = trade_wealth
 
-        # Assign defensibility now that final populations and trade wealth are known.
         if self.defensibility_params is not None and self.settlements and COST_SURFACES.present(world):
             from realmgen.polity.seeding import compute_settlement_defensibility
             cs = COST_SURFACES.read(world)
@@ -499,7 +479,6 @@ class PopulationStage(Stage):
         MINING_POPULATION.write(mesh, mining)
         world.add_feature("mine_workers", miners)
 
-        # ── Write per-face metadata ──────────────────────────────────────────
         TRADE_FLOW.write(mesh, self.trade_result.face_flow)
         mesh.apply_metadata_channel("is_trade_hub", self.trade_result.hub_mask.tolist())
 
@@ -517,9 +496,7 @@ class PopulationStage(Stage):
 
         world.add_feature("settlements", self.settlements)
         world.add_feature("trade_routes", self.trade_result.routes)
-        # Per-settlement trade attribution (S, S), index-aligned with `settlements`.
-        # The polity stage reads this for economic-grip / peripheral-wealth secession.
-        # Guard against a stale shape if the final settlement set is empty.
+        # (S, S), read by the polity stage for loyalty secession; guard a stale shape.
         attribution = self.trade_result.pair_flow
         if attribution.shape != (len(self.settlements), len(self.settlements)):
             attribution = np.zeros((len(self.settlements), len(self.settlements)), dtype=np.float32)
@@ -566,10 +543,8 @@ class PopulationStage(Stage):
         reg.add_hover(_settlement_hover, world_only=True)
 
     # ── Persistence ───────────────────────────────────────────────────────────
-    # Settlements are the only realm *feature* this stage owns; their final
-    # positions (refined in place by RefineStage) are captured here. Per-face
-    # population / rural / hinterland / trade-flow round-trip via metadata, so
-    # load() just re-derives the stage attrs from the restored mesh.
+    # Settlements (positions refined in place by RefineStage) are saved here; per-face
+    # channels round-trip via metadata, so load() re-derives the attrs from the mesh.
 
     def serialize(self) -> dict:
         if self.settlements:
@@ -599,6 +574,5 @@ class PopulationStage(Stage):
                 [bool(m.get("is_trade_hub", False)) for m in mesh.face_metadata],
                 dtype=bool,
             )
-            # Routes live on the world feature (restored by RefineStage.load); the
-            # debug Trade Flow scheme only reads face_flow.
+            # Routes are restored by RefineStage.load; the debug scheme only reads face_flow.
             self.trade_result = TradeResult(face_flow=face_flow, hub_mask=hub_mask, routes=[])

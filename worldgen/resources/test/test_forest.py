@@ -20,10 +20,7 @@ DESERT = 8
 
 
 def _default_kwargs(**overrides) -> dict[str, Any]:
-    """Return the keyword args for ``compute_forest_density`` — ``params=…`` + ``seed=…``.
-
-    ``overrides`` set individual ``ForestDensityParams`` fields, or ``seed``.
-    """
+    """``compute_forest_density`` kwargs (``params`` + ``seed``), with ``overrides`` setting fields."""
     seed = overrides.pop("seed", 42)
     defaults = dict(
         precipitation_modulation_strength=0.3,

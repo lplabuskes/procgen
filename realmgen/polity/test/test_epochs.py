@@ -1,7 +1,6 @@
 """Unit tests for realmgen.polity.epochs — Stage 5 fragmentation.
 
-Pure selection logic is exercised over hand-built ``Polity`` forests; a small
-line-graph smoke test confirms the runner threads through ``ForestBuilder``.
+Selection logic over hand-built forests, plus a line-graph smoke test of the runner.
 """
 from __future__ import annotations
 

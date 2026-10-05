@@ -1,9 +1,4 @@
-"""Danger stage — DangerBuilder.
-
-Runs after the resources stage. Seeds per-face danger values from terrain
-proxies (geology, climate, hydrology, resources) and writes a clamped [0, 1]
-float32 danger field per face. Consumed by realmgen and display.
-"""
+"""Danger stage: a per-face [0, 1] danger field seeded from terrain-gated sources (see docs/danger.md)."""
 from __future__ import annotations
 
 from typing import Mapping, Optional
@@ -47,19 +42,14 @@ from worldgen.resources.terrain import (
 
 
 def _pos_to_face(mesh, pos: np.ndarray) -> Optional[int]:
-    """Return the face index whose centroid is closest to ``pos``."""
+    """Face whose centroid is closest to ``pos``."""
     diffs = mesh.face_centroids - pos.astype(np.float64)
     idx = int(np.argmin((diffs * diffs).sum(axis=1)))
     return idx
 
 
 class DangerBuilder(Stage):
-    """Computes per-face danger values from terrain proxies.
-
-    Slots into the globe pipeline between resources and cost. Writes the
-    ``danger`` MetaChannel (per-face metadata) and ``danger`` FeatureChannel
-    (numpy array) for realmgen consumption.
-    """
+    """Computes per-face danger; writes the ``danger`` metadata and feature (for realmgen)."""
 
     name = "danger"
 

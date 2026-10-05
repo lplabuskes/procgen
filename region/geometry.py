@@ -1,15 +1,12 @@
 """Equal-area cubed-sphere region geometry.
 
-The sphere is wrapped in a cube; each of the 6 cube faces is a gnomonic patch
-carrying gnomonic coordinates ``(u, v) in [-1, 1]**2``.  A separable equal-area
-CDF stretch maps gnomonic ``u`` to ``p in [0, 1]`` such that uniform steps in
-``p`` carve out equal solid angle (exactly for the 1-D marginal; a few-percent
-residual near corners).  Each face is cut into an ``N_SUBDIV x N_SUBDIV`` grid
-of cells in ``(pu, pv)`` space, giving ``6 * N_SUBDIV**2`` regions total.
+Each of the 6 cube faces is a gnomonic patch ``(u, v) in [-1, 1]**2``.  A
+separable equal-area CDF maps ``u`` to ``p in [0, 1]`` (exact for the 1-D
+marginal; a few-percent residual near corners), and each face is cut into an
+``N_SUBDIV x N_SUBDIV`` grid in ``(pu, pv)``: ``6 * N_SUBDIV**2`` regions.
 
-A whole-sphere rotation about Z aligns a cube-face boundary with the viewer's
-antimeridian; every public entry point takes that ``antimeridian`` so region
-assignment is stable regardless of how the mesh is oriented.
+A rotation about Z aligns a cube-face boundary with the ``antimeridian`` every
+public entry point takes.
 
 Region ids decompose as ``face * N_SUBDIV**2 + ci * N_SUBDIV + cj`` where
 ``face in [0, 6)`` and ``ci, cj in [0, N_SUBDIV)``.
@@ -25,8 +22,7 @@ N_REGIONS: int = 6 * N_SUBDIV * N_SUBDIV
 def _rotation(antimeridian: float) -> float:
     """Z-rotation (radians) placing a cube-face boundary at ``antimeridian``.
 
-    Cube edges between the 4 equatorial faces sit at ``45 deg + k*90 deg`` in the
-    rotated frame, so rotating by ``antimeridian - pi/4`` lands one edge there.
+    Equatorial cube edges sit at ``45 deg + k*90 deg``, so rotate by ``antimeridian - pi/4``.
     """
     return antimeridian - np.pi / 4.0
 
@@ -65,12 +61,9 @@ def _cube_face_gnomonic(
       0/1 (±X): u = yr/m, v = zr/m     2/3 (±Y): u = xr/m, v = zr/m
       4/5 (±Z): u = xr/m, v = yr/m
 
-    Sharing one raw formula between a face and its opposite (e.g. both 0 and
-    1 from ``yr/m``) mirrors one of the pair, since the two are reflections
-    of each other through the origin. ``u_g`` is negated on faces 1, 2 and 5
-    to undo that, so every face is right-handed the same way: east is +u
-    wherever north is +v (see ``region/test/test_geometry.py``, which checks
-    this by sign of ``(d/ds local_to_ecef) x (d/dt local_to_ecef) . centre``).
+    Opposite faces share a raw formula and so would be mirrored; ``u_g`` is
+    negated on faces 1, 2 and 5 so every face is right-handed (east +u where
+    north is +v; checked in ``region/test/test_geometry.py``).
     """
     ax, ay, az = np.abs(xr), np.abs(yr), np.abs(zr)
     dom_x = (ax >= ay) & (ax >= az)
@@ -154,9 +147,8 @@ def cell_border_polylines(antimeridian: float, samples: int = 100) -> list[np.nd
 class RegionGeometry:
     """Geometry of a single region cell: maps local ``[0, 1]**2`` <-> the sphere.
 
-    The local frame is equal-area: uniform ``(s, t)`` steps cover equal solid
-    angle (up to the CDF residual).  ``s`` runs along the cell's ``pu`` axis,
-    ``t`` along ``pv``.  This local frame is what regional upsampling samples in.
+    The local frame is equal-area (up to the CDF residual); ``s`` runs along
+    ``pu``, ``t`` along ``pv``.
     """
 
     def __init__(self, region_id: int, antimeridian: float) -> None:
@@ -184,10 +176,9 @@ class RegionGeometry:
     def ecef_to_local(self, positions: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """ECEF ``(N, 3)`` -> ``(s, t, valid)``, the inverse of ``local_to_ecef``.
 
-        Points are projected through this cell's own cube face, so the frame
-        extends smoothly past the cell's edges (and past the cube face's) —
-        ``s``/``t`` simply leave ``[0, 1]``.  Only the far hemisphere of the
-        face has no image; ``valid`` is False there.
+        Projected through this cell's cube face, so the frame extends smoothly
+        past the cell (``s``/``t`` leave ``[0, 1]``); ``valid`` is False on the
+        far hemisphere.
         """
         pts = np.asarray(positions, dtype=np.float64).reshape(-1, 3)
         xr, yr, zr = _rotate_into_cube_frame(pts, self.antimeridian)
@@ -215,8 +206,7 @@ class RegionGeometry:
     def sample_grid(self, res_s: int, res_t: int) -> np.ndarray:
         """Cell-centred ``(res_t, res_s, 3)`` ECEF grid of sample positions.
 
-        Samples the centres of a ``res_s x res_t`` equal-area lattice over the
-        cell — the sampling points a regional field would be evaluated at.
+        Centres of a ``res_s x res_t`` equal-area lattice over the cell.
         """
         s = (np.arange(res_s, dtype=np.float64) + 0.5) / res_s
         t = (np.arange(res_t, dtype=np.float64) + 0.5) / res_t
@@ -229,19 +219,10 @@ class RegionGeometry:
         return self.local_to_ecef(np.array([0.5]), np.array([0.5]))[0]
 
     def up_direction(self) -> np.ndarray:
-        """Local ``(ds, dt)`` direction, at the cell centre, that a renderer
-        should treat as "up".
+        """Local ``(ds, dt)`` direction at the cell centre a renderer should treat as "up" (unnormalised).
 
-        Ordinarily this is true geographic north: the tangent, at the cell
-        centre, of the direction of increasing latitude. A cell centred on an
-        actual pole (only possible for an odd ``N_SUBDIV``, and then only its
-        one centre cell) has no north — the tangent plane there has no
-        latitude gradient to follow — so "up" falls back to the tangent
-        toward the antimeridian meridian instead, which is at least a fixed,
-        predictable direction.
-
-        Only the direction matters; the returned vector is not normalised to
-        any particular local distance.
+        Geographic north; a cell centred on a pole (odd ``N_SUBDIV`` only) falls
+        back to the tangent toward the antimeridian.
         """
         eps = 1e-4
         c = 0.5

@@ -1,30 +1,20 @@
 """Refining the world's cities onto a region's (or a local map's) finer coast and rivers.
 
-The refine stage sites every city on a global texel (~14 km), and remembers what
-that texel offered (``Settlement.site_kind``: ocean or lake coast, river,
-confluence; :mod:`realmgen.refine.settlements`).  The region re-floods the
-shoreline and re-routes the rivers over its finer relief, so a harbour city left
-on its global texel can stand kilometres from the refined coast.  Each tier
-therefore re-sites the city among its own dry texels near where the tier above
-put it:
+Cities are sited on a global texel with a ``Settlement.site_kind`` (ocean/lake
+coast, river, confluence; :mod:`realmgen.refine.settlements`).  The refined
+shore and rivers can leave them kilometres off, so each tier re-sites them:
 
-- a city moves at most ``reach`` from its position at the tier above (region:
-  ``refine_radius_global_texels`` global texels; local map:
-  ``refine_radius_parent_texels`` regional texels) and stays on dry land in its
-  own face;
-- it keeps what its site offered wherever this tier can show it: a harbour city
-  lands on the refined coast (ocean, or lake for a lake port), a river city on
-  the drawn river or a confluence;
-- among those, the stage's own weights pick the spot — harbour, confluence and
-  river bonuses for the features the site had, local fertility, a pull back
-  toward the parent position and a little seeded jitter.  Features the site did
-  not have earn nothing, so an inland city does not wander onto a stream or a
-  shore the finer tier revealed.
+- within ``reach`` of the parent position (``refine_radius_global_texels`` /
+  ``refine_radius_parent_texels``), on dry land in the same face;
+- keeping their site kind where this tier shows it (harbours on the refined
+  coast, river cities on a drawn river or confluence);
+- scored by the stage's weights for the features the site had, fertility, a
+  pull toward the parent and seeded jitter.  Features the site lacked earn
+  nothing, so inland cities don't wander onto newly revealed shores.
 
-The result is the city's position (``Settlement.position``; the region's also
-``region_position``), flagged ``refined`` / ``local_refined`` and saved with the
-world.  Each city is refined by exactly one region (the one containing its
-site) and one local map (``localmap/settlements.py``), once each.
+The result is ``Settlement.position`` (the region's also ``region_position``),
+flagged ``refined`` / ``local_refined``.  Each city is refined once by the
+region containing its site and once by a local map (``localmap/settlements.py``).
 """
 from __future__ import annotations
 
@@ -58,8 +48,7 @@ def refine_region_cities(
     river_threshold_factor: float = 1.5,
     params: Optional[RegionSettlementParams] = None,
 ) -> int:
-    """Refine the not-yet-refined cities whose site lies in this region, in place;
-    returns how many were refined."""
+    """Refine this region's not-yet-refined cities in place; returns how many."""
     settlements = globe.get_feature("settlements") or []
     if not settlements:
         return 0
@@ -118,7 +107,7 @@ def refine_cities(
             SITE_OCEAN * ocean + SITE_LAKE * lake + SITE_CONFLUENCE * conf + SITE_RIVER * river
             + SITE_FERTILITY * sites.fertility[cand] - SITE_CENTRE * d + SITE_JITTER * rng.random(cand.size)
         )
-        # Keep the harbour, then the river, wherever this tier has one in reach.
+        # Keep the harbour, then the river, where this tier has one in reach.
         keep = np.ones(cand.size, dtype=bool)
         coast = ocean | lake
         if coast.any():

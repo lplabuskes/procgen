@@ -1,9 +1,4 @@
-"""Unit tests for `worldgen.cost.surfaces` and `CostBuilder`.
-
-The river-aware land edge cost is the subtle part, so most of the file exercises
-it: direction attribution, the along-valley discount vs. across-river ford
-penalty, flow-magnitude scaling, impassability, and clamping.
-"""
+"""Unit tests for `worldgen.cost.surfaces` and `CostBuilder` (mostly the river-aware land edge cost)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -39,11 +34,7 @@ def _norm(v) -> np.ndarray:
 
 
 def _run_cost(dual, rivers=None):
-    """Run the CostBuilder stage against a stub mesh and return its surfaces.
-
-    Rivers (River objects) are supplied via the ``"river_objects"`` world
-    feature, the same channel the hydrology stage registers them on.
-    """
+    """Run the CostBuilder stage against a stub mesh (rivers via ``"river_objects"``); return its surfaces."""
     world = World.from_mesh(dual)
     if rivers is not None:
         world.add_feature("river_objects", rivers)
@@ -63,13 +54,9 @@ class _StubMesh:
 
 
 def _star_mesh() -> _StubMesh:
-    """5-face star centred on the +Z pole.
+    """5-face star centred on the +Z pole: 0=MID, 1=+x, 2=+y, 3=-x, 4=-y; arms touch only MID.
 
-    Index map: 0=MID (at the pole), 1=+x, 2=+y, 3=-x, 4=-y. MID is adjacent to
-    all four arms; each arm touches only MID. The tangent plane at MID is the
-    x-y plane, so a +x river flow is exactly parallel to the MID→(+x) step and
-    perpendicular to the MID→(+y) step — letting us test "along" vs "across"
-    cleanly. `face_adjacency[0]` is `[1, 2, 3, 4]`, i.e. [+x, +y, -x, -y].
+    MID's tangent plane is x-y, so a +x flow is parallel to MID→(+x) and perpendicular to MID→(+y).
     """
     centroids = np.array([
         _norm((0.0, 0.0, 1.0)),    # 0 MID

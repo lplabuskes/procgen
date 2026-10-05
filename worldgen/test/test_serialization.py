@@ -1,16 +1,5 @@
-"""Round-trip + back-compat tests for the decomposed save/load framework.
-
-These run against a committed legacy fixture (``saved_worlds/test.npz``, saved
-before the cost stage existed) rather than a full pipeline build, so they stay
-fast while exercising every stage's ``load`` and ``serialize`` path:
-
-* ``test_load_legacy_world`` — the per-stage ``load`` loop rehydrates a globe
-  saved by an older code path, and the cost stage's absent-key back-compat
-  branch is taken silently.
-* ``test_resave_roundtrip`` — re-serializing the loaded globe and loading it
-  again reproduces the mesh textures, face metadata, and feature set exactly,
-  covering both ``serialize`` and ``load`` for every stage with data present.
-"""
+"""Save/load round-trip tests against a committed legacy fixture (``saved_worlds/test.npz``, saved
+before the cost stage existed), so every stage's ``load`` and ``serialize`` runs without a full build."""
 from __future__ import annotations
 
 from pathlib import Path

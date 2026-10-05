@@ -1,12 +1,5 @@
-"""Per-face helpers for the resources stage.
-
-Two cheap, robust signals derived from data already on the mesh:
-  - `face_elevation_range`: pixel elevation span per face, the "ruggedness" proxy
-    we use in place of unreliable per-pixel slope (see
-    docs/plans/resources_generation_spec.md for the slope rationale).
-  - `face_hops_from_seeds`: BFS hop count on the face-adjacency graph from a
-    boolean seed mask, used for water-proximity and volcanism-proximity terms.
-"""
+"""Per-face helpers for the resources stage: ruggedness (pixel elevation span, used instead of
+noise-dominated per-pixel slope), BFS hop counts, and seed masks."""
 from __future__ import annotations
 
 from collections import deque
@@ -18,14 +11,7 @@ from worldgen.geology.channels import VOLCANIC_ACTIVITY
 
 
 def face_elevation_range(elevation_tex: np.ndarray) -> np.ndarray:
-    """Per-face pixel elevation span, in km.
-
-    Args:
-        elevation_tex: (N, H, W, 1) float32; channel 0 is elevation in km.
-
-    Returns:
-        (N,) float32 — `pixel_elev.max() - pixel_elev.min()` per face.
-    """
+    """(N,) float32 per-face pixel elevation span (km) from an (N, H, W, 1) elevation texture."""
     elev = elevation_tex[..., 0]
     return (elev.max(axis=(1, 2)) - elev.min(axis=(1, 2))).astype(np.float32)
 
@@ -35,20 +21,7 @@ def face_hops_from_seeds(
     seed_mask: np.ndarray,
     max_hops: int = 16,
 ) -> np.ndarray:
-    """Per-face shortest-path hop count from any seed face, capped at `max_hops`.
-
-    BFS on the face adjacency graph. Seed faces return 0. Faces unreachable
-    within `max_hops` return `max_hops + 1`; callers using `exp(-hops * decay)`
-    treat this naturally as a near-zero contribution.
-
-    Args:
-        mesh: PolygonMesh with populated `face_adjacency`.
-        seed_mask: (N,) bool — True for seed faces.
-        max_hops: BFS depth cap.
-
-    Returns:
-        (N,) int32 hop counts.
-    """
+    """(N,) int32 BFS hop count from any seed face; faces beyond `max_hops` get `max_hops + 1`."""
     n = len(mesh.faces)
     if seed_mask.shape != (n,):
         raise ValueError(f"seed_mask shape {seed_mask.shape} != ({n},)")
@@ -74,16 +47,7 @@ def face_hops_from_seeds(
 
 
 def river_traversed_faces(rivers, n_faces: int) -> np.ndarray:
-    """Bool mask of faces that any river segment passes through.
-
-    Args:
-        rivers: iterable of `River` objects (from `worldgen.hydrology.types`),
-            or None.
-        n_faces: total face count.
-
-    Returns:
-        (n_faces,) bool — True where a river segment endpoint references the face.
-    """
+    """(n_faces,) bool: faces referenced by a non-lake river segment endpoint."""
     mask = np.zeros(n_faces, dtype=bool)
     if not rivers:
         return mask
@@ -97,33 +61,17 @@ def river_traversed_faces(rivers, n_faces: int) -> np.ndarray:
 
 
 def lake_containing_faces(lake_mask_tex: np.ndarray, threshold: float = 0.05) -> np.ndarray:
-    """Bool mask of faces whose lake-mask fraction exceeds `threshold`.
-
-    Args:
-        lake_mask_tex: (N, H, W, 1) float32; channel 0 is lake mask (1=lake).
-        threshold: minimum area fraction of lake pixels to count the face.
-
-    Returns:
-        (N,) bool mask.
-    """
+    """(N,) bool: faces whose lake pixel fraction is at least `threshold`."""
     return (lake_mask_tex[..., 0].mean(axis=(1, 2)) >= threshold)
 
 
 def volcanic_faces(mesh: PolygonMesh, threshold: float) -> np.ndarray:
-    """Bool mask of faces with `volcanic_activity` >= threshold.
-
-    Reads `volcanic_activity` from per-face metadata (written by the geology
-    stage). Faces without the key are treated as non-volcanic.
-    """
+    """Bool mask of faces with `volcanic_activity` >= threshold."""
     return VOLCANIC_ACTIVITY.read(mesh) >= threshold
 
 
 def coastal_ocean_faces(mesh: PolygonMesh, is_ocean: np.ndarray) -> np.ndarray:
-    """Bool mask of ocean faces that border at least one non-ocean face.
-
-    Used as BFS seeds for computing ocean depth (distance from coast into open
-    water), which drives the coastal-proximity factor in aquatic fertility.
-    """
+    """Bool mask of ocean faces bordering a non-ocean face (seeds for ocean depth hops)."""
     n = len(mesh.faces)
     mask = np.zeros(n, dtype=bool)
     for i in range(n):

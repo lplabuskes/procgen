@@ -1,10 +1,4 @@
-"""Tests for river generation: crossing detection and property checks.
-
-Covers:
- - crossing_pairs: great-circle arc intersection primitive (unit tests)
- - generate(): end-to-end property tests verifying no rivers cross and no river
-   loops back on itself (over a few deterministic seeds)
-"""
+"""River generation tests: crossing_pairs unit tests and end-to-end properties of generate()."""
 from __future__ import annotations
 
 import numpy as np
@@ -27,11 +21,7 @@ def _unit(v: np.ndarray) -> np.ndarray:
 
 def _arcs_cross(p1_a: np.ndarray, p2_a: np.ndarray,
                 p1_b: np.ndarray, p2_b: np.ndarray) -> bool:
-    """Return True if great-circle arc A (p1_a→p2_a) crosses arc B (p1_b→p2_b).
-
-    Uses the same plane-intersection test as _crossing_pairs: candidate crossing
-    point is ±(n_a × n_b)/|n_a × n_b| and is valid iff it lies in both arcs.
-    """
+    """True if great-circle arc A (p1_a→p2_a) crosses arc B (candidate point ±n_a × n_b)."""
     n_a = np.cross(p1_a, p2_a)
     n_b = np.cross(p1_b, p2_b)
     d = np.cross(n_a, n_b)
@@ -71,8 +61,7 @@ def _crossing_pairs_np(
 ) -> list[tuple[int, int]]:
     """Vectorized great-circle arc crossing test; returns (si_a, si_b) hit pairs.
 
-    Only strict interior crossings are returned — endpoint touches (t < _ENDPOINT_TOL
-    or t > 1 - _ENDPOINT_TOL for either arc) are tributary junctions, not crossings.
+    Endpoint touches (within _ENDPOINT_TOL) are junctions and excluded.
     """
     n_a = np.cross(p1_a, p2_a)
     n_b = np.cross(p1_b, p2_b)
@@ -106,11 +95,7 @@ def _crossing_pairs_np(
 
 
 def _inter_river_crossings(rivers: list[River]) -> list[tuple]:
-    """Return (ri_a, ri_b, si_a, si_b) for every crossing between distinct rivers.
-
-    Uses AABB pre-filtering and vectorized arc intersection so the check runs
-    fast even with hundreds of rivers.
-    """
+    """(ri_a, ri_b, si_a, si_b) for every crossing between distinct rivers (AABB pre-filtered)."""
     segs = [_river_segments(r) for r in rivers]
     bounds = [_aabb(p1, p2) for p1, p2 in segs]
     crossings = []
@@ -146,8 +131,7 @@ def _make_rivers_for_seed(seed: int) -> list[River]:
     """Run a minimal but realistic pipeline and return generated rivers."""
     mesh = Mesh.icosphere(3).mesh_dual()
     rng = np.random.default_rng(seed)
-    # Elevation: mostly a smooth gradient by z-coordinate plus small noise so
-    # that rivers form on the northern hemisphere and drain toward the equator.
+    # z-gradient plus noise: rivers drain from the north toward the equator.
     centroids = mesh.face_centroids            # (N, 3)
     z = centroids[:, 2]                        # in [-1, 1]
     elevations = 4.0 * z + 0.5 * rng.standard_normal(len(mesh.faces))
@@ -156,13 +140,9 @@ def _make_rivers_for_seed(seed: int) -> list[River]:
     return rg.generate()
 
 
-# Inter-river crossings are an accepted artifact: tributaries route down the
-# accumulation tree and each river is smoothed independently, so where two
-# smoothed arcs intersect nothing removes them (the old flow-based truncation
-# was dropped because it chopped long modest-flow rivers at high-flow crossings).
-# These per-seed counts are the baseline since the smooth (kernel) face-value
-# rasteriser replaced the piecewise-linear one (was 5/9/7 before it); the test is
-# a ratchet that only fails if a change makes the overlaps *worse*.
+# Inter-river crossings are accepted: rivers are smoothed independently (flow-based
+# truncation was dropped — it chopped long modest-flow rivers). Per-seed ratchet:
+# fails only if overlaps get worse.
 _MAX_INTER_RIVER_CROSSINGS = {0: 6, 7: 2, 42: 3}
 
 
@@ -178,15 +158,12 @@ def generated_rivers(request) -> tuple[int, list[River]]:
 class TestCrossingPairs:
     """Unit tests for the crossing_pairs primitive using synthetic arc data."""
 
-    # Two diagonals of a small spherical square near the north pole cross in
-    # the centre of the square.  Pick corners 10° from the pole at four
-    # cardinal/diagonal azimuths so the arcs are clearly in the interior.
+    # Diagonals of a small spherical square, corners 10° from the north pole.
     _a = 10.0    # angular distance from pole in degrees
 
     @classmethod
     def _pole_corner(cls, az_deg: float) -> np.ndarray:
-        """Unit-sphere point at angular distance cls._a from the north pole,
-        at azimuth az_deg (degrees east of +X)."""
+        """Unit-sphere point cls._a degrees from the north pole at azimuth az_deg (east of +X)."""
         ar = np.deg2rad(cls._a)
         az = np.deg2rad(az_deg)
         return _unit(np.array([
@@ -267,16 +244,10 @@ class TestCrossingPairs:
 # ---------------------------------------------------------------------------
 
 class TestRiverProperties:
-    """Property tests over three deterministic seeds on a small icosphere(3) mesh
-    with gradient terrain: no river may loop back on itself, and inter-river
-    crossings must not exceed the per-seed baseline (a ratchet — see
-    ``_MAX_INTER_RIVER_CROSSINGS``). Exercises the Priority-Flood / D-infinity
-    pipeline, accumulation-graph routing, and self-crossing removal.
-    """
+    """No river loops on itself; inter-river crossings stay within ``_MAX_INTER_RIVER_CROSSINGS``."""
 
     def test_rivers_produced(self, generated_rivers):
-        """Ensure the pipeline actually generates rivers so the property checks
-        below are not vacuously true."""
+        """Guards against the property checks being vacuous."""
         _seed, rivers = generated_rivers
         assert len(rivers) > 0, (
             "no rivers generated — the property tests below would be vacuous"
@@ -307,12 +278,7 @@ class TestRiverProperties:
 # ---------------------------------------------------------------------------
 
 def _min_chord_dist_to_polyline(q: np.ndarray, river: River) -> float:
-    """Minimum chord distance from unit-sphere point q to any segment of river.
-
-    Uses the standard parametric nearest-point-on-segment formula in 3-space.
-    For short arcs (< ~5°) the chord vs. great-circle approximation error is
-    < 0.002, which is well within the junction detection tolerance.
-    """
+    """Minimum chord distance from unit-sphere point q to river (error < 0.002 for arcs < ~5°)."""
     pts = river.as_polyline()
     if len(pts) < 2:
         return float('inf')
@@ -329,13 +295,10 @@ def _min_chord_dist_to_polyline(q: np.ndarray, river: River) -> float:
 def _classify_river_mouth(river: River, all_rivers: list, gen: RiverGenerator) -> str:
     """Return 'ocean', 'lake', 'junction', or 'unknown' for a river's mouth.
 
-    - ocean: nearest grid node is in the ocean mask, or the mouth is within
-      OCEAN_TOL chord distance of any ocean node (covers traces that reached the
-      ocean but whose mouth drifted slightly inland after Laplacian smoothing).
-    - lake: nearest grid node is in the endorheic basin mask (closed sink).
-    - junction: mouth lies on another river's polyline within JUNCTION_TOL;
-      tributaries end on their main stem at the confluence (Hack decomposition).
-    - unknown: none of the above; indicates a stall, loop, or geometry failure.
+    - ocean: nearest node is ocean, or within OCEAN_TOL of one.
+    - lake: nearest node is endorheic.
+    - junction: mouth lies on another river within JUNCTION_TOL (tributary confluence).
+    - unknown: a stall, loop, or geometry failure.
     """
     assert river.mouth is not None
     q = river.mouth.position.astype(np.float64)
@@ -346,20 +309,15 @@ def _classify_river_mouth(river: River, all_rivers: list, gen: RiverGenerator) -
     if gen._endorheic_mask[nearest]:
         return 'lake'
 
-    # Near-ocean check: Laplacian smoothing pins polyline endpoints but
-    # resolve_self_crossings can overwrite river.mouth with a segment-end node
-    # that drifted slightly inland. Accept any mouth within ~1-2 pixel widths
-    # of an ocean node.
+    # resolve_self_crossings can move river.mouth to a smoothed node slightly
+    # inland; accept ~1-2 pixel widths.
     OCEAN_TOL = 0.025
     ocean_idxs = np.where(gen._ocean_mask)[0]
     if ocean_idxs.size > 0:
         if np.linalg.norm(gen.positions[ocean_idxs] - q[None], axis=1).min() < OCEAN_TOL:
             return 'ocean'
 
-    # A tributary's mouth is the confluence node on its main stem, which lies on
-    # the main stem's polyline. The chord approximation error is < 0.002 for 5°
-    # segments; the larger 0.03 tolerance also absorbs the offset from smoothing
-    # the tributary and the stem independently (per-river endpoints are pinned).
+    # Tolerance also absorbs smoothing tributary and stem independently.
     JUNCTION_TOL = 0.03
     for other in all_rivers:
         if other is river:
@@ -388,10 +346,7 @@ def gen_and_rivers_mouths(request):
 
 
 class TestRiverMouthTermination:
-    """Every river mouth must terminate at the ocean, an endorheic lake, or as a
-    tributary joining a higher-flow river (a junction where a tributary ends on
-    its main stem in the Hack decomposition).
-    """
+    """Every mouth ends at the ocean, an endorheic lake, or a confluence with its main stem."""
 
     def test_rivers_generated(self, gen_and_rivers_mouths):
         _, rivers = gen_and_rivers_mouths

@@ -106,7 +106,6 @@ def _split_at_antimeridian(
         lonlat = np.column_stack([lon, lat])
         return [lonlat] if face_uv is None else [(lonlat, face_uv)]
 
-    # Precompute the ECEF direction of the cut meridian for crossing interpolation.
     cos_cut = np.cos(cut_lon)
     sin_cut = np.sin(cut_lon)
 
@@ -127,8 +126,7 @@ def _split_at_antimeridian(
                 west_uv_pts.append(face_uv[i])
 
         if crosses[i]:
-            # Find t where the edge a→b crosses the cut meridian.
-            # The cut meridian satisfies: p_y * cos_cut - p_x * sin_cut = 0.
+            # Edge a→b crosses the cut meridian where p_y cos_cut - p_x sin_cut = 0.
             a, b = face_ecef[i], face_ecef[(i + 1) % n]
             fa = a[1] * cos_cut - a[0] * sin_cut
             fb = b[1] * cos_cut - b[0] * sin_cut
@@ -364,7 +362,7 @@ class MapWidget(QWidget):
         self._faces_lonlat = []
         self._face_src = []
         self._face_uvs = []
-        # Always compute UVs when any textures exist — needed for both rendering and hover hit-testing.
+        # UVs are needed for hover hit-testing as well as rendering.
         has_textures = bool(self._mesh.face_textures)
         vertex_uvs: Optional[list[np.ndarray]] = None
         if has_textures:
@@ -616,7 +614,6 @@ class MapWidget(QWidget):
         if self._region_face_cells is None or self._mesh is None:
             return
 
-        # Blue tint over all mesh polygons in the hovered region.
         if self._hover_region is not None:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(QColor(80, 140, 255, 80)))
@@ -628,7 +625,6 @@ class MapWidget(QWidget):
                         QPolygonF([QPointF(float(xx), float(yy)) for xx, yy in zip(px, py)])
                     )
 
-        # Mathematically-defined border polylines (ECEF points, projected each frame).
         if not self._region_border_polylines:
             return
         pen = QPen(QColor(0, 0, 0, 200))
@@ -675,7 +671,6 @@ class MapWidget(QWidget):
         mu = (mx - W * 0.5) / scale_x + cx
         mv = -(my - H * 0.5) / scale_y + cy
 
-        # Bounding-box prefilter (vectorised) before per-polygon PIP test.
         candidates = np.where(
             (self._face_bbox_min[:, 0] <= mu) & (self._face_bbox_max[:, 0] >= mu)
             & (self._face_bbox_min[:, 1] <= mv) & (self._face_bbox_max[:, 1] >= mv)
@@ -871,8 +866,7 @@ class MapWindow(QMainWindow):
         self._region_view = RegionView()
         self._color_combo.currentTextChanged.connect(self._on_scheme_changed)
         self._hover_parts: Optional[HoverPartsFn] = None
-        # Scheme → the recipe its texture was built with; the region view reruns
-        # it on refined data.  The world map only needs the finished texture.
+        # Scheme → texture recipe, rerun by the region view on refined data.
         self._scheme_recipes: dict[str, TextureRecipe] = {}
         self._region_view.set_hover_callback(lambda texel: self._zoomed_hover(self._region_view, texel))
         self._region_btn.toggled.connect(self._map.set_region_mode)
@@ -901,8 +895,7 @@ class MapWindow(QMainWindow):
         self._map.set_mesh(mesh)
 
     def set_globe(self, globe: "World") -> None:
-        # A re-run replaces the world under our feet; any region on screen is now
-        # stale, so drop back to the world map rather than show old detail.
+        # Any region on screen is stale after a re-run: drop back to the world map.
         if self._stack.currentWidget() is self._local_view:
             self._exit_local()
         if self._stack.currentWidget() is self._region_view:
@@ -916,14 +909,12 @@ class MapWindow(QMainWindow):
         self._local_view.set_realm_params(params)
 
     def set_world_params(self, params: "GlobeParams") -> None:
-        """The physical tuning the world was built with; the region view refines
-        resources and re-routes roads with it."""
+        """The physical tuning the world was built with; the region view refines with it."""
         self._region_view.set_world_params(params)
         self._local_view.set_world_params(params)
 
     def set_region_params(self, params: "RegionParams") -> None:
-        """Tune the region tier; the region on screen (if any) is refined again,
-        and so is a local map on screen (it is built from the region)."""
+        """Tune the region tier, re-refining any region or local map on screen."""
         local = self._stack.currentWidget() is self._local_view
         showing = local or self._stack.currentWidget() is self._region_view
         if showing:
@@ -931,8 +922,7 @@ class MapWindow(QMainWindow):
             QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
         try:
             self._region_view.set_params(params, self._map.globe)
-            # Local maps are built from the region's rivers and roads too, which
-            # a region-params change can rebuild without new fields.
+            # Local maps depend on the region's rivers and roads, which may change without new fields.
             self._local_view.clear_local_cache()
             if local:
                 self._reopen_local()
@@ -960,11 +950,7 @@ class MapWindow(QMainWindow):
             self._local_view.set_local(self._region_view, local.hex_index, keep_view=True)
 
     def _enter_region(self, region_id: int) -> None:
-        """Switch from the world map to the zoomed-in view of a clicked region.
-
-        Refinement runs synchronously — it is a few hundred thousand samples, well
-        under a second — behind a busy cursor.
-        """
+        """Switch from the world map to the zoomed-in view of a clicked region (refined synchronously)."""
         geometry = RegionGeometry(region_id, self._map.antimeridian)
         prev_status = self._status_label.text()
         self.set_status(f"Refining region {region_id}…")
@@ -1109,9 +1095,8 @@ class MapWindow(QMainWindow):
         self.set_status("  |  ".join(self._hover_parts(face, uv, None)))
 
     def _zoomed_hover(self, view: RegionView, texel: Optional[tuple[int, int, int]]) -> None:
-        """World-map hover for the texel's face, with refined values swapped in,
-        after the view's own settlement fragments (the city, town or village under
-        the cursor; a region hexagon's towns)."""
+        """The view's settlement fragments, then world-map hover for the texel's face with refined
+        values swapped in."""
         fields = view.fields
         if texel is None or fields is None:
             self.set_status(view.status_text())

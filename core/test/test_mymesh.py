@@ -158,9 +158,7 @@ class TestFaceTexturePositions:
         assert np.all(dots > 0), "Some texture pixels ended up in the wrong hemisphere"
 
     def test_vertex_uv_roundtrip(self):
-        # For each face vertex, compute its UV coordinate using the stored tangent frame,
-        # snap to the nearest pixel in a dense grid, and verify that pixel's 3D position
-        # is within 1° of the original vertex on the sphere.
+        # Each vertex's UV, snapped to a dense grid, maps back to within 1° of it.
         H, W = 101, 101
         mesh = Mesh.icosphere(0)
         pos = mesh.face_texture_positions(H, W)
@@ -205,8 +203,6 @@ class TestFaceTextureInPolygon:
         assert mask.dtype == bool
 
     def test_centre_inside_corners_outside(self):
-        # A hexagon/pentagon inscribed in its square texture leaves the square's
-        # corners outside the polygon; the central texels are always inside.
         dual = Mesh.icosphere(2).mesh_dual()
         mask = dual.face_texture_in_polygon(16, 16)
         assert mask[:, 7:9, 7:9].all()                 # centre 2×2 always inside
@@ -216,9 +212,6 @@ class TestFaceTextureInPolygon:
         assert 0.4 < mask.mean() < 0.95
 
     def test_inside_pixels_match_positions(self):
-        # Inside texels are exactly the fan-triangle interior the renderer uses, so
-        # an inside texel must be closer to its own face centroid than the texture
-        # extrapolation pushes the over-hanging corners.
         dual = Mesh.icosphere(1).mesh_dual()
         pos = dual.face_texture_positions(16, 16)
         mask = dual.face_texture_in_polygon(16, 16)

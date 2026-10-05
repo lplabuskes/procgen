@@ -89,7 +89,6 @@ def main() -> None:
             print(f"    γ={g:<3}: D_max={d_max:6.1f}  → fert0.9={d_top:6.1f}/km²  "
                   f"fert0.3={d_med:5.2f}/km²")
 
-        # Run realm pipeline
         realm = RealmPipeline(RealmParams())
         realm.build(ctx)
         ps = realm.population_stage

@@ -1,26 +1,19 @@
 """Town stage — the settlements between a village and the city floor.
 
-Runs after :class:`~realmgen.refine.builder.RefineStage`, once the cities have
-their final sites. Towns are **display-only**: nothing downstream reads them.
+Runs after refine, once cities have their final sites. Display-only: nothing
+downstream reads towns.
 
-1. **Rural density** — each face's farmers are spread over its texels by the
-   rural model's own food base (``fertility ** γ``), its fishers over its
-   shore and its miners on the texel of their deposit, conserved per face
-   (``compute_rural_density``, ``compute_mining_density``).
-2. **Town sizes** — a share (``town_fraction``) of each face's farmers and
-   fishers, and a share (``mining_town_fraction``) of its miners, is spent on
-   towns of ``town_min`` … ``PopulationParams.city_min`` people,
-   truncated-Pareto sized, from an RNG keyed on ``(seed, face)``.
-3. **Town sites** — towns are sited largest first on owned land texels,
-   weighted by density and site bonuses, clear of each other and of cities;
-   mining towns only near their face's worked deposits (``place_towns``).
-4. **Accounting** — town people come *out of* the rural population: the face's
-   ``rural_population`` and its density texture are reduced by exactly the
-   towns sited there, so rural + towns is the countryside the population stage
-   computed. A town that found no site stays rural.
+1. **Rural density**: farmers spread by ``fertility ** γ``, fishers on the shore,
+   miners on their deposit's texel, conserved per face.
+2. **Sizes**: ``town_fraction`` of farmers+fishers and ``mining_town_fraction``
+   of miners become truncated-Pareto towns of ``town_min`` …
+   ``PopulationParams.city_min`` people, RNG keyed on ``(seed, face)``.
+3. **Sites**: largest first on owned land texels, clear of towns and cities;
+   mining towns only near worked deposits.
+4. **Accounting**: towns are carved out of ``rural_population`` and the density
+   texture, so rural + towns is unchanged; unsited towns stay rural.
 
-Everything is per global face and independent of which region is viewed, so a
-town is the same whichever neighbouring region the view entered from.
+All per global face, so a town doesn't depend on which region is viewed.
 """
 from __future__ import annotations
 
@@ -57,9 +50,8 @@ from worldgen.hydrology.channels import LAKE_MASK
 from worldgen.resources.minerals import mineral_workings, site_workers
 
 RURAL_DENSITY_TEXTURE = "rural_density"
-# The fishers' part of ``rural_density``: the finer tiers keep them on the shore.
+# Fishers' / miners' parts of ``rural_density``, so finer tiers keep them on the shore / by the deposit.
 FISHING_DENSITY_TEXTURE = "fishing_density"
-# ... and the miners' part: the finer tiers keep them by their deposit.
 MINING_DENSITY_TEXTURE = "mining_density"
 _SIZE_STREAM = 1   # RNG stream tag for town sizes (sites use the bare (seed, face) stream)
 _MINING_SIZE_STREAM = 2   # ... and for mining-town sizes
@@ -81,8 +73,7 @@ class TownParams:
     port_bonus: float = _f(2.0, label="Site bonus: harbour", min=0.0, max=10.0)
     confluence_bonus: float = _f(2.0, label="Site bonus: river confluence", min=0.0, max=10.0)
     river_bonus: float = _f(1.0, label="Site bonus: river", min=0.0, max=10.0)
-    # A stream: a channel of the hydrology stream network, too small for the
-    # world map's rivers (a region draws it as a tributary).
+    # Stream: a hydrology stream-network channel too small for the world map's rivers.
     stream_bonus: float = _f(1.0, label="Site bonus: stream", min=0.0, max=10.0)
     route_bonus: float = _f(1.0, label="Site bonus: trade route", min=0.0, max=10.0)
     mining_bonus: float = _f(1.5, label="Site bonus: mineral deposit", min=0.0, max=10.0)
@@ -113,8 +104,7 @@ def build_rural_density_texture(
 
 
 def rural_density_recipe(d_max: float) -> TextureRecipe:
-    """The Rural Density layer, scaled to the world's ``d_max``, over any texture
-    set holding ``rural_density`` (the globe's, or a region's refined one)."""
+    """The Rural Density layer over any texture set holding ``rural_density`` (globe or region)."""
     def fn(tex) -> np.ndarray:
         water = np.asarray(tex["ocean_mask"])[..., 0] > 0.5
         if "lake_mask" in tex:
@@ -130,8 +120,7 @@ def _density_legend(d_max: float) -> list[tuple[str, tuple]]:
 
 @dataclass
 class TownSiteContext:
-    """What town siting reads from the rest of the world, in unit-sphere chords:
-    the cities' exclusion discs, trade-route and mineral points, and the radii."""
+    """Town-siting inputs from the rest of the world; distances in unit-sphere chords."""
 
     city_positions: np.ndarray       # (C, 3)
     city_faces: np.ndarray           # (C,)
@@ -144,8 +133,7 @@ class TownSiteContext:
 
 
 def town_site_context(world, p: TownParams, pp: PopulationParams) -> TownSiteContext:
-    """The :class:`TownSiteContext` of ``world`` — shared by the stage and the
-    region view's re-siting (``region/towns.py``)."""
+    """The :class:`TownSiteContext` of ``world``; shared with ``region/towns.py``."""
     settlements = world.get_feature("settlements") or []
     city_pop = np.array([s.population for s in settlements], dtype=np.float64)
     workings = mineral_workings(world)
@@ -197,8 +185,8 @@ class TownStage(Stage):
         seed = int(world.seed or 0)
         n = len(mesh.faces)
 
-        # The countryside before towns: rural + any towns an earlier run carved out
-        # (PopulationStage zeroes town_population when it writes a fresh rural_population).
+        # Countryside before towns: rural + any towns an earlier run carved out
+        # (PopulationStage zeroes town_population when it rewrites rural_population).
         rural = np.asarray(RURAL_POPULATION.read(mesh), dtype=np.float64)
         if TOWN_POPULATION.present(mesh):
             rural = rural + np.asarray(TOWN_POPULATION.read(mesh), dtype=np.float64)
@@ -221,9 +209,7 @@ class TownStage(Stage):
             np.asarray(FISHING_POPULATION.read(mesh), dtype=np.float64)
             if FISHING_POPULATION.present(mesh) else None
         )
-        # The miners, on the texels of their deposits' workings (the minerals
-        # feature, index-aligned with the population stage's mine_workers, split
-        # by mineral_sites).
+        # ``minerals`` is index-aligned with the population stage's ``mine_workers``.
         minerals = world.get_feature("minerals")
         workings = mineral_workings(world)
         workers = world.get_feature("mine_workers")
@@ -233,7 +219,7 @@ class TownStage(Stage):
         if MINING_POPULATION.present(mesh) and minerals is not None and workings is not None and workers is not None:
             mining = np.clip(np.asarray(MINING_POPULATION.read(mesh), dtype=np.float64), 0.0, rural)
             mine_points, site_deposit, site_share = workings
-            # The population stage's face assignment, so the miners match its channel.
+            # Same face assignment as the population stage, to match its channel.
             deposit_faces = _positions_to_face_ids(np.asarray(minerals[0]), np.asarray(mesh.face_centroids))
             mine_faces = deposit_faces[site_deposit]
             workers = site_workers(site_deposit, site_share, workers)
@@ -298,8 +284,7 @@ class TownStage(Stage):
         )
 
         # ── Carve the towns out of the countryside ───────────────────────────
-        # A mining town takes miners first; any it drew beyond them (the odd
-        # minimum-size town) comes from the face's farmers and fishers.
+        # A mining town takes miners first; any excess comes from farmers and fishers.
         town_pop = np.bincount(towns.face_id, weights=towns.population, minlength=n)
         mine_town_pop = np.bincount(
             towns.face_id[from_mines], weights=towns.population[from_mines], minlength=n)
@@ -353,9 +338,7 @@ class TownStage(Stage):
             )
 
     # ── Persistence ───────────────────────────────────────────────────────────
-    # The towns feature is the only thing this stage owns outright; the reduced
-    # rural_population / town_population channels round-trip as metadata and the
-    # rural_density texture as a mesh texture.
+    # Only the towns feature; channels and density textures persist generically.
 
     def serialize(self) -> dict:
         return self.towns.pack() if self.towns is not None else {}

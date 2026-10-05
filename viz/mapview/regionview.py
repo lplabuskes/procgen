@@ -44,29 +44,20 @@ _FARM_OVERLAYS = ("villages", "towns", "settlements")
 
 
 class RegionView(QWidget):
-    """Zoomed-in view of a single region — or of one regional hex's local map.
+    """Zoomed-in view of a single region, or of one regional hex's local map.
 
-    The region cell is a unit square in the equal-area ``(s, t)`` local frame
-    (see :mod:`region.geometry`), tiled with flat-top hexagons by
-    :class:`~region.grid.RegionHexGrid`.  Each hexagon carries its own texture
-    holding the refined fields from :mod:`region.upsample` — the global map
-    upsampled with slope-proportional detail, with every global texel's average
-    preserved.  Those textures are drawn directly: local ``(s, t)`` maps to
-    screen by a single flip-and-scale, so a hex texture is an axis-aligned image
-    clipped to its hexagon.
+    The region cell is a unit square in the equal-area ``(s, t)`` frame
+    (:mod:`region.geometry`), tiled with flat-top hexagons, each carrying its
+    refined texture (:mod:`region.upsample`).  ``(s, t)`` maps to screen by a
+    flip-and-scale, so each texture is an axis-aligned image clipped to its
+    hexagon.  Without a globe the bare hex scaffolding is drawn.
 
-    Without a globe (or before a region is picked) the view falls back to drawing
-    the bare hex scaffolding.
+    A local map (:meth:`set_local`) uses the parent hex's square as its frame,
+    clipped to the parent hexagon.  In a region, :meth:`set_local_pick` turns
+    clicks into "open this hex's local map".
 
-    **Local maps.**  The same widget shows a local map (:meth:`set_local`): its
-    frame is the parent hex's square, its hexes the local grid, and everything
-    is clipped to the parent hexagon.  Rivers, roads and towns are the local
-    map's; villages are drawn as dots.  In a region, :meth:`set_local_pick`
-    turns clicks (not drags) into "open this hex's local map".
-
-    Scroll to zoom (1×–``MAX_ZOOM``, anchored to the cursor) and drag to pan, as
-    on the world map.  The zoom is a screen-space magnification of the laid-out
-    cell, so it composes with the north-up rotation and the legend stays put.
+    Zoom (1×–``MAX_ZOOM``) is a screen-space magnification applied after the
+    north-up rotation, so the legend stays put.
     """
 
     MAX_ZOOM = 20.0
@@ -76,8 +67,7 @@ class RegionView(QWidget):
     _CLICK_SLOP = 4.0
     # How close (px) the cursor must be to a village dot to describe it.
     _VILLAGE_HOVER_PX = 6.0
-    # How far (px) past a city or town marker's fill the cursor still describes
-    # it — its white ring, and a little slack.
+    # How far (px) past a city or town marker's fill still counts as hovering it.
     _MARKER_HOVER_SLOP = 3.0
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -86,37 +76,29 @@ class RegionView(QWidget):
         self._grid: Optional[RegionHexGrid] = None
         self._fields: Optional[RegionFields] = None
         self._region_params = RegionParams()
-        # The world's realm tuning: the town weights and radii towns are refined
-        # with, the population γ and the danger movement scale.
         self._realm_params: Optional["RealmParams"] = None
-        # The world's physical tuning: the resource and land-cost models reused here.
         self._world_params: Optional["GlobeParams"] = None
-        # The world's stream network and trade routes re-routed over this region's
-        # relief; built with the region, since refining the towns needs them.
+        # Re-routed over this region's relief; built with the region (town refinement needs them).
         self._rivers: Optional[RegionRivers] = None
         self._roads: Optional[RegionRoads] = None
-        # The region's streams below the world's network, with the params they
-        # were built with: built when a local map is first opened (only local
-        # maps draw them) and shared by all of them.
+        # (params, streams) below the world's network; built lazily for local maps only.
         self._streams: Optional[tuple[RegionStreamParams, list[RiverPath]]] = None
         # World deltas moved onto the re-routed rivers' mouths.
         self._deltas: Optional[np.ndarray] = None
         self._globe: Optional["World"] = None
-        # The world map's active scheme: its name and spec (colour fn, texture, recipe).
         self._layer: Optional[str] = None
         self._spec: Optional[SchemeSpec] = None
         self._legend: Optional[tuple[str, list]] = None
         self._overlay_visible: dict[str, bool] = {}
         self._hex_images: list[QImage] = []
-        # A local map's farmland, one translucent image per hexagon (empty: none shown).
+        # A local map's farmland, one image per hexagon (empty: none shown).
         self._farm_images: list[QImage] = []
         # Per feature: (source positions, positions moved onto the refined land).
         self._land_positions: dict[str, tuple[np.ndarray, np.ndarray]] = {}
         # (x0, y0, size, rotation) of the cell as last painted — hover hit-tests against it.
         self._cell_layout: Optional[tuple[float, float, float, QTransform]] = None
         self._hover_callback: Optional[Callable[[Optional[tuple[int, int, int]]], None]] = None
-        # Magnification about the cell's footprint centre, and the pan offset in
-        # units of the footprint width (so it survives a resize).
+        # Pan is in units of the footprint width, so it survives a resize.
         self._zoom: float = 1.0
         self._pan = np.zeros(2, dtype=np.float64)
         # (centre x, centre y, footprint px) of the last paint — zoom/pan anchor.
@@ -172,12 +154,9 @@ class RegionView(QWidget):
         self.update()
 
     def _refine_features(self) -> None:
-        """Re-route the streams over the refined terrain, refine the positions of
-        the cities this region owns, re-route the trade routes (ending on those
-        cities), move the deltas onto the new river mouths, and refine the
-        positions of the towns this region owns.  Cities and towns are refined in
-        the world's features, so they stay refined (and are saved) after the
-        region is left."""
+        """Re-route rivers and roads over the refined terrain, snap deltas, and refine
+        this region's cities and towns.  Settlements are refined in the world's
+        features, so they persist (and are saved) after the region is left."""
         assert self._fields is not None and self._globe is not None
         f, globe, rp = self._fields, self._globe, self._region_params
         self._rivers = build_region_rivers(f, globe, rp.rivers)
@@ -212,8 +191,7 @@ class RegionView(QWidget):
     # ── local maps ───────────────────────────────────────────────────────────
 
     def _region_streams(self, params: RegionStreamParams) -> list[RiverPath]:
-        """This region's streams for its local maps (:func:`build_region_streams`),
-        built on first use and kept until the region, its rivers or ``params`` change."""
+        """This region's streams for its local maps, cached until the region or ``params`` change."""
         if self._fields is None or self._globe is None or self._rivers is None:
             return []
         if self._streams is None or self._streams[0] != params:
@@ -222,11 +200,8 @@ class RegionView(QWidget):
         return self._streams[1]
 
     def set_local(self, parent: "RegionView", hex_index: int, keep_view: bool = False) -> None:
-        """Show the local map of ``parent``'s regional hex ``hex_index``.
+        """Show the local map of ``parent``'s regional hex ``hex_index`` (cached per region fields).
 
-        Built from the parent's refined fields, rivers, roads and deltas (with
-        this view's :class:`LocalParams` and the world's tuning), or taken from
-        the cache when it was built from those same region fields.
         ``keep_view`` keeps the zoom and pan (a rebuild of the map on screen).
         """
         fields, globe = parent._fields, parent._globe
@@ -275,10 +250,8 @@ class RegionView(QWidget):
         self.update()
 
     def set_local_params(self, params: LocalParams, globe: Optional["World"] = None) -> None:
-        """Replace the local tuning; cached local maps are dropped (the caller
-        re-opens the one on screen).  Every town and city a local map refined
-        under the old tuning goes back to where its region put it — ``globe``'s
-        (default: the shown one's) — to be refined again by its local map."""
+        """Replace the local tuning, dropping cached local maps (the caller re-opens the one
+        on screen) and resetting every settlement's local refinement in ``globe``."""
         if params == self._local_params:
             return
         self._local_params = params
@@ -312,13 +285,10 @@ class RegionView(QWidget):
         self._hex_click_callback = cb
 
     def set_params(self, params: RegionParams, globe: Optional["World"] = None) -> None:
-        """Replace the region tuning; a region on screen is refined again with it.
+        """Replace the region tuning and refine the region on screen again.
 
-        Every town and city refined under the old tuning (by a region or a local
-        map) is stale, wherever it is, so all of ``globe``'s (default: the shown
-        one's) go back to their stage sites and are refined again as their
-        regions are visited. Only what changed is rebuilt: new river or
-        settlement params keep the refined fields.
+        Every settlement in ``globe`` is reset to its stage site, since any refinement
+        is now stale.  New river or settlement params keep the refined fields.
         """
         if params == self._region_params:
             return
@@ -342,14 +312,11 @@ class RegionView(QWidget):
         self.update()
 
     def set_realm_params(self, params: Optional["RealmParams"]) -> None:
-        """The realm tuning the world was built with (town weights and radii, the
-        population γ, the danger movement scale), used when refining. A change
-        comes with a rebuilt world, so there is nothing to redo here."""
+        """The realm tuning the world was built with, used when refining (changes come with a new world)."""
         self._realm_params = params
 
     def set_world_params(self, params: Optional["GlobeParams"]) -> None:
-        """The physical tuning the world was built with (the resource and land-cost
-        models), used when refining. A change comes with a rebuilt world."""
+        """The physical tuning the world was built with, used when refining (changes come with a new world)."""
         self._world_params = params
 
     def clear_region(self) -> None:
@@ -458,9 +425,7 @@ class RegionView(QWidget):
             )
 
     def _rebuild_farm_images(self) -> None:
-        """A local map's farmland as one image per hexagon, of the kinds whose
-        settlements' overlay is on: village fields with the villages, town fields
-        with the towns, market gardens with the cities."""
+        """A local map's farmland as one image per hexagon, for the settlement overlays shown."""
         self._farm_images = []
         farmland = self._local.farmland if self._local is not None else None
         if farmland is None:
@@ -529,8 +494,6 @@ class RegionView(QWidget):
         else:
             self._draw_hex_grid(painter, x0, y0, size)
 
-        # The cell outline; the run's summary goes to the window's status bar
-        # (``status_text``) rather than over the map.
         painter.setPen(_cosmetic_pen(QColor(70, 85, 100)))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawPolygon(self._outline(x0, y0, size))
@@ -544,8 +507,7 @@ class RegionView(QWidget):
             painter.drawPolygon(self._hex_polygon(x0 + hs * size, y0 + (1.0 - ht) * size, r_px))
         painter.restore()
 
-        # Overlays are drawn in screen space (so markers stay upright and sized
-        # in pixels), clipped to the rotated cell.
+        # Overlays in screen space (markers stay upright, pixel-sized), clipped to the rotated cell.
         if self._globe is not None and self._geometry is not None:
             painter.save()
             if legend:
@@ -568,11 +530,9 @@ class RegionView(QWidget):
             )
 
     def _refined_features(self) -> dict:
-        """Overlay features this region draws finer than the world map: the
-        rivers and roads re-routed over the refined terrain, the deltas on the
-        new river mouths, and each mineral deposit as its workings. (Towns and cities need no override: their refined
-        positions are in the world features.)  A local map adds its villages, its
-        towns moved off its water and its cities' footprints."""
+        """Overlay features drawn finer than the world map: re-routed rivers and roads, snapped
+        deltas, mineral workings; local maps add villages, their towns and city footprints.
+        (Region towns and cities need no override: their refined positions are in the world features.)"""
         out: dict = {}
         if self._local is not None:
             out["villages"] = self._local.villages
@@ -615,8 +575,7 @@ class RegionView(QWidget):
 
     def _land_reach(self) -> float:
         """How far (chord) a settlement on refined water is moved onto land: the
-        farthest the refinement lets water spread onto land the globe called dry,
-        plus a couple of texels of slack."""
+        refinement's water spread plus two texels of slack."""
         f = self._fields
         if f is None:
             return 0.0
@@ -636,14 +595,10 @@ class RegionView(QWidget):
         return moved
 
     def _up_angle(self) -> float:
-        """Screen rotation (radians) that makes "up" read correctly for this cell.
+        """Screen rotation (radians) that turns ``RegionGeometry.up_direction()`` to screen-up.
 
-        ``RegionGeometry.up_direction()`` gives the local ``(ds, dt)`` that
-        should render as up — true north ordinarily, or the antimeridian
-        tangent on the two regions centred on a pole, where north has no
-        direction. The ``(s, screen-x) / (t, screen-y flipped)`` mapping already
-        treats +t as up with no rotation, so this is 0 for every cell where that
-        already points at the target.
+        Up is true north, or the antimeridian tangent on the two polar regions.
+        +t is already screen-up unrotated.
         """
         if self._geometry is None:
             return 0.0
@@ -654,9 +609,7 @@ class RegionView(QWidget):
     def _equivalent_zoom(self, size: float, W: float) -> float:
         """The world-map zoom showing this cell's ground at its on-screen scale.
 
-        Overlays size their markers and lines by zoom; handing them this makes
-        a region look like the world map zoomed in to the same place.  The
-        world map at zoom 1 spans 2π of longitude across the view's width.
+        Overlays size markers and lines by zoom; world zoom 1 spans 2π of longitude across the width.
         """
         return self._px_per_rad(size) / (W / (2.0 * np.pi))
 
@@ -776,9 +729,8 @@ class RegionView(QWidget):
         return texel
 
     def settlements_under_cursor(self, texel: Optional[tuple[int, int, int]]) -> list[str]:
-        """Status fragments for the settlements at the cursor: the city under it,
-        then on a local map the town or village dot under it, or in a region the
-        count of towns in the hovered hexagon (``texel``'s)."""
+        """Status fragments for the settlements at the cursor: the city, then the town/village
+        dot (local map) or the towns in ``texel``'s hexagon (region)."""
         parts: list[str] = []
         city = self.city_under_cursor(texel)
         if city is not None:
@@ -798,8 +750,7 @@ class RegionView(QWidget):
         )
 
     def _nearest_marker(self, sx: np.ndarray, sy: np.ndarray, keep: np.ndarray, radii) -> Optional[int]:
-        """Index of the marker under the cursor (nearest centre among those it is
-        within ``radius + _MARKER_HOVER_SLOP`` of), or None."""
+        """Index of the nearest marker within ``radius + _MARKER_HOVER_SLOP`` of the cursor, or None."""
         assert self._mouse is not None
         d = np.where(keep, np.hypot(sx - self._mouse[0], sy - self._mouse[1]), np.inf)
         d = np.where(d <= np.asarray(radii) + self._MARKER_HOVER_SLOP, d, np.inf)
@@ -808,8 +759,7 @@ class RegionView(QWidget):
         return int(np.argmin(d))
 
     def city_under_cursor(self, texel: Optional[tuple[int, int, int]]) -> Optional[str]:
-        """``"<tier> · <people>"`` for the city under the cursor, if any: its marker
-        in a region; on a local map its built-up ground (``texel``) or marker."""
+        """``"<tier> · <people>"`` for the city under the cursor (marker, or local-map footprint)."""
         if not self._cursor_ready() or not self._overlay_visible.get("settlements"):
             return None
         assert self._globe is not None
@@ -855,8 +805,7 @@ class RegionView(QWidget):
         return f"{TOWN_KIND_NAMES[int(towns.kind[found])]} · {float(towns.population[found]):,.0f} people"
 
     def towns_in_hex(self, hex_idx: int) -> list[str]:
-        """``["Towns in hex: N (people)", "<count> <kind>, …"]`` for the towns whose
-        drawn position falls in one of a region's hexagons; empty when none do."""
+        """``["Towns in hex: N (people)", "<count> <kind>, …"]`` for a region hexagon; empty if none."""
         if self._local is not None or self._globe is None or self._fields is None or self._geometry is None:
             return []
         towns = self._globe.get_feature("towns")
@@ -938,20 +887,17 @@ class RegionView(QWidget):
     def _draw_textured_hexes(
         self, painter: QPainter, x0: float, y0: float, size: float
     ) -> None:
-        """Blit each hexagon's texture, clipped to the hexagon itself.
+        """Blit each hexagon's texture, clipped to the hexagon.
 
-        The texture square spans ``2R`` in local units centred on the hex, with
-        row 0 at the top — so the image-to-screen map is a plain scale plus
-        translate, and the over-hanging corners are simply clipped away.
+        The texture square spans ``2R`` centred on the hex, row 0 at the top, so the
+        image-to-screen map is a scale plus translate; the over-hanging corners are clipped.
         """
         assert self._grid is not None and self._fields is not None
         r_px = self._grid.radius * size
         tex_size = self._fields.tex_size
         scale = (2.0 * r_px) / tex_size
-        # Draw a hair past the hexagon so antialiased neighbours overlap instead
-        # of leaving a seam; the extra pixel comes from the texture's over-hang,
-        # which is real data for the adjacent hexagon anyway.  Divided by the
-        # zoom so the overlap stays sub-pixel on screen.
+        # Overdraw a sub-pixel hair so antialiased neighbours don't leave a seam
+        # (the over-hang is real data for the neighbour anyway).
         r_draw = r_px + 0.75 / self._zoom
 
         painter.save()
@@ -966,8 +912,7 @@ class RegionView(QWidget):
             )
             painter.setBrush(brush)
             painter.drawPolygon(self._hex_polygon(cx, cy, r_draw))
-        # A local map's farmland, over the terrain and under the overlays.  Only
-        # the hexagon itself: the farmland lies on its own texels.
+        # Farmland: over the terrain, under the overlays, no overdraw.
         for i, (s, t) in enumerate(self._grid.centers if self._farm_images else []):
             cx = x0 + s * size
             cy = y0 + (1.0 - t) * size
@@ -976,8 +921,7 @@ class RegionView(QWidget):
             painter.setBrush(brush)
             painter.drawPolygon(self._hex_polygon(cx, cy, r_px))
 
-        # Faint outlines: the hexagons are the scaffolding for local maps, so
-        # they stay legible without competing with the terrain.
+        # Faint hex outlines.
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.setPen(_cosmetic_pen(QColor(20, 25, 30, 60)))
         for s, t in self._grid.centers:
@@ -1011,8 +955,7 @@ def _cosmetic_pen(color: QColor) -> QPen:
 class _RegionProjector:
     """Overlay projector for a region: the cell's local frame, then its screen transform.
 
-    Features beyond ``_MARGIN`` of the cell (in local units) are culled rather
-    than drawn under the clip, and the far side of the globe has no image.
+    Features beyond ``_MARGIN`` of the cell (local units) are culled; the far side has no image.
     """
 
     _MARGIN = 0.15

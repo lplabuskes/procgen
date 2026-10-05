@@ -40,8 +40,7 @@ def test_shapes_and_keys(fields):
 
 
 def test_texel_area_matches_the_cell_not_the_hex_overspill(fields):
-    # The hexes spill past the cell, so in-hex texels cover more than one cell:
-    # cell area / in-hex count would undercount each texel's area.
+    # Hexes spill past the cell, so cell area / in-hex count would undercount.
     import math
     from region.geometry import N_REGIONS
     from region.upsample import EARTH_RADIUS_KM
@@ -140,8 +139,7 @@ def test_the_coastline_moves_both_ways(fields, synthetic_globe):
     ocean = fields.textures["ocean_mask"].reshape(-1) > 0.5
     assert (anchor & ~ocean).sum() > 0        # islands and spits
     assert (~anchor & ocean).sum() > 0        # bays and inlets
-    # …but the shore only *moves*, it does not migrate: the two maps still agree
-    # almost everywhere.
+    # …but the two maps still agree almost everywhere.
     assert (anchor != ocean).mean() < 0.05
 
 
@@ -191,11 +189,7 @@ def test_shallow_water_damping_only_touches_submerged_ground():
 
 
 def test_shallow_lake_beds_do_not_dither(synthetic_globe):
-    """The whole point of the fade: a lake keeps its body, not just its outline.
-
-    Undamped noise re-emerges through the shallow margins of a lake and the mask,
-    being a threshold on the refined elevation, breaks the water into speckle.
-    """
+    """With the fade a lake keeps its body; undamped noise breaks it into speckle."""
     def dried(**overrides) -> float:
         f = build_region_fields(synthetic_globe, REGION_ID, _params(**overrides))
         anchor = _anchor_mask(f, synthetic_globe, "lake_mask")
@@ -246,11 +240,7 @@ def _biome_edge_fraction(fields) -> float:
 
 
 def test_biome_smoothing_cleans_the_boundaries(synthetic_globe):
-    """Without it the refined climate frays every biome edge into a dithered band.
-
-    The classifier is a hard threshold and the refined temperature swings ~1 °C
-    texel-to-texel, so near a cut neighbouring texels land on opposite sides.
-    """
+    """Without it the refined climate frays every biome edge into a dithered band."""
     rough = build_region_fields(synthetic_globe, BIOME_REGION, _params(biome_smoothing=0))
     smooth = build_region_fields(synthetic_globe, BIOME_REGION, _params())
     assert _biome_edge_fraction(smooth) < _biome_edge_fraction(rough)
@@ -309,11 +299,7 @@ def test_temperature_follows_the_refined_relief(synthetic_globe):
 
 
 def test_precipitation_follows_the_refined_relief(synthetic_globe):
-    """Orographic, not random: high texels inside a global texel are the wet ones.
-
-    This is what keeps the biome map from speckling — an independent noise stream
-    in precipitation would scatter texels across the classifier's thresholds.
-    """
+    """Orographic, not random: high texels inside a global texel are the wet ones."""
     fields = build_region_fields(synthetic_globe, REGION_ID, _params())
     elev = fields.textures["elevation"].reshape(-1)
     precip = fields.textures["precipitation"].reshape(-1, 4).sum(axis=1)

@@ -1,12 +1,9 @@
 """Regional maps: equal-area cubed-sphere subdivision and per-region refinement.
 
-The globe is divided into ``6 · N_SUBDIV**2`` equal-area regions via a gnomonic
-cubed-sphere parameterization with a separable equal-area CDF stretch
-(:mod:`region.geometry`).  Each region's local ``[0, 1]**2`` frame is tiled with
-hexagons carrying their own textures (:mod:`region.grid`), and
-:mod:`region.upsample` fills those textures by refining the global fields:
-bilinear upsample + slope-proportional detail, with every global texel's average
-preserved exactly.  All of it is Qt-free; the viewer sits on top.
+``6 · N_SUBDIV**2`` equal-area cubed-sphere regions (:mod:`region.geometry`),
+each tiled with textured hexagons (:mod:`region.grid`) that
+:mod:`region.upsample` fills by refining the global fields while preserving every
+global texel's average.  Qt-free.
 """
 from region.geometry import (
     N_SUBDIV,

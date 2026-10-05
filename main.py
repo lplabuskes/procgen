@@ -35,12 +35,7 @@ class AppParams:
 
 
 class AppPipeline(Pipeline):
-    """Top-level nested pipeline: physical world then human geography.
-
-    Both sub-pipelines are ordinary :class:`~core.pipeline.Stage` objects, so a
-    single ``build`` / ``apply_display`` walks the whole tree. Persistence stays
-    scoped to the physical world via :attr:`globe_pipeline`.
-    """
+    """Top-level nested pipeline: physical world then human geography."""
 
     def __init__(self, params: AppParams) -> None:
         self.globe_pipeline = GlobePipeline(params.globe)

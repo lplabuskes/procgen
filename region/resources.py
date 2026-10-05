@@ -1,32 +1,22 @@
 """Regional refinement of the resource, population and danger fields.
 
-Runs inside :func:`region.upsample.build_region_fields`, after the physical fields,
-and follows the same rule: every field is the global one plus structure that only
-the refined relief can explain, corrected so each global texel keeps its global
-aggregate.  No field here has noise of its own — all of the sub-grid variation
-comes from the refined relief (through slope, the relief anomaly, the treeline
-and the refined shoreline), so the layers line up with one another and with the
-terrain.
+Runs inside :func:`region.upsample.build_region_fields` after the physical fields,
+with the same conservation rule.  No noise of its own: all sub-grid variation
+comes from the refined relief (slope, anomaly, treeline, shoreline), so the layers
+line up with the terrain.
 
-- **Forest density** — the treeline on the refined elevation: a sub-grid ridge
-  poking above it goes bare, a hollow below it keeps its trees.  Conserved
-  multiplicatively over land, per global texel.
-- **Fertility** — alluvial valley floors are richer and steep slopes poorer
-  (``fertility_valley_gain``, ``fertility_slope_penalty``), and the forest penalty
-  follows the refined forest.  Conserved multiplicatively over land.
-- **Dominant crop** — reclassified from the refined fields, with the climate
-  area-averaged the way ``biome`` is.
-- **Rural density** — each global texel's farmers redistributed over its refined
-  land by the rural model's own weight, ``fertility ** γ``, and its fishers
-  (``fishing_density``) over its refined shore, within ``fishing_shore_km`` of
-  the water, and its miners (``mining_density``) in camps within a few
-  ``mining_camp_km`` of their deposit.  Conserved *exactly* as totals: no one is created or lost, and none
-  are left on refined water unless a global texel has no dry ground left at all.
-- **Danger** — per face on the globe, so first made continuous with
-  :class:`region.smooth.FaceFanField` (exact face means), then nudged by terrain:
-  rugged ground and dense forest more dangerous, open flat ground less
-  (``danger_terrain_gain``).  The nudge is renormalised per global texel, so it
-  moves danger around inside a texel without changing its mean.
+- **Forest density** — the treeline on the refined elevation.  Conserved over land.
+- **Fertility** — richer valley floors, poorer slopes (``fertility_valley_gain``,
+  ``fertility_slope_penalty``), forest penalty from the refined forest.
+  Conserved over land.
+- **Dominant crop** — reclassified, with climate area-averaged as for ``biome``.
+- **Rural density** — farmers over refined land by ``fertility ** γ``, fishers
+  (``fishing_density``) within ``fishing_shore_km`` of water, miners
+  (``mining_density``) around their deposit (``mining_camp_km``).  Totals
+  conserved exactly; none left on refined water unless a texel has no land.
+- **Danger** — made continuous with :class:`region.smooth.FaceFanField`, then
+  nudged up on rugged/forested ground (``danger_terrain_gain``) and
+  renormalised per global texel.
 """
 from __future__ import annotations
 
@@ -51,11 +41,10 @@ _EARTH_RADIUS_KM = 6371.0
 
 @dataclass
 class RefineContext:
-    """What every field's refinement needs: the texels, their anchors and the relief.
+    """Shared inputs for the field refinements.
 
-    All per-texel arrays are flat ``(P,)`` over the child tier's hex textures,
-    which have shape ``shape`` = ``(M, T, T)``; ``source`` is the parent tier
-    (the globe for a region, a region for a local map).
+    Per-texel arrays are flat ``(P,)`` over the child's ``shape`` = ``(M, T, T)``
+    textures; ``source`` is the parent tier.
     """
 
     source: "ParentSource"
@@ -72,8 +61,7 @@ class RefineContext:
     anchor_land: np.ndarray      # the anchor texel is dry on the globe
     texel_km: float = 1.0        # child texel spacing
     mine_points: Optional[np.ndarray] = None   # (K, 3) worked deposits
-    # (temperature, precipitation) box-averaged over params.biome_smoothing, as
-    # the biome was classified from; None to average them here.
+    # (temperature, precipitation) as averaged for the biome; None to average here.
     climate_avg: Optional[tuple[np.ndarray, np.ndarray]] = None
 
     def has(self, key: str) -> bool:
@@ -86,9 +74,7 @@ class RefineContext:
         return self.source.anchor_values(key, self.located)[:, 0]
 
     def conserve_unit(self, values: np.ndarray, targets: np.ndarray, mask: np.ndarray, rounds: int = 8) -> np.ndarray:
-        """:meth:`conserve_mean` for a field bounded to ``[0, 1]``: clipping after
-        the correction would lose what saturated, so the two alternate until the
-        texels left below 1 have taken it up."""
+        """:meth:`conserve_mean` for a ``[0, 1]`` field: scale and clip alternate, then settle exactly."""
         out = np.clip(values, 0.0, 1.0)
         for _ in range(rounds):
             out = np.clip(self.conserve_mean(out, targets, mask), 0.0, 1.0)
@@ -97,10 +83,8 @@ class RefineContext:
     def _settle_unit(self, values: np.ndarray, targets: np.ndarray, mask: np.ndarray) -> np.ndarray:
         """Close what the alternation left open, exactly and inside ``[0, 1]``.
 
-        A group still short of its target moves every texel toward 1 in
-        proportion to its headroom; one still over scales down.  Needed where a
-        target sits at (or near) 1 — the parent tier's own clip saturated it —
-        which the scale-and-clip rounds only approach geometrically.
+        Short groups move toward 1 in proportion to headroom; over ones scale
+        down.  Needed for targets near 1, which the rounds only approach geometrically.
         """
         w = self.weights * mask
         means, counts = anchor_means(values, self.anchors, w, self.n_anchors)
@@ -126,8 +110,7 @@ class RefineContext:
         return values * np.where(ok, targets / np.where(ok, m, 1.0), 1.0)
 
 
-# The last danger field built, keyed by the mesh and danger array it came from:
-# the solve is global, and a world's danger never changes once built.
+# Last danger field built, keyed by mesh and danger array (the solve is global).
 _DANGER_CACHE: list = []
 
 
@@ -140,8 +123,7 @@ def _danger_field(mesh: "PolygonMesh", danger: np.ndarray) -> FaceFanField:
 
 
 def _spread_into(values: np.ndarray, where: np.ndarray, shape: tuple[int, int, int], passes: int = 12) -> np.ndarray:
-    """Fill NaN ``values`` inside ``where`` from their known 4-neighbours, a ring
-    per pass, within each hex texture.  Flat ``(P,)`` in and out."""
+    """Fill NaN ``values`` inside ``where`` from known 4-neighbours, a ring per pass; flat ``(P,)``."""
     v = values.reshape(shape).copy()
     inside = where.reshape(shape)
     for _ in range(passes):
@@ -164,8 +146,7 @@ def _or_fallback(ctx: RefineContext, w: np.ndarray, fallback: np.ndarray) -> np.
 
 
 def _box_mean(values: np.ndarray, r: int) -> np.ndarray:
-    """``(2r+1)``² mean over each ``(M, T, T)`` hex texture, edges replicated
-    (separable running sums, so a wide box is as cheap as a narrow one)."""
+    """``(2r+1)``² mean over each ``(M, T, T)`` hex texture, edges replicated."""
     out = np.asarray(values, dtype=np.float64)
     for axis in (1, 2):
         pad = [(0, 0)] * 3
@@ -179,9 +160,7 @@ def _box_mean(values: np.ndarray, r: int) -> np.ndarray:
 
 
 def refined_slope(elevation: np.ndarray, texel_km: float) -> np.ndarray:
-    """``(M, T, T)`` gradient magnitude (km/km) of refined ``(M, T, T)`` elevation,
-    within each hex texture (which over-hangs its hexagon, so the visible area
-    differences real neighbours)."""
+    """``(M, T, T)`` gradient magnitude (km/km) of refined elevation, per hex texture."""
     dz_r, dz_c = np.gradient(np.asarray(elevation, dtype=np.float64), axis=(1, 2))
     return np.hypot(dz_r, dz_c) / max(texel_km, 1e-9)
 
@@ -236,8 +215,7 @@ def refine_resources(
             mod = mod * (1.0 - s * forest) / np.maximum(1.0 - s * forest_coarse, 1e-3)
         target = ctx.anchor("fertility")
         fertility = ctx.conserve_unit(coarse * mod, target, dry)
-        # Water keeps the globe's aquatic fertility; water the refined shoreline
-        # added takes it from the neighbouring water.
+        # Water keeps the parent's aquatic fertility; newly flooded texels take their neighbours'.
         aquatic = _spread_into(np.where(~ctx.land & ~ctx.anchor_land, target, np.nan), ~ctx.land, shape)
         fertility = np.clip(np.where(ctx.land, fertility, np.where(np.isfinite(aquatic), aquatic, coarse)), 0.0, 1.0)
         out["fertility"] = texture(fertility)
@@ -266,8 +244,7 @@ def refine_resources(
         )
         fert = fertility if fertility is not None else np.ones(len(target))
         w = np.where(ctx.land, np.clip(fert, 0.0, 1.0) ** float(fertility_exponent), 0.0)
-        # A global texel whose refined land is all barren spreads its people
-        # evenly over that land; one with no land left keeps them where they are.
+        # All-barren land: spread evenly over it; no land left: keep them in place.
         w = _or_fallback(ctx, w, ctx.land.astype(np.float64))
         w = _or_fallback(ctx, w, np.ones(len(w)))
         mine_target = (
@@ -276,15 +253,13 @@ def refine_resources(
         )
         rho = ctx.conserve_mean(w, target - fish_target - mine_target, everywhere)
         if ctx.has("mining_density"):
-            # The miners camp around their deposit: land weighted by a Gaussian
-            # of ``mining_camp_km`` about the nearest worked deposit; a global
-            # texel with no such land keeps them with its farmers.
+            # Land weighted by a Gaussian about the nearest worked deposit; with
+            # no such land, miners stay with the farmers.
             if ctx.mine_points is not None and len(ctx.mine_points):
                 d, _ = KDTree(ctx.mine_points).query(ctx.positions, workers=-1)
                 camp_rad = float(params.mining_camp_km) / _EARTH_RADIUS_KM
                 q = np.where(ctx.land & (ctx.weights > 0), (np.asarray(d) / camp_rad) ** 2, np.inf)
-                # Relative to each global texel's closest land, so a texel far
-                # from its deposit (in camp radii) does not underflow.
+                # Relative to each anchor's closest land, so distant deposits don't underflow.
                 q_min = np.full(ctx.n_anchors, np.inf)
                 np.minimum.at(q_min, ctx.anchors, q)
                 finite = np.isfinite(q)
@@ -297,9 +272,7 @@ def refine_resources(
             out["mining_density"] = texture(mine)
             rho = rho + mine
         if ctx.has("fishing_density"):
-            # The fishers stay on the refined shore: land weighted by how much
-            # water lies within ``fishing_shore_km``; with no shore left in a
-            # global texel they join its farmers.
+            # Land weighted by nearby water fraction; with no shore, fishers join the farmers.
             r = int(round(float(params.fishing_shore_km) / max(ctx.texel_km, 1e-9)))
             near = _box_mean((~ctx.land).astype(np.float64).reshape(shape), max(r, 1)).reshape(-1)
             ws = _or_fallback(ctx, np.where(ctx.land, near, 0.0), w)
@@ -311,8 +284,7 @@ def refine_resources(
     # ── danger: continuous across faces, nudged by terrain ───────────────────
     if danger is not None:
         base, targets = danger
-        # Area-averaged like the biome's climate: texel slope is too noisy to read
-        # alone.  Water scores like open flat ground, so a shore is not a seam.
+        # Area-averaged (texel slope is too noisy); water scores as flat ground so shores aren't seams.
         score = np.where(ctx.land, slope_n + (forest if forest is not None else 0.0), 0.0)
         score = _box_filter(score.reshape(*shape, 1), int(params.biome_smoothing)).reshape(-1)
         nudged = base * np.exp(float(params.danger_terrain_gain) * score)

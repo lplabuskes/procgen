@@ -146,8 +146,7 @@ def _distance_to_coast_km(mesh: PolygonMesh, face_elev_km: np.ndarray,
     if is_ocean is None:
         is_ocean = face_elev_km <= sea_level
 
-    # Build face-distance graph + virtual multi-source node at index n (weight 0
-    # to every ocean face) for single-call multi-source Dijkstra.
+    # Virtual node n with 0-weight edges to every ocean face → one multi-source Dijkstra.
     rows: list[int] = []
     cols: list[int] = []
     data: list[float] = []
@@ -200,10 +199,9 @@ def _is_built(b: "ClimateBuilder") -> TypeGuard[_ClimateBuilt]:
 
 
 class ClimateBuilder(Stage):
-    """Pipeline Stage: first climate pass; attaches temperature/precipitation/biome textures.
+    """First climate pass: temperature/precipitation/biome textures.
 
-    Intermediate per-face results are kept as instance attributes so downstream
-    stages can read them without re-running any work.
+    Per-face intermediates are kept as attributes for the lake-feedback pass.
     """
 
     name = "climate"
@@ -260,9 +258,7 @@ class ClimateBuilder(Stage):
             latitudes_rad,
             params=wp,
         )
-        # Land/sea thermal contrast → seasonal pressure systems → cross-isobar
-        # flow. Added on top of the zonal base; ocean inertia damps the anomaly
-        # so the contribution is largest on continental coasts.
+        # Land/sea thermal-contrast monsoon flow on top of the zonal base.
         winds = winds + pressure_winds(
             mesh.face_centroids.astype(np.float64),
             mesh.face_adjacency,
@@ -362,7 +358,7 @@ class ClimateBuilder(Stage):
         mesh.set_face_textures("humidity", h_pixel.astype(np.float16), n_channels=N_SEASONS)
         mesh.set_face_textures("biome", biome_tex, n_channels=1)
 
-        # Per-face metadata aggregates — p_face derived from pixel averages for consistency.
+        # p_face from pixel means so face and texture totals agree.
         p_face = p_pixel.mean(axis=(1, 2))                                      # (N, K) mm/season
         t_annual = t_face.mean(axis=1)
         t_warmest = t_face.max(axis=1)
@@ -419,8 +415,7 @@ class ClimateBuilder(Stage):
     ) -> None:
         """Add lake evaporation as a moisture source, then refresh precipitation and biomes.
 
-        Single correction pass approximating the hydrology→climate feedback; must be called
-        after build() and after HydrologyBuilder has attached the lake_mask texture.
+        Single correction pass; requires build() and the hydrology lake_mask texture.
         """
         if not _is_built(self):
             raise RuntimeError("ClimateBuilder.build() must be called first")
@@ -429,7 +424,6 @@ class ClimateBuilder(Stage):
         if pp.lake_feedback_iter <= 0 or pp.lake_evap_scale <= 0.0:
             return
 
-        # Per-face lake area fraction.
         lake_frac = lake_mask_tex[:, :, :, 0].mean(axis=(1, 2)).astype(np.float32)  # (N,)
         if lake_frac.max() < 1e-6:
             return
@@ -448,8 +442,7 @@ class ClimateBuilder(Stage):
             lake_frac[:, None] * t_factor * (pp.lake_evap_scale * pp.evaporation_scale)
         ).astype(np.float32)                                           # (N, K)
 
-        # Advect lake-sourced moisture; fewer iterations than the main pass since
-        # lake sources are small and the effect is localized.
+        # Fewer iterations than the main pass: lake sources are small and local.
         dq_lake = advect_moisture(
             lake_evap,
             mesh.face_centroids.astype(np.float64),
@@ -467,7 +460,6 @@ class ClimateBuilder(Stage):
         q_updated = (self.humidity_face + dq_lake).astype(np.float32)
         self.humidity_face = q_updated
 
-        # Re-rasterize humidity → precipitation → biomes.
         elev_tex = ELEVATION.read(mesh)                                # (N, H, W, 1)
         n_h = elev_tex.shape[1]
 
@@ -500,7 +492,6 @@ class ClimateBuilder(Stage):
         mesh.set_face_textures("humidity", h_pixel.astype(np.float16), n_channels=N_SEASONS)
         mesh.set_face_textures("biome", biome_tex, n_channels=1)
 
-        # Refresh per-face metadata aggregates.
         p_face = p_pixel.mean(axis=(1, 2))                             # (N, K)
         p_annual = p_face.sum(axis=1)
         biome_face = _dominant_biome_per_face(biome_tex)

@@ -74,9 +74,7 @@ def test_continuous_across_face_edges(mesh, blobby):
 
 
 def test_a_uniform_block_has_a_dome_in_the_middle(mesh):
-    """The field must fall to 0 at a block's rim, so the rim faces rise to keep
-    their means; inside, the smoothest solution is a dome — the middle face is not
-    a dip below its neighbours — and nothing approaches an isolated face's 3× cone."""
+    """Rim faces rise to keep their means; the middle is a dome, not a dip, well below a 3× cone."""
     values = np.zeros(len(mesh.faces))
     core = 100
     ring = list(mesh.face_adjacency[core])

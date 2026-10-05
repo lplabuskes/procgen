@@ -1,7 +1,6 @@
 """Unit tests for realmgen.polity.loyalty — the Stage-4 trade-attribution levers.
 
-Each lever is a pure function over the trade-attribution matrix + claim partition;
-the last class checks they compose correctly through ``classify_settlements``.
+The last class checks they compose through ``classify_settlements``.
 """
 from __future__ import annotations
 

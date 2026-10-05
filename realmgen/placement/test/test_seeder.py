@@ -1,8 +1,4 @@
-"""Tests for realmgen.placement.seeder — pure-function unit tests.
-
-All tests use a lightweight stub graph so there is no dependency on a full
-worldgen run.  The integration is covered by ``test_stage.py``.
-"""
+"""Unit tests for realmgen.placement.seeder on stub graphs."""
 from __future__ import annotations
 
 import numpy as np

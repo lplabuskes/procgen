@@ -1,20 +1,12 @@
 """Typed channel descriptors — the inter-stage data contract.
 
-Stages read and write shared world state through three descriptor kinds instead
-of magic strings:
-
 - ``MetaChannel``   — per-face scalars in ``mesh.face_metadata``.
 - ``TextureChannel``— ``(N, H, W, C)`` arrays in ``mesh.face_textures``.
 - ``FeatureChannel``— vector/point/graph entities in the ``World`` feature registry.
 
-Each stage exports the channels it produces (and that another stage consumes) as
-module-level constants; downstream stages import those constants, so the
-dependency is an explicit, type-checked edge rather than a string literal.
-
-``MetaChannel`` and ``TextureChannel`` operate on a ``PolygonMesh`` — that is
-where their data lives, and both pipeline ``build`` methods (via ``ctx.mesh``)
-and deeper helper modules already hold a mesh. ``FeatureChannel`` operates on a
-``World`` because the feature registry lives there.
+Stages export the channels they produce as module-level constants and consumers
+import them, making dependencies explicit edges rather than string literals.
+Mesh channels operate on a ``PolygonMesh``; ``FeatureChannel`` on a ``World``.
 """
 from __future__ import annotations
 
@@ -30,11 +22,9 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class MetaChannel:
-    """A named per-face scalar stored in ``mesh.face_metadata``.
+    """A named per-face scalar in ``mesh.face_metadata``; ``read`` returns ``(N,)``.
 
-    ``read`` returns an ``(N,)`` array (one value per face); ``write`` bulk-sets
-    the key across all faces. Presence is tested on face 0, matching the
-    established convention that metadata keys are written uniformly across faces.
+    Presence is tested on face 0: metadata keys are written uniformly across faces.
     """
     name: str
     dtype: Any = np.float64
@@ -74,13 +64,7 @@ class TextureChannel:
 
 @dataclass(frozen=True)
 class FeatureChannel:
-    """A named vector/point/graph entity in the ``World`` feature registry.
-
-    Features are arbitrary Python objects (lists of ``River`` objects,
-    ``(positions, kinds, abundances)`` tuples, dataclasses, …) that don't fit the
-    per-face raster — so unlike the mesh channels there is no array dtype to
-    declare. ``read`` returns the stored object (or ``None`` if absent).
-    """
+    """A named entity (any Python object) in the ``World`` feature registry; ``read`` gives ``None`` if absent."""
     name: str
 
     def present(self, world: "World") -> bool:

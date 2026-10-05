@@ -9,9 +9,8 @@ import numpy as np
 
 
 class ControlClass(IntEnum):
-    """How a settlement relates to the polity claiming it (projected authority
-    vs local power): ``DIRECT`` = directly-ruled province, ``VASSAL`` = founds a
-    child polity under its claimant, ``INDEPENDENT`` = founds a new sovereign."""
+    """Settlement vs claimant: ``DIRECT`` province, ``VASSAL`` (founds a child
+    polity), ``INDEPENDENT`` (founds a new sovereign)."""
 
     DIRECT = 0
     VASSAL = 1
@@ -31,10 +30,9 @@ class Scalars(NamedTuple):
         return Scalars(*(np.atleast_1d(np.asarray(a)[idx]) for a in self))
 
 
-# Sovereign palette — assigned to independent nations by ``polity_id % len(POLITY_COLORS)``.
-# Rich, saturated, and dark enough (L ≈ 0.38–0.42) that vassal tints (lightened in
-# make_polity_tree_color) land visibly lighter while staying clearly in the same family.
-# Yellow-green band (~75°–115°) is intentionally skipped to avoid muddy colours.
+# Sovereign palette, indexed by ``polity_id % len(POLITY_COLORS)``. Dark enough
+# (L ≈ 0.38–0.42) that lightened vassal tints stay in family; yellow-green
+# (~75°–115°) skipped as muddy.
 POLITY_COLORS: List[tuple] = [
     (0.69, 0.19, 0.11, 1.0),  # crimson      [  8°]
     (0.72, 0.44, 0.12, 1.0),  # orange       [ 32°]
@@ -61,27 +59,22 @@ UNCLAIMED_COLOR = (0.32, 0.30, 0.27, 1.0)
 class Polity:
     """A node in the polity forest grown from a capital settlement.
 
-    Sovereigns are roots (``liege is None``); vassals point at a parent via
-    ``liege``. ``polity_id`` aligns with the per-face ``polity_id`` metadata (the
-    *directly governing* polity — sovereign or vassal). Scalars: ``cohesion``
-    (stability), ``infrastructure`` (projection range), ``legitimacy`` (field
-    magnitude), ``maritime_reach`` (sea projection). ``power`` is own-territory
-    member population; ``domain_power`` adds descendant vassals.
+    ``polity_id`` matches the per-face ``polity_id`` metadata (the directly
+    governing polity). Scalars: ``cohesion`` (stability), ``infrastructure``
+    (projection range), ``legitimacy`` (field magnitude), ``maritime_reach``
+    (sea projection).
     """
 
     polity_id: int
     capital_face: int
     capital_position: np.ndarray            # (3,) unit-sphere centroid of the capital face
-    # Per-polity scalars (see class docstring).
     cohesion: float = 1.0
     infrastructure: float = 1.0
     legitimacy: float = 1.0
     maritime_reach: float = 0.0
-    # Hierarchy.
     liege: Optional[int] = None             # parent polity id; None ⇒ sovereign root
     autonomy: float = 0.0                   # 0 for sovereigns; >0 for vassals
     depth: int = 0                          # 0 = sovereign root
-    # Strength + territory.
     power: float = 0.0                      # own-territory member-settlement population
     domain_power: float = 0.0               # own + all descendant-vassal members
     n_faces: int = 0                        # own-territory size (face count)

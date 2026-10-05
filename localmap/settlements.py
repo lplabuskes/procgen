@@ -1,22 +1,15 @@
 """Refining towns and cities onto a local map's coast, rivers and roads.
 
-The region re-sites every town and city within about a global texel of its
-world site (``region/towns.py``, ``region/cities.py``), on the region's ~4.6 km
-texels.  A local map re-sites them again from there, with the same rules on its
-own ~0.35 km texels and its own coast, rivers and roads, within
-``refine_radius_parent_texels`` regional texels.  The result is saved on the
-world (``local_refined``), so the settlement stands in the same place on every
-map that shows it.
+``region/towns.py`` / ``region/cities.py``'s rules one tier down, within
+``refine_radius_parent_texels`` regional texels of the region's site.  The result
+is saved on the world (``local_refined``) so every map shows it in one place.
 
-**Ownership.** A settlement is refined by exactly one local map, once: the one
-of the regional hex nearest its region position (the hexes' Voronoi cells), in
-the region that refined it.  Another local map that shows it near its edge draws
-it wherever it stands — refined if its own hex has been opened, at its region
-position (moved off the water) if not.
+Ownership: each settlement is refined once, by the local map of the regional hex
+nearest its region position, in the region that refined it.  Other maps draw it
+wherever it currently stands.
 
-Cities go first, before the local roads are routed, so the roads end on them
-(``build_local_roads``'s ``moved``); towns go after, since their route flag
-reads the local roads.
+Cities go before the local roads (so roads end on them); towns after (their
+route flag reads the local roads).
 """
 from __future__ import annotations
 
@@ -51,9 +44,8 @@ def local_owned(
     region: RegionFields, hex_index: int, site_positions: np.ndarray, region_positions: np.ndarray,
     refined: np.ndarray, local_refined: np.ndarray, antimeridian,
 ) -> np.ndarray:
-    """``(K,)`` True for the settlements the local map of ``region``'s hex
-    ``hex_index`` refines: refined by this region, not yet locally, and nearest
-    this hex."""
+    """``(K,)`` True for settlements this hex's local map refines: refined by
+    this region, not yet locally, and nearest this hex."""
     site_positions = np.asarray(site_positions, dtype=np.float64).reshape(-1, 3)
     if len(site_positions) == 0:
         return np.zeros(0, dtype=bool)
@@ -72,8 +64,8 @@ def refine_local_cities(
     local: RegionFields, region: RegionFields, hex_index: int, rivers: RegionRivers, globe: "World",
     params: Optional[LocalSettlementParams] = None, river_threshold_factor: float = 1.5,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Refine the cities this local map owns, in place.  Returns ``(old, new)``
-    positions of every city that stands somewhere new, for the roads."""
+    """Refine the cities this local map owns, in place; returns ``(old, new)``
+    positions of every moved city, for the roads."""
     settlements = globe.get_feature("settlements") or []
     if not settlements:
         return np.zeros((0, 3)), np.zeros((0, 3))

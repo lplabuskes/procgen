@@ -1,9 +1,6 @@
 """Adapter: apply a (Qt-free) ``DisplayRegistry`` to a ``MapWindow``.
 
-This is the one place that knows both the registry shape and the Qt window API.
-Stages contribute schemes/overlays/hover to a ``DisplayRegistry`` in ``core``;
-this function performs the actual window wiring, so ``core`` and the stages stay
-free of any Qt dependency.
+Keeps ``core`` and the stages free of any Qt dependency.
 """
 from __future__ import annotations
 
@@ -35,9 +32,8 @@ def apply_registry(reg: DisplayRegistry, window, world: World) -> None:
             kind, entries = ov.legend
             window.register_legend(ov.feature, kind, entries)
 
-    # Decomposed hover: every stage's fragments for a face; the window joins them
-    # into the status bar. The region view passes ``local`` to swap in its refined
-    # values for the contributors that report on refined textures.
+    # Every stage's hover fragments for a face; the region view passes ``local``
+    # to swap in its refined values.
     def _hover_parts(
         face_src: int, uv: Optional[np.ndarray] = None, local: Optional[LocalHoverFn] = None
     ) -> list[str]:

@@ -26,10 +26,8 @@ def compute_border_tension(
         artery       = (1 - artery_weight) + artery_weight * tanh(mean_flow / flow_ref)
         crossing     = permeability * balance * artery
 
-    Evenly matched powers sharing a permeable gap are in tension even without
-    trade (the artery term keeps a ``1 - artery_weight`` baseline; trade amplifies
-    toward 1). A border's tension is its hottest crossing; a face's tension is the
-    hottest crossing on its own edges, concentrating heat on chokepoints.
+    A border's tension is its hottest crossing; a face's is the hottest crossing
+    on its own edges, concentrating heat on chokepoints.
 
     Returns ``(pair_tension {(a<b): t in [0,1]}, face_tension (N,) float64)``.
     """

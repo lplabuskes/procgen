@@ -1,20 +1,11 @@
 """Stage 5 — fragmentation epochs.
 
-Runs a few "historical epochs" on top of the resolved forest. Each epoch rolls a
-cohesion shock per sovereign; any sovereign whose shocked cohesion falls below
-what its **territory size demands** sheds one peripheral seat as a new sovereign —
-its weakest-held vassal (highest ``autonomy``) if it has vassals, otherwise the
-lowest-authority directly-held settlement (the interior **saddle**). The shed seat
-is added to the capital set and Stages 2-4 are re-run (a fresh
-:class:`~realmgen.polity.forest.ForestBuilder` build), so the empire retreats to
-its strong core while the breakaway holds the periphery beyond the saddle.
-
-This is a *modifier* over the base mechanism, never a rewrite: with
-``n_epochs == 0`` the forest is the plain Stage 0-3 result.
-
-Each shed is recorded as a :class:`FragmentationEvent` so the run's sequence of
-secessions survives as a ``polity_history`` feature — a chronicle a later
-history-generation pass can narrate (who broke away from whom, in which epoch).
+Each epoch rolls a cohesion shock per sovereign; one whose shocked cohesion falls
+below what its territory size demands sheds one peripheral seat as a new
+sovereign (its most autonomous vassal, else its lowest-authority direct
+settlement), and the forest is rebuilt with that seat added to the capitals.
+``n_epochs == 0`` gives the plain Stage 0-3 forest. Each shed is recorded as a
+:class:`FragmentationEvent` in the ``polity_history`` feature.
 """
 from __future__ import annotations
 
@@ -41,11 +32,10 @@ SADDLE_SPLIT = "saddle_split"
 
 @dataclass
 class FragmentationEvent:
-    """One secession during a fragmentation epoch — a unit of generated history.
+    """One secession during a fragmentation epoch.
 
-    Faces are stable identifiers (a settlement's face never moves), so both
-    ``parent_capital_face`` and ``breakaway_capital_face`` are sovereign capitals
-    in the final forest and can be mapped to ``Polity`` records by capital face.
+    Both capital faces are sovereign capitals in the final forest, so they map to
+    ``Polity`` records by capital face.
     """
 
     epoch: int                      # 0-based epoch in which the secession occurred
@@ -73,10 +63,9 @@ class FragmentationParams:
 def _breakaway_seat(
     pol: Polity, by_id: Dict[int, Polity], authority_of_face: np.ndarray
 ) -> Optional[Tuple[int, str]]:
-    """``(capital face, kind)`` of the seat ``pol`` sheds when it fragments, or ``None``.
+    """``(capital face, kind)`` of the seat ``pol`` sheds, or ``None``.
 
-    Prefer the weakest-held vassal (highest ``autonomy``); failing that, the
-    lowest-authority directly-held settlement (the deepest interior saddle).
+    The most autonomous vassal, else the lowest-authority direct settlement.
     """
     if pol.vassals:
         vassals = [by_id[v] for v in pol.vassals if v in by_id]
@@ -99,13 +88,11 @@ def select_fragmentations(
     shock_scale: float,
     size_reference: float,
 ) -> List[FragmentationEvent]:
-    """Secessions this epoch — one :class:`FragmentationEvent` per fragmenting sovereign.
+    """Secessions this epoch, one per fragmenting sovereign.
 
-    A sovereign fragments when ``cohesion - shock < demand``, where
-    ``demand = min(domain_face_count / size_reference, 1)`` (bigger domains demand
-    more cohesion) and ``shock ~ U[0, shock_scale]`` is rolled from a per-(seed,
-    capital, epoch) substream. Over-extended low-cohesion realms (Mongol) shed
-    every epoch; tight realms (Song) never do; the shock decides the borderline.
+    A sovereign fragments when ``cohesion - shock < demand``, with
+    ``demand = min(domain_faces / size_reference, 1)`` and
+    ``shock ~ U[0, shock_scale]`` from a per-(seed, capital, epoch) substream.
     """
     n = len(polities)
     if n == 0:
@@ -158,9 +145,7 @@ def run_fragmentation_epochs(
 ) -> Tuple[ForestBuilder, List[FragmentationEvent]]:
     """Build the forest, then run ``params.n_epochs`` fragmentation epochs.
 
-    Returns ``(final ForestBuilder, history)`` where ``history`` is the chronicle
-    of secessions in order. Each epoch re-runs Stages 2-4 with the shed seats
-    added to the capital set; stops early once an epoch is stable.
+    Returns ``(final ForestBuilder, history)``; stops early once an epoch is stable.
     """
     forest = ForestBuilder(sctx)
     forest.build(list(capital_sidx), land_mask, report)

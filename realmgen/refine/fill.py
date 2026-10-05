@@ -1,26 +1,16 @@
 """Polity classification of the land surface — the shared source of truth.
 
-The polity a point belongs to is a **function of its position on the sphere**
-(``PolityLabelField``), never of which face's texture grid happens to hold it.
-That is what keeps everything consistent across the mesh seams: two faces'
-over-hanging square textures that sample the same spot of ground always agree,
-and the border tracer (``borders.py``) contours the very same field on its own
-seamless lattice, so the lines and the fill describe one partition.
+The label is a function of position on the sphere only (``PolityLabelField``),
+never of which face's texture holds the point, so over-hanging textures agree
+across seams and ``borders.py`` contours the same partition.
 
-A point is labelled by its **owner** face (nearest centroid) and that face's
-neighbours: claimed land is split among its own polity and its claimed-land
-neighbours by an authority-weighted (multiplicatively-weighted) Voronoi, so the
-stronger polity bulges into the weaker one. The positions fed to that Voronoi
-are domain-warped so the boundary wiggles organically instead of following the
-straight bisectors between face centroids.
+A point is labelled among its owner face (nearest centroid) and that face's
+claimed-land neighbours by an authority-weighted Voronoi over domain-warped
+positions, so stronger polities bulge and boundaries wiggle off the bisectors.
 
-Labels: a polity id (``>= 0``), ``UNCLAIMED`` (-1) for claimed-by-nobody land, or
-``WATER`` (-2) for ocean/lake. Water comes from the per-texel masks, so a
-face-level *water* face (more than half its texels water) can still hold genuine
-land texels — the *orphan land* — which go to its claimed-land neighbours.
-
-``build_polity_fill_texture`` colourises the texel labels into the ``(N, H, W, 4)``
-RGBA "Polities" fill texture.
+Labels: polity id (``>= 0``), ``UNCLAIMED`` (-1), ``WATER`` (-2, from the texel
+masks). Land texels of a face-level water face (orphan land) go to its
+claimed-land neighbours.
 """
 from __future__ import annotations
 
@@ -51,12 +41,7 @@ def domain_warp(
 ) -> np.ndarray:
     """Displace 3-D ``positions`` by a coherent fBm-simplex vector field.
 
-    Used to perturb the texel positions fed to the polity Voronoi so the
-    classification boundary wiggles organically instead of hugging the straight
-    perpendicular bisectors between face centroids (the polygonal staircase).
-
-    The displacement is a pure function of position, so coincident points get the
-    *same* warp — the warp never introduces seams of its own.
+    A pure function of position, so it never introduces seams.
     """
     if amplitude <= 0.0 or octaves <= 0:
         return np.asarray(positions, dtype=np.float64)
@@ -100,10 +85,9 @@ def _polity_color_map(polities: List) -> dict:
 class PolityLabelField:
     """The polity label as a function of position on the sphere.
 
-    ``land_labels(points)`` ignores water (it answers "whose land would this be");
-    callers overlay the water masks themselves, at whatever resolution they hold
-    them. Unclaimed land faces, and water faces with no claimed-land neighbour,
-    label their whole cell ``UNCLAIMED``.
+    ``land_labels`` ignores water; callers overlay their own water masks.
+    Unclaimed land faces, and water faces with no claimed-land neighbour, label
+    their whole cell ``UNCLAIMED``.
     """
 
     # Points labelled per call; bounds the (P, K, 3) Voronoi work array.
@@ -135,9 +119,8 @@ class PolityLabelField:
         self._warp_octaves = int(warp_octaves)
         self._warp_seed = int(warp_seed)
 
-        # Voronoi candidates per owner face: itself plus its neighbours, kept only
-        # where they are claimed land (so a water owner votes among its claimed
-        # neighbours — the orphan land — and an unclaimed-land owner has none).
+        # Candidates per owner: itself + neighbours, claimed land only (an
+        # unclaimed-land owner has none).
         adj = mesh.face_adjacency
         n = len(self.pof)
         k = 1 + max((len(a) for a in adj), default=0)
@@ -207,11 +190,7 @@ def compute_texel_labels(
     warp_octaves: int = 3,
     warp_seed: int = 0,
 ) -> np.ndarray:
-    """Return the ``(N, H, W)`` int32 per-texel label grid (see ``PolityLabelField``).
-
-    Values: ``>= 0`` polity id, ``UNCLAIMED`` (-1) for unclaimed land, ``WATER``
-    (-2) for ocean/lake texels.
-    """
+    """Return the ``(N, H, W)`` int32 per-texel label grid (see ``PolityLabelField``)."""
     field = PolityLabelField(
         mesh, polity_of_face, is_water, authority, control_floor=control_floor,
         warp_amplitude=warp_amplitude, warp_frequency=warp_frequency,
@@ -237,10 +216,7 @@ def build_polity_fill_texture(
     warp_seed: int = 0,
     labels: Optional[np.ndarray] = None,
 ) -> np.ndarray:
-    """Return an ``(N, H, W, 4)`` float16 RGBA polity-fill texture.
-
-    Colourises the per-texel labels (computed here, or reused via ``labels``).
-    """
+    """Return an ``(N, H, W, 4)`` float16 RGBA polity-fill texture (``labels`` reused if given)."""
     if labels is None:
         labels = compute_texel_labels(
             mesh, polity_of_face, is_water, authority, ocean_tex, lake_tex,
@@ -253,17 +229,12 @@ def build_polity_fill_texture(
 
 def colorize_labels(labels: np.ndarray, polities: List, ocean_tex: np.ndarray,
                     lake_tex: Optional[np.ndarray]) -> np.ndarray:
-    """``(..., 4)`` float32 RGBA for a label grid of any leading shape.
-
-    Polity ids take the exact "Polities" scheme colours, unclaimed land is grey,
-    and ocean / lake texels (from the masks) their own blues.
-    """
+    """``(..., 4)`` float32 RGBA for a label grid, in the "Polities" scheme colours."""
     labels = np.asarray(labels)
     pid_rgb = _polity_color_map(polities)
     unclaimed = np.asarray(UNCLAIMED_COLOR[:3], dtype=np.float32)
     ocean = np.asarray(OCEAN_COLOR[:3], dtype=np.float32)
 
-    # Colour lookup by polity id (unclaimed grey for gaps / negative labels).
     max_pid = max((p.polity_id for p in polities), default=-1)
     color_lut = np.tile(unclaimed, (max_pid + 2, 1))  # row 0..max_pid; row -1 spare
     for pid, rgb in pid_rgb.items():
@@ -278,8 +249,7 @@ def colorize_labels(labels: np.ndarray, polities: List, ocean_tex: np.ndarray,
     rgb_flat[claimed] = color_lut[flat[claimed]]
     rgba[..., :3] = rgb_flat.reshape(*labels.shape, 3)
 
-    # Texel-accurate coastlines from the ocean / lake masks (runs last so it
-    # overrides any polity colour painted onto a water texel).
+    # Water last, overriding any polity colour.
     rgba[ocean_tex[..., 0] > 0.5, :3] = ocean
     if lake_tex is not None:
         from worldgen.hydrology.builder import LAKE_COLOR
@@ -290,9 +260,8 @@ def colorize_labels(labels: np.ndarray, polities: List, ocean_tex: np.ndarray,
 def polity_fill_recipe(field: PolityLabelField, polities: List) -> TextureRecipe:
     """The "Polities" fill as a recipe over texel positions and water masks.
 
-    The label is a function of position, so any grid of texels can be coloured
-    directly — a region view evaluates it at its own, finer texels (with its
-    refined shoreline) instead of magnifying the global fill texture.
+    Lets a region view colour its own finer texels (and refined shoreline)
+    instead of magnifying the global texture.
     """
     def fn(textures) -> np.ndarray:
         labels = field.texel_labels(textures[POSITIONS_KEY], textures["ocean_mask"],

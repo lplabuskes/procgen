@@ -1,32 +1,15 @@
-"""Physical base cost surfaces for overland and maritime movement.
+"""Physical base cost surfaces for overland and maritime movement (per face).
 
-Two surfaces, per the realmgen design (docs/plans/settlement_generation_design.md):
+- **Land** — biome difficulty + ruggedness, plus an anisotropic river term (cheap along a valley, dear
+  to ford).  All open water (ocean ∪ lake) is impassable.
+- **Sea** — coastal water cheapest, open ocean dearer, straits discounted, land impassable.  Lakes are
+  sailable, and navigable rivers extend the network inland up to the fall line.
 
-  * **Land surface** — an isotropic per-face cost (biome difficulty + ruggedness)
-    plus an *anisotropic* river term (cheap to travel *along* a navigable valley,
-    expensive to *ford across* it). All open water — ocean **and lakes** — is
-    impassable on land. (A realmgen hinterland may opt into a *limited* band of
-    coastal water via its own permeable graph, but the base land surface does not.)
-  * **Sea surface** — water is the cheap medium (coastal water cheapest, open
-    ocean dearer with distance from coast), land impassable, narrow straits
-    tagged and discounted. Lakes are sailable like the ocean, and **navigable
-    rivers extend the sailable network inland** so a boat can travel up a river
-    from the sea up to the *fall line* — the furthest navigable point, where
-    rising ruggedness turns the river to rapids and cities historically cluster.
+Navigable-river faces are the only overlap: passable on both surfaces.  The river term is directional,
+so it is stored as per-face flow direction + magnitude and folded into edge costs by
+:func:`build_land_edge_costs`, which realmgen reuses after adding danger.
 
-A navigable-river face is the one place the two surfaces overlap: it is passable
-on land (you can walk its banks) *and* on sea (a boat can sail it).
-
-Everything is per-face — faces, not pixels, for logic (see the design doc). The
-river anisotropy is the one directional term, so it cannot collapse to a single
-per-face scalar; we store a per-face flow direction + magnitude and fold the
-direction into the *edge* cost via :func:`build_land_edge_costs`. realmgen calls
-the same function after adding its danger field to the per-face base cost, so the
-river model lives in exactly one place.
-
-The functions here take only the small attribute set ``faces`` (for length),
-``face_adjacency``, and ``face_centroids`` off the mesh, so they are easy to test
-against a lightweight stub.
+Functions only need ``faces``, ``face_adjacency`` and ``face_centroids`` off the mesh (easy to stub).
 """
 from __future__ import annotations
 
@@ -41,15 +24,11 @@ from worldgen.climate.classification import N_BIOMES
 if TYPE_CHECKING:
     from worldgen.cost.builder import SeaCostParams, StraitParams
 
-# Sphere radius for converting unit-sphere arc lengths to kilometres (matches the
-# value used across the climate stage).
 EARTH_RADIUS_KM = 6371.0
 
 
-# Relative overland traversal difficulty per biome (index matches
-# climate.classification.BIOME_NAMES). Open temperate / steppe grassland is the
-# 1.0 baseline; dense rainforest, desert heat, and ice are the hardest. This
-# table *defines* the model; `biome_cost_scale` tunes its overall weight.
+# Relative overland difficulty per biome (index = BIOME_NAMES); temperate/steppe = 1.0.
+# `biome_cost_scale` tunes its overall weight.
 BIOME_TRAVERSAL_COST = np.array(
     [
         4.0,  # 0 Icecap
@@ -69,34 +48,19 @@ assert BIOME_TRAVERSAL_COST.shape == (N_BIOMES,), "biome cost table out of sync 
 
 @dataclass
 class CostSurfaces:
-    """Per-face physical base traversal-cost layers (worldgen output).
+    """Per-face physical base traversal-cost layers.
 
-    ``N`` = number of faces. Fields flagged "(meaningful where passable)" hold a
-    computed value on every face but should only be trusted where the matching
-    passability mask is True.
-
-    A *navigable-river* face is passable on **both** surfaces — it is the only
-    overlap. Recover the constituent masks from the two passability arrays:
-    ``is_water = ~land_passable`` (ocean ∪ lake), and
-    ``navigable_river = land_passable & sea_passable``.
+    ``is_water = ~land_passable`` (ocean ∪ lake); ``navigable_river = land_passable & sea_passable``.
 
     Attributes:
-        land_base_cost:  (N,) float32 — isotropic land cost (biome + ruggedness),
-            meaningful where ``land_passable``. The river term is *not* baked in;
-            it is directional and applied per-edge by ``build_land_edge_costs``.
-        land_passable:   (N,) bool — False on open water (ocean ∪ lake).
-        river_flow_dir:  (N, 3) float32 — unit tangent-plane flow direction
-            (downstream) per face; ``(0, 0, 0)`` where no river passes.
-        river_flow_mag:  (N,) float32 — representative (max) upstream-flow value
-            of the river through the face; 0 where no river.
-        river_navigability: (N,) float32 in [0, 1] — fall-line taper: 1 where the
-            river is placid/flat, falling to 0 at the navigable-ruggedness limit
-            (rapids); 0 where no river passes.
-        sea_base_cost:   (N,) float32 — sailable-water cost (coastal cheap → open
-            dear, straits discounted), meaningful where ``sea_passable``; 0 on
-            non-sailable land.
-        sea_passable:    (N,) bool — True on sailable water: ocean ∪ lake ∪
-            navigable river.
+        land_base_cost:  (N,) float32 — biome + ruggedness, meaningful where ``land_passable``.  The
+            directional river term is applied per edge by ``build_land_edge_costs``.
+        land_passable:   (N,) bool — False on open water.
+        river_flow_dir:  (N, 3) float32 — unit tangent downstream direction; 0 where no river.
+        river_flow_mag:  (N,) float32 — max upstream flow through the face; 0 where no river.
+        river_navigability: (N,) float32 in [0, 1] — 1 placid, 0 at the rapids limit or no river.
+        sea_base_cost:   (N,) float32 — meaningful where ``sea_passable``; 0 on land.
+        sea_passable:    (N,) bool — ocean ∪ lake ∪ navigable river.
         strait_mask:     (N,) bool — narrow water chokepoints.
     """
 
@@ -108,8 +72,7 @@ class CostSurfaces:
     sea_base_cost: np.ndarray
     sea_passable: np.ndarray
     strait_mask: np.ndarray
-    # (N, 3) float32 coast-blended mean wind direction; zero near coasts. None
-    # if the climate stage ran without wind data.
+    # (N, 3) float32 coast-blended mean wind direction; zero near coasts.  None without wind data.
     wind_dir: np.ndarray | None = None
 
 
@@ -128,17 +91,11 @@ def compute_land_base_cost(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Isotropic per-face land cost = biome difficulty + ruggedness + forest penalty.
 
-    Open water (ocean ∪ lake) is impassable on the land surface. Water faces keep
-    a finite (meaningless) cost value — gate them with the returned mask. A
-    realmgen hinterland that wants to reach a limited band of coastal water builds
-    its own permeable graph (overriding the water cost); the base land surface here
-    does not.
-
     Args:
         face_biome: (N,) int — biome index per face.
         face_elev_range_km: (N,) float — per-face pixel elevation span (km), the
             ruggedness proxy (per-pixel slope is noise-dominated; see terrain.py).
-        is_water: (N,) bool — open water (ocean ∪ lake) is impassable on land.
+        is_water: (N,) bool — open water (ocean ∪ lake), impassable.
         face_forest_density: (N,) float in [0, 1] — mean forest density per face;
             None disables the forest term.
         forest_cost_strength: additive scale on forest density (0 = no effect).
@@ -168,21 +125,14 @@ def compute_river_flow_field(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Per-face downstream flow direction + magnitude from river geometry.
 
-    For every river segment, its direction ``end - start`` is attributed to each
-    face the segment touches (its start and end face), weighted by the segment's
-    upstream-flow value. Per face we keep the flow-weighted mean direction
-    (projected onto the face tangent plane, unit length) and the maximum flow
-    value seen (the main stem dominates).
+    Each segment's direction is attributed to its start and end faces; per face we keep the
+    flow-weighted mean direction (unit, tangent plane) and the max flow seen.
 
     Args:
         mesh: object exposing ``faces`` and ``face_centroids``.
         rivers: iterable of ``River`` (worldgen.hydrology.types) or None.
-        include_in_lake: if False, segments flagged ``in_lake`` are skipped (they
-            run across a lake surface, not drainable land) — so a river crossing
-            an exorheic lake contributes no land cost in that stretch.
-        exclude_mask: (N,) bool or None — faces to leave at zero flow (e.g. open
-            water: a river's mouth segment touches an ocean face, but a river term
-            on a water face is meaningless since it is impassable on land).
+        include_in_lake: if False, skip ``in_lake`` segments (they cross a lake surface, not land).
+        exclude_mask: (N,) bool or None — faces left at zero flow (e.g. open water).
 
     Returns:
         (river_flow_dir (N, 3) float32 unit tangent, river_flow_mag (N,) float32).
@@ -211,9 +161,6 @@ def compute_river_flow_field(
                         if fr > mag[fid]:
                             mag[fid] = fr
 
-    # Project each face's accumulated direction onto its tangent plane and
-    # normalize. face_centroids are unit vectors, so the radial component is
-    # (accum·c) c.
     centroids = np.asarray(mesh.face_centroids, dtype=np.float64)
     radial = (accum * centroids).sum(axis=1, keepdims=True) * centroids
     tangent = accum - radial
@@ -230,24 +177,17 @@ def compute_river_navigability(
 ) -> np.ndarray:
     """Per-face river navigability in [0, 1] — the fall-line taper.
 
-    A river is navigable where it is *flat*: navigability falls linearly from 1
-    (placid, pixel elevation span 0) to 0 at ``navigable_ruggedness_km`` of local
-    relief, beyond which the river is rapids/falls. Faces with no river are 0.
-
-    This drives two things: it tapers the land-surface corridor discount toward
-    the fall line (:func:`build_land_edge_costs`), and, once thresholded by
-    :func:`navigable_river_mask`, it decides which river faces join the sailable
-    sea network. The "fall line" — the furthest navigable point up a river, where
-    cities cluster — is where this field drops to 0 along the river's course.
+    Falls linearly from 1 (flat) to 0 at ``navigable_ruggedness_km`` of local relief (rapids).  It tapers
+    the land corridor discount (:func:`build_land_edge_costs`) and, via :func:`navigable_river_mask`,
+    decides which river faces are sailable.  The fall line is where it reaches 0 along a river.
 
     Args:
-        river_flow_mag: (N,) float — representative river flow per face (0 = none).
-        face_elev_range_km: (N,) float — per-face pixel elevation span (km), the
-            ruggedness proxy (per-pixel slope is noise-dominated; see terrain.py).
+        river_flow_mag: (N,) float — river flow per face (0 = none).
+        face_elev_range_km: (N,) float — per-face pixel elevation span (km), the ruggedness proxy.
         navigable_ruggedness_km: local relief (km) at which navigability hits 0.
 
     Returns:
-        (N,) float32 navigability in [0, 1]; 0 where no river passes.
+        (N,) float32; 0 where no river passes.
     """
     flow = np.asarray(river_flow_mag, dtype=np.float64)
     relief = np.maximum(np.asarray(face_elev_range_km, dtype=np.float64), 0.0)
@@ -264,23 +204,9 @@ def navigable_river_mask(
     *,
     navigable_flow_min: float = 500.0,
 ) -> np.ndarray:
-    """Boolean mask of river faces that join the sailable sea network.
+    """(N,) bool: river faces that join the sailable network.
 
-    A river face is navigable-by-boat when it carries at least
-    ``navigable_flow_min`` flow, has positive navigability (flat enough — below
-    the fall line), and is not already open water. These faces are *amphibious*:
-    passable on the land surface (you can walk the banks) **and** on the sea
-    surface (a boat can sail them), the only overlap between the two surfaces.
-    They let a river connect to the sea directly, not only through a port.
-
-    Args:
-        river_flow_mag: (N,) float — representative river flow per face.
-        river_navigability: (N,) float — from :func:`compute_river_navigability`.
-        is_water: (N,) bool — ocean ∪ lake (already-sailable faces).
-        navigable_flow_min: minimum flow to float a boat.
-
-    Returns:
-        (N,) bool.
+    Flow ≥ ``navigable_flow_min``, navigability > 0 (below the fall line), and not already water.
     """
     flow = np.asarray(river_flow_mag, dtype=np.float64)
     nav = np.asarray(river_navigability, dtype=np.float64)
@@ -289,13 +215,7 @@ def navigable_river_mask(
 
 
 def _flatten_adjacency(mesh) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Flatten ``face_adjacency`` into (src, dst, indptr) for vectorized edge ops.
-
-    ``src[k]``/``dst[k]`` are the k-th directed edge (each undirected edge appears
-    twice, once per direction). ``indptr[i]:indptr[i+1]`` is the slice of edges
-    leaving face i, so a flat per-edge array can be re-split to mirror
-    ``face_adjacency``.
-    """
+    """Flatten ``face_adjacency`` into directed edges (src, dst) and CSR ``indptr`` (edges leaving face i)."""
     adj = mesh.face_adjacency
     indptr = np.zeros(len(adj) + 1, dtype=np.int64)
     src_list: List[int] = []
@@ -327,34 +247,14 @@ def build_land_edge_costs(
     river_max_mult: float = 5.0,
     settlement_mask: np.ndarray | None = None,
 ) -> List[np.ndarray]:
-    """Directional per-edge land traversal cost (mirrors ``mesh.face_adjacency``).
+    """Directional per-edge land cost; ``costs[i][k]`` steps from face i to ``face_adjacency[i][k]``.
 
-    Returns a list ``costs`` where ``costs[i][k]`` is the cost of stepping from
-    face ``i`` to ``mesh.face_adjacency[i][k]``. An edge with either endpoint not
-    ``land_passable`` is ``np.inf``.
-
-    ``cost = mean(land_cost over the two faces) × river_multiplier``. The
-    multiplier comes from how each river face's flow aligns with the step
-    direction:
-
-      * parallel (travel *along* the valley) → discount, toward ``river_min_mult``
-      * perpendicular (*ford* across the river) → penalty, toward ``river_max_mult``
-
-    scaled by the river's flow magnitude (saturating at ``river_flow_reference``).
-    A face with no river contributes a multiplier of 1.
-
-    The *along-valley discount* is additionally tapered by ``river_navigability``
-    (1 on placid flat reaches → full discount; 0 in rugged gorges at/above the
-    fall line → no discount, leaving only the ford penalty). The ford penalty is
-    not tapered — a rapids-choked river is no easier to cross. ``None`` means
-    "fully navigable everywhere" (the discount applies in full).
-
-    ``settlement_mask``: (N,) bool — faces with a settlement suppress the ford
-    penalty (settlements have bridges/fords), but still receive the corridor
-    discount for traveling along the valley.
-
-    ``land_cost`` is whatever per-face base the caller wants the river term applied
-    to — worldgen passes ``land_base_cost``; realmgen passes base + danger.
+    ``cost = mean(land_cost of both faces) × river_multiplier``; ``inf`` if either face is impassable.
+    Per river face, stepping along the flow discounts (toward ``river_min_mult``) and across it
+    penalises (toward ``river_max_mult``), scaled by flow saturating at ``river_flow_reference``.  The
+    discount (not the ford penalty) is tapered by ``river_navigability`` (None = fully navigable).
+    ``settlement_mask`` faces have bridges: no ford penalty.  ``land_cost`` is the caller's base
+    (worldgen: ``land_base_cost``; realmgen: base + danger).
     """
     src, dst, indptr = _flatten_adjacency(mesh)
     n = len(mesh.faces)
@@ -411,20 +311,10 @@ def detect_straits(
     *,
     params: "StraitParams",
 ) -> np.ndarray:
-    """Tag water faces pinched between land on opposite sides (chokepoints).
+    """(N,) bool: water faces pinched between land on opposite sides (chokepoints).
 
-    A water face is a strait if two of its land neighbours lie in roughly
-    opposite tangent directions (their unit direction vectors have a dot product
-    at or below ``opposite_dot_threshold``) while it still has at least
-    ``min_water_neighbors`` water neighbours forming the through-channel.
-
-    Args:
-        mesh: object exposing ``faces``, ``face_adjacency`` and ``face_centroids``.
-        is_water: (N,) bool — open water (ocean ∪ lake).
-        params: StraitParams — ``opposite_dot_threshold`` + ``min_water_neighbors``.
-
-    Returns:
-        (N,) bool strait mask.
+    Two land neighbours' tangent directions must have dot ≤ ``opposite_dot_threshold``, with at least
+    ``min_water_neighbors`` water neighbours forming the channel.
     """
     p = params
     n = len(mesh.faces)
@@ -460,24 +350,11 @@ def detect_straits(
 
 
 def compute_sea_distance_to_coast(mesh, is_water: np.ndarray) -> np.ndarray:
-    """Great-circle km from each water face to the nearest coast.
+    """(N,) float32 great-circle km from each sailable face to the nearest coast.
 
-    Dijkstra over the *sailable-water* sub-graph (ocean ∪ lake ∪ navigable
-    rivers), seeded at coastal water (water faces adjacent to at least one land
-    face). This is the open-ocean → coast metric the sea surface needs; it is the
-    opposite of the climate stage's ``distance_to_coast`` (which is land → ocean
-    and ~0 on the water). Lake and navigable-river faces border land on most
-    sides, so they read as coastal (~0) — cheap to sail, as intended.
-
-    Land faces, and any water face with no reachable coast (e.g. a world with no
-    land), return 0.
-
-    Args:
-        mesh: object exposing ``faces``, ``face_adjacency`` and ``face_centroids``.
-        is_water: (N,) bool — the sailable mask.
-
-    Returns:
-        (N,) float32 distance in km.
+    Dijkstra over sailable water seeded at water faces touching land.  The opposite of climate's
+    ``distance_to_coast`` (land → ocean).  Lakes and navigable rivers read as coastal (~0).  Land and
+    water with no reachable coast return 0.
     """
     n = len(mesh.faces)
     is_water = np.asarray(is_water, dtype=bool)
@@ -516,16 +393,10 @@ def compute_ice_penalty(
     freeze_threshold_celsius: float = 0.0,
     penalty_strength: float = 5.0,
 ) -> np.ndarray:
-    """Per-face ice penalty multiplier based on fraction of seasons below freezing.
+    """(N,) float32 ice multiplier ``1 + freezing_fraction × penalty_strength``.
 
-    Args:
-        temperature_tex: (N, H, W, K=4) float32 — per-season temperatures (°C).
-        freeze_threshold_celsius: temperature below which water is icebound.
-        penalty_strength: multiplier applied per freezing season
-            (1 + freezing_fraction × penalty_strength).
-
-    Returns:
-        (N,) float32 multipliers ≥ 1.0; 1.0 where water never freezes.
+    ``temperature_tex`` is (N, H, W, K) per-season °C; a season freezes when its face mean is below
+    ``freeze_threshold_celsius``.
     """
     temp = np.asarray(temperature_tex, dtype=np.float64)
     n_faces = temp.shape[0]
@@ -535,16 +406,11 @@ def compute_ice_penalty(
     if temp.shape[-1] < 1:
         return np.ones(n_faces, dtype=np.float32)
 
-    # Count seasons below freezing per face (mean temperature per season per face).
     season_temps = temp.reshape(n_faces, -1, temp.shape[-1])  # (N, H*W, K)
     mean_season_temps = season_temps.mean(axis=1)  # (N, K)
     freezing_seasons = np.sum(mean_season_temps < freeze_thresh, axis=1)  # (N,)
     n_seasons = mean_season_temps.shape[1]
-
-    # Fraction of year below freezing: 0 if never, 1 if always.
     freezing_fraction = np.clip(freezing_seasons / max(n_seasons, 1), 0.0, 1.0)
-
-    # Penalty: 1 + fraction × strength, so ice-locked water has ~1+strength cost.
     penalty = 1.0 + freezing_fraction * strength
     return penalty.astype(np.float32)
 
@@ -558,23 +424,11 @@ def compute_wind_sea_modifier(
     penalty_strength: float = 1.0,
     coast_blend_km: float = 300.0,
 ) -> np.ndarray:
-    """Per-face sea cost multiplier from wind speed — a bell curve centred on optimal.
+    """(N,) float32 sea cost multiplier ≥ 1 from mean wind speed (becalmed or stormy costs more).
 
-    Too little wind leaves sailing ships becalmed; too much is dangerous. Cost
-    is lowest at ``optimal_speed`` m/s and rises symmetrically on either side with
-    a Gaussian envelope of width ``speed_width``. The full penalty at zero /
-    extreme wind is ``1 + penalty_strength``.
-
-    The effect is blended to 1.0 within ``coast_blend_km`` of the coast so
-    near-shore routes stay unaffected by open-ocean wind conditions.
-
-    Args:
-        winds: (N, K, 3) float32 — seasonal wind velocity vectors (m/s).
-        sea_distance_to_coast_km: (N,) float — distance from each face to the
-            nearest coast (from :func:`compute_sea_distance_to_coast`).
-
-    Returns:
-        (N,) float32 multiplier ≥ 1.0; 1.0 at optimal speed or near the coast.
+    An inverted Gaussian of width ``speed_width`` around ``optimal_speed`` m/s, peaking at
+    ``1 + penalty_strength``; blended to 1 within ``coast_blend_km`` of the coast.  ``winds`` is
+    (N, K, 3) m/s; distances from :func:`compute_sea_distance_to_coast`.
     """
     winds_f = np.asarray(winds, dtype=np.float64)           # (N, K, 3)
     speed = np.linalg.norm(winds_f, axis=2).mean(axis=1)   # (N,) m/s, mean across seasons
@@ -594,21 +448,9 @@ def compute_wind_mean_dir(
     *,
     coast_blend_km: float = 300.0,
 ) -> np.ndarray:
-    """Coast-blended mean wind direction for use in directional edge costs.
+    """(N, 3) float32 unit mean wind direction scaled by the coast blend (→ 0 near shore).
 
-    Returns the mean wind vector (averaged across seasons) normalised to unit
-    length, then scaled by the same coast-blend factor used in
-    :func:`compute_wind_sea_modifier` so that faces near the shore contribute
-    no directional bias to their edges — coastal routes stay viable regardless
-    of offshore wind patterns.
-
-    Args:
-        winds: (N, K, 3) float32 — seasonal wind velocity vectors (m/s).
-        sea_distance_to_coast_km: (N,) float.
-
-    Returns:
-        (N, 3) float32 unit-direction vectors scaled by coastal blend weight
-        (magnitude approaches 0 near the coast).
+    Uses the same blend as :func:`compute_wind_sea_modifier` so coastal routes get no wind bias.
     """
     winds_f = np.asarray(winds, dtype=np.float64)
     mean_wind = winds_f.mean(axis=1)                         # (N, 3)
@@ -630,27 +472,14 @@ def compute_sea_cost(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Per-face sea cost: coastal water cheapest, open ocean dearer, straits discounted.
 
-    Cost ramps linearly from ``params.coastal_cost`` at the shore to
-    ``params.open_ocean_cost`` at ``params.open_ocean_distance_km`` and beyond;
-    strait faces are multiplied by ``params.strait_discount`` (near-free
-    crossings). Optional modifiers stacked on top in order:
-
-    * **Ice**: fraction of frozen seasons × ``ice_penalty_strength`` — polar seas.
-    * **Wind speed**: bell-curve centred on ``wind_optimal_speed`` m/s — too calm
-      or too stormy costs more; blended to 1.0 near the coast.
-
-    The directional wind term (cheap downwind, dear upwind) is *not* applied here
-    — it lives in :func:`build_sea_edge_costs` because it depends on travel direction.
-
-    Pass distances from :func:`compute_sea_distance_to_coast` (open-ocean → coast),
-    *not* the climate stage's land → ocean ``distance_to_coast``.
-
-    ``is_water`` is the sailable mask — ocean ∪ lake ∪ navigable rivers; lakes and
-    navigable rivers read as coastal (distance ~0) and so come out cheap.
+    Ramps linearly from ``coastal_cost`` at the shore to ``open_ocean_cost`` at ``open_ocean_distance_km``;
+    straits × ``strait_discount``; then optional ice and wind-speed multipliers.  The directional wind
+    term lives in :func:`build_sea_edge_costs`.  Distances must come from
+    :func:`compute_sea_distance_to_coast`, not climate's ``distance_to_coast``.  ``is_water`` is the
+    sailable mask (ocean ∪ lake ∪ navigable rivers).
 
     Returns:
-        (sea_base_cost (N,) float32, sea_passable (N,) bool). Non-sailable land
-        faces are impassable; their cost is left at 0 (gate via the mask).
+        (sea_base_cost (N,) float32, 0 on land; sea_passable (N,) bool).
     """
     p = params
     sea_passable = np.asarray(is_water, dtype=bool)
@@ -693,26 +522,11 @@ def build_sea_edge_costs(
     wind_dir: np.ndarray | None = None,
     direction_strength: float = 0.4,
 ) -> List[np.ndarray]:
-    """Per-edge sea cost with optional directional wind term.
+    """Per-edge sea cost (mirrors ``mesh.face_adjacency``), with an optional directional wind term.
 
-    Base cost = mean of endpoint face costs (``inf`` if either is land).
-
-    If ``wind_dir`` is provided (coast-blended mean wind direction from
-    :func:`compute_wind_mean_dir`), a directional multiplier is applied:
-    travelling *downwind* (step aligned with the wind) is cheaper; travelling
-    *upwind* is costlier. The multiplier ranges in
-    ``[1 - direction_strength, 1 + direction_strength]`` and is averaged over
-    the wind directions at both endpoint faces. Coastal faces carry near-zero
-    ``wind_dir`` magnitude (pre-blended by the caller) so the directional term
-    naturally fades near the shore.
-
-    Args:
-        wind_dir: (N, 3) float32 — coast-blended unit wind direction per face
-            (magnitude 0 near coast). ``None`` disables the directional term.
-        direction_strength: fractional cost change per unit of wind alignment
-            (0 = no effect, 1 = free downwind / double upwind).
-
-    Mirrors ``mesh.face_adjacency`` like :func:`build_land_edge_costs`.
+    Base = mean of endpoint costs (``inf`` if either is land).  ``wind_dir`` (from
+    :func:`compute_wind_mean_dir`, ~0 near coasts) scales by ``1 - direction_strength · align`` with the
+    endpoints' mean wind: cheaper downwind, dearer upwind.
     """
     src, dst, indptr = _flatten_adjacency(mesh)
     n = len(mesh.faces)

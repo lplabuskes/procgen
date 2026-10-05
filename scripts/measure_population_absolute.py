@@ -1,24 +1,17 @@
 """Measure *absolute* population grounding vs a medieval-tech Earth.
 
-Companion to ``measure_population.py`` (distribution *shape*): this harness checks
-that the realm layer's people-denominated quantities land at plausible
-medieval-Earth scales. Grew out of the investigation in
-``docs/plans/city_population_rework_plan.md``.
+Companion to ``measure_population.py`` (shape): checks that people-denominated
+quantities land at plausible medieval-Earth scales.
 
 Anchors (whole globe, c.1300):
     World total (rural + urban):   ~300-400 M people
     Largest city:                  ~50k-500k (Constantinople ~400k, Paris ~200k)
-    Urban fraction:                ~2-6 % of total population in *major cities*.
-                                   Full medieval urbanization (every town >5k) ran
-                                   ~5-10 %, but the towns below this layer's
-                                   resolution are deliberately unmodeled (their
-                                   surplus share is reserved — see plan §5).
+    Urban fraction:                ~2-6 % in major cities (smaller towns are not
+                                   in this layer)
     Trade-fed cities:              at least one top-10 city should draw most of
-                                   its food from trade (the Constantinople test —
-                                   structurally impossible pre-rework)
+                                   its food from trade (the Constantinople test)
 
-The physical world is cached per seed in ``saved_worlds/`` (shared with the
-other harnesses); only the realm stage is re-run.
+The physical world is cached per seed in ``saved_worlds/``; only the realm stage is re-run.
 
 Usage:
     python3 scripts/measure_population_absolute.py            # seeds 4, 31, 35
@@ -51,8 +44,7 @@ RESULTS_DIR = Path(__file__).parent / "results"
 JSON_PATH = RESULTS_DIR / "population_absolute_results.json"
 MD_PATH = RESULTS_DIR / "population_absolute_results.md"
 
-# Vetted Earth-like seeds (land fraction ~29%, continent-scale landmasses) —
-# same set as measure_rivers.py.
+# Vetted Earth-like seeds (land ~29%, continent-scale landmasses).
 DEFAULT_SEEDS = [4, 31, 35]
 
 MEDIEVAL_REF = {
@@ -110,8 +102,8 @@ def measure_seed(seed: int, rebuild: bool) -> dict:
     trade_fed_top10 = int(trade_fed[order[:10]].sum()) if pops.size else 0
     band_lo, band_hi = MEDIEVAL_REF["top_city"]
 
-    # Implied D_max for an exact 400 M *rural* total at the current γ, the
-    # fishers and miners held fixed — the direct calibration handle for ``rural_density_max``.
+    # Implied D_max (``rural_density_max``) for exactly 400 M rural at the current γ,
+    # fishers and miners held fixed.
     land = ~IS_WATER.read(mesh)
     fishing_total = float(FISHING_POPULATION.read(mesh)[land].sum()) if FISHING_POPULATION.present(mesh) else 0.0
     mining_total = float(MINING_POPULATION.read(mesh).sum()) if MINING_POPULATION.present(mesh) else 0.0

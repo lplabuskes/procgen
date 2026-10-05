@@ -81,16 +81,9 @@ class RealmParams:
 
 
 class RealmPipeline(Pipeline):
-    """Six-stage pipeline for the human-geography layer.
+    """Six-stage pipeline for the human-geography layer (see module docstring).
 
-    Stages in order: :class:`~realmgen.scoring.builder.ScoringStage` →
-    :class:`~realmgen.placement.builder.PlacementStage` →
-    :class:`~realmgen.population.builder.PopulationStage` →
-    :class:`~realmgen.polity.builder.PolityStage` →
-    :class:`~realmgen.refine.builder.RefineStage` →
-    :class:`~realmgen.towns.builder.TownStage`.  After ``build(ctx)``, each
-    stage stores its results as attributes; ``apply_display`` wires all of them
-    into a ``MapWindow``.
+    Each stage keeps its results as attributes after ``build(ctx)``.
     """
 
     def __init__(self, params: RealmParams | None = None) -> None:

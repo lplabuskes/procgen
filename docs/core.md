@@ -1,103 +1,128 @@
 # Core — Infrastructure and Mesh
 
-Qt-free shared infrastructure every package builds on. The Qt viewers are in [viz.md](viz.md).
+Qt-free shared infrastructure. Qt viewers: [viz.md](viz.md).
 
 ## `core/pipeline.py` — Stage contract and BuildContext
 
-**`BuildContext`** (dataclass): Shared state threaded through every stage's `build`.
-- `world: World` — the container all stages read/write
-- `seed: int | None` — base seed for per-stage RNG fan-out (defaults to `world.seed`; random if both are `None`)
-- `progress: ProgressFn` — optional status callback; called via `ctx.report(msg)`
-- `ctx.mesh` — shorthand property for `ctx.world.mesh`
-- `ctx.rng(name) → np.random.Generator` — deterministic per-name RNG; stable for a given `(seed, name)` pair and independent of call order across stages
+**`BuildContext`** (dataclass), threaded through every `build`:
+- `world: World`; `ctx.mesh` = `ctx.world.mesh`
+- `seed` — base for per-stage RNG fan-out (defaults to `world.seed`; random if both `None`)
+- `progress` — status callback via `ctx.report(msg)`
+- `ctx.rng(name)` — deterministic per-name `Generator`, stable per `(seed, name)`, independent of call order
 
-**`Stage`** (ABC): One unit of world generation. Subclasses must implement `build`; all other hooks default to no-ops.
-- `name: str` — stage identifier
-- `requires / provides: Tuple[Channel, ...]` — declared channel dependencies (for validation, deferred)
-- `build(ctx)` — reads inputs from `ctx`, writes outputs back
-- `register_display(world, reg, *, debug=False)` — adds color schemes/overlays to `DisplayRegistry`
-- `serialize() → dict[str, np.ndarray]` / `load(arrays, ctx)` — persistence hooks
+**`Stage`** (ABC; only `build` required): `name`, `requires` / `provides`
+(channel tuples; validation deferred), `build(ctx)`, `register_display(world,
+reg, *, debug=False)`, `serialize() → dict[str, ndarray]` / `load(arrays, ctx)`.
 
-**`Pipeline`** (subclass of `Stage`): Ordered list of stages run against a shared `BuildContext`. Iterable; `build(ctx)` runs each stage in order and caches `self.world`. Because a `Pipeline` *is* a `Stage`, pipelines nest — its `register_display` / `serialize` / `load` hooks delegate to its children, so an app-level pipeline can hold sub-pipelines (e.g. `GlobePipeline` + `RealmPipeline`) as ordinary stages and build/display/serialize the whole tree in one uniform walk.
-- `apply_display(window, *, debug=False)` — builds **one** `DisplayRegistry` from the whole (recursive) stage tree and wires it into `window` via `viz.mapview.registry.apply_registry` in a single pass (imported lazily so `core` stays Qt-free).
+**`Pipeline`** (a `Stage`): ordered stages over one `BuildContext`; `build` runs
+them and caches `self.world`. Pipelines nest — display/serialize/load delegate to
+children, so an app pipeline holds `GlobePipeline` + `RealmPipeline` as ordinary
+stages. `apply_display(window, *, debug=False)` builds **one** `DisplayRegistry`
+from the whole tree and wires it via `viz.mapview.registry.apply_registry`
+(imported lazily so `core` stays Qt-free).
 
 ## `core/channels.py` — Inter-stage data contract
 
-Stages read and write shared world state through typed channel descriptors instead of magic strings. Each stage exports the channels it produces as module-level constants; downstream stages import those constants, making dependencies explicit and type-checked.
+Typed descriptors instead of magic strings; each stage exports the channels it
+produces as module constants and downstream stages import them.
 
-- **`MetaChannel(name, dtype, default)`**: Per-face scalar in `mesh.face_metadata`. `read(mesh) → (N,) ndarray`; `write(mesh, values)` bulk-sets the key; `present(mesh) → bool`.
-- **`TextureChannel(name, n_channels)`**: `(N, H, W, C)` array in `mesh.face_textures`. Same `present/read/write` API operating on the mesh.
-- **`FeatureChannel(name)`**: Arbitrary Python object in the `World` feature registry (rivers, deposits, settlements, etc.). `present/read/write` operate on a `World` rather than a mesh.
+- `MetaChannel(name, dtype, default)` — per-face scalar in `mesh.face_metadata`; `read(mesh) → (N,)`, `write`, `present`.
+- `TextureChannel(name, n_channels)` — `(N, H, W, C)` in `mesh.face_textures`; same API.
+- `FeatureChannel(name)` — arbitrary object in the `World` feature registry; API on a `World`.
 
 `Channel = Union[MetaChannel, TextureChannel, FeatureChannel]`
 
 ## `core/world.py` — World container
 
-**`World`**: Container for a generated world: a mesh plus a named feature registry. The constructor `World(mesh_params, *, seed, progress)` loads a mesh from the shared cache (`core/mesh_cache.py`), building it on first run. Use `World.from_mesh(mesh)` to wrap an already-built mesh (`seed` is then `None`; `load_world` restores it from the saved `world_seed`).
+`World(mesh_params, *, seed, progress)` loads a mesh from `core/mesh_cache.py`
+(building on first run). `World.from_mesh(mesh)` wraps a built mesh (`seed=None`;
+`load_world` restores it from `world_seed`).
 
-Attributes: `mesh`, `seed` (kept so later stages can derive per-world-deterministic draws — polity scalars, region noise, …), `antimeridian` (the map cut longitude, set by `ElevationBuilder` via `core.antimeridian`).
-
-Feature registry: `add_feature(name, data)`, `get_feature(name, default=None)`, `has_feature(name)`, `remove_feature(name)`, `feature_names()`.
+Attributes: `mesh`, `seed` (for per-world-deterministic draws — polity scalars,
+region noise, …), `antimeridian` (map cut longitude, set by `ElevationBuilder`).
+Features: `add_feature`, `get_feature(name, default=None)`, `has_feature`,
+`remove_feature`, `feature_names`.
 
 ## `core/mesh_cache.py` — Mesh cache
 
-**`MeshParams`** (`@paramclass`): `icosphere_depth`, `n_swaps`, `n_relax`, `stiffness`, `outer_iters` — same parameters as `Mesh.icosphere` + `deregularize` + `mesh_dual`. Exposed in `GlobeParams.mesh`.
+- `MeshParams` (`@paramclass`, `GlobeParams.mesh`): `icosphere_depth`, `n_swaps`, `n_relax`, `stiffness`, `outer_iters` (as `Mesh.icosphere` + `deregularize` + `mesh_dual`).
+- `build(params, cache_dir, n, progress)` — generates `n` (5) deregularized duals into `mesh_cache/` *beside* the repo (`core/../../mesh_cache`). `load_random(seed, cache_dir, n)` picks `seed % n` (random if `None`). `is_populated()`.
+- `World.__init__` builds if unpopulated, then `load_random(seed)`. **Changing `MeshParams` does not rebuild an existing cache.**
 
-**`build(params, cache_dir, n, progress)`**: Generates `n` (5) random deregularized dual meshes and writes them to `mesh_cache/` — the directory *beside* the repo (`core/../../mesh_cache`). Run once; subsequent runs load from cache. **`load_random(seed, cache_dir, n)`**: Loads one mesh deterministically by `seed % n` (a random one when `seed` is `None`). **`is_populated()`** checks the cache.
-
-`World.__init__` calls `mesh_cache.build` when the cache is not populated, then `mesh_cache.load_random(seed)`. Changing `MeshParams` does not rebuild an existing cache.
-
-**Derived geometry.** A loaded mesh carries a `geometry_store` (`_SidecarStore`) that persists its texel positions (`face_texture_positions`) and boundary pixel pairs (`boundary_pixel_pairs`) as `mesh_<i>.<key>.npz` beside the mesh (~40 MB per mesh at `tex_size` 16), so only the first build on each mesh computes them (~1 s). Files are stamped with `GEOMETRY_VERSION` and the mesh file's size/mtime — **bump `GEOMETRY_VERSION` when either computation changes**. Meshes built any other way (`geometry_store is None`) cache in memory only.
+**Derived geometry.** A loaded mesh's `geometry_store` (`_SidecarStore`) persists
+`face_texture_positions` and `boundary_pixel_pairs` as `mesh_<i>.<key>.npz`
+beside it (~40 MB at `tex_size` 16; first build ~1 s). Stamped with
+`GEOMETRY_VERSION` and the mesh file's size/mtime — **bump `GEOMETRY_VERSION` when
+either computation changes**. Other meshes (`geometry_store is None`) cache in
+memory only.
 
 ## `core/persistence.py` — Save / load
 
-Generic, numpy-only slice of persistence. A `.npz` holds `params_json` (the params dataclass tree), the mesh geometry (`mesh_vertices` / `mesh_face_sizes` / `mesh_face_data`), every face texture as `tex_<name>` except display-only `*_rgba` ones, `face_metadata_json`, and whatever each stage's `serialize()` adds.
+`.npz` with `params_json`, mesh geometry (`mesh_vertices` / `mesh_face_sizes` /
+`mesh_face_data`), every face texture as `tex_<name>` except display-only
+`*_rgba`, `face_metadata_json`, plus each stage's `serialize()`.
 
-- `save_world(world, params, stages, path)` — `stages` is any iterable of `Stage` (normally the pipeline)
-- `load_world(path, params_cls) → (params, world, data)` — rebuilds the params (`deep_from_dict`) and a mesh-bearing `World`; the caller runs each stage's `load(data, ctx)`
+- `save_world(world, params, stages, path)`
+- `load_world(path, params_cls) → (params, world, data)` — caller then runs each stage's `load(data, ctx)`
 
-Used by `main.py` (whole app) and `worldgen.save_globe` / `load_globe` (physical world only). No backward compatibility with older saves is kept.
+Used by `main.py` and `worldgen.save_globe` / `load_globe`. No backward
+compatibility.
 
 ## `core/antimeridian.py`
 
-**`find_ideal_antimeridian(mesh, n_samples=360) → float`**: the cut longitude (radians) that minimises land-face crossings when splitting polygons at the antimeridian. Samples 360 candidate longitudes in [−π, π); for each, counts land faces whose vertex longitude span exceeds π after shifting. Among candidates tied for fewest crossings, picks the one farthest from any land face centroid. Falls back to π when the mesh has no `is_ocean` metadata. Stored as `World.antimeridian`; the map views and the region cells all cut there.
+`find_ideal_antimeridian(mesh, n_samples=360) → float` — cut longitude
+minimising land faces crossing it (vertex longitude span > π after shifting);
+ties → farthest from any land centroid; no `is_ocean` → π. Stored as
+`World.antimeridian`; map views and region cells cut there.
 
 ## `core/params.py` — Params utilities
 
-**`paramclass`**: Alias for `@dataclass` — used to mark params dataclasses so the UI dialog can reflect over them.
-
-**`param_field(default, *, label, min, max, step?, hidden?)`**: Declares a leaf param field with UI dialog metadata (`label`, range, optional step, optional hidden flag). Import alias `_f` is convention throughout the codebase.
-
-**`field`**: Re-exported `dataclasses.field` for declaring nested sub-param fields with `metadata={"label": ...}`.
+- `paramclass` — alias for `@dataclass`, marks params for the UI dialog.
+- `param_field(default, *, label, min, max, step?, hidden?)` — leaf field with dialog metadata; conventionally imported as `_f`.
+- `field` — re-exported `dataclasses.field` for nested sub-params (`metadata={"label": ...}`).
 
 ## `core/display.py` — DisplayRegistry
 
-Qt-free surface that stages contribute visualization to. A viz adapter (`viz/mapview/registry.py`) later walks it and wires into a concrete `MapWindow`, keeping Qt/OpenGL out of `core`.
+Qt-free surface stages contribute visuals to; `viz/mapview/registry.py` wires it
+to a `MapWindow`.
 
-- **`DisplayRegistry`**: `add_scheme(name, fn, *, texture?, legend?, recipe?)`, `add_overlay(feature, label, *, checked?, legend?)`, `add_hover(fn, *, refined=(), world_only=False)`. `hover(face_idx, uv, world, local=None)` concatenates all registered contributor fragments; `refined` names the face textures a contributor reports on, and a regional view's `local(keys)` replaces that contributor's fragments in place when it has refined all of them. `world_only` contributors are skipped when `local` is passed (the regional view describes that content itself).
-- **`SchemeSpec`**: `fn: SchemeFn` (callable over face metadata dict → RGBA tuple), optional `texture` (associated per-face RGBA texture name), optional `legend`, optional `recipe`.
-- **`TextureRecipe`**: how a scheme's RGBA texture is made — `fn(textures) -> (N, H, W, 4)` over a `{key: (N, H, W, C)}` dict, the `sources` keys it needs (extras such as water masks are read with `.get`), and `relief` (a regional view may hillshade it). The owning stage builds its world texture with `mesh.set_face_textures(key, recipe(mesh.face_textures))` and registers the same object; the region view reruns it on its refined textures, so both views colour a layer with one function. `available(textures)` checks the sources. The reserved source `POSITIONS_KEY` (`"positions"`) is the `(N, H, W, 3)` unit-sphere texel positions, for layers that are a function of position rather than stored data (the polity fill); the region view supplies it.
-- **`OverlaySpec`**: `feature: str`, `label: str`, `checked: bool`, optional `legend`.
+- **`DisplayRegistry`**: `add_scheme(name, fn, *, texture?, legend?, recipe?)`,
+  `add_overlay(feature, label, *, checked?, legend?)`, `add_hover(fn, *,
+  refined=(), world_only=False)`. `hover(face_idx, uv, world, local=None)`
+  concatenates fragments; with `local`, a contributor whose `refined` texture
+  keys are all refined is replaced in place by `local(keys)`, and `world_only`
+  contributors are skipped.
+- **`SchemeSpec`**: `fn` (face metadata → RGBA), optional `texture`, `legend`,
+  `recipe`.
+- **`TextureRecipe`**: `fn(textures) -> (N, H, W, 4)` over `{key: (N, H, W, C)}`,
+  `sources` (extras like water masks read with `.get`), `relief` (zoomed view may
+  hillshade). The stage builds its world texture with
+  `mesh.set_face_textures(key, recipe(mesh.face_textures))` and registers the
+  same object; the region view reruns it on refined textures — one colouring
+  function for both. `available(textures)` checks sources. Reserved source
+  `POSITIONS_KEY` (`"positions"`): `(N, H, W, 3)` unit-sphere texel positions for
+  layers that are functions of position (polity fill); supplied by the region
+  view.
+- **`OverlaySpec`**: `feature`, `label`, `checked`, optional `legend`.
 
 ## `core/mesh.py` — Mesh data structures
 
-- **`PolygonMesh`**: Base class for any polygon mesh. Pre-computes `face_adjacency`, `face_centroids`, `face_areas`, `face_metadata`, and fan-triangulated render arrays at construction. Key API:
-  - `set_face_colors(colors)`
-  - `set_face_metadata(face_idx, **kw)`
-  - `apply_metadata_channel(key, values)` — bulk-write one metadata key across all faces
-  - `set_face_textures(name, textures, n_channels=4)` — attach `(N, H, W, C)` float32; use `n_channels=1` for data layers like elevation, 4 for RGBA display
-  - `face_texture_positions(h, w)` — unit-sphere 3D position of every texture pixel (grid endpoints, `linspace(0, 1, T)`); over-hanging corner pixels are extrapolated from the nearest fan triangle. Starting point for any per-pixel geographic computation
-  - `face_texture_in_polygon(h, w)` — `(N, H, W)` bool: texels inside the face polygon vs. the square texture's over-hanging corners
-  - `face_tangent_frames()` — raw per-face tangent-plane data for projecting arbitrary 3D points into a face's UV space; `face_uv_to_3d` / `face_3d_to_uv` for single points
-  - `boundary_pixel_pairs(tex_size)` — matched texel pairs across every shared face edge, cached per `tex_size` (seam smoothing, ocean flood, seam metrics); `measure_boundary_texture_jumps(texture)` summarises the jump across them
-
-- **`Mesh`** (subclass of `PolygonMesh`): Triangular mesh.
-  - `icosphere(depth)` — generates a subdivided icosahedron; vertices sorted along the Z-axis for spatial locality
-  - `.deregularize(n_swaps, n_relax, stiffness, outer_iters)` — breaks regularity via random edge-swaps and spring relaxation on the unit sphere
-  - `.mesh_dual()` — returns a `PolygonMesh` by placing new vertices at face centroids (normalized to unit sphere), then for each original vertex builds a CCW-wound face from the centroids of its adjacent faces
-
-**Key invariant:** `Mesh` stores only triangular faces; `PolygonMesh` handles arbitrary polygon faces (e.g., the dual has 12 pentagons + many hexagons). The dual normalizes centroids to the unit sphere.
+- **`PolygonMesh`** — precomputes `face_adjacency`, `face_centroids`,
+  `face_areas`, `face_metadata`, fan-triangulated render arrays.
+  - `set_face_colors`, `set_face_metadata(face_idx, **kw)`, `apply_metadata_channel(key, values)`
+  - `set_face_textures(name, textures, n_channels=4)` — `(N, H, W, C)` float32 (1 for data, 4 for RGBA)
+  - `face_texture_positions(h, w)` — unit-sphere position per texel (grid endpoints, `linspace(0, 1, T)`; over-hanging corners extrapolated from the nearest fan triangle)
+  - `face_texture_in_polygon(h, w)` — `(N, H, W)` bool: inside polygon vs over-hang
+  - `face_tangent_frames()`; `face_uv_to_3d` / `face_3d_to_uv`
+  - `boundary_pixel_pairs(tex_size)` — matched texel pairs across shared edges, cached per size (seam smoothing, ocean flood, seam metrics); `measure_boundary_texture_jumps(texture)`
+- **`Mesh`** (triangles only):
+  - `icosphere(depth)` — vertices sorted along Z for locality
+  - `.deregularize(n_swaps, n_relax, stiffness, outer_iters)` — random edge swaps + spring relaxation
+  - `.mesh_dual()` → `PolygonMesh`: vertices at face centroids (normalised to the sphere), one CCW face per original vertex (12 pentagons + hexagons)
 
 ## Tangent frame convention
 
-Per-face tangent-plane axes are `u_axis = cross(z, n)`, `v_axis = cross(n, u_axis)` (with `x` in place of `z` above ~64° latitude, `|n_z| ≥ 0.9`), so the texture U-axis is geographic east and V-axis is geographic north for ~90% of faces. Any D4 grid-walk algorithm will produce N-S/E-W-biased output; `rivers.py` avoids this with D-infinity accumulation and Laplacian-smoothed polylines rather than grid-snapped steps.
+`u_axis = cross(z, n)`, `v_axis = cross(n, u_axis)` (`x` in place of `z` when
+`|n_z| ≥ 0.9`, above ~64°), so U is east and V north for ~90% of faces. D4 grid
+walks produce N-S/E-W bias; `rivers.py` avoids it with D-infinity accumulation
+and smoothed polylines.

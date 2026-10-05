@@ -1,16 +1,11 @@
 """City footprints: the built-up ground each city covers on a local map.
 
-A city of ``P`` people covers ``P / density`` of dry ground (``density_per_ha``,
-~200 people/ha for a walled medieval city).  Its footprint is that many local
-texels (~0.12 km² each), claimed outward from the city's site in order of
-distance — lightly jittered (``edge_roughness``) so the edge is ragged rather
-than a staircase circle.  Water is never claimed, so a footprint wraps a bay or
-lake shore instead of spilling into it; the local rivers are vector lines, not
-texels, so a city spans its river as real ones did.  Larger cities claim first
-and no texel belongs to two cities.
+A city of ``P`` people claims ``P / density_per_ha`` of dry texels (~200 people/ha,
+walled medieval), nearest first with jittered distance (``edge_roughness``) for a
+ragged edge.  Water is never claimed; rivers are vectors, so a city spans its
+river.  Larger cities claim first; no texel has two owners.
 
-Display-only: nothing downstream reads the footprints, and the city keeps its
-people (no rural density is carved out).  Qt-free and deterministic.
+Display-only (no rural density is carved out).  Qt-free and deterministic.
 """
 from __future__ import annotations
 
@@ -23,10 +18,8 @@ from scipy.spatial import KDTree
 from core.params import param_field as _f, paramclass
 from region.upsample import EARTH_RADIUS_KM, RegionFields
 
-# km² per hectare.
 _KM2_PER_HA = 0.01
-# RNG stream tag for the edge jitter.
-_CITY_STREAM = 13
+_CITY_STREAM = 13   # RNG stream tag for the edge jitter
 
 
 @paramclass
@@ -39,11 +32,7 @@ class CityParams:
 
 @dataclass
 class CityFootprints:
-    """The texels each of a local map's cities covers.
-
-    ``owner`` indexes the map's cities (``LocalMap.city_index`` order); each
-    claimed texel also has its four corners on the sphere, for drawing.
-    """
+    """The texels each of a local map's cities covers; ``owner`` is in ``LocalMap.city_index`` order."""
 
     owner: np.ndarray        # (M, T, T) int32, -1 where no city stands
     city: np.ndarray         # (K,) int — owning city of each claimed texel
@@ -101,8 +90,7 @@ def city_footprints(
 
     for c in np.argsort(-population, kind="stable"):
         n = max(1, int(round(float(population[c]) / density_km2 / texel_km2)))
-        # Search a disc comfortably wider than the footprint: water, jitter and
-        # a neighbour's claim can each push the edge out.
+        # Search well beyond the footprint: water, jitter and neighbours push the edge out.
         r_km = np.sqrt(n * texel_km2 / np.pi)
         reach = (3.0 * r_km + 2.0 * np.sqrt(texel_km2)) * (1.0 + float(params.edge_roughness)) / EARTH_RADIUS_KM
         near = np.asarray(tree.query_ball_point(positions[c], reach), dtype=np.int64)

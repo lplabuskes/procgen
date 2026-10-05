@@ -1,23 +1,10 @@
-"""Trade-driven settlement spawning.
+"""Trade-driven settlement spawning during the population relaxation passes.
 
-Three mechanisms add settlements during the population relaxation phase:
-
-1. **Hub spawning** — faces with very high trade flow and no nearby settlement.
-   Represents natural chokepoints or junctions where commerce concentrates.
-   Always placed as towns (tier 2).
-
-2. **Waypoint spawning** — intermediate stops on long inter-settlement routes.
-   When the cost-distance between two settlements exceeds ``waypoint_min_cost``,
-   the highest-scoring eligible face in the middle 60% of that route gets a
-   village (tier 3).
-
-3. **Port spawning** — goods move between land and water only at settlements,
-   but while the settlements relax, trade may land anywhere at a steep cost.
-   Where a lot of it still does, a port town (tier 2) is founded, and on the
-   next pass that landing is an ordinary port.
-
-Returned settlements are added to the settlement list *before* the relaxation
-loop runs, so they participate in all subsequent trade and population passes.
+1. **Hubs** — high-flow faces with no nearby settlement become towns (tier 2).
+2. **Ports** — fallback landings that still carry heavy flow become port towns
+   (tier 2); on the next pass the landing is an ordinary port.
+3. **Waypoints** — routes longer than ``waypoint_min_cost`` get a village (tier 3)
+   at the best eligible face in their middle 60%.
 """
 from __future__ import annotations
 
@@ -45,11 +32,10 @@ def _next_waypoint(
     """``(position in order, face)`` of the next pair from ``order[start:]`` that
     gets a waypoint, or ``(len(order), -1)`` when none does.
 
-    Each pair's path is walked back from its destination over the source's
-    predecessor row (scipy's -9999 sentinel, or more than ``max_steps`` faces,
-    means no path).  Its waypoint is the face of the path's middle 60% by cost
-    from the source — not forbidden, at least ``min_suit`` suitable — with the
-    highest ``suit × flow / max_flow``; the first along the path on ties.
+    Each path is walked back from its destination over the source's predecessor
+    row (a negative sentinel or > ``max_steps`` faces means no path).  The waypoint
+    is the eligible face in the middle 60% by cost with the highest
+    ``suit × flow / max_flow``; the first along the path on ties.
     """
     for pos in range(start, len(order)):
         i = order[pos]
@@ -101,35 +87,14 @@ def spawn_trade_settlements(
     """Return newly spawned trade-driven settlements (caller merges the list).
 
     Args:
-        n_faces: mesh face count N.
-        settlements: existing settlement list — not mutated.
-        face_flow: ``(N,)`` float — cumulative trade flow per face from the
-            initial trade pass.
-        suitability: ``(N,)`` float — per-face suitability score in [0, 1].
-        is_water: ``(N,)`` bool — ocean ∪ lake mask; no settlement placed here.
-        cost_graph: ``(N, N)`` land-cost CSR matrix (used undirected).
+        cost_graph: ``(N, N)`` land-cost CSR (used undirected).
         centroids: ``(N, 3)`` unit-sphere face centroids.
-        tier_configs: ``[(exclusion, threshold, initial_population), ...]`` —
-            index 2 = town (used for hubs), index 3 = village (used for
-            waypoints).
-        hub_spawn_quantile: percentile of positive face flows above which a
-            face is a hub candidate.
-        hub_min_suitability: minimum suitability for hub placement.
-        hub_exclusion: minimum cost-distance from any settlement to spawn a hub.
-        waypoint_min_cost: minimum inter-settlement cost-distance to insert a
-            waypoint on the route.
-        waypoint_min_suitability: minimum suitability for waypoint placement.
-        waypoint_exclusion: minimum cost-distance from any settlement for a
-            waypoint.
-        landing_flow: ``(N,)`` float — trade flow over fallback landings (land
-            faces that are not ports); ``None`` spawns no ports.
-        port_spawn_quantile: a landing founds a port when its flow reaches this
-            quantile of the positive face flows.
-        port_min_suitability: minimum suitability for a port.
-        port_exclusion: minimum cost-distance from any settlement for a port.
-
-    Returns:
-        New :class:`~realmgen.placement.types.Settlement` objects to merge.
+        tier_configs: ``[(exclusion, threshold, initial_population), ...]``;
+            index 2 (town) seeds hubs and ports, index 3 (village) waypoints.
+        hub_spawn_quantile / port_spawn_quantile: quantile of positive face flows
+            a face's flow (landing flow for ports) must reach.
+        *_exclusion: minimum cost-distance from any settlement.
+        landing_flow: ``(N,)`` flow over fallback landings; ``None`` spawns no ports.
     """
     if not settlements:
         return []
@@ -140,11 +105,9 @@ def spawn_trade_settlements(
 
     s_nodes = np.array([s.face_id for s in settlements], dtype=np.int32)
 
-    # Multi-source Dijkstra from all existing settlements.
     dist, pred = sp_dijkstra(
         cost_graph, directed=False, indices=s_nodes, return_predecessors=True,
     )
-    # dist: (S, N), pred: (S, N)
     min_dist = dist.min(axis=0)  # (N,) — distance to nearest existing settlement
 
     spawned: List[Settlement] = []
@@ -157,7 +120,6 @@ def spawn_trade_settlements(
     if positive_flow.size > 0:
         hub_threshold = float(np.quantile(positive_flow, hub_spawn_quantile))
 
-        # Forbidden: water, or too close to any existing settlement.
         forbidden = water | (min_dist < hub_exclusion)
 
         candidates = np.where(
@@ -177,7 +139,6 @@ def spawn_trade_settlements(
                 score=float(flow[int(face_id)]),
                 population=hub_initial_pop,
             ))
-            # Expand forbidden zone to prevent clustering of new hubs.
             d_from_hub = sp_dijkstra(
                 cost_graph, directed=False,
                 indices=[int(face_id)], return_predecessors=False, limit=hub_exclusion,
@@ -221,19 +182,16 @@ def spawn_trade_settlements(
 
     all_nodes = np.array([s.face_id for s in combined], dtype=np.int32)
 
-    # Full Dijkstra from combined settlement list for inter-settlement distances.
     dist2, pred2 = sp_dijkstra(
         cost_graph, directed=False, indices=all_nodes, return_predecessors=True,
     )
 
-    # Forbidden zone for waypoints: water or too close to any settlement.
     min_dist2 = dist2.min(axis=0)
     forbidden_wp = water | (min_dist2 < waypoint_exclusion)
 
     max_flow = float(flow.max()) if flow.max() > 0 else 1.0
 
-    # Collect long pairs, process longest first so the most important routes
-    # get first pick of candidate faces.
+    # Longest routes first, so they get first pick of candidate faces.
     n_combined = len(combined)
     pair_dist = dist2[:, all_nodes]                                   # (S, S)
     k_src, k_dst = np.triu_indices(n_combined, k=1)
@@ -259,7 +217,6 @@ def spawn_trade_settlements(
             score=float(suit[int(best)]),
             population=wp_initial_pop,
         ))
-        # Mark vicinity of the new waypoint as forbidden for future waypoints.
         d_from_wp = sp_dijkstra(
             cost_graph, directed=False,
             indices=[int(best)], return_predecessors=False, limit=waypoint_exclusion,

@@ -26,14 +26,11 @@ class RiverSegment:
 
 @dataclass
 class StreamNetwork:
-    """The drainage network down to a stream threshold far below the rivers'.
+    """The rivers' single-receiver accumulation tree, cut at a far lower stream threshold.
 
-    A sparse view of the single-receiver accumulation tree the rivers are cut
-    from: every texel carrying at least the stream threshold of flow (a
-    *channel*), plus the texels those drain into (sea, endorheic lakes), as flat
-    node ids ``face·H·W + row·W + col`` of the face texture grid. ``receiver`` is
-    an index into these arrays (-1 at an outlet or where the tree leaves the
-    network). The rivers are the part of it above the river threshold.
+    Holds every channel texel plus the texels they drain into (sea, endorheic
+    lakes), as flat ids ``face·H·W + row·W + col``.  ``receiver`` indexes these
+    arrays (-1 at an outlet or where the tree leaves the network).
     """
 
     nodes: np.ndarray        # (K,) int64 flat texel id
@@ -94,10 +91,7 @@ def laplacian_smooth_sphere(
     iterations: int = 8,
     alpha: float = 0.5,
 ) -> List[np.ndarray]:
-    """Laplacian smoothing on the unit sphere; endpoints pinned.
-
-    Interior points pulled toward neighbour midpoint by alpha and re-projected each iteration.
-    """
+    """Laplacian smoothing on the unit sphere, re-projecting each iteration; endpoints pinned."""
     if len(polyline) < 3:
         return [p.astype(np.float32, copy=True) for p in polyline]
 

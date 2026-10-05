@@ -1,16 +1,10 @@
-"""Atmospheric moisture transport and humidity model.
+"""Atmospheric moisture transport: SST-driven evaporation advected along seasonal winds.
 
-Replaces the parameterised zonal precipitation baselines and continentality
-decay with an SST-driven evaporation source advected along seasonal winds.
-Continental drying, ITCZ convergence, and rain shadows all emerge from the
-transport physics rather than per-parameter tuning.
+Continental drying, ITCZ convergence and rain shadows emerge from transport:
 
-Pipeline
---------
 1. ``evaporation_source`` — ocean faces emit moisture proportional to SST.
-2. ``advect_moisture``    — conservative Jacobi transport along seasonal wind
-                            vectors; a background decay rate acts as the
-                            precipitation sink that dries continental interiors.
+2. ``advect_moisture``    — Jacobi transport along wind; a background decay
+                            is the precipitation sink.
 3. ``moisture_to_precipitation`` — q_air × orographic factor × scale → mm/season.
 """
 from __future__ import annotations
@@ -42,16 +36,13 @@ def evaporation_source(
 ) -> np.ndarray:
     """Moisture emission rate for ocean faces; zero on land.
 
-    The temperature factor is linear in [−25 °C, 27 °C], giving stronger
-    evaporation from warm tropical oceans and negligible evaporation from cold
-    polar seas.  Land faces are zeroed regardless of temperature.
+    Temperature factor is linear over [−25 °C, 27 °C].
 
     Args:
         face_temps_c:     (N, K) seasonal face temperatures in °C.
         face_elev_km:     (N,) mean face elevation in km.
         evaporation_scale: Global wetness multiplier (1.0 = Earth-like default).
-        is_ocean:         Optional (N,) bool override. When provided, replaces
-                          the elevation-based ocean test.
+        is_ocean:         Optional (N,) bool; replaces the elevation-based ocean test.
 
     Returns:
         (N, K) float32 dimensionless moisture availability in [0, evaporation_scale].
@@ -71,10 +62,8 @@ def _build_wind_edges(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Outgoing advection edges for one season.
 
-    An edge (i → j) exists when the wind vector at face i has a positive
-    component in the direction i→j.  Outgoing weights are normalised to sum
-    to 1 per source face so that ``transport_step × q`` is distributed among
-    all downwind neighbours in proportion to their directional flux.
+    Edge i → j exists when wind at i has a positive component along i→j;
+    weights are that flux, normalised to sum to 1 per source face.
 
     Returns:
         (src, dst, weight) int32 / int32 / float32 arrays.
@@ -129,29 +118,18 @@ def advect_moisture(
 ) -> np.ndarray:
     """Advect atmospheric moisture to near-steady-state along seasonal winds.
 
-    Each iteration:
-      1. Each face sends ``transport_step × q`` to its downwind neighbours
-         (distributed by normalised flux weight) and loses that amount locally.
-      2. Background precipitation removes ``decay_rate × q`` from every face.
-      3. Ocean faces are clamped back to their evaporation source, replenishing
-         moisture lost to advection and decay (continuous evaporation).
-
-    Continentality drying emerges because inland faces receive decreasing
-    amounts each hop; convergent zones (ITCZ) accumulate moisture from multiple
-    source directions; divergent zones (horse latitudes, anticyclones) dry out
-    because outflow exceeds inflow.
+    Each iteration: every face sends ``transport_step × q`` downwind, loses
+    ``decay_rate × q`` to precipitation, and ocean faces are topped back up to
+    their evaporation source.
 
     Args:
         evaporation:      (N, K) source strengths from ``evaporation_source``.
         face_centroids:   (N, 3) unit-sphere centroids.
         face_adjacency:   adjacency list from ``PolygonMesh``.
         winds:            (N, K, 3) seasonal wind vectors in m/s.
-        n_iter:           Jacobi iterations; 200 reaches steady state on a
-                          depth-4 icosphere dual (~10 k faces).
-        decay_rate:       Background precipitation fraction removed per step;
-                          controls how quickly moisture declines inland.
-        _transport_step:  Fraction of each face's moisture moved per step.
-                          Kept at 0.5 for stability (CFL < 1); not a tuning knob.
+        n_iter:           Jacobi iterations (200 ≈ steady state at ~10 k faces).
+        decay_rate:       Fraction removed per step; sets inland drying rate.
+        _transport_step:  Fraction moved per step; 0.5 for stability (CFL < 1), not a knob.
 
     Returns:
         (N, K) float32 equilibrium specific humidity (dimensionless).
@@ -163,7 +141,7 @@ def advect_moisture(
     for k in range(K):
         src, dst, w = _build_wind_edges(face_centroids, face_adjacency, winds[:, k, :])
         evap_k = evaporation[:, k]            # (N,)
-        q_k = evap_k.copy()                   # initialise at source values
+        q_k = evap_k.copy()
 
         q_air[:, k] = _advect_season(
             q_k, evap_k, src, dst, w, is_ocean, int(n_iter),
@@ -177,9 +155,7 @@ def advect_moisture(
 def _advect_season(q, evap, src, dst, w, is_ocean, n_iter, step, keep):  # pragma: no cover - compiled
     """``n_iter`` Jacobi transport steps of one season (see :func:`advect_moisture`).
 
-    Each step, in the field's own precision: every face sends ``step × q``
-    downwind (split by ``w``, added in edge order), keeps the rest, loses
-    ``1 − keep`` to precipitation, and ocean faces are topped back up to ``evap``.
+    Runs in the field's own precision, adding in edge order.
     """
     n = q.shape[0]
     for _ in range(n_iter):
@@ -203,13 +179,10 @@ def smooth_humidity(
 ) -> np.ndarray:
     """Laplacian graph smoothing of the humidity field.
 
-    Blends each face toward the mean of its immediate neighbours, diffusing
-    ITCZ stripes and softening face-edge discontinuities in the biome map.
+    Diffuses ITCZ stripes and softens face-edge discontinuities in the biome map.
 
     Args:
         q_air:          (N, K) equilibrium humidity from advect_moisture.
-        face_adjacency: adjacency list from PolygonMesh.
-        n_passes:       smoothing iterations.
         alpha:          neighbour-mean blend weight (0 = no change, 1 = full replace).
 
     Returns:
@@ -248,19 +221,7 @@ def per_pixel_humidity(
     mesh,
     tex_size: int,
 ) -> np.ndarray:
-    """Rasterize face-level humidity to per-pixel texture via shared-vertex barycentric interpolation.
-
-    Face humidity values are averaged onto shared vertices so adjacent faces
-    interpolate from the same boundary values, eliminating hard seams.
-
-    Args:
-        q_air:    (N, K) smoothed humidity from smooth_humidity.
-        mesh:     PolygonMesh.
-        tex_size: Output texture resolution (H = W = tex_size).
-
-    Returns:
-        (N, H, W, K) float32.
-    """
+    """Rasterize (N, K) face humidity to (N, H, W, K) float32 via shared-vertex interpolation."""
     from worldgen.geology.elevation import rasterize_face_values, smooth_texture_seams
 
     h_tex = rasterize_face_values(mesh, q_air.astype(np.float64), tex_size)  # (N, H, W, K)
@@ -277,10 +238,7 @@ def moisture_to_precipitation(
 ) -> np.ndarray:
     """Convert equilibrium humidity to face-level precipitation (mm/season).
 
-    Applies an orographic enhancement factor identical to the old model
-    (``exp(k × wind·∇h)``) so windward slopes receive extra precipitation.
-    Divides the annual-scale constant by 4 for per-season output to stay
-    consistent with the rest of the climate pipeline.
+    Orographic enhancement ``exp(k × wind·∇h)`` on windward slopes.
 
     Args:
         q_air:               (N, K) from ``advect_moisture``.

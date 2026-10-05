@@ -5,11 +5,9 @@ Usage:
     python3 scripts/measure_climate_seams.py 1 2 3            # specific seeds
     python3 scripts/measure_climate_seams.py --random 5       # 5 random seeds
 
-For each seed, runs the full elevation + climate pipeline (no hydrology) and
-reports mean/median/RMS/max boundary jump for both temperature (°C) and
-precipitation (mm/season).  The jump at each matched seam-pixel pair is the
-mean absolute difference averaged across all 4 seasons.  Use this to quantify
-how much of a hard per-face edge remains after the IDW smoothing step.
+Runs elevation + climate (no hydrology) and reports mean/median/RMS/max boundary
+jump for temperature (°C) and precipitation (mm/season), each pair's jump averaged
+over the 4 seasons — what remains of per-face edges after IDW smoothing.
 """
 from __future__ import annotations
 

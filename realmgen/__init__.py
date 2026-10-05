@@ -1,7 +1,4 @@
-"""Human geography generation (realmgen) — settlements, trade, polities, military.
+"""Human geography generation (realmgen) — settlements, trade, polities.
 
-Downstream of the physical worldgen pipeline. Takes a fully-built :class:`Globe`
-and attaches human geography features. Treats the physical world as read-only.
-
-Current stage: suitability scorer (Stage 1 partial).
+Runs on a fully-built world and treats the physical layers as read-only.
 """

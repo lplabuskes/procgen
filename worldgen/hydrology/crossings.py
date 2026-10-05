@@ -1,9 +1,4 @@
-"""Great-circle arc crossing detection and self-crossing removal.
-
-Public API:
-    crossing_pairs(p1_a, p2_a, p1_b, p2_b) -> list of (si_a, si_b, t_a, t_b, cross_pt)
-    resolve_self_crossings(rivers) -> List[River]
-"""
+"""Great-circle arc crossing detection and self-crossing removal."""
 from __future__ import annotations
 
 from typing import List, Optional, Tuple
@@ -28,9 +23,8 @@ def crossing_pairs(
 ) -> List[Tuple[int, int, float, float, np.ndarray]]:
     """Vectorized great-circle crossing detection.
 
-    Returns list of (si_a, si_b, t_a, t_b, cross_pt) — per sign of the
-    crossing point, in row-major (si_a, si_b) order.  ``pair_mask`` ``(Na, Nb)``
-    limits the test to the pairs it marks.
+    Returns (si_a, si_b, t_a, t_b, cross_pt) per sign of the crossing point, in
+    row-major (si_a, si_b) order.  ``pair_mask`` ``(Na, Nb)`` limits the pairs tested.
     """
     n_a = np.cross(p1_a, p2_a)                        # (Na, 3)
     n_b = np.cross(p1_b, p2_b)                        # (Nb, 3)
@@ -45,7 +39,7 @@ def crossing_pairs(
         safe_len = np.where(valid, d_len, 1.0)
         c = sign * d / safe_len[:, :, None]            # (Na, Nb, 3)
 
-        # c on arc A: (p1_a × c)·n_a ≥ 0  AND  (c × p2_a)·n_a ≥ 0
+        # On arc A: (p1_a × c)·n_a ≥ 0 and (c × p2_a)·n_a ≥ 0; likewise B.
         p1a_x_c = np.cross(p1_a[:, None, :], c)       # (Na, Nb, 3)
         c_x_p2a = np.cross(c, p2_a[:, None, :])       # (Na, Nb, 3)
         on_a = (
@@ -54,7 +48,6 @@ def crossing_pairs(
             np.sum(c_x_p2a * n_a[:, None, :], axis=2) >= -1e-6
         )
 
-        # c on arc B: (p1_b × c)·n_b ≥ 0  AND  (c × p2_b)·n_b ≥ 0
         p1b_x_c = np.cross(p1_b[None, :, :], c)       # (Na, Nb, 3)
         c_x_p2b = np.cross(c, p2_b[None, :, :])       # (Na, Nb, 3)
         on_b = (
@@ -85,8 +78,7 @@ _PAIR_BLOCK = 1 << 18
 def resolve_self_crossings(rivers: List[River]) -> List[River]:
     """Remove loops caused by Laplacian smoothing.
 
-    Finds the earliest crossing, excises the detour by splicing upstream of i
-    to downstream of j at the crossing point. Iterates until none remain.
+    Repeatedly splices out the detour at the earliest crossing.
     """
     result: List[River] = []
     for river in rivers:
@@ -100,9 +92,8 @@ def resolve_self_crossings(rivers: List[River]) -> List[River]:
             p1 /= np.maximum(np.linalg.norm(p1, axis=1, keepdims=True), 1e-12)
             p2 /= np.maximum(np.linalg.norm(p2, axis=1, keepdims=True), 1e-12)
 
-            # Every segment i against every later, non-adjacent j, in blocks of
-            # rows; the earliest i with a crossing wins (the last of its hits),
-            # so the first block with one ends the search.
+            # Each i vs later non-adjacent j, in row blocks; the earliest i wins,
+            # so the first block with a hit ends the search.
             best: Optional[Tuple[int, int, float, float, np.ndarray]] = None
             block = max(1, _PAIR_BLOCK // n)
             for lo in range(0, n - 2, block):

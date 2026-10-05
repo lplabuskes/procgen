@@ -1,10 +1,7 @@
 """Polity stage — seeds capitals, runs the forest algorithm, scores tension.
 
-The tree model (``docs/plans/polity_generation_brief.md``, Stages 0-3): seed
-sovereign capitals, project authority over the land + sea cost surfaces, claim
-faces, classify each settlement direct/vassal/independent, recurse for vassal
-sub-territories. The heavy lifting lives in :mod:`realmgen.polity.forest`; this
-stage handles IO, cost graphs, border tension, and display.
+Tree model per ``docs/plans/polity_generation_brief.md``. The algorithm lives in
+:mod:`realmgen.polity.forest`; this stage handles IO, cost graphs, tension and display.
 
 Runs after population and before refine in :class:`~realmgen.builder.RealmPipeline`.
 """
@@ -144,8 +141,7 @@ class PolityStage(Stage):
             if TRADE_FLOW.present(mesh) else np.zeros(n)
         )
         trade_wealth = trade_flow[settlement_faces]
-        # Per-settlement, per-partner trade matrix (S, S) for the Stage-4 loyalty
-        # levers; index-aligned with `settlements`. Absent ⇒ levers no-op.
+        # (S, S) trade matrix for the Stage-4 loyalty levers; absent => levers no-op.
         n_settle = len(settlements)
         trade_attribution = world.get_feature("trade_attribution")
         if trade_attribution is None or np.shape(trade_attribution) != (n_settle, n_settle):
@@ -159,13 +155,11 @@ class PolityStage(Stage):
         )
         land_graph = build_cost_graph(mesh.face_adjacency, land_edge_costs)
 
-        # Build per-face defensibility from values stamped on settlements by PopulationStage.
-        # Only settlement faces are ever read by the forest algorithm; non-settlement faces get 1.0.
+        # Only settlement faces are ever read; the rest stay 1.0.
         defensibility = np.ones(n, dtype=np.float64)
         for s in settlements:
             defensibility[s.face_id] = s.defensibility
 
-        # Stage 0 — seed sovereign capitals (weighted).
         trade_ref = float(trade_wealth.max())
         trade_norm = trade_wealth / trade_ref if trade_ref > 0.0 else np.zeros_like(trade_wealth)
         seed_weights = (
@@ -252,7 +246,7 @@ class PolityStage(Stage):
             )
             return land_base_cost, land_edge_costs, hybrid_graph
 
-        # Fallback when no cost surfaces were built (land-only, no sea channel).
+        # No cost surfaces: land-only, no sea channel.
         base = np.where(is_water, np.inf, 1.5) + danger_scale * danger
         land_edge_costs = [
             np.array([0.5 * (base[i] + base[j]) for j in adj], dtype=np.float64)
@@ -271,7 +265,7 @@ class PolityStage(Stage):
         pos = trade_flow[trade_flow > 0.0]
         flow_ref = float(np.quantile(pos, 0.90)) if pos.size > 0 else 0.0
         norm_flow = trade_flow / flow_ref if flow_ref > 0.0 else trade_flow
-        # Scored on the sovereign partition (top-level borders only).
+        # Sovereign partition only (top-level borders).
         return compute_border_tension(
             mesh.face_adjacency, sovereign_of_face,
             _root_power(polities), land_edge_costs, norm_flow,
@@ -308,10 +302,10 @@ class PolityStage(Stage):
         self, mesh, polities: List[Polity],
         polity_of_face: np.ndarray, is_water: np.ndarray,
     ) -> dict:
-        """Return {depth: np.ndarray shape (N, 6)} with border segment endpoints (xyz, xyz).
+        """``{depth: (M, 6) float32}`` border segments ``(xyz, xyz)``.
 
-        Depth 0 = sovereign borders (between different sovereigns or vs. unclaimed).
-        Depth d > 0 = borders between different depth-d subtrees within the same parent.
+        Depth 0 = sovereign borders (incl. vs unclaimed); depth d = between depth-d
+        subtrees of the same parent.
         """
         if not polities:
             return {}
@@ -320,7 +314,6 @@ class PolityStage(Stage):
         max_depth = max(p.depth for p in polities)
         n = len(polity_of_face)
 
-        # Build root-to-leaf ancestor chain for each polity.
         pol_chain: dict[int, list[int]] = {}
         for pol in polities:
             chain: list[int] = []
@@ -331,8 +324,7 @@ class PolityStage(Stage):
             chain.reverse()
             pol_chain[pol.polity_id] = chain
 
-        # ancestor_at[d, face] = polity_id of the face's ancestor at depth d
-        # (clamped to the deepest ancestor when depth exceeds chain length).
+        # ancestor_at[d, face]: ancestor polity at depth d, clamped to the deepest.
         ancestor_at = np.full((max_depth + 1, n), -1, dtype=np.int32)
         for face_idx in range(n):
             if is_water[face_idx]:
@@ -357,10 +349,8 @@ class PolityStage(Stage):
                     continue
                 if is_water[face_b]:
                     continue
-                # Skip if both unclaimed.
                 if ancestor_at[0, face_a] < 0 and ancestor_at[0, face_b] < 0:
                     continue
-                # Find the shallowest depth where they differ.
                 border_depth = -1
                 for d in range(max_depth + 1):
                     if ancestor_at[d, face_a] != ancestor_at[d, face_b]:
@@ -410,8 +400,7 @@ class PolityStage(Stage):
         if self.polities:
             tex = ("polity_fill" if world is not None
                    and "polity_fill" in world.mesh.face_textures else None)
-            # The refine stage's label field lets a region redraw the fill at its
-            # own resolution (see ``polity_fill_recipe``).
+            # Lets a region redraw the fill at its own resolution.
             field = world.get_feature("polity_label_field") if world is not None else None
             recipe = (polity_fill_recipe(field, self.polities)
                       if tex is not None and field is not None else None)
@@ -461,9 +450,7 @@ class PolityStage(Stage):
                 reg.add_scheme("Authority Field", disp.make_authority_color(mx))
 
     # ── Persistence ───────────────────────────────────────────────────────────
-    # The polity forest is the feature this stage owns; per-face polity/sovereign/
-    # control/tension/authority fields round-trip via metadata, so load() rebuilds
-    # the Polity objects and re-derives the per-face attrs from the restored mesh.
+    # Per-face fields round-trip via metadata; load() rebuilds only the Polity objects.
 
     def serialize(self) -> dict:
         if self.polities:

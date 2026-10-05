@@ -1,18 +1,11 @@
 """Stage 6 — texel-level refinement of realm geometry.
 
-Runs after polity and before towns in :class:`~realmgen.builder.RealmPipeline`.  Purely a geometric
-refinement pass over render outputs (no population/polity recomputation):
+Purely geometric; no population/polity recomputation. Mutates world features:
 
-1. **Settlements** — site each settlement on the best texel of its face (harbour,
-   confluence, river, fertility), no closer than ``city_min_spacing_km`` to a
-   bigger city, mutating ``Settlement.position``.
-2. **Trade routes** — remap any route endpoint that coincided with a moved
-   settlement to its refined position (same connections, adjusted geometry).
-3. **Polity borders** — replace the angular per-edge border soup with continuous,
-   Chaikin-smoothed polylines, and build a texel-resolution, authority-weighted
-   polity *fill* texture (attached to the "Polities" map mode).
-
-All outputs are mutated in place on the existing world features.
+1. **Settlements**: sited on the best texel of their face, at least
+   ``city_min_spacing_km`` from a bigger city.
+2. **Trade routes**: endpoints remapped to moved settlements.
+3. **Polity borders**: smoothed polylines plus the texel "Polities" fill texture.
 """
 from __future__ import annotations
 
@@ -69,8 +62,7 @@ class RefineStage(Stage):
 
     def __init__(self, params: RefineParams | None = None) -> None:
         self.params = params or RefineParams()
-        # Final realm geometry, cached for serialization (refine is the last stage
-        # to touch routes and borders, so these are the final features).
+        # Final routes/borders, cached for serialization.
         self._routes: list | None = None
         self._borders: dict | None = None
 
@@ -103,9 +95,7 @@ class RefineStage(Stage):
             field = self._label_field(world)
             polities = world.get_feature("polities") or []
             if world.has_feature("polity_borders") and field is not None:
-                # One label field — the polity at each point of the sphere — feeds
-                # both the fill (sampled at every texel) and the borders (contoured
-                # on a seamless lattice), so the lines bound the fill.
+                # One label field feeds both fill and borders, so the lines bound the fill.
                 H, W = int(ocean_tex.shape[1]), int(ocean_tex.shape[2])
                 labels = field.texel_labels(
                     mesh.face_texture_positions(H, W), ocean_tex, lake_tex)
@@ -119,14 +109,12 @@ class RefineStage(Stage):
 
             ctx.report(f"  ✦ Refined {len(moved)} settlement position(s) to texel level.")
 
-        # Capture the final realm geometry for serialization regardless of whether
-        # refinement ran (these may be the raw routes/borders from earlier stages).
+        # Captured even if refinement didn't run (raw routes/borders then).
         self._routes = world.get_feature("trade_routes")
         self._borders = world.get_feature("polity_borders")
 
     def _label_field(self, world) -> PolityLabelField | None:
-        """The polity label field, also kept as the ``polity_label_field`` feature
-        so the display can redraw the fill at any resolution; None before polities."""
+        """Build and store the ``polity_label_field`` feature; None before polities."""
         mesh = world.mesh
         polities = world.get_feature("polities") or []
         if not (polities and POLITY_ID.present(mesh) and AUTHORITY.present(mesh)
@@ -148,9 +136,7 @@ class RefineStage(Stage):
         return field
 
     # ── Persistence ───────────────────────────────────────────────────────────
-    # Trade-route and polity-border geometry reach their final form here (routes
-    # remapped, borders smoothed), so this stage owns their round-trip. The
-    # polity_fill RGBA texture persists generically via mesh textures.
+    # Owns the route/border round-trip; polity_fill persists via mesh textures.
 
     def serialize(self) -> dict:
         arrays: dict = {}

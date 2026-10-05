@@ -54,14 +54,12 @@ def classify_textures(temperature_tex: np.ndarray,
                       latitudes_deg: np.ndarray) -> np.ndarray:
     """Vectorised biome classifier over (N, H, W, K) textures.
 
-    The decision tree must be kept in lock-step with `default_biome`; a unit
-    test pins per-pixel agreement.
+    Must stay in lock-step with `default_biome` (a test pins agreement).
 
     Args:
         temperature_tex: (N, H, W, K) float °C.
         precipitation_tex: (N, H, W, K) float mm/season.
-        latitudes_deg: (N,) face latitude in degrees (unused at present, but
-            kept in the signature so swappable classifiers can use it).
+        latitudes_deg: (N,) face latitude in degrees (unused; for swappable classifiers).
 
     Returns:
         (N, H, W, 1) uint8 biome indices.

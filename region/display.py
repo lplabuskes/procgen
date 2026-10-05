@@ -1,11 +1,8 @@
 """RGBA display textures for the region view.
 
-Deliberately thin: the region view offers exactly the world map's layers, under
-the same names, coloured by the same code.  A scheme whose texture has a
-:class:`~core.display.TextureRecipe` is rebuilt from the region's refined
-fields by running that recipe on them — the very function its stage ran on the
-globe's face textures.  Every other layer is read straight off the globe, so a
-region reads as a zoomed-in continuation of it rather than a different map.
+The region view offers exactly the world map's layers.  A scheme with a
+:class:`~core.display.TextureRecipe` is rebuilt by running that recipe on the
+refined fields; every other layer is read straight off the globe.
 """
 from __future__ import annotations
 
@@ -23,11 +20,7 @@ if TYPE_CHECKING:
 
 
 def recipe_inputs(fields: RegionFields) -> dict[str, np.ndarray]:
-    """What a recipe may read here: the refined textures plus the texel positions.
-
-    Positions let a layer that is a function of place on the sphere (the polity
-    fill) be evaluated at the region's own resolution.
-    """
+    """What a recipe may read here: the refined textures plus texel positions (for e.g. the polity fill)."""
     return {**fields.textures, POSITIONS_KEY: fields.positions}
 
 
@@ -41,10 +34,8 @@ def build_layer_texture(
 ) -> np.ndarray:
     """(M, T, T, 4) float32 RGBA for one world-map layer over a refined region.
 
-    A layer with a recipe whose sources the region has refined is rebuilt from
-    them (hillshaded by the refined relief when the recipe asks for it); any
-    other layer is sampled from the global map (``mesh`` plus the scheme's
-    texture or colour function), so a region offers every world-map layer.
+    Rebuilt from refined fields when the recipe allows (hillshaded if it asks),
+    else sampled from the global ``mesh``.
     """
     if has_refined_layer(fields, spec):
         assert spec.recipe is not None
@@ -77,9 +68,8 @@ def sample_global_layer(
 ) -> np.ndarray:
     """(M, T, T, 4) RGBA reading a world-map layer exactly as the globe draws it.
 
-    A per-face RGBA texture is read at each texel's anchor (nearest global
-    texel); otherwise the scheme colours each texel's owning face flat — the
-    same two rendering paths the world map uses.  No detail is invented.
+    A per-face RGBA texture is read at each texel's anchor; otherwise the scheme
+    colours each texel's owning face flat.
     """
     shape = fields.faces.shape
     if texture_key is not None and texture_key in mesh.face_textures:
@@ -103,9 +93,8 @@ def describe_texel(
 ) -> list[str] | None:
     """Status-bar fragments for the refined ``keys`` at one texel.
 
-    Mirrors the world map's hover contributors for those textures (see
-    ``DisplayRegistry.add_hover(refined=...)``); ``None`` when any key is not
-    refined here, so the caller falls back to the global value.
+    Mirrors the world map's hover (``DisplayRegistry.add_hover(refined=...)``);
+    ``None`` when any key is not refined here.
     """
     tex = fields.textures
     if not keys or any(k not in tex for k in keys):
@@ -139,11 +128,8 @@ def hillshade(
 ) -> np.ndarray:
     """Relight ``(M, T, T, 4)`` colours by the slope of the refined elevation.
 
-    Without this the added relief is invisible — a biome or elevation ramp at
-    ~16 km²/texel simply cannot show a 100 m bump.  Gradients are taken inside
-    each hex texture (which over-hangs its hexagon, so the visible area is lit
-    from real neighbours) with the light from the north-west, the cartographic
-    convention.  Pixels under ``water`` (``(M, T, T)`` bool) are left as they are.
+    Light from the north-west; gradients per hex texture.  Pixels under
+    ``water`` (``(M, T, T)`` bool) are left unchanged.
     """
     elev = np.asarray(elevation, dtype=np.float32)[..., 0]
     dz_ds = np.gradient(elev, axis=2) / texel_km     # east-west, columns
@@ -164,11 +150,9 @@ def hillshade(
 def snap_to_land(fields: RegionFields, points: np.ndarray, max_dist: float) -> np.ndarray:
     """Move points that fall on the region's refined water onto its nearest land.
 
-    Settlements are sited on the globe's texels, but the region re-floods the
-    shoreline against its refined relief, which can put a harbour town just
-    offshore. Each such point moves to the nearest in-hexagon land texel of the
-    region within ``max_dist`` (chord on the unit sphere); points on land,
-    outside the cell, or with no land that close are returned unchanged.
+    The refined shoreline can put a harbour town just offshore.  Wet points move
+    to the nearest in-hexagon land texel within ``max_dist`` (chord); others are
+    unchanged.
     """
     points = np.asarray(points, dtype=np.float64).reshape(-1, 3)
     out = points.copy()
@@ -186,8 +170,7 @@ def snap_to_land(fields: RegionFields, points: np.ndarray, max_dist: float) -> n
     land = fields.in_hex & ~water                                   # (M, T, T)
     reach = 2.0 * grid.radius
     for k in np.flatnonzero(wet):
-        # Land texels of the hexes around the point (a hex's texture covers it
-        # alone, so the nearest land may sit in a neighbour's).
+        # Search neighbouring hexes too: the nearest land may be in one.
         d2 = (grid.centers[:, 0] - s[k]) ** 2 + (grid.centers[:, 1] - t[k]) ** 2
         near = np.flatnonzero(d2 <= reach ** 2)
         cand = fields.positions[near][land[near]]

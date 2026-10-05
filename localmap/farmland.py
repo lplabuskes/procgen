@@ -1,32 +1,22 @@
 """Farmland: the fields and gardens around a local map's settlements.
 
-How much ground each settlement farms (medieval rules of thumb):
+Area farmed (medieval rules of thumb):
 
-- **Villages** farm their own fields: ``ha_per_farmer`` (1.5 ha — about 1 ha of
-  cropland per person under three-field rotation, fallow included, plus meadow
-  and pasture) for every villager.
-- **Towns**: about half the townspeople (``town_farming_share``) work the town's
-  own fields; the rest of its food comes from the villages around it.
-- **Mining villages and towns** live off the mine and buy their food: only
-  ``mining_farming_share`` (0.1) of their people farm, so their fields are a
-  narrow band, or none.
-- **Cities** are fed by their trade hinterland, not by fields of their own, so
-  their farmland is a ring of market gardens and orchards
-  ``city_garden_ring_km`` (1.5 km) wide outside their built-up footprint
-  (:mod:`localmap.cities`) — on the map's typical ground; the stretch below,
-  relative to its median, narrows it over poor ground and widens it over good.
+- villages: ``ha_per_farmer`` (1.5 ha: ~1 ha cropland under three-field rotation
+  plus meadow and pasture) per villager;
+- towns: ``town_farming_share`` of their people;
+- mining villages and towns: only ``mining_farming_share`` (they buy food);
+- cities: no fields (fed by trade), just a ``city_garden_ring_km`` ring of market
+  gardens outside the footprint, wider over good ground, narrower over poor.
 
-Fields are claimed texel by texel (~0.12 km² each), outward from each settlement
-like a city's footprint, but preferring good land: a texel's distance is
-stretched by ``1 + fertility_weight·(1 − fertility) + slope_weight·slope +
-forest_weight·forest`` (slope as a fraction of ``slope_saturation``), and
-lightly jittered (``edge_roughness``), so fields fill valleys and skip steep or
-forested ground.  The garden rings go first; then towns and villages claim
-together, cheapest (settlement, texel) pair first, each until its quota is met,
-so neighbours share the ground between them instead of the first-served taking
-it.  Water and built-up city texels are never claimed.
+Texels are claimed by distance stretched by ``1 + fertility_weight·(1 − fertility)
++ slope_weight·slope + forest_weight·forest`` (slope relative to
+``slope_saturation``) and jittered (``edge_roughness``).  Garden rings go first;
+then towns and villages claim together, cheapest (settlement, texel) pair first,
+so neighbours share ground rather than first-served taking it.  Water and
+built-up texels are never claimed.
 
-Display-only and Qt-free; deterministic.
+Display-only, Qt-free, deterministic.
 """
 from __future__ import annotations
 
@@ -47,11 +37,9 @@ except ImportError:  # pragma: no cover - numba is an optional accelerator
     def njit(func=None, **_):  # type: ignore[misc]
         return func if func is not None else (lambda f: f)
 
-# Who a farmland texel belongs to.
 FARM_VILLAGE, FARM_TOWN, FARM_CITY = range(3)
 FARM_KIND_NAMES = ("Village fields", "Town fields", "Market gardens")
-# RGBA fill per kind: fields a translucent wheat, gardens a dark olive (apart from
-# the tier colours a city footprint is drawn in).
+# RGBA per kind: translucent wheat fields, dark olive gardens (distinct from city footprint colours).
 FARM_KIND_COLORS: list[tuple[float, float, float, float]] = [
     (0.93, 0.84, 0.46, 0.55),
     (0.93, 0.84, 0.46, 0.55),
@@ -59,10 +47,8 @@ FARM_KIND_COLORS: list[tuple[float, float, float, float]] = [
 ]
 # ± fraction of brightness each texel varies by, so fields read as a patchwork.
 _PATCHWORK = 0.10
-# km² per hectare.
 _KM2_PER_HA = 0.01
-# RNG stream tag for the edge jitter.
-_FARM_STREAM = 17
+_FARM_STREAM = 17   # RNG stream tag for the edge jitter
 
 
 @paramclass
@@ -81,11 +67,7 @@ class FarmlandParams:
 
 @dataclass
 class Farmland:
-    """The farmland texels of a local map and whose they are.
-
-    ``owner`` indexes the settlements of the kind ``kind`` names, in the order
-    they were passed (the map's villages; its ``town_index`` / ``city_index``).
-    """
+    """A local map's farmland texels; ``owner`` indexes settlements of ``kind`` in the order passed."""
 
     kind: np.ndarray        # (M, T, T) int8 FARM_* code, -1 where not farmed
     owner: np.ndarray       # (M, T, T) int32 settlement index within its kind, -1 where not farmed
@@ -95,8 +77,7 @@ class Farmland:
 
 @njit(cache=True)
 def _claim(order, who, texel, quota, owner):  # pragma: no cover - numba-compiled
-    """Walk (settlement, texel) pairs cheapest first; each free texel goes to the
-    pair's settlement while it still wants ground.  ``owner`` is updated in place."""
+    """Assign free texels over (settlement, texel) pairs cheapest first, up to each quota; ``owner`` in place."""
     claimed = np.zeros(quota.shape[0], dtype=np.int64)
     for k in order:
         s = who[k]
@@ -128,8 +109,7 @@ def place_farmland(
 ) -> Farmland:
     """Claim every settlement's farmland.  See the module docstring.
 
-    ``village_mining`` / ``town_mining`` (bool, per village / town) flag the
-    mining settlements, which farm only ``mining_farming_share`` of their people.
+    ``village_mining`` / ``town_mining``: per-settlement bool mining flags.
     """
     p = params or FarmlandParams()
     shape = local.in_hex.shape
@@ -167,7 +147,7 @@ def place_farmland(
     pos = local.positions.reshape(-1, 3)[cells]
     tree = KDTree(pos)
 
-    # How much farther a texel's poor, steep or wooded ground makes it, jittered.
+    # Distance stretch for poor, steep or wooded ground, jittered.
     tex = local.textures
     stretch = np.ones(cells.size)
     if "fertility" in tex:
@@ -188,8 +168,7 @@ def place_farmland(
     if n_cities and ring > 0 and footprints is not None and len(footprints.city):
         fp_pos = local.positions.reshape(-1, 3)[np.flatnonzero(footprints.owner.reshape(-1) >= 0)]
         fp_city = footprints.owner.reshape(-1)[footprints.owner.reshape(-1) >= 0]
-        # The ring is measured on the map's typical ground (its median stretch):
-        # wider over good land, narrower over poor.
+        # Ring measured relative to the median stretch: wider over good land.
         rel = stretch / float(np.median(stretch))
         d, near = KDTree(fp_pos).query(pos, distance_upper_bound=ring / float(rel.min()) + 1e-12, workers=-1)
         hit = np.isfinite(d)
@@ -202,8 +181,7 @@ def place_farmland(
     s_pos = np.concatenate([v_pos, t_pos])
     s_quota = np.round(np.concatenate([v_target, t_target]) / texel_km2).astype(np.int64)
     if len(s_pos):
-        # Search wide enough that poor ground, the jitter and neighbours can
-        # each push a settlement's fields out.
+        # Search wide enough for poor ground, jitter and neighbours to push fields out.
         r_disc = np.sqrt(np.maximum(s_quota, 1) * texel_km2 / np.pi)
         reach = (3.0 * r_disc + 2.0 * np.sqrt(texel_km2)) * (1.0 + float(p.edge_roughness)) / EARTH_RADIUS_KM
         lists = tree.query_ball_point(s_pos, reach, workers=-1)
@@ -221,7 +199,6 @@ def place_farmland(
         areas[FARM_VILLAGE] = claimed[:len(v_pos)] * texel_km2
         areas[FARM_TOWN] = claimed[len(v_pos):] * texel_km2
 
-    # Back to (kind, index within kind) on the texture grid.
     k = np.full(cells.size, -1, dtype=np.int8)
     o = np.full(cells.size, -1, dtype=np.int32)
     n_v, n_t = len(v_pos), len(t_pos)
@@ -236,9 +213,8 @@ def place_farmland(
 
 
 def farmland_rgba(farmland: Farmland, show: tuple[bool, bool, bool] = (True, True, True)) -> np.ndarray:
-    """``(M, T, T, 4)`` float RGBA of the farmland of the kinds ``show`` picks
-    (villages, towns, cities), transparent elsewhere; each texel's brightness
-    varies a little (a fixed random draw) so the fields read as a patchwork."""
+    """``(M, T, T, 4)`` RGBA of the kinds ``show`` picks (villages, towns, cities),
+    with fixed per-texel brightness jitter for a patchwork look."""
     rgba = np.zeros(farmland.kind.shape + (4,), dtype=np.float32)
     shade = 1.0 + _PATCHWORK * (2.0 * np.random.default_rng(_FARM_STREAM).random(farmland.kind.shape) - 1.0)
     for k, on in enumerate(show):

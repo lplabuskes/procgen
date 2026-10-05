@@ -1,7 +1,4 @@
-"""Placement stage — settlement seeding on the land cost graph.
-
-Params and stage for the second phase of the realm pipeline.
-"""
+"""Placement stage — settlement seeding on the land cost graph (second realm phase)."""
 from __future__ import annotations
 
 from typing import Optional
@@ -29,8 +26,8 @@ class TierParams:
 
 @paramclass
 class SeederParams:
-    # Cities form at nodes — harbors, confluences, passes, straits — not merely
-    # at fertile spots (fertile spots get villages, modeled separately).
+    # Cities form at nodes (harbors, confluences, passes, straits), not merely at
+    # fertile spots, which get villages.
     situational_weight: float = _f(0.55, label="Situational value weight", min=0.0, max=1.0)
     tier0: TierParams = field(
         default_factory=lambda: TierParams(exclusion_radius=25.0, score_threshold=0.45, initial_population=1.0),
@@ -76,7 +73,6 @@ class PlacementStage(Stage):
         situational_value = SITUATIONAL_VALUE.read(mesh)
         centroids = np.asarray(mesh.face_centroids, dtype=np.float64)
 
-        # Optional danger influence.
         danger = np.zeros(n, dtype=np.float32)
         if self.danger_params is not None:
             from worldgen.danger.channels import DANGER_ARRAY

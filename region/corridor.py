@@ -1,12 +1,9 @@
 """Corridor routing on a region raster — shared by the regional rivers and roads.
 
-A world line feature (a river's stem, a trade route) is a fact at the global
-resolution; a region refines only *where exactly* it runs.  Both do it the same
-way: a uniform raster over the region's local ``(s, t)`` frame at a multiple of
-the regional texel spacing, ``margin`` past the cell, from which only the nodes
-some corridor can reach are ever sampled; then, per line, the least-cost
-8-connected path through the nodes within a set distance of its world centreline.
-What "cost" means is the caller's (:func:`route_corridor`'s ``edge_cost``).
+A uniform raster over the region's local ``(s, t)`` frame, ``margin`` past the
+cell, sampled only where some corridor reaches; per world line, the least-cost
+8-connected path within a set distance of its centreline.  The caller supplies
+the cost (:func:`route_corridor`'s ``edge_cost``).
 """
 from __future__ import annotations
 
@@ -39,8 +36,8 @@ EdgeCost = Callable[[np.ndarray, np.ndarray, np.ndarray, np.ndarray], np.ndarray
 class Raster:
     """A uniform ``n × n`` node grid over local ``[lo, lo + (n-1)·step]²``.
 
-    Row 0 is the smallest ``t``.  All per-node arrays are flat ``(n²,)``, but
-    only the ``sampled`` nodes hold data — the ones a corridor can reach.
+    Row 0 is the smallest ``t``.  Per-node arrays are flat ``(n²,)``; only
+    ``sampled`` nodes hold data.
     """
 
     lo: float
@@ -83,9 +80,8 @@ def _hex_texel_lookup(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """``(hex, row, col, covered)`` of the nearest hex texel to each local point.
 
-    Unlike :meth:`RegionHexGrid.texels_at` this reaches past the cell edge,
-    through the hexagons' over-hanging textures; ``covered`` is False only where
-    no texture reaches.
+    Unlike :meth:`RegionHexGrid.texels_at` this reaches past the cell edge via
+    the over-hang; ``covered`` is False where no texture reaches.
     """
     _, hexes = KDTree(grid.centers).query(np.column_stack([s, t]), k=1, workers=-1)
     hexes = np.asarray(hexes, dtype=np.int64)
@@ -104,11 +100,9 @@ def sample_raster(
 ) -> Raster:
     """Read the refined relief, water and ``keys`` onto the ``sampled`` raster nodes.
 
-    Refined values come from the nearest hex texel where a texture covers the
-    node, else from the globe (bilinear); a key the globe does not have (a field
-    refined only regionally) reads the nearest texel, covered or not.  A
-    multi-channel key is summed over its channels (seasonal precipitation →
-    annual).
+    Nearest hex texel where a texture covers the node, else the globe (bilinear);
+    region-only keys always read the nearest texel.  Multi-channel keys are
+    summed (seasonal precipitation → annual).
     """
     grid, tex = fields.grid, fields.tex_size
     idx = np.flatnonzero(sampled)
@@ -198,11 +192,9 @@ def route_corridor(
 ) -> Optional[np.ndarray]:
     """Least-cost raster-node path along one in-raster stretch of a world line.
 
-    The path is confined to nodes within ``radius_nodes`` of the polyline
-    ``(s, t)``.  It starts at the first vertex and ends at the last — or, given
-    ``sinks``, at the cheapest sink node within ``mouth_radius`` of the last
-    vertex (widening the corridor there), stopping at the first such sink it
-    touches.  None when no path exists.
+    Confined to nodes within ``radius_nodes`` of ``(s, t)``; ends at the last
+    vertex, or given ``sinks`` at the cheapest sink within ``mouth_radius`` of
+    it (truncated at the first such sink touched).  None when no path exists.
     """
     n = raster.n
     rows, cols = centreline(raster.lo, raster.step, n, s, t)
@@ -262,8 +254,7 @@ def route_corridor(
     path.reverse()
     local_path = np.asarray(path, dtype=np.int64)
     nodes = sub[local_path]
-    # Stop at the first sink the path touches near its end, however it got
-    # there; one passed further back is travelled through.
+    # Stop at the first sink touched near the end; ones further back are travelled through.
     if sinks is not None:
         hit = np.flatnonzero((sinks[nodes] & near_mouth[rr[local_path], cc[local_path]])[1:])
         if hit.size:

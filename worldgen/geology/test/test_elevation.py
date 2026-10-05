@@ -125,11 +125,9 @@ class TestNoiseAmplitude:
 
 
 class TestPositionContinuity:
-    """Underlying invariant for seamless noise: face_texture_positions must give
-    the same 3D point on either side of a shared edge."""
+    """Seamless-noise invariant: face_texture_positions agree across shared edges."""
 
     def test_positions_match_at_shared_vertices(self):
-        # At exact polygon corners both faces should agree (pixel-perfect).
         mesh = Mesh.icosphere(1).mesh_dual()
         H = W = 32
         positions = mesh.face_texture_positions(H, W)
@@ -140,8 +138,7 @@ class TestPositionContinuity:
             p_a = _bilinear_sample(positions[fa], uv_a_i)
             p_b = _bilinear_sample(positions[fb], uv_b_i)
             max_err = max(max_err, float(np.linalg.norm(p_a - p_b)))
-        # Shared vertices are exact pixel positions on the [0,1]² grid corners
-        # in tangent-plane param space, so tolerance can be tight.
+        # Shared vertices are exact grid corners, so tolerance can be tight.
         assert max_err < 1e-4, f"vertex position discrepancy: {max_err:.6f}"
 
     def test_positions_match_along_shared_edge_interior(self):
@@ -163,8 +160,7 @@ class TestPositionContinuity:
                 if err > max_err:
                     max_err = err
                     worst = (fa, fb, float(t))
-        # Faces in an icosphere(1) dual have angular radius ~30°; sub-percent
-        # absolute distance on the unit sphere ≈ ~0.5° angular agreement.
+        # ~0.5° angular agreement on ~30°-radius faces.
         assert max_err < 0.01, (
             f"edge-interior position discrepancy {max_err:.4f} at "
             f"faces/t={worst}"
@@ -172,14 +168,10 @@ class TestPositionContinuity:
 
 
 class TestNoiseContinuity:
-    """The actual seam test: bilinear-sampled noise values must agree along
-    shared edges between adjacent faces.
+    """Bilinear-sampled noise must agree along shared edges.
 
-    Tolerances are chosen for a depth-2 dual mesh (320 dual faces) — coarser
-    than production (depth-4, 2562 faces) so the test runs fast, but the
-    residual seam after band-limiting scales down further on finer meshes
-    (~3 mm on depth-4). Tolerance budget here is the visibility threshold
-    relative to the regression we're guarding against (~45 mm pre-band-limit).
+    Depth-2 mesh for speed; the residual seam shrinks on finer meshes. Guards
+    against the ~45 mm pre-band-limit seam.
     """
 
     SEAM_TOL_KM = 0.025  # well under the ~45 mm visible seam from the original bug
@@ -233,16 +225,10 @@ class TestNoiseContinuity:
 
 
 class TestElevationTextureContinuity:
-    """Elevation texture values must agree at shared edges.
+    """Elevation texture values must agree at shared edges."""
 
-    compute_elevation_textures stores absolute elevation (not a delta), so we
-    compare the sampled texture value directly on both sides of each shared edge.
-    """
-
-    # Vertex tolerance accounts for bilinear sampling error (UV corners don't land
-    # exactly on pixel centers in a tex_size=32 grid).
-    # Edge tolerance reflects the near-zero residual from barycentric interpolation
-    # (measured ~0.001 km; pre-fix UV-space IDW reached ~1.8 km).
+    # Vertex tolerance covers bilinear sampling error (UV corners off pixel centres).
+    # Edge residual measured ~0.001 km (pre-fix UV-space IDW reached ~1.8 km).
     VERTEX_TOL_KM = 0.1
     EDGE_TOL_KM = 0.01
 
@@ -322,15 +308,10 @@ class _UnionFind:
 
 
 class TestOceanMaskComponents:
-    """Verify every connected component of the ocean mask reaches genuine ocean depth.
+    """Every ocean-mask component must include a pixel below -0.5 km.
 
-    Rationale: the flood-fill in compute_ocean_mask_texture seeds from faces whose
-    max pixel elevation is at or below sea level (0 km). A correctly-functioning
-    mask should therefore contain no spurious component that exists entirely in
-    the [-0.5, 0] km shallow band — every real ocean component must include at
-    least one pixel below -0.5 km. The connectivity used here is independent of
-    the flood-fill implementation: intra-face 4-connectivity plus exact
-    pixel-pixel cross-face matching from _iter_boundary_pixel_pairs.
+    No spurious component may live entirely in the [-0.5, 0] km shallow band.
+    Connectivity is computed independently of the flood-fill implementation.
     """
 
     def test_each_component_reaches_deep_ocean(self):

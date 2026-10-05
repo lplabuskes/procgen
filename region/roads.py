@@ -1,33 +1,21 @@
 """Regional roads — the world's trade routes re-routed over the refined terrain.
 
-The trade stage routes goods over the face graph, so a world route is a chain of
-straight hops between face centroids, ~225 km apart.  Which places trade, over
-which faces, and how much, are world facts.  A region refines only *where the
-road runs* between them:
+World routes are straight hops between face centroids (~225 km); which places
+trade and how much are world facts.  A region refines only where the road runs:
 
-- The world's route edges are chained into polylines at their junctions, and the
-  land chains are re-traced (:func:`region.corridor.route_corridor`) through a
-  corridor ``corridor_face_fraction`` of a face spacing either side of the world
-  line — the uncertainty a face-graph route leaves.
-- The cost is the world's land-cost model evaluated per raster node instead of
-  per face, in the same units: a node's base cost (biome difficulty, forest,
-  and danger × the realm's movement scale) is charged per face-width travelled,
-  climbing is charged ``ruggedness_cost_per_km`` per km of refined relief, and a
-  regional river costs the world's ford penalty to cross and gives its corridor
-  discount to travel along.  Refined water is impassable.  So a road takes the
-  pass and the valley floor, fords rivers where they are small, and keeps out of
-  dangerous forest when there is a way round.
-- Sea legs stay straight.  A port hop (land face → water face) is split at the
-  refined coast: its land part is routed with the chain it continues, the rest
-  is drawn straight out to sea.
-- Only routes the world map draws are re-routed (flow at or above the world's
-  median, the renderer's threshold); the rest are kept as they are, for town
-  siting.  Ends at a settlement land exactly on its marker (moved onto the
-  refined land when the refined shoreline flooded it): ``moved`` carries the
-  cities the region has re-sited (``region/cities.py``) from their world
-  position to their refined one.
+- Route edges are chained into polylines at junctions; land chains are re-traced
+  (:func:`region.corridor.route_corridor`) within ``corridor_face_fraction`` of a
+  face spacing of the world line.
+- Cost is the world's land-cost model per raster node, in the same units: base
+  cost (biome, forest, danger × movement scale) per face-width, plus
+  ``ruggedness_cost_per_km`` per km climbed; regional rivers charge the ford
+  penalty to cross and discount travel along them.  Refined water is impassable.
+- Sea legs stay straight; a port hop is split at the refined coast.
+- Only routes the world map draws (flow ≥ median) are re-routed; the rest are
+  kept for town siting.  Settlement ends land exactly on their markers; ``moved``
+  carries cities re-sited by ``region/cities.py``.
 
-Everything is deterministic.  Routes leaving the raster are cut at its edge.
+Routes leaving the raster are cut at its edge.
 """
 from __future__ import annotations
 
@@ -65,12 +53,10 @@ RouteSegment = tuple[np.ndarray, np.ndarray, float]
 class RegionRoadParams:
     """Tuning for regional road refinement."""
 
-    # Raster spacing as a multiple of the regional texel spacing.  Roads cross
-    # whole faces, so a coarser raster than the rivers' is plenty.
+    # In regional texels; coarser than the rivers' raster, as roads cross whole faces.
     raster_texels: float = _f(2.0, label="Road raster spacing (texels)", min=1.0, max=6.0, step=0.5)
     margin: float = _f(0.08, label="Road raster margin", min=0.0, max=0.3, step=0.01)
-    # Half-width of the corridor a world route may move within, as a fraction of
-    # the face spacing (~225 km at the default mesh).
+    # Corridor half-width as a fraction of the face spacing (~225 km).
     corridor_face_fraction: float = _f(
         0.35, label="Corridor half-width (face spacings)", min=0.05, max=1.0, step=0.05)
     smoothing_iterations: int = _f(6, label="Road smoothing iterations", min=0, max=20)
@@ -81,8 +67,7 @@ class RegionRoads:
     """Regional trade routes, as world-form ``(start, end, flow)`` segments."""
 
     region_id: int
-    # The re-routed land roads and the straight sea legs, drawn in place of the
-    # world's routes.
+    # Re-routed land roads and straight sea legs, drawn in place of the world's.
     segments: list[RouteSegment]
     # World routes below the drawing threshold, kept straight: towns still read them.
     undrawn: list[RouteSegment] = field(default_factory=list)
@@ -94,14 +79,12 @@ class RegionRoads:
     polyline_flows: list[np.ndarray] = field(default_factory=list)
 
 
-# How close (chord) a road end must be to a settlement's old position to follow
-# it: float32 round-off of a saved world, far below a texel.
+# Chord distance for a road end to match a settlement's old position (float32 round-off).
 _MOVE_TOLERANCE = 1e-6
 
 
 def move_points(points: np.ndarray, moved: Optional[tuple[np.ndarray, np.ndarray]]) -> np.ndarray:
-    """``points`` with each one at an ``old`` position of ``moved = (old, new)``
-    replaced by the matching ``new`` one."""
+    """``points`` with any at an ``old`` position of ``moved = (old, new)`` replaced by its ``new``."""
     if moved is None or len(moved[0]) == 0 or len(points) == 0:
         return points
     old, new = (np.asarray(a, dtype=np.float64).reshape(-1, 3) for a in moved)
@@ -123,8 +106,7 @@ def _key(p: np.ndarray) -> tuple[float, float, float]:
 def _river_nodes(rivers: Optional[RegionRivers], fields: RegionFields, raster: Raster) -> tuple[np.ndarray, np.ndarray]:
     """``(n²,)`` flow of the regional river on each raster node (0 off-river).
 
-    Rivers are rasterised 4-connected — a diagonal step marks both corners — so
-    an 8-connected road cannot slip between two diagonal river nodes unfording.
+    Rasterised 4-connected so an 8-connected road cannot slip diagonally across unfording.
     """
     n = raster.n
     flow = np.zeros(n * n)
@@ -157,8 +139,7 @@ def _road_cost(
     raster: Raster, river_flow: np.ndarray, land: "LandCostParams", danger_scale: float, node_km: float,
     face_km: float,
 ):
-    """Per-edge road cost in the world's land-cost units (one face-width step of
-    base cost 1 costs 1)."""
+    """Per-edge road cost in world land-cost units (one face-width step of base cost 1 costs 1)."""
     biome = np.clip(np.rint(raster.values.get("biome", np.full(raster.n ** 2, 3.0))), 0,
                     len(BIOME_TRAVERSAL_COST) - 1).astype(np.int64)
     base = float(land.biome_cost_scale) * BIOME_TRAVERSAL_COST[biome].astype(np.float64)
@@ -235,8 +216,7 @@ def _chains(edges: list[tuple[int, int, float]], n_nodes: int) -> list[tuple[lis
 def _coast_point(
     raster: Raster, fields: RegionFields, land_end: np.ndarray, sea_end: np.ndarray,
 ) -> Optional[np.ndarray]:
-    """Where the straight hop from ``land_end`` to ``sea_end`` first meets refined
-    water, as the last dry raster node before it; None if it never does."""
+    """The last dry raster node before the hop ``land_end`` → ``sea_end`` meets refined water, or None."""
     pts = np.stack([land_end, sea_end])
     s, t, valid = fields.geometry.ecef_to_local(pts)
     if not valid.all():
@@ -278,8 +258,7 @@ def _dry_node(raster: Raster, node: int, radius: float) -> int:
 
 @dataclass
 class _Stretch:
-    """One in-raster stretch of a chain: local vertices, which are real world
-    vertices (the others are cuts at the raster edge), and the hop flows."""
+    """One in-raster stretch of a chain; ``real`` marks world vertices (others are edge cuts)."""
 
     s: np.ndarray
     t: np.ndarray
@@ -337,8 +316,7 @@ def _stretches(
 
 
 def _assign_flows(path: np.ndarray, verts: np.ndarray, flows: np.ndarray) -> np.ndarray:
-    """Per-edge flow along a routed ``path`` (P, 3): each world hop's flow on the
-    stretch between the path points nearest its two ends."""
+    """Per-edge flow along a routed ``path`` (P, 3), each hop's flow between the points nearest its ends."""
     near = np.argmin(np.linalg.norm(path[None, :, :] - verts[:, None, :], axis=2), axis=1)
     near = np.maximum.accumulate(near)
     out = np.full(len(path) - 1, flows[0] if len(flows) else 0.0)
@@ -362,11 +340,9 @@ def build_region_roads(
 ) -> RegionRoads:
     """Re-route the world's trade routes over ``fields``' refined terrain.
 
-    ``land`` and ``danger_scale`` are the world's land-cost tuning and the realm's
-    danger movement scale; ``land_reach`` is how far (chord) a settlement on the
-    refined water is moved onto land (default: six regional texels).
-    ``moved = (old, new)`` moves every route end at an ``old`` position (a
-    settlement's world site) to the matching ``new`` one (where it now stands).
+    ``land_reach`` is how far (chord) a settlement on refined water is moved onto
+    land (default six texels).  ``moved = (old, new)`` maps settlements' world
+    sites to where they now stand.
     """
     from worldgen.cost.builder import LandCostParams
     params = params or RegionRoadParams()
@@ -381,7 +357,6 @@ def build_region_roads(
     spacing = fields.grid.texel_spacing_rad(fields.tex_size)
     land_reach = 6.0 * spacing if land_reach is None else float(land_reach)
 
-    # Only what the map draws is re-routed; the rest is kept for the towns.
     flows = np.array([float(r[2]) for r in routes])
     threshold = float(np.median(flows))
     starts = move_points(np.array([np.asarray(r[0], dtype=np.float64) for r in routes]), moved)
@@ -401,7 +376,7 @@ def build_region_roads(
     if not drawn.any():
         return RegionRoads(region_id=fields.region_id, segments=[], undrawn=undrawn)
 
-    # Land or sea at each hop end, by the world's land-passability of its face.
+    # Land or sea at each hop end, by its face's land-passability.
     cs = globe.get_feature("cost_surfaces")
     sampler = GlobalSampler(mesh)
     idx = np.flatnonzero(drawn)
@@ -412,7 +387,6 @@ def build_region_roads(
     else:
         land0 = land1 = np.ones(len(idx), dtype=bool)
 
-    # Sample the raster around every land and port hop.
     radius_nodes = max(float(params.corridor_face_fraction) * face_rad / node_rad, 1.5)
     any_land = land0 | land1
     lines = [(np.array([s0[i], s1[i]]), np.array([t0[i], t1[i]])) for i in idx[any_land]]
@@ -479,12 +453,9 @@ def route_polyline(
     edge_cost,
     smoothing_iterations: int,
 ) -> list[tuple[np.ndarray, np.ndarray]]:
-    """Re-route one road polyline ``verts`` (K, 3) with per-edge ``flows`` over
-    ``raster``; returns ``(path, edge flows)`` per in-raster stretch.
+    """Re-route one polyline ``verts`` (K, 3) over ``raster``; ``(path, edge flows)`` per stretch.
 
-    Its ends land exactly on their points (a settlement's marker); a cut at the
-    raster edge keeps its node.  A stretch with no dry way through (an island hop
-    the refined coast cut) keeps the given line.
+    Ends land exactly on their points; a stretch with no dry way through keeps the given line.
     """
     hi = raster.lo + raster.step * (raster.n - 1)
     s, t, _ = fields.geometry.ecef_to_local(verts)
@@ -508,8 +479,7 @@ def route_polyline(
 def _route_stretch(
     raster: Raster, s: np.ndarray, t: np.ndarray, radius_nodes: float, edge_cost,
 ) -> Optional[np.ndarray]:
-    """Raster nodes of the least-cost road along one in-raster stretch, its ends
-    moved onto the nearest dry node."""
+    """Raster nodes of the least-cost road along one stretch, ends moved to the nearest dry node."""
     ends, _ = raster.index(np.array([s[0], s[-1]]), np.array([t[0], t[-1]]))
     a = _dry_node(raster, int(ends[0]), radius_nodes)
     b = _dry_node(raster, int(ends[1]), radius_nodes)

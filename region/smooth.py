@@ -1,28 +1,19 @@
 """A continuous, mean-preserving, non-negative surface through per-face values.
 
-Some world fields exist only per face (danger), and a region drawing them flat
-shows the ~50,000 km² faces as blocks with hard steps between them.
-:class:`FaceFanField` replaces the step function with a piecewise-linear surface
-over each face's *fan*: the triangles (centroid, vertex i, vertex i+1).  A vertex
-value is shared by the three faces that meet there, so the surface is continuous,
-and each face's area mean is exactly its own value:
+For per-face fields (danger), :class:`FaceFanField` replaces the step function
+with a piecewise-linear surface over each face's fan of triangles (centroid,
+vertex i, vertex i+1).  Vertex values are shared, so the surface is continuous,
+and each face's area mean is exact:
 
     mean_f = (c_f + 2·W_f) / 3,   W_f = area-weighted mean of the fan's rim values
 
-For a non-negative field that also forces the surface to 0 on every face whose
-value is 0 — edges and vertices included — so danger must fade out *inside* the
-faces that carry it.  Within those constraints the node values are chosen to make
-the surface as smooth as possible: the least-squares solution minimising the
-squared difference along every fan-triangle edge, with each face's mean an exact
-equality constraint (one sparse KKT solve, repeated with any node that came out
-negative pinned to 0).  Inside a uniform block of faces that gives a gentle
-dome; the faces at the block's edge, whose outer rim is pinned to 0, rise above
-their value to keep their means, and an isolated face — its whole rim pinned — is
-a cone reaching 3× its value.
+For a non-negative field, zero faces are zero everywhere (edges included), so
+danger fades out inside the faces carrying it.  Node values minimise squared
+differences along fan edges subject to the exact means (sparse KKT solve,
+re-solved with negative nodes pinned to 0).  An isolated face becomes a cone
+reaching 3× its value.
 
-Points are located on the sphere with gnomonic barycentrics (a 3×3 solve per fan
-triangle), which agree across a shared edge whichever face a point is assigned
-to, so the continuity is exact rather than up to the texture seams.
+Gnomonic barycentrics agree across shared edges, so continuity is exact.
 """
 from __future__ import annotations
 
@@ -36,8 +27,7 @@ from scipy.spatial import KDTree
 if TYPE_CHECKING:
     from core.mesh import PolygonMesh
 
-# Barycentric slack for "inside a triangle": points on a shared edge or vertex
-# may round either way.
+# Barycentric slack for "inside a triangle" (shared edges may round either way).
 _INSIDE_EPS = -1e-9
 # Points processed per batch (bounds the (P, K, 3) scratch arrays).
 _CHUNK = 200_000
@@ -49,11 +39,10 @@ def _smoothest_nodes(
     vals: np.ndarray, n_verts: int, tri_face: np.ndarray, tri_a: np.ndarray, tri_b: np.ndarray,
     rim_weight: np.ndarray,
 ) -> np.ndarray:
-    """Node values ``[centroids (N) | vertices (V)]`` of the smoothest surface with
-    face means ``vals``, non-negative when ``vals`` is.
+    """Node values ``[centroids (N) | vertices (V)]`` of the smoothest surface with face means ``vals``.
 
-    ``rim_weight[t]`` is fan triangle ``t``'s share of its face's area, so the
-    mean constraint reads ``c_f + Σ_t rim_weight[t]·(v_a + v_b) = 3·vals[f]``.
+    Non-negative when ``vals`` is.  ``rim_weight[t]`` is fan triangle ``t``'s
+    area share: ``c_f + Σ_t rim_weight[t]·(v_a + v_b) = 3·vals[f]``.
     """
     n = len(vals)
     size = n + n_verts
@@ -94,8 +83,7 @@ def _smoothest_nodes(
         if vals.min() < 0.0:
             break
         negative = free[x[free] < -1e-12]
-        # A centroid is its face's last free node; it never needs pinning while
-        # any rim node is free, and pinning it with none free would be infeasible.
+        # Never pin centroids: with no free rim node that would be infeasible.
         negative = negative[negative >= n]
         if negative.size == 0:
             break
@@ -140,9 +128,7 @@ class FaceFanField:
         self._tree = KDTree(cents)
         self.centre_values = centre
         self.vertex_values = vertex
-        # Faces whose surface — and every neighbour's — is 0 throughout: a point
-        # nearest one of them is 0 without locating it (it lies in that face or
-        # an adjacent one).  Most of a sparse field like danger.
+        # Faces zero throughout along with all neighbours: points nearest them are 0 without locating.
         flat = np.bincount(tri_face, weights=np.abs(self._corner_values).max(axis=1), minlength=n) == 0.0
         self._quiet = flat & np.array([all(flat[j] for j in nbrs) for nbrs in mesh.face_adjacency])
 
@@ -165,8 +151,7 @@ class FaceFanField:
 
     def _locate(self, pts: np.ndarray, faces: np.ndarray) -> np.ndarray:
         value, inside = self._in_faces(pts, faces[:, None])
-        # The mesh is deregularised, so ~10% of points sit in a neighbour's
-        # polygon rather than their nearest centroid's; widen the search for those.
+        # Deregularised mesh: ~10% of points lie outside their nearest centroid's polygon.
         for k in (3, 8):
             miss = np.flatnonzero(~inside)
             if miss.size == 0:
@@ -176,8 +161,7 @@ class FaceFanField:
         return value
 
     def _in_faces(self, pts: np.ndarray, faces: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """Value in the best-fitting fan triangle among ``faces`` ``(P, K)``, and
-        whether that triangle actually contains the point."""
+        """Value in the best-fitting fan triangle among ``faces`` ``(P, K)``, and whether it contains the point."""
         tris = self._face_tris[faces].reshape(len(pts), -1)          # (P, K·width)
         valid = tris >= 0
         safe = np.where(valid, tris, 0)

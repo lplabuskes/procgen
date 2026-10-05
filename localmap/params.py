@@ -14,12 +14,10 @@ from region.streams import RegionStreamParams
 
 @paramclass
 class LocalParams:
-    """Local-tier params: the field refinement, the region's streams below the
-    world's network (built once per region, drawn only on local maps), the local
-    rivers and roads, town and city refinement, and the villages, the cities'
-    footprints and the farmland.  None of it
-    touches the world build or the region; changing it puts every town and city
-    back where its region put it, to be refined again by its local map."""
+    """Local-tier params (``streams`` are built per region but drawn only on local maps).
+
+    None of it touches the world build or the region; changing it resets every
+    town and city to its region position, to be refined again locally."""
 
     upsample: LocalUpsampleParams = field(
         default_factory=LocalUpsampleParams, metadata={"label": "Detail refinement"}

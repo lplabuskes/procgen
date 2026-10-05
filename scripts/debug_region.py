@@ -1,20 +1,10 @@
 """Visual check on regional upsampling — coarse vs. refined, plus conservation.
 
-A region is the global map *refined*: the global field upsampled onto the
-region's hex textures, slope-proportional detail added on top, and every global
-texel's average forced back to its exact global value
-(``docs/plans/regional_local_maps_design.md``).  Two things can go wrong and
-neither is visible from the world map:
+Renders one region side by side: left with ``relief_factor = 0`` (upsampled
+only), right with the real params, each hexagon drawn as ``RegionView`` paints it.
 
-  • the detail is invisible (or deafening) — hence the side-by-side, left panel
-    with ``relief_factor = 0`` and right panel with the real params;
-  • the refinement drifts off the globe — hence the printed conservation report,
-    which is the critical invariant: averaging each global texel's regional
-    samples must give back the global value.
-
-Each hexagon is drawn as its own texture image clipped to the hexagon, exactly
-as :class:`viz.mapview.regionview.RegionView` paints it, so what you see here is
-what the viewer shows.
+Prints the **conservation report**, the critical invariant: averaging each global
+texel's regional samples must give back the global value (``docs/region_fields.md``).
 
 Usage:
     python3 scripts/debug_region.py                       # seed 4, auto-pick the most land-rich region
@@ -55,8 +45,7 @@ from worldgen.resources.display import (  # noqa: E402
 )
 from _common import get_physical_world  # noqa: E402
 
-# The world-map layers a region refines, by their scheme names — the same recipe
-# objects the stages register, so this renders exactly what the viewer shows.
+# The world-map layers a region refines, by scheme name (the stages' own recipes).
 LAYERS: dict[str, TextureRecipe] = {
     "Elevation": ELEVATION_RECIPE,
     "Biome": BIOME_RECIPE,
@@ -115,10 +104,8 @@ def draw_region(  # type: ignore[no-untyped-def]
 def report_shoreline(fields: RegionFields, world) -> None:  # type: ignore[no-untyped-def]
     """How far the refined water masks moved off the global ones.
 
-    The water *surface* is taken from the globe, so the only thing that may
-    change is the shape of the shore.  A large number here means the refined
-    relief is fighting the global masks — a few percent is the expected
-    sub-texel wiggle.
+    A few percent is the expected sub-texel wiggle; more means the refined relief
+    is fighting the global masks.
     """
     anchors = fields.anchors.reshape(-1)
     for key in ("ocean_mask", "lake_mask"):
@@ -160,9 +147,7 @@ def main() -> None:
     if args.relief is not None:
         params.relief_factor = args.relief
 
-    # The honest "no refinement" baseline: no added relief, and the water masks
-    # copied from the anchor texel, so the left panel shows the global coastline
-    # at its native blockiness.
+    # "No refinement" baseline: no added relief, water masks copied from the anchor texel.
     coarse_params = RegionUpsampleParams(**vars(params))
     coarse_params.relief_factor = 0.0
     coarse_params.orographic_gain = 0.0

@@ -9,16 +9,8 @@ if TYPE_CHECKING:
 
 
 def find_ideal_antimeridian(mesh: PolygonMesh, n_samples: int = 360) -> float:
-    """
-    Return the longitude (radians) for the map cut that minimizes land crossings.
-
-    Among all candidate cut longitudes with the fewest land-face crossings,
-    picks the one that maximizes the minimum angular distance to any land face
-    centroid — i.e., the cut that is as far from land as possible.
-
-    Falls back to π (the standard antimeridian) when the mesh has no
-    is_ocean face metadata.
-    """
+    """Longitude (radians) of the map cut with fewest land-face crossings,
+    tie-broken by distance to the nearest land centroid.  π without ``is_ocean`` metadata."""
     has_ocean_meta = any("is_ocean" in meta for meta in mesh.face_metadata)
     if not has_ocean_meta:
         return np.pi
@@ -39,7 +31,6 @@ def find_ideal_antimeridian(mesh: PolygonMesh, n_samples: int = 360) -> float:
         v = verts[np.array(face, dtype=np.int32)]
         face_lons[i, : len(face)] = np.arctan2(v[:, 1], v[:, 0])
 
-    # Land centroid longitudes for the distance tie-breaker.
     c = mesh.face_centroids  # (n_faces, 3)
     land_centroid_lons = np.arctan2(c[is_land, 1], c[is_land, 0])
 
@@ -47,8 +38,7 @@ def find_ideal_antimeridian(mesh: PolygonMesh, n_samples: int = 360) -> float:
     land_counts = np.empty(n_samples, dtype=np.int32)
 
     for ci, cut_lon in enumerate(candidates):
-        # Shift all vertex lons so cut_lon maps to ±π (the standard antimeridian).
-        # For small convex faces, max−min > π reliably detects a crossing.
+        # Shift so cut_lon maps to ±π; for small convex faces, max−min > π means a crossing.
         shifted = ((face_lons - cut_lon) % (2.0 * np.pi)) - np.pi
         max_s = np.nanmax(shifted, axis=1)
         min_s = np.nanmin(shifted, axis=1)
@@ -57,7 +47,6 @@ def find_ideal_antimeridian(mesh: PolygonMesh, n_samples: int = 360) -> float:
     min_land = int(land_counts.min())
     good = candidates[land_counts == min_land]
 
-    # Among cuts with fewest land crossings, pick the one farthest from all land.
     best_cut = float(good[0])
     best_min_dist = -1.0
     for cut_lon in good:

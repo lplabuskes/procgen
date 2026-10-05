@@ -1,31 +1,17 @@
-"""Villages: the local map's settlements of 200–1000 people.
+"""Villages: the local map's settlements of 200–1000 people, carved out of the rural population.
 
-Villages come **out of** the rural population, the way the world's towns do
-(:mod:`realmgen.towns`), one tier finer:
+- Budget: the rural people in each global texel ∩ local map (a regional texel is
+  too small to hold a village); ``village_fraction`` of it goes to villages.
+- Sizes: the town stage's truncated Pareto (:func:`realmgen.towns.placement.draw_town_sizes`),
+  whose stochastic remainder gives thin land the odd village.
+- Sites: largest first, Gumbel-max over a log weight among the budget's dry texels
+  (rural density, river/stream, confluence, coast, road raise it; slope lowers it).
+  Exclusion radius ``spacing_km · (pop / village_min)^0.25``; towns and cities
+  clear ``settlement_clearance_km`` scaled from 1,000 people.
+- Accounting: an unsited village stays rural; each budget's rural density is
+  scaled down by exactly what its villages took (:func:`village_budget_report`).
 
-- **Budget.** The people in each *global texel ∩ local map* (the local rural
-  density summed over the map's domain) are one budget.  A share
-  ``village_fraction`` of it is spent on villages; the rest is the scattered
-  countryside — hamlets and farmsteads — which stays as the rural density.  A
-  regional texel (~20 km², a few hundred people at best) is too small to be the
-  unit; a global texel (~195 km²) holds several villages.
-- **Sizes** are the town stage's truncated Pareto on ``[village_min,
-  village_max]`` (:func:`realmgen.towns.placement.draw_town_sizes`), with its
-  unbiased stochastic remainder, so thinly peopled land still gets the odd
-  village.
-- **Sites.** Each village picks, largest first, among its budget's dry texels by
-  Gumbel-max over a log weight: local rural density (farmland), a drawn river or
-  stream, a confluence, the coast and a road all raise it, steep ground lowers
-  it.  A village claims ``spacing_km · (pop / village_min)^0.25``; towns and
-  cities (at their local positions) claim ``settlement_clearance_km`` scaled the
-  same way from a 1,000-person town.
-- **Accounting.** A village that finds no free site stays rural.  Each budget's
-  rural density is scaled down by exactly what its villages took, so rural +
-  villages inside every global texel ∩ map is unchanged
-  (:func:`village_budget_report`).
-
-Deterministic: every budget draws from its own stream, seeded by the world
-seed, the map and the global texel.
+Deterministic: each budget has its own stream (world seed, map, global texel).
 """
 from __future__ import annotations
 
@@ -47,12 +33,9 @@ from region.upsample import EARTH_RADIUS_KM, RegionFields
 VILLAGE_FARM, VILLAGE_RIVER, VILLAGE_COAST, VILLAGE_ROAD, VILLAGE_MINING = range(5)
 VILLAGE_KIND_NAMES = ("Farming village", "River village", "Fishing village", "Roadside village", "Mining village")
 
-# RNG stream tag for village sizes and sites.
-_VILLAGE_STREAM = 7
-# Density floor (relative to the budget's mean) so barren-but-dry ground keeps a
-# small chance, as for towns.
+_VILLAGE_STREAM = 7   # RNG stream tag
+# Density floor (relative to the budget's mean): barren-but-dry ground keeps a small chance.
 _DENSITY_FLOOR = 0.05
-# Towns' clearance grows from this size.
 _CLEARANCE_REFERENCE_POP = 1_000.0
 
 
@@ -91,8 +74,7 @@ class Villages:
     kind: np.ndarray             # (V,) VILLAGE_* code
     anchor: np.ndarray           # (V,) global texel (the budget it came from)
     rural_density: np.ndarray    # (M, T, T, 1) people/km², net of the villages
-    # Per budget (global texel ∩ map): its anchor, rural people before villages,
-    # and the people its villages took.
+    # Per budget (global texel ∩ map): anchor, rural people before villages, people placed.
     budget_anchor: np.ndarray    # (B,)
     budget_people: np.ndarray    # (B,)
     budget_placed: np.ndarray    # (B,)
@@ -116,9 +98,8 @@ def place_villages(
 ) -> Villages:
     """Size and site the villages of local map ``local``.
 
-    ``settlement_positions`` / ``settlement_populations`` are the towns and
-    cities in and around the map, at their local positions: villages keep clear
-    of them.  ``seed`` should identify the world and the map.
+    ``settlement_positions`` / ``settlement_populations``: towns and cities in and
+    around the map, which villages keep clear of.  ``seed`` identifies world and map.
     """
     p = params or VillageParams()
     tex = local.textures
@@ -225,8 +206,7 @@ def place_villages(
         if not np.isfinite(score[best]):
             continue
         c = int(cand[best])
-        # Largest first, so every later village's radius is no larger than this
-        # one's: blocking by the placed radius keeps each pair apart by the larger.
+        # Largest first, so blocking by the placed radius keeps each pair apart by the larger.
         radius = base_radius * (size / float(p.village_min)) ** SPACING_EXPONENT
         blocked[tree.query_ball_point(cand_pos[c], radius)] = True
         placed[b] += size
@@ -255,8 +235,7 @@ def place_villages(
 
 
 def village_budget_report(local: RegionFields, villages: Villages) -> dict[str, float]:
-    """Is every budget's people conserved?  Rural (net) + villages per global
-    texel ∩ map against the rural people before, and how much went to villages."""
+    """Conservation check: rural (net) + villages per global texel ∩ map vs the rural people before."""
     domain = local.domain
     anchors = local.anchors[domain]
     idx = np.searchsorted(villages.budget_anchor, anchors)

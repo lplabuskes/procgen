@@ -1,24 +1,18 @@
 """Measure local-map villages — counts, sizes, spacing and the share of rural people.
 
-For each seed, builds the realm on the cached physical world, samples regional
-hexes across the rural-density range (the hexes of the land faces at the
-``QUANTILES`` of face density), builds each hex's local map as the viewer does,
-and reports per hex:
+Builds local maps for hexes at the ``QUANTILES`` of land-face rural density and
+reports per hex:
 
-  • rural density (people/km²) and villages per 100 km² — against the count the
-    budget predicts, ``village_fraction · ρ · 100 / mean size``: a shortfall
-    means siting ran out of room (spacing) rather than people;
+  • rural density (people/km²) and villages per 100 km² vs the budget's prediction
+    ``village_fraction · ρ · 100 / mean size`` (a shortfall means spacing ran out);
   • village size (mean, median) and nearest-neighbour spacing (median, p10, p90);
-  • the share of rural people living in villages (target ``village_fraction``),
-    and the share left in *no-village* budgets — global texel ∩ map pieces too
-    small to afford one village (slivers at face seams, and thin land);
+  • share of rural people in villages (target ``village_fraction``), and the share
+    in *no-village* budgets (texel ∩ map pieces too small for one village);
   • village kinds, and the budget conservation residual (must be ~1e-8).
 
-Earth-ish anchors (rough, high-medieval England/northern France c.1300): rural
-density ~30–40/km², villages of a few hundred people ~2–3 km apart, most people
-in villages rather than dispersed farmsteads.  This world's rural density is
-calibrated lower (``measure_population_absolute.py``), so its villages sit
-further apart at the same fraction; compare spacing against density, not alone.
+Earth-ish anchors (high-medieval England/northern France): rural density
+~30–40/km², villages of a few hundred ~2–3 km apart.  This world's density is
+calibrated lower, so compare spacing against density, not alone.
 
 Usage:
     python3 scripts/measure_villages.py                 # seeds 4, 31, 35

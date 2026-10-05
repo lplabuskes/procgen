@@ -1,12 +1,8 @@
 """River flow in physical units: discharge and channel width.
 
-River ``flow`` is a precipitation-weighted texel count — each texel upstream
-contributes its annual precipitation over the world mean — so one flow unit is
-one global texel's area receiving the mean precipitation.  Multiplying that
-water by a runoff ratio gives the discharge; the channel width then follows the
-at-a-station hydraulic-geometry fit ``w = a · Q^b`` (Leopold & Maddock; the
-global fit of Moody & Troutman gives a ≈ 7 m, b ≈ 0.5: ~3 km for an Amazon, a
-few hundred metres for a Rhine).
+One flow unit is one global texel's area at mean precipitation; × runoff ratio
+gives discharge.  Width follows hydraulic geometry ``w = a · Q^b`` (Moody &
+Troutman: a ≈ 7 m, b ≈ 0.5 — ~3 km for an Amazon, a few hundred m for a Rhine).
 """
 from __future__ import annotations
 
@@ -17,8 +13,7 @@ from worldgen.climate.channels import PRECIPITATION
 
 EARTH_RADIUS_KM = 6371.0
 SECONDS_PER_YEAR = 3.156e7
-# The share of precipitation that leaves as river flow (Earth's land: ~40k of
-# ~110k km³/yr).
+# Share of precipitation leaving as river flow (Earth: ~40k of ~110k km³/yr).
 RUNOFF_RATIO = 0.36
 WIDTH_COEFF_M = 7.0
 WIDTH_EXPONENT = 0.5

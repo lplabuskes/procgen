@@ -54,8 +54,7 @@ def world(fields, synthetic_globe):
     s, t, valid = fields.geometry.ecef_to_local(c)
     inside = valid & (s > 0.05) & (s < 0.95) & (t > 0.05) & (t < 0.95)
     inland = {int(f) for f in np.flatnonzero(inside & land)}
-    # A coastal face with a sea neighbour in the cell, and the inland face
-    # furthest from it.
+    # A coastal face with a sea neighbour in the cell, and the furthest inland face.
     coast = next(f for f in sorted(inland) if any(ocean[g] and inside[g] for g in mesh.face_adjacency[f]))
     sea = next(g for g in mesh.face_adjacency[coast] if ocean[g] and inside[g])
     start = max(inland, key=lambda f: np.linalg.norm(c[f] - c[coast]))

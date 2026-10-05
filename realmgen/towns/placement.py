@@ -1,9 +1,7 @@
 """Pure functions for the town stage: rural density, town sizes, town sites.
 
-Towns are carved out of the rural population, so every function here works per
-global face and conserves that face's people: rural density spreads the face's
-rural population over its texels, town sizes spend a share of it, and whatever
-a town could not be sited for goes back to the countryside.
+Everything works per global face and conserves that face's people; unsited
+town people go back to the countryside.
 """
 from __future__ import annotations
 
@@ -27,8 +25,7 @@ if TYPE_CHECKING:
 # Town exclusion radii grow with size as ``(pop / reference) ** SPACING_EXPONENT``:
 # a 7k town claims ~1.6× the room of a 1k one, a 500k city ~2.9× a 7k one.
 SPACING_EXPONENT = 0.25
-# Density floor (relative to the face mean) so barren-but-land sites keep a
-# nonzero chance: mining camps and waypoints do not need farmland.
+# Density floor (relative to the face mean): mining camps and waypoints don't need farmland.
 _DENSITY_FLOOR = 0.05
 # RNG stream tag for a face's mining-town site noise, seeded (seed, face, tag).
 _MINING_STREAM = 5
@@ -44,9 +41,7 @@ def texel_owners(centroids: np.ndarray, positions: np.ndarray) -> np.ndarray:
 
 
 def shore_texels(land: np.ndarray) -> np.ndarray:
-    """``(N, H, W)`` land texels with water among their 8 neighbours in the same
-    face texture (which over-hangs its face, so a polygon-edge texel sees the
-    real neighbouring water)."""
+    """``(N, H, W)`` land texels with water among their 8 neighbours in the same face texture."""
     water = np.pad(~land, ((0, 0), (1, 1), (1, 1)), mode="edge")
     _, h, w = land.shape
     near = np.zeros(land.shape, dtype=bool)
@@ -67,14 +62,11 @@ def compute_rural_density(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Per-texel rural density and its fishing part (people/km²), ``(N, H, W)`` each.
 
-    The farmers — ``rural − fishing`` — follow the rural model's own food base,
-    ``fertility ** γ``, over land texels; the fishers (``fishing``, per face)
-    live on the shore (:func:`shore_texels`).  Each is scaled per face so the
-    texels a face *owns* hold exactly its people (each owned texel standing for
-    an equal share of the face's area). An over-hanging texel takes its owner
-    face's scale, so the field is a function of position and agrees across face
-    seams. A face whose owned land is all barren spreads its farmers evenly over
-    that land instead, and one with no owned shore puts its fishers with them.
+    Farmers (``rural − fishing``) follow ``fertility ** γ`` over land; fishers
+    live on the shore. Each is scaled per face so the face's owned texels (equal
+    area each) hold exactly its people; over-hanging texels take their owner's
+    scale, so the field agrees across seams. All-barren faces spread farmers
+    evenly; shoreless faces put fishers with the farmers.
     """
     n = rural.shape[0]
     rural = np.asarray(rural, dtype=np.float64)
@@ -112,14 +104,11 @@ def compute_mining_density(
     land: np.ndarray,
     owner: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """The miners as density on the texel of their deposit, ``(N, H, W)``
-    people/km², and the miners of each face that found no texel, ``(N,)``.
+    """Miner density ``(N, H, W)`` people/km² and unsited miners per face ``(N,)``.
 
-    Each deposit's ``workers`` go on the owned land texel of its face nearest the
-    deposit (``points``, unit vectors), at the face's owned-texel area — the
-    scale :func:`compute_rural_density` uses — so the face's texels hold exactly
-    its miners.  A face that owns no land texel cannot hold its miners; they are
-    returned for the caller to spread with the rest of its countryside.
+    Each deposit's ``workers`` go on the owned land texel nearest it, at the same
+    per-texel area as :func:`compute_rural_density`. Faces with no owned land
+    return their miners as unsited.
     """
     n = land.shape[0]
     density = np.zeros(land.shape, dtype=np.float64)
@@ -151,11 +140,10 @@ def draw_town_sizes(
 ) -> np.ndarray:
     """Town populations spending ``budget`` people, largest first.
 
-    Sizes are truncated-Pareto (``pdf ∝ x^-(α+1)`` on ``[town_min, town_max]``;
-    α = 1 is rank-size). The draw that would overspend is cut to what is left,
-    and a remainder below ``town_min`` becomes one more minimum-size town with
-    probability ``remainder / town_min`` — unbiased, so a thinly peopled face
-    still gets a town now and then. The total never exceeds ``cap``.
+    Truncated-Pareto (``pdf ∝ x^-(α+1)`` on ``[town_min, town_max]``); the
+    overspending draw is cut to what's left, and a remainder below ``town_min``
+    becomes a min-size town with probability ``remainder / town_min`` (unbiased).
+    The total never exceeds ``cap``.
     """
     sizes: list[float] = []
     remaining = float(budget)
@@ -185,10 +173,8 @@ def site_log_weight_and_kind(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Log site weight and town kind of one face's candidate sites.
 
-    ``rho`` is rural density, normalised here by the face mean; the flags are
-    what each site offers. The water ones do not stack: pass ``river`` without
-    the confluences and ``stream`` without either. A stream site makes a river
-    town, like a river site.
+    ``rho`` is rural density (normalised here by the face mean). Water flags
+    don't stack: pass ``river`` without confluences and ``stream`` without either.
     """
     mean = float(rho.mean()) if rho.size else 0.0
     rho_n = rho / mean if mean > 0 else np.ones_like(rho)
@@ -199,7 +185,6 @@ def site_log_weight_and_kind(
         )
         + params.mining_bonus * mine
     )
-    # What the site offered, most distinctive first.
     kind = np.select(
         [coast, mine, confluence | river | stream, route],
         [TOWN_PORT, TOWN_MINING, TOWN_RIVER, TOWN_ROUTE],
@@ -222,8 +207,7 @@ def _build_candidates(
     mineral_tree: Optional[KDTree], route_tree: Optional[KDTree],
     mining_radius: float, route_radius: float, seed: int,
 ) -> tuple[dict[int, FaceCandidates], dict[int, np.random.Generator]]:
-    """Candidates for every face in ``faces``, with each face's site RNG (the
-    same stream then draws that face's Gumbel noise)."""
+    """Candidates per face, with each face's site RNG (reused for its Gumbel noise)."""
     sites.prefetch(faces)
     rngs: dict[int, np.random.Generator] = {}
     per_face = []
@@ -233,12 +217,11 @@ def _build_candidates(
         rng = np.random.default_rng([int(seed), int(f)])
         rngs[f] = rng
         pos = fs.positions[idx]
-        # Coast texels keep their centre: a jitter could step off into the sea.
+        # Coast texels aren't jittered: they could step into the sea.
         coast = fs.coast[idx]
         jittered = np.where(coast[:, None], pos, _jitter(pos, params.site_jitter * fs.spacing, rng))
         per_face.append((f, fs, idx, pos, jittered))
 
-    # One batched query per tree over every face's sites.
     all_pos = np.concatenate([p for *_, p, _j in per_face]) if per_face else np.zeros((0, 3))
     all_jit = np.concatenate([j for *_, j in per_face]) if per_face else np.zeros((0, 3))
     n_all = all_pos.shape[0]
@@ -269,9 +252,8 @@ def _build_candidates(
 def _mining_candidates(
     cand: FaceCandidates, points: np.ndarray, workers: np.ndarray, mining_radius: float,
 ) -> FaceCandidates:
-    """A face's sites for its mining towns: those within ``2 × mining_radius`` of
-    one of its worked deposits, weighted ``Σ workers · exp(−(d / radius)²)`` so a
-    town favours the bigger mines and stands close by."""
+    """Mining-town sites: within ``2 × mining_radius`` of a worked deposit,
+    weighted ``Σ workers · exp(−(d / radius)²)``."""
     d2 = ((cand.positions[:, None, :] - points[None, :, :]) ** 2).sum(axis=2) / mining_radius ** 2
     w = (workers[None, :] * np.exp(-d2)).sum(axis=1)
     reach = (d2 < 4.0).any(axis=1) & (w > 0)
@@ -304,21 +286,10 @@ def place_towns(
     """Site every requested town; returns ``(towns, unplaced_people_per_face,
     is_mining_request)`` — the last flags the towns sited for ``mining_requests``.
 
-    ``requests`` is ``(face, sizes)`` per face. Towns are sited globally largest
-    first, so the biggest towns take the best sites. Each picks among its face's
-    owned land texels by weighted random choice (Gumbel-max over the log site
-    weight — denser farmland, harbours, rivers, trade routes and mineral
-    deposits all raise it), skipping any site within the exclusion radius of a
-    town or city already there. Radii are chord distances on the unit sphere:
-    ``town_spacing`` for a ``town_min`` town, ``city_radii`` per city, and a pair
-    must be the larger of their two radii apart.
-
-    ``mining_requests`` (``(face, sizes)``) are the mining towns: sited the same
-    way among the face's sites near its worked deposits (``mine_points`` on
-    ``mine_faces`` with ``mine_workers`` miners), always of the mining kind.
-
-    Exclusion is only checked against the face and its neighbours, which is exact
-    while every radius is shorter than a face's width.
+    ``requests``/``mining_requests`` are ``(face, sizes)``; mining towns are
+    sited among sites near the face's worked deposits. Radii are unit-sphere
+    chords: ``town_spacing`` for a ``town_min`` town, ``city_radii`` per city.
+    See :func:`site_largest_first`.
     """
     mineral_tree = KDTree(mineral_points) if mineral_points is not None and len(mineral_points) else None
     route_tree = KDTree(route_points) if route_points is not None and len(route_points) else None
@@ -365,12 +336,11 @@ def site_largest_first(
     request, all on that request's face), globally largest first; returns
     ``([(request, face, size, position, kind)], unplaced_per_face)``.
 
-    Each town takes the Gumbel-max of its request's log site weights (noise drawn
-    from ``rngs[request]``) over the sites clear of every exclusion disc already
-    placed — the fixed ``disc_*`` ones (cities) and earlier towns. A town of
-    ``size`` claims ``town_spacing · (size / town_min)^0.25``; a pair must be the
-    larger of their two radii apart. Only the face and its neighbours are
-    checked, which is exact while every radius is shorter than a face's width.
+    Each town takes the Gumbel-max of its log site weights over sites clear of
+    every disc placed so far (fixed ``disc_*`` cities, then earlier towns). A town
+    claims ``town_spacing · (size / town_min)^0.25``; a pair must be the larger
+    radius apart. Only the face and its neighbours are checked, which is exact
+    while every radius is shorter than a face's width.
     """
     n = len(adjacency)
     order = sorted(
@@ -437,8 +407,7 @@ def site_largest_first(
 def _site_towns(size, face, req, row, cand_off, cand_pos, cand_logw, gum_off, gum,
                 disc_off, disc_pos, disc_rad, n_disc, adj_ptr, adj_idx,
                 town_spacing, town_min, exponent, n_faces):  # pragma: no cover - compiled
-    """The :func:`site_largest_first` loop: each town in turn takes its best-scoring
-    candidate clear of every disc on its face and the neighbours, then adds its own.
+    """The compiled :func:`site_largest_first` loop.
 
     Returns ``(chosen candidate per town or −1, unplaced people per face)``.
     """

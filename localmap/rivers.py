@@ -1,20 +1,14 @@
-"""Local rivers: the region's re-routed rivers re-routed again over the local relief.
+"""Local rivers: :mod:`region.rivers` one tier down.
 
-A region re-traces the world's stream network within about one global texel of
-its world centreline (:mod:`region.rivers`); a local map does the same one tier
-down: each regional river path is re-traced within about one *regional* texel of
-the region's line, over the local relief, with the same valley-seeking cost and
-the same routing loop (:func:`region.rivers.route_stream_paths`).  Paths are
-routed largest flow first, and one that ends inside the map ends on whatever it
-drains into near its regional end — the stem it joins, a lake, or the local
-coast.  Flow is the region's, which is the world's.
+Each regional river path is re-traced within about one regional texel of its
+line over the local relief (:func:`region.rivers.route_stream_paths`), largest
+flow first; one ending inside the map ends on what it drains into (stem, lake or
+coast).  Flow is the region's, which is the world's.
 
-**Then the region's streams.**  The world's network stops at its
-``stream_flow_threshold``, coarse for villages; the region adds its own streams
-below that (:mod:`region.streams`), and a local map re-traces them the same way,
-after the rivers, so each ends on the river or stream it drains into.  They go
-to :attr:`RegionRivers.streams`: drawn and sited on by villages, but towns,
-cities and deltas keep to the world's channels.
+The region's own streams (:mod:`region.streams`, below the world's
+``stream_flow_threshold``) are re-traced after the rivers and go to
+:attr:`RegionRivers.streams`: villages site on them, but towns, cities and
+deltas keep to the world's channels.
 """
 from __future__ import annotations
 
@@ -62,9 +56,8 @@ def _region_paths(
 ) -> list[StreamPath]:
     """The region's river paths inside the local raster, largest flow first.
 
-    A path leaving and re-entering the raster becomes one run per visit; a run
-    ends *here* (on a sink or a stem, not at the raster edge) only when it holds
-    the region path's last vertex.
+    One run per visit to the raster; a run ``ends_here`` (on a sink or stem, not
+    the raster edge) only when it holds the region path's last vertex.
     """
     out: list[StreamPath] = []
     for positions, flows, _ in rivers:

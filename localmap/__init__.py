@@ -1,13 +1,7 @@
 """Local maps: each regional hexagon refined onto its own finer hex grid.
 
-The third tier, under :mod:`region`: a local map covers one regional hex
-(:mod:`localmap.geometry`), tiles it with smaller hexagons
-(:mod:`localmap.grid`) and fills their textures by refining the region's
-exactly the way a region refines the globe (:mod:`localmap.upsample`).  It
-re-routes the region's rivers and roads (:mod:`localmap.rivers`,
-:mod:`localmap.roads`) and sites villages of 200–1000 people
-(:mod:`localmap.villages`); :mod:`localmap.builder` runs it all.
-See ``docs/local.md``.  Qt-free.
+The third tier under :mod:`region`, refining the region the way a region refines
+the globe; :mod:`localmap.builder` runs it.  See ``docs/local.md``.  Qt-free.
 """
 from localmap.builder import LocalMap, build_local_map
 from localmap.geometry import LocalGeometry

@@ -1,14 +1,6 @@
-"""Cost-surface stage — the final worldgen step producing base traversal costs.
+"""Cost-surface stage: the physical base land + sea traversal costs realmgen builds on.
 
-Reads the `biome` and `is_ocean` per-face metadata and the `elevation` +
-`lake_mask` face textures, plus the hydrology rivers, and produces the physical
-base land + sea cost layers. See `worldgen/cost/surfaces.py` for the model and
-docs/plans/settlement_generation_design.md (Stage 0) for the rationale: these layers
-are consumed by realmgen, which adds the danger field on top.
-
-Lakes count as sailable water (impassable on land like the ocean), and navigable
-rivers — flat enough and carrying enough flow, up to the fall line — extend the
-sailable sea network inland so a river can connect to the sea directly.
+The model lives in :mod:`worldgen.cost.surfaces`; see docs/cost.md.
 """
 from __future__ import annotations
 
@@ -95,13 +87,7 @@ def _face_elevation_range_km(elevation_tex: np.ndarray) -> np.ndarray:
 
 
 def _face_lake_mask(mesh: PolygonMesh, threshold: float = 0.5) -> np.ndarray:
-    """Per-face lake flag — True where the face is mostly lake.
-
-    Reads the hydrology ``lake_mask`` texture (1 inside the lake footprint). A
-    face counts as water when at least ``threshold`` of its pixels are lake, so a
-    sliver of shoreline lake does not turn a land face impassable. Returns all
-    False when no lake texture is present.
-    """
+    """Per-face lake flag: at least ``threshold`` of its pixels are lake (a shoreline sliver doesn't count)."""
     n = len(mesh.faces)
     if not LAKE_MASK.present(mesh):
         return np.zeros(n, dtype=bool)
@@ -110,17 +96,11 @@ def _face_lake_mask(mesh: PolygonMesh, threshold: float = 0.5) -> np.ndarray:
 
 
 class CostBuilder(Stage):
-    """Builds the base land + sea cost surfaces (a pipeline ``Stage``).
+    """Builds the base land + sea cost surfaces.
 
-    ``build(ctx)`` runs after elevation + climate + hydrology so the
-    ``biome`` / ``is_ocean`` metadata and the ``elevation`` / ``lake_mask``
-    textures are present; it reads the rivers from the ``"river_objects"`` world
-    feature. Stores ``self.surfaces: CostSurfaces`` and writes
-    ``land_base_cost`` / ``sea_base_cost`` / ``is_strait`` / ``is_water`` /
-    ``is_navigable_river`` / ``river_navigability`` per-face metadata (the
-    displayable, serializable summary; the full surfaces — including the river
-    flow field — live in ``self.surfaces`` and the ``"cost_surfaces"`` globe
-    feature).
+    The full :class:`CostSurfaces` go to ``self.surfaces`` and the ``"cost_surfaces"`` feature; per-face
+    metadata carries a displayable summary (``land_base_cost``, ``sea_base_cost``, ``is_strait``,
+    ``is_water``, ``is_navigable_river``, ``river_navigability``).
     """
 
     name = "cost"
@@ -164,9 +144,7 @@ class CostBuilder(Stage):
             land_cost = (land_cost * (1.0 + p.land.marsh_cost_strength * marsh)).astype(np.float32)
 
         _report("Computing river flow field…")
-        # A river's mouth segment touches a water face; exclude water faces so the
-        # land river term never lands on impassable water (in-lake stretches are
-        # already skipped inside compute_river_flow_field).
+        # Mouth segments touch water faces; keep the land river term off them.
         river_flow_dir, river_flow_mag = compute_river_flow_field(
             mesh, rivers, exclude_mask=is_water
         )
@@ -182,8 +160,6 @@ class CostBuilder(Stage):
             navigable_flow_min=p.sea.navigable_flow_min,
         )
 
-        # Sailable network = open water plus navigable rivers (which stay
-        # land-passable too — the one overlap between the two surfaces).
         is_sailable = is_water | river_navigable
 
         _report("Detecting straits…")
@@ -192,7 +168,7 @@ class CostBuilder(Stage):
         _report("Computing sea distance to coast…")
         sea_dist = compute_sea_distance_to_coast(mesh, is_sailable)
 
-        # Read winds from the climate stage if available: [(centroids, (N,3)), ...]
+        # Climate winds feature: [(centroids, (N,3)), ...] per season.
         winds_arr: Optional[np.ndarray] = None
         wind_dir: Optional[np.ndarray] = None
         winds_feature = ctx.world.get_feature("winds")
@@ -255,7 +231,6 @@ class CostBuilder(Stage):
             [m.get("land_base_cost", 0.0) for m in mesh.face_metadata], dtype=np.float64
         )
         # Normalize against land faces only (water carries a meaningless cost value).
-        # Fall back to is_ocean for worlds saved before the cost stage wrote is_water.
         is_water_arr = np.array(
             [is_water_meta(m) for m in mesh.face_metadata],
             dtype=bool,

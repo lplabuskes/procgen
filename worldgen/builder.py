@@ -57,9 +57,7 @@ class GlobePipeline(Pipeline):
         self.danger_builder: DangerBuilder = DangerBuilder(self.params.danger)
         self.cost_builder: CostBuilder = CostBuilder(self.params.cost)
 
-        # Lake-feedback second pass is placed after hydrology and the deltas (so
-        # the land they build gets its precipitation and biome), sharing the
-        # climate builder.
+        # Lake feedback runs after the deltas so the land they build gets its own climate.
         super().__init__([
             self.elevation_builder,
             self.climate_builder,

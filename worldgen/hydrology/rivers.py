@@ -76,7 +76,6 @@ class RiverGenerator:
         self.sea_level = sea_level
         self.min_lake_pixels = min_lake_pixels
 
-        # Per-node flat arrays.
         self.elevations: np.ndarray = elev.astype(np.float32).reshape(-1)
         self.positions: np.ndarray = mesh.face_texture_positions(h, h).reshape(-1, 3)
 
@@ -92,9 +91,7 @@ class RiverGenerator:
             flat = annual.reshape(-1)
             mean = float(flat.mean())
             self._mean_precip: float | None = max(mean, 1e-6)
-            # Precip-weighted accumulation: each node contributes precip/mean
-            # (mean ≈ 1 over all nodes), so wetter cells carry proportionally
-            # more flow.
+            # Each node contributes precip/mean (≈ 1 on average) to accumulation.
             self._precip_weights: np.ndarray | None = (flat / self._mean_precip).astype(np.float32)
         else:
             self._mean_precip = None
@@ -112,20 +109,15 @@ class RiverGenerator:
         # Populated by compute_flow / water-balance shrinking.
         self._endorheic_mask: np.ndarray = np.zeros(self.n_nodes, dtype=bool)
 
-        # Per-face tangent frames; the inter-face flow fallback projects D8
-        # descent directions into each face's UV frame.
+        # For the inter-face flow fallback (D8 descent projected into face UV).
         frames = mesh.face_tangent_frames()
         self._u_axes = np.asarray(frames[0], dtype=np.float64)
         self._v_axes = np.asarray(frames[1], dtype=np.float64)
 
-        # Sparse inter-face adjacency; intra-face neighbours derived on the fly.
-        # Derived from the mesh's cached boundary pixel pairs (already built by
-        # the elevation/climate seam passes), avoiding a separate stitch pass.
-        # The pairing uses a strict t∈[0,1] band vs stitch's ±1e-3 slack, so it
-        # differs by ~0.3% of edges — visually negligible, and the cache is free.
+        # Inter-face adjacency from the mesh's cached boundary pixel pairs (no
+        # separate stitch pass; their strict t∈[0,1] band differs from stitch's
+        # ±1e-3 slack on ~0.3% of edges — negligible).
         self._inter_adj: Dict[int, List[int]] = self._build_inter_adj_from_pairs(mesh)
-        # Static node adjacency as CSR (indptr + flat indices) for the JIT-compiled
-        # Priority-Flood. Built once; the grid + stitch topology never changes.
         self._build_neighbor_csr()
 
     def _build_inter_adj_from_pairs(self, mesh: PolygonMesh) -> Dict[int, List[int]]:
@@ -146,13 +138,10 @@ class RiverGenerator:
         return inter_adj
 
     def _build_neighbor_csr(self) -> None:
-        """Precompute static node adjacency as CSR arrays (indptr, flat).
+        """Static node adjacency as CSR (indptr, flat) for the JIT Priority-Flood.
 
-        Builds the D8 intra-face edges (vectorised across all faces) plus the
-        stitched inter-face edges, writing each node's row in place. The
-        per-node order — [up, down, left, right, UL, UR, DL, DR] then the
-        inter-face ones — reproduces the exact neighbour ordering ``_neighbors``
-        emits. Consumed by the JIT Priority-Flood in routing.py.
+        Per-node order — [up, down, left, right, UL, UR, DL, DR] then inter-face —
+        must match ``_neighbors``.
         """
         res = self.resolution
         r2 = self._r2
@@ -172,7 +161,7 @@ class RiverGenerator:
             (rows + dr >= 0) & (rows + dr < res) & (cols + dc >= 0) & (cols + dc < res)
             for dr, dc in directions
         ])                                                       # (8, r2)
-        # Slot of each direction within a node's row: the valid ones before it.
+        # Slot within a node's row = number of valid directions before it.
         slot = np.cumsum(valid, axis=0) - valid                  # (8, r2)
         n_intra = valid.sum(axis=0)                              # (r2,)
 
@@ -194,7 +183,7 @@ class RiverGenerator:
             ls = local[valid[d]]
             src = (face_base + ls[None, :]).reshape(-1)
             flat[indptr[src] + np.tile(slot[d][ls], n_faces)] = src + (dr * res + dc)
-        # Inter-face neighbours follow, each node's in its ``_inter_adj`` order.
+        # Inter-face neighbours follow, in ``_inter_adj`` order.
         order = np.argsort(inter_src, kind="stable")
         s_sorted = inter_src[order]
         first = np.searchsorted(s_sorted, s_sorted, side="left")
@@ -281,11 +270,10 @@ class RiverGenerator:
         return r1, r2, f1, f2, ang, accum
 
     def _shrink_endorheic_lakes(self, flow_accum: np.ndarray) -> None:
-        """Shrink endorheic lakes to equilibrium where inflow equals total PET.
+        """Shrink endorheic lakes until total PET equals inflow.
 
-        Clears dry-bed pixels from _lake_mask, sets _endorheic_mask on kept pixels,
-        and rewrites _eff so external traces descend into the new lake.
-        No-op without climate inputs.
+        Updates _lake_mask, _endorheic_mask and _eff (so traces descend into the
+        shrunken lake). No-op without climate inputs.
         """
         if self._t_annual_flat is None or self._precip_weights is None or self._mean_precip is None:
             return
@@ -299,20 +287,20 @@ class RiverGenerator:
             0.0,
             self._pet_max_mm_yr,
         ).astype(np.float32)
-        pet_norm = pet_mm_yr / self._mean_precip  # normalized to mean-precip units
+        pet_norm = pet_mm_yr / self._mean_precip  # mean-precip units
 
         for comp in components:
             comp_arr = np.asarray(comp, dtype=np.int64)
             inflow = float(flow_accum[comp_arr].max())  # ≈ upstream contribution at the spill pixel
             total_pet_norm = float(pet_norm[comp_arr].sum())
             if inflow >= total_pet_norm:
-                continue  # exorheic — lake overflows, keep at full Priority-Flood fill
+                continue  # exorheic: keep the full fill
 
             elevs = self.elevations[comp_arr]
             order = np.argsort(elevs, kind='stable')
             sorted_pixels = comp_arr[order]
             cum_pet = np.cumsum(pet_norm[sorted_pixels])
-            # Find the smallest prefix whose cumulative PET reaches the inflow.
+            # Smallest prefix whose cumulative PET reaches the inflow.
             k = int(np.searchsorted(cum_pet, inflow, side='left')) + 1
             k = max(1, min(k, len(comp_arr)))
 
@@ -326,7 +314,7 @@ class RiverGenerator:
             self._eff[leave] = self.elevations[leave]  # restore dry bed; old eff would route out the old spill
 
     def _build_lake_mask(self, was_raised: np.ndarray) -> np.ndarray:
-        """Return a bool mask containing only flooded land components >= min_lake_pixels."""
+        """Bool mask of flooded land components with >= min_lake_pixels."""
         raw = was_raised & ~self._ocean_mask
         mask = np.zeros(self.n_nodes, dtype=bool)
         for comp in self._components(raw, min_size=self.min_lake_pixels):
@@ -345,26 +333,18 @@ class RiverGenerator:
         frac2: np.ndarray,
         flow_accum: np.ndarray,
     ) -> List[River]:
-        """Build rivers by routing along the D-infinity accumulation graph.
+        """Build rivers along the primary-receiver tree of the D-infinity graph.
 
-        Each river follows the primary (max-accumulation) receiver chain from a
-        channel headwater down to the sea, an endorheic sink, or a confluence
-        with a larger stem. The drawn polyline therefore *is* the accumulation
-        channel, so the painted flow grows smoothly and only jumps at real
-        confluences — unlike the bilinear-gradient trace, whose path was
-        decoupled from the accumulation field (off-channel sampling produced a
-        flat-then-leap staircase). Tributaries are separate rivers terminating
-        at the confluence node where they meet a higher-order stream, so no two
-        rivers share an interior cell (a main-stem / Hack decomposition).
+        Each river runs from a headwater to the sea, an endorheic sink, or its
+        confluence with a larger stem (Hack decomposition), so the drawn line is
+        the accumulation channel and flow jumps only at real confluences.
         """
         n = self.n_nodes
         ocean = self._ocean_mask
         endo = self._endorheic_mask
         threshold = self.min_flow
 
-        # Primary single receiver = the valid receiver carrying the larger
-        # accumulation (follows the main channel at confluences). -1 at outlets /
-        # endorheic sinks. This single-receiver graph is the tree we draw.
+        # Primary receiver = the valid one with larger accumulation; -1 at outlets / sinks.
         r1 = receiver1.astype(np.int64)
         r2 = receiver2.astype(np.int64)
         valid1 = (r1 >= 0) & (frac1 > 0.0)
@@ -378,14 +358,10 @@ class RiverGenerator:
         take2 = valid2 & (~valid1 | (acc2 > acc1))
         prx[take2] = r2[take2]
 
-        # Tree accumulation: single-receiver flow along the prx edges we draw.
-        # Everything keys off this so the network and its painted flow are one
-        # consistent quantity — monotonic down each chain, rising only at *drawn*
-        # confluences, with sources born right at the threshold. (D-inf
-        # `flow_accum` only chooses the direction; it is a DAG, so using it for
-        # magnitude leaps where flow joins via the secondary receiver — a jump
-        # with no drawn tributary — and using it for the threshold makes sources
-        # appear far above it.) Reuses the JIT accumulator with one receiver.
+        # Single-receiver accumulation along the drawn tree: monotonic, rising
+        # only at drawn confluences, sources born at the threshold. D-inf
+        # `flow_accum` only picks direction — as magnitude it leaps where flow
+        # joins via an undrawn secondary receiver.
         tree_accum = accumulate_flow(
             prx.astype(np.int32),
             np.full(n, -1, dtype=np.int32),
@@ -399,8 +375,7 @@ class RiverGenerator:
         self._tree_receiver = prx
         self._tree_accum = tree_accum
 
-        # Channel nodes: enough tree flow, not open sea. Lake interiors stay in
-        # (rivers route through exorheic lakes, flagged in_lake downstream).
+        # Lake interiors stay in: rivers route through exorheic lakes (flagged in_lake).
         is_channel = (tree_accum >= threshold) & ~ocean
         return [
             self._river_from_path(path, tree_accum)
@@ -414,8 +389,7 @@ class RiverGenerator:
         nodes = np.asarray(path, dtype=np.int64)
         raw_pos = [self.positions[nd].astype(np.float64) for nd in path]
         smooth = laplacian_smooth_sphere(raw_pos, iterations=8, alpha=0.5)
-        # On-channel flow: running max of accumulation keeps it monotonic through
-        # the minor dips D-inf splitting can leave between adjacent channel cells.
+        # Running max smooths minor dips D-inf splitting leaves along the channel.
         running = np.maximum.accumulate(flow_accum[nodes]).astype(np.float64)
         in_lake = self._lake_mask[nodes]
 
@@ -454,8 +428,7 @@ class RiverGenerator:
         return rivers
 
     def stream_network(self, threshold: float) -> StreamNetwork:
-        """The accumulation tree down to ``threshold`` — the rivers' own tree
-        (same receivers, same flow), cut far lower. Call after generate()."""
+        """The rivers' own accumulation tree, cut at a lower ``threshold``. Call after generate()."""
         ocean = self._ocean_mask
         stop = ocean | self._endorheic_mask
         channel = (self._tree_accum >= threshold) & ~ocean
@@ -494,12 +467,10 @@ class RiverGenerator:
                 continue
 
             boundary_set = set(boundary)
-            # Adjacency among boundary pixels only.
             adj: Dict[int, List[int]] = {
                 node: [nb for nb in self._neighbors(node) if nb in boundary_set]
                 for node in boundary
             }
-            # Walk the boundary graph in connected order.
             ordered: List[int] = [boundary[0]]
             visited: set = {boundary[0]}
             current = boundary[0]
@@ -537,20 +508,14 @@ def main_stem_paths(
 ) -> List[List[int]]:
     """Main-stem (Hack) decomposition of a single-receiver channel tree.
 
-    ``receiver[i]`` is node ``i``'s downstream node (-1 at an outlet), ``accum``
-    the flow along those edges, ``is_channel`` the nodes carrying enough of it to
-    be drawn and ``is_stop`` the sinks a river ends on (sea, endorheic lakes, …).
-    Returns node paths headwater → mouth: each runs from a channel leaf down to a
-    sink or to the confluence where it meets a larger stem (that node included),
-    so no two paths share an interior node. Paths shorter than ``min_nodes`` are
-    dropped as stubs.
+    ``receiver[i]`` is node ``i``'s downstream node (-1 at an outlet);
+    ``is_stop`` marks sinks (sea, endorheic lakes). Returns headwater → mouth
+    paths, each ending at a sink or at its confluence node with a larger stem,
+    so no two share an interior node. Paths under ``min_nodes`` are dropped.
     """
     n = len(receiver)
-    # main_child[d] = the channel node draining into d with the largest
-    # accumulation — the main-stem continuation upstream of d. Ascending
-    # iteration leaves the max as the final writer. A chain stops where its node
-    # is not its receiver's main_child; channel leaves (main_child == -1) are the
-    # headwaters.
+    # main_child[d] = largest-accumulation channel node draining into d (ascending
+    # iteration leaves the max as last writer); leaves (-1) are headwaters.
     ch = np.where(is_channel)[0]
     ch_sorted = ch[np.argsort(accum[ch], kind="stable")]
     main_child = np.full(n, -1, dtype=np.int64)
@@ -573,6 +538,6 @@ def main_stem_paths(
             if main_child[d] != cur:   # merged into a larger stem here
                 break
             cur = d
-        if len(path) >= min_nodes:     # drop stubs (matches old >2-segment rule)
+        if len(path) >= min_nodes:
             paths.append(path)
     return paths

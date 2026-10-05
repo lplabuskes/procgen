@@ -1,17 +1,13 @@
 """The coarse tier a refinement reads from: the globe, or a region.
 
-A refinement (:func:`region.upsample.refine_fields`) needs the same handful of
-things from whichever tier sits above it, at every one of its own texels:
+At each child texel, a refinement (:func:`region.upsample.refine_fields`) needs:
 
-- a **smooth** read of a parent texture (bilinear) — the coarse field detail is
-  added to;
-- the **anchor**: the single parent texel a child texel belongs to, and that
-  texel's exact value — the conservation target;
-- the parent's surface slope, texel spacing, water surfaces and danger.
+- a smooth (bilinear) read of a parent texture, which detail is added to;
+- the **anchor**: the parent texel it belongs to, whose value is the conservation target;
+- the parent's slope, texel spacing, water surfaces and danger.
 
-:class:`GlobalSource` answers them from the mesh's face textures (the region
-tier); :class:`RegionSource` answers them from a region's refined hex textures
-(the local tier).  Everything else in the refinement is tier-agnostic.
+:class:`GlobalSource` serves the region tier from face textures,
+:class:`RegionSource` the local tier from a region's hex textures.
 """
 from __future__ import annotations
 
@@ -36,9 +32,7 @@ EARTH_RADIUS_KM = 6371.0
 def global_slope(mesh: "PolygonMesh", elevation_tex: np.ndarray) -> np.ndarray:
     """(N, H, W, 1) gradient magnitude (km/km) of the global elevation texture.
 
-    Differences are taken across each face's own texel grid and scaled by that
-    face's tangent-frame extent, so the result is a true surface slope rather
-    than a per-index difference.
+    Per-face texel differences scaled by the face's tangent-frame extent.
     """
     elev = np.asarray(elevation_tex, dtype=np.float64)[..., 0]        # (N, H, W)
     _, h, w = elev.shape
@@ -55,8 +49,9 @@ def global_slope(mesh: "PolygonMesh", elevation_tex: np.ndarray) -> np.ndarray:
 def _bilinear_stencil(
     tiles: np.ndarray, x: np.ndarray, y: np.ndarray, h: int, w: int, owner: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Corners and weights of a bilinear read at continuous texel coords ``(x, y)``
-    of ``(N, h, w)`` textures, corners mapped through ``owner`` (flat texel → anchor)."""
+    """Corners and weights of a bilinear read at texel coords ``(x, y)`` of ``(N, h, w)`` textures.
+
+    Corners are mapped through ``owner`` (flat texel → anchor)."""
     x0 = np.clip(np.floor(x).astype(np.int64), 0, max(w - 2, 0))
     y0 = np.clip(np.floor(y).astype(np.int64), 0, max(h - 2, 0))
     x1 = np.minimum(x0 + 1, w - 1)
@@ -70,8 +65,7 @@ def _bilinear_stencil(
 
 @dataclass
 class Located:
-    """Child texels located on the parent: their anchors plus whatever the
-    source needs for its bilinear reads (``data``, opaque to callers)."""
+    """Child texels located on the parent: anchors plus ``data`` (opaque, for the source's reads)."""
 
     anchors: np.ndarray          # (P,) flat parent texel index
     data: tuple
@@ -80,10 +74,9 @@ class Located:
 class ParentSource:
     """What a refinement reads from the tier above.  See the module docstring."""
 
-    #: Number of parent texels — the length of every per-anchor reduction.
+    #: Number of parent texels.
     n_anchors: int
-    #: Mean angular spacing (radians) of the parent's texels; the detail band
-    #: starts at its Nyquist.
+    #: Mean angular spacing (radians) of the parent's texels.
     spacing_rad: float
 
     def has(self, key: str) -> bool:
@@ -103,19 +96,16 @@ class ParentSource:
     def owners(self) -> np.ndarray:
         """``(n_anchors,)`` the anchor owning each parent texel's *position*.
 
-        A texel's own index unless its position lies in a neighbouring texture's
-        territory (over-hang past its hexagon or face); then that neighbour's
-        texel there.
+        A texel's own index unless its position is over-hang in a neighbour's
+        territory; then the neighbour's texel there.
         """
         raise NotImplementedError
 
     def stencil(self, loc: Located) -> tuple[np.ndarray, np.ndarray]:
         """``((P, 4) anchors, (P, 4) weights)``: the bilinear read of a per-anchor field.
 
-        The four corners are the parent texels a bilinear read touches, each
-        replaced by the anchor that *owns* that texel's position — so a
-        texture's over-hang reads its neighbour's values and the read stays
-        continuous across hex / face seams.
+        Each corner is replaced by the anchor owning its position, so the read
+        stays continuous across hex / face seams.
         """
         raise NotImplementedError
 
@@ -135,9 +125,8 @@ class ParentSource:
     def danger(self, loc: Located, positions: np.ndarray) -> Optional[tuple[np.ndarray, Optional[np.ndarray]]]:
         """``(base, targets)`` for the danger refinement, or None without danger.
 
-        ``base`` is a smooth ``(P,)`` danger surface; ``targets`` the per-texel
-        value each anchor group must keep, or None to keep ``base``'s own
-        per-anchor mean.
+        ``base`` is a smooth ``(P,)`` surface; ``targets`` each anchor group's
+        mean, or None to keep ``base``'s own.
         """
         raise NotImplementedError
 
@@ -186,19 +175,15 @@ class GlobalSource(ParentSource):
     def danger(self, loc: Located, positions: np.ndarray) -> Optional[tuple[np.ndarray, Optional[np.ndarray]]]:
         if self._danger is None:
             return None
-        # One value per face: made continuous with exact face means; the nudge
-        # then keeps each global texel's mean of that surface.
+        # Per-face values made continuous with exact face means.
         return _danger_field(self.mesh, np.asarray(self._danger, dtype=np.float64))(positions), None
 
 
 class RegionSource(ParentSource):
     """A region's refined hex textures as the parent of a local map.
 
-    Points are located through the region's own ``(s, t)`` frame (which extends
-    smoothly past the cell) on the hexagon with the nearest centre — a regular
-    hex tiling is the Voronoi diagram of its centres — and read from that hex's
-    texture, which over-hangs its hexagon, so a bilinear read near a hexagon's
-    edge still has real data on both sides.
+    Points are located in the region's ``(s, t)`` frame on the hexagon with the
+    nearest centre and read from its (over-hanging) texture.
     """
 
     def __init__(self, fields: "RegionFields") -> None:
@@ -228,9 +213,7 @@ class RegionSource(ParentSource):
         return _bilinear_stencil(hexes, x, y, t, t, self.owners())
 
     def locate(self, points: np.ndarray) -> Located:
-        # Anchored on the texel *owning* the nearest one, as on the globe
-        # (GlobalSampler.anchors): a point by a hexagon's edge whose nearest
-        # texel is an over-hang one belongs to the neighbour's texel there.
+        # Anchor on the texel owning the nearest one, as GlobalSampler.anchors does.
         loc = self._locate_nearest(points)
         return Located(self.owners()[loc.anchors], loc.data)
 

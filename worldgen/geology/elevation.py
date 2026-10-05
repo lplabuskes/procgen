@@ -42,27 +42,27 @@ def _boundary_delta(
 
     if btype == "convergent":
         if my_type == "continental" and "continental" in neighbor_types:
-            # Continental-continental collision: mountain range on both sides
+            # Collision: mountain range
             return 4.0 * rate
         elif my_type == "continental" and "oceanic" in neighbor_types:
-            # Oceanic subducts under continental: volcanic arc
+            # Volcanic arc over subducting oceanic plate
             return 2.5 * rate
         elif my_type == "oceanic" and "continental" in neighbor_types:
-            # Oceanic subducts: trench
+            # Trench
             return -2.5 * rate
         else:
-            # Oceanic-oceanic: trench on both sides (island arc is minor)
+            # Oceanic-oceanic: trench (island arc is minor)
             return -1.5 * rate
 
     if btype == "divergent":
         if my_type == "oceanic":
-            # Mid-ocean ridge: elevated above oceanic baseline
+            # Mid-ocean ridge
             return 2.0 * rate
         else:
-            # Continental rift: depressed below continental baseline
+            # Continental rift
             return -1.5 * rate
 
-    # Transform boundaries and interior: no delta
+    # Transform / interior
     return 0.0
 
 
@@ -86,7 +86,6 @@ def compute_face_elevations(
         dtype=np.float64,
     )
 
-    # Compute the elevation delta at each boundary face.
     boundary_deltas = np.zeros(n_faces, dtype=np.float64)
     for i in range(n_faces):
         bd = boundary_data[i]
@@ -100,7 +99,7 @@ def compute_face_elevations(
             rate_norm=rate_norm,
         )
 
-    # Accumulate decayed contributions from each boundary face via BFS.
+    # Strongest-magnitude decayed contribution wins (not summed).
     delta_field = np.zeros(n_faces, dtype=np.float64)
     for src in range(n_faces):
         delta = boundary_deltas[src]
@@ -147,9 +146,7 @@ def compute_erosion(
 
     # --- Hydraulic erosion ---
     for _ in range(hydraulic_iterations):
-        # Priority-queue fill: raise sinks to the level of their lowest outflow neighbor.
-        # Process faces from lowest to highest; any face whose all neighbors are higher
-        # gets filled to the min neighbor elevation.
+        # Single low-to-high sweep raising each sink to its lowest neighbour.
         order = np.argsort(elev)
         for i in order:
             neighbors = adjacency[i]
@@ -160,7 +157,7 @@ def compute_erosion(
             if elev[i] < min_nb:
                 elev[i] = min_nb
 
-        # Flow accumulation: route water downhill, accumulate volume at each face.
+        # Flow accumulation, split by elevation drop.
         flow = np.ones(n_faces, dtype=np.float64)
         order = np.argsort(elev)[::-1]  # highest first
         for i in order:
@@ -168,19 +165,16 @@ def compute_erosion(
             lower = [nb for nb in neighbors if elev[nb] < elev[i]]
             if not lower:
                 continue
-            # Distribute flow proportionally by elevation drop.
             drops = np.array([elev[i] - elev[nb] for nb in lower], dtype=np.float64)
             drops /= drops.sum()
             for nb, frac in zip(lower, drops):
                 flow[nb] += flow[i] * frac
 
-        # Erode high faces, deposit on receiving faces.
         sediment = np.zeros(n_faces, dtype=np.float64)
         for i in order:
             neighbors = adjacency[i]
             lower = [nb for nb in neighbors if elev[nb] < elev[i]]
             if not lower:
-                # Deposition at sinks
                 elev[i] += sediment[i] * hydraulic_deposition_rate
                 continue
             erosion = hydraulic_erosion_rate * math.log1p(flow[i]) * 0.01
@@ -197,7 +191,7 @@ def compute_erosion(
 
     # --- Thermal erosion ---
     for _ in range(thermal_iterations):
-        # Single sweep; iterate faces in random-ish order (by elevation, high to low).
+        # High to low.
         order = np.argsort(elev)[::-1]
         for i in order:
             for nb in adjacency[i]:
@@ -225,8 +219,7 @@ def compute_noise_elevation_deltas(
 ) -> np.ndarray:
     """Per-pixel fBm simplex noise at uniform amplitude across all faces.
 
-    Band-limited to the pixel grid: octaves above nyquist_safety/max_pixel_spacing are
-    skipped to prevent aliasing across face UV boundaries (which appears as seams).
+    Octaves above nyquist_safety/max_pixel_spacing are skipped: aliasing shows as seams.
     """
     n_faces = len(mesh.faces)
     positions = mesh.face_texture_positions(tex_size, tex_size)  # (N, H, W, 3)
@@ -272,9 +265,7 @@ def face_elevations_from_texture(elevation_textures: np.ndarray) -> np.ndarray:
 
 
 # Kernel support of rasterize_face_values, in mean face-centroid spacings.  At
-# 2.0 a face's centre keeps ~1/2 of its own value and takes the rest from its six
-# neighbours — about as smooth as the old vertex-averaged raster (1/3), but
-# without its creases.
+# 2.0 a face's centre keeps ~1/2 of its own value, the rest from its neighbours.
 RASTER_SUPPORT_SPACINGS = 2.0
 
 
@@ -282,10 +273,9 @@ RASTER_SUPPORT_SPACINGS = 2.0
 def _stencil_rows(dist, idx, inv_support):  # pragma: no cover - compiled
     """CSR pieces ``(data, cols, counts)`` of the normalised Wendland C² weights.
 
-    ``dist``/``idx`` are each texel's k nearest centroids; the kernel is
-    ``(1 − r)⁴ (4r + 1)`` on ``r`` = distance / support (0 for r ≥ 1), and only
-    positive weights are kept.  A texel farther than the support from every
-    centroid (a badly stretched face) falls back to its nearest face.
+    ``dist``/``idx`` are each texel's k nearest centroids; kernel
+    ``(1 − r)⁴ (4r + 1)``, r = distance / support.  A texel beyond the support of
+    every centroid falls back to its nearest face.
     """
     n_rows, k = dist.shape
     data = np.empty(n_rows * k, dtype=np.float32)
@@ -321,10 +311,8 @@ def _stencil_rows(dist, idx, inv_support):  # pragma: no cover - compiled
     return data[:n], cols[:n], counts
 
 
-# mesh → {(tex_size, support_spacings): (P, N) CSR raster stencil}.  Every
-# texel's normalised kernel weights depend only on the geometry, so a build's
-# many rasters share them; ~0.3 GB at tex_size 16, so the globe pipeline drops
-# them when it finishes (:func:`clear_raster_stencils`).
+# mesh → {(tex_size, support_spacings): (P, N) CSR raster stencil}.  ~0.3 GB at
+# tex_size 16; the globe pipeline drops them when done (:func:`clear_raster_stencils`).
 _RASTER_STENCILS: "weakref.WeakKeyDictionary[PolygonMesh, Dict[Tuple[int, float], csr_matrix]]" = (
     weakref.WeakKeyDictionary()
 )
@@ -380,13 +368,9 @@ def rasterize_face_values(
 ) -> np.ndarray:
     """Rasterize per-face scalars to per-pixel textures as a smooth field over the sphere.
 
-    Every texel takes the kernel-weighted mean of the face values whose centroids
-    lie within ``support_spacings`` mean centroid spacings of its position
-    (Wendland C², normalised).  The result is a function of position alone, so
-    adjacent faces' textures — seams and over-hangs included — agree wherever
-    they cover the same ground, and its gradient is continuous: no creases at
-    face edges, unlike piecewise-linear interpolation over the polygons.
-    The weights are computed once per mesh and resolution (:func:`_raster_stencil`).
+    Each texel is the normalised Wendland C² mean of face values within
+    ``support_spacings`` centroid spacings.  A function of position alone, so
+    adjacent faces (seams, over-hangs) agree and the gradient has no creases.
     Returns float32 (N, tex_size, tex_size, K); K=1 when face_values is 1-D.
     """
     values = np.asarray(face_values, dtype=np.float64)
@@ -423,9 +407,8 @@ def smooth_texture_seams(
 def _seam_pass(tex, flat_a, flat_b):  # pragma: no cover - compiled
     """One :func:`smooth_texture_seams` pass over ``(P, K)`` texels, in place.
 
-    Each paired texel becomes the mean of itself and all its partners (pre-pass
-    values), the partner sums added in pair order — a's then b's — like the
-    ``np.add.at`` original.
+    Each paired texel becomes the mean of itself and its partners (pre-pass
+    values), summed in pair order — a's then b's — like the ``np.add.at`` original.
     """
     partner_sum = np.zeros_like(tex)
     count = np.zeros(tex.shape[0], dtype=np.int32)
@@ -481,10 +464,8 @@ def compute_ocean_mask_texture(
     elevs = elevation_textures[:, :, :, 0]    # (N, H, W)
     elev_max = elevs.max(axis=(1, 2))          # (N,)
 
-    # ---- Phase 1: seed faces ------------------------------------------------
-    is_core = elev_max <= seed_level           # unambiguously ocean
+    is_core = elev_max <= seed_level
 
-    # ---- Phase 2: face BFS --------------------------------------------------
     face_queue: deque[int] = deque(int(i) for i in np.where(is_core)[0])
     while face_queue:
         fi = face_queue.popleft()
@@ -493,10 +474,7 @@ def compute_ocean_mask_texture(
                 is_core[fj] = True
                 face_queue.append(fj)
 
-    # ---- Phase 3: pixel flood fill -------------------------------------------
-    # Every pixel of a core face is a seed; the fill spreads 4-connected within a
-    # face and across matched seam pairs, through pixels at or below sea level.
-    # The flooded set is the wet pixels' connected components holding a seed.
+    # Pixel fill: wet connected components containing a core-face pixel.
     wet = elevs.reshape(-1) <= sea_level
     ids = np.arange(N * H * W, dtype=np.int64).reshape(N, H, W)
     fa, fb, ra, ca, rb, cb = mesh.boundary_pixel_pairs(H)

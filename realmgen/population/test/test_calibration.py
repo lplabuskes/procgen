@@ -1,7 +1,4 @@
-"""Unit tests for realmgen.population.calibration — pure-function tests.
-
-All tests use lightweight stub graphs with no dependency on a full worldgen run.
-"""
+"""Unit tests for realmgen.population.calibration on stub graphs."""
 from __future__ import annotations
 
 import numpy as np

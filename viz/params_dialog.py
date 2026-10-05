@@ -117,9 +117,7 @@ class ParamsDialog(QDialog):
         content_layout = QVBoxLayout(content)
         content_layout.setSpacing(6)
 
-        # Walk the top-level params: dataclass fields become collapsible sections;
-        # leaf fields are grouped into a form. Top-level fields are rendered inline
-        # rather than nested under a root header.
+        # Top-level fields render inline, not under a root header.
         for f in dataclasses.fields(params):
             if f.metadata.get("hidden"):
                 continue

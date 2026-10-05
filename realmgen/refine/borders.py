@@ -1,29 +1,19 @@
 """Continuous polity border polylines, contoured on a seamless global lattice.
 
-The polity a point belongs to is a function of its position on the sphere
-(``fill.PolityLabelField``); the fill texture samples it at every face texel,
-and this module contours the *same* field, so the lines bound the fill's regions.
+Contours the same position-only ``fill.PolityLabelField`` the fill texture
+samples, so the lines bound the fill's regions. Face textures can't be contoured
+directly (they over-hang their hexagons and their grids don't line up across
+seams), so the field is sampled on a seamless fine icosphere lattice at about
+texel spacing:
 
-Contouring on the face textures themselves does not work: each face's square
-texture over-hangs its hexagon and no two faces' grids line up, so a border has
-to be stitched across every seam, and a border running *along* a seam lives in
-neither grid. Instead the field is sampled on the vertices of a fine icosphere
-(``_icosphere_lattice``) — one triangle mesh covering the whole sphere, with no
-seams — at about the texel spacing:
-
-1. Each lattice edge whose two (non-water) end labels differ is a border
-   crossing, at the **shallowest** hierarchy depth where the two labels'
-   ancestors differ (depth 0 = sovereign borders, including polity vs. unclaimed
-   land). Land against water is a coastline, not a border.
-2. The crossing point is found by bisecting the edge against the label field, so
-   the line sits on the true boundary rather than at the edge midpoint.
-3. Marching triangles joins them: a triangle with two crossings links them; one
-   with three (a three-region junction) or one (a border meeting the coast) links
-   each crossing to the triangle's centre. Triangles have no ambiguous case, and
-   every crossing is shared by exactly the two triangles on its edge, so the
-   pieces chain into continuous lines by construction — nothing needs welding.
-4. The chained polylines are Chaikin-smoothed, holding junctions fixed so the
-   borders meeting there stay joined.
+1. A lattice edge with differing non-water end labels is a crossing at the
+   shallowest depth where their ancestors differ (depth 0 includes polity vs
+   unclaimed). Land against water is coast, not border.
+2. Each crossing is bisected against the label field onto the true boundary.
+3. Marching triangles: two crossings link to each other; one (coast) or three
+   (junction) link to the triangle centre. No ambiguous cases, so pieces chain
+   into continuous lines without welding.
+4. Polylines are Chaikin-smoothed with junctions held fixed.
 """
 from __future__ import annotations
 
@@ -42,9 +32,8 @@ _ICOSA_EDGE_RAD = 1.1071487177940904
 def _chain_edges(edges, stops=frozenset()) -> List[list]:
     """Chain undirected ``(a, b)`` edges into vertex polylines.
 
-    Walks stop at junction/endpoint vertices (degree != 2) and at any vertex in
-    ``stops``, so a closed loop comes back as ``[v, ..., v]`` and shared junctions
-    appear in every incident chain — keeping the pieces joined.
+    Walks stop at vertices of degree != 2 and in ``stops``; a closed loop comes
+    back as ``[v, ..., v]`` and junctions appear in every incident chain.
     """
     adj: dict = defaultdict(list)
     for a, b in edges:
@@ -74,12 +63,11 @@ def _chain_edges(edges, stops=frozenset()) -> List[list]:
         return chain
 
     chains: List[list] = []
-    # Open chains: anchor at junctions / endpoints / stops first.
     for v in [v for v in adj if is_stop(v)]:
         for w in adj[v]:
             if ekey(v, w) not in visited:
                 chains.append(walk(v, w))
-    # Pure cycles with no junction: start anywhere on each remaining edge.
+    # Remaining edges are pure cycles.
     for a, b in edges:
         if ekey(a, b) not in visited:
             chains.append(walk(a, b))
@@ -87,8 +75,7 @@ def _chain_edges(edges, stops=frozenset()) -> List[list]:
 
 
 def _chaikin(points: List[np.ndarray], iterations: int, closed: bool) -> List[np.ndarray]:
-    """Chaikin corner-cutting.  Open chains keep their endpoints fixed (so chains
-    sharing a junction vertex stay joined); closed loops cut every corner."""
+    """Chaikin corner-cutting; open chains keep their endpoints fixed so junctions stay joined."""
     pts = points
     for _ in range(max(iterations, 0)):
         if len(pts) < 3:
@@ -115,11 +102,7 @@ def _chaikin(points: List[np.ndarray], iterations: int, closed: bool) -> List[np
 
 
 def _ancestor_lut(polities: List) -> tuple[np.ndarray, int]:
-    """``lut[d, polity_id]`` = depth-d ancestor id (clamped to the leaf).
-
-    Rows cover ``0..max_depth``; columns cover ``0..max_polity_id``.  Unused
-    polity-id columns stay -1.
-    """
+    """``(lut, max_depth)``; ``lut[d, polity_id]`` = depth-d ancestor (clamped to the leaf), -1 if unused."""
     pol_by_id = {p.polity_id: p for p in polities}
     max_depth = max(p.depth for p in polities)
     max_pid = max(p.polity_id for p in polities)
@@ -140,9 +123,7 @@ def _edge_border_depth(la: np.ndarray, lb: np.ndarray,
                        lut: np.ndarray) -> np.ndarray:
     """Per-edge shallowest border depth (-1 = not a border) for label arrays.
 
-    Coastlines (either side ``WATER``) are never borders.  Polity-vs-unclaimed
-    land is a depth-0 border; polity-vs-polity is the shallowest depth where
-    their ancestor chains diverge.
+    Coastlines are never borders; polity-vs-unclaimed land is depth 0.
     """
     shape = la.shape
     fa = la.ravel()
@@ -151,9 +132,7 @@ def _edge_border_depth(la: np.ndarray, lb: np.ndarray,
 
     nonwater = (fa != WATER) & (fb != WATER)
     diff = (fa != fb) & nonwater
-    # polity vs unclaimed land → depth 0
     out[diff & ((fa < 0) | (fb < 0))] = 0
-    # polity vs polity → shallowest diverging depth
     both = diff & (fa >= 0) & (fb >= 0)
     if np.any(both):
         a = fa[both]
@@ -189,8 +168,7 @@ def _unique_edges(tris: np.ndarray, n_verts: int) -> tuple[np.ndarray, np.ndarra
 def _icosphere_lattice(depth: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """``(verts, tris, edges, tri_edges)`` of an icosphere subdivided ``depth`` times.
 
-    Vectorised (the mesh module's ``Mesh.icosphere`` is a Python loop, far too slow
-    at the ~10⁶-vertex sizes used here) and cached, since it depends only on depth.
+    Vectorised because ``Mesh.icosphere`` is far too slow at ~10⁶ vertices.
     """
     phi = (1.0 + np.sqrt(5.0)) / 2.0
     verts = np.array([
@@ -238,9 +216,8 @@ def _bisect_crossings(verts: np.ndarray, edges: np.ndarray, la: np.ndarray,
                       lb: np.ndarray, label_fn: Optional[Callable], steps: int) -> np.ndarray:
     """Point on each edge where the label turns from ``la`` into ``lb``.
 
-    Bisects against ``label_fn`` (``(P, 3) → (P,)`` land labels); an edge whose
-    midpoint holds a third label (a junction passing through it) keeps the
-    bracket it had. Without a ``label_fn`` the crossing is the edge midpoint.
+    Bisects against ``label_fn`` (``(P, 3) → (P,)``); an edge whose midpoint hits a
+    third label keeps its bracket. Without ``label_fn`` the crossing is the midpoint.
     """
     p0 = verts[edges[:, 0]]
     p1 = verts[edges[:, 1]]
@@ -272,10 +249,9 @@ def trace_lattice_borders(verts: np.ndarray, tris: np.ndarray, edges: np.ndarray
                           bisect_steps: int = 5) -> dict:
     """Return ``{depth: (M, 6)}`` smoothed border segments contoured on a triangle lattice.
 
-    ``verts`` are unit-sphere lattice vertices carrying ``labels`` (polity id,
-    ``UNCLAIMED`` or ``WATER``); ``edges``/``tri_edges`` come from
-    ``_unique_edges(tris)``. ``label_fn`` is the land label field the labels were
-    sampled from, used to place each crossing on the true boundary.
+    ``labels`` per vertex are polity id, ``UNCLAIMED`` or ``WATER``;
+    ``edges``/``tri_edges`` come from ``_unique_edges(tris)``. ``label_fn`` is the
+    land label field the labels came from, used to bisect crossings.
     """
     if not polities:
         return {}
@@ -293,14 +269,13 @@ def trace_lattice_borders(verts: np.ndarray, tris: np.ndarray, edges: np.ndarray
     point_id = np.full(len(edges), -1, dtype=np.int64)
     point_id[cross] = np.arange(cross.size)
 
-    # Triangles touching a crossing, and how many of their edges cross.
     is_cross = ebd >= 0
     touched = np.flatnonzero(is_cross[tri_edges].any(axis=1))
     te = tri_edges[touched]                                  # (T, 3)
     bd = ebd[te]                                             # (T, 3)
     n_cross = (bd >= 0).sum(axis=1)
 
-    # Two crossings: link them (both are the same border, hence the same depth).
+    # Two crossings: same border, hence same depth.
     two = n_cross == 2
     te2, bd2 = te[two], bd[two]
     col = np.argsort(bd2 < 0, axis=1, kind="stable")[:, :2]  # the two crossing columns
@@ -308,8 +283,7 @@ def trace_lattice_borders(verts: np.ndarray, tris: np.ndarray, edges: np.ndarray
     ids2 = point_id[te2[rows, col]]                          # (T2, 2)
     depth2 = bd2[rows[:, 0], col[:, 0]]
 
-    # One crossing (a border meeting the coast) or three (a junction): link each
-    # crossing to the triangle's centre.
+    # One crossing (coast) or three (junction): link each to the triangle centre.
     hub = ~two
     hub_tris = touched[hub]
     centres = verts[tris[hub_tris]].sum(axis=1)
@@ -363,10 +337,9 @@ def smooth_polity_borders(mesh, polities: List, field: PolityLabelField,
                           lattice_offset: int = 0, bisect_steps: int = 5) -> dict:
     """Return ``{depth: (M, 6)}`` continuous, Chaikin-smoothed polity borders.
 
-    Contours ``field`` on an icosphere lattice about as fine as the face texels
-    (``lattice_offset`` levels finer or coarser; ``lattice_depth`` overrides
-    both), with water read from the ``ocean_tex`` /
-    ``lake_tex`` masks so borders end at the texel coastline.
+    Lattice is about texel-fine, shifted by ``lattice_offset`` levels
+    (``lattice_depth`` overrides). Water from ``ocean_tex``/``lake_tex`` so
+    borders end at the texel coastline.
     """
     if not polities:
         return {}

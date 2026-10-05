@@ -1,13 +1,9 @@
 """World — the generic container a Pipeline reads and writes.
 
-Holds the surface ``mesh`` (rasterized per-face data: textures + metadata) plus a
-generic feature registry for vector/point/graph entities (rivers, minerals,
-coastlines, and future cities/roads/realms) that don't fit the per-face raster.
-
-This is the promoted form of the old ``worldgen.globe.Globe``. The World owns its
-mesh: the constructor loads one from the shared cache (building the cache on first
-run), so ``mesh`` is always present. Use :meth:`World.from_mesh` to wrap an
-already-built mesh (e.g. when loading a saved world).
+Holds the surface ``mesh`` (per-face textures + metadata) plus a feature registry
+for vector/point/graph entities that don't fit the per-face raster.  The
+constructor loads a mesh from the shared cache (building it on first run);
+:meth:`World.from_mesh` wraps an existing one.
 """
 from __future__ import annotations
 
@@ -37,8 +33,7 @@ class World:
                 progress("Building mesh cache (first run only)…")
             mesh_cache.build(params, progress=progress)
         self.mesh: "PolygonMesh" = mesh_cache.load_random(seed=seed)
-        # Retained so downstream stages can derive per-world-deterministic RNG
-        # (e.g. polity scalars) — same seed ⇒ same world ⇒ same generation.
+        # For per-world-deterministic RNG downstream.
         self.seed: Optional[int] = seed
         self._features: Dict[str, Any] = {}
         # Set by ElevationBuilder after ocean data is available.

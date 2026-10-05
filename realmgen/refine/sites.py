@@ -1,15 +1,9 @@
 """Per-texel site features, shared by city siting and town placement.
 
-A settlement site is a texel of the global face textures. What makes a texel a
-good site — coast, a river, a confluence, good soil — is the same question for a
-major city and for a market town, so both read it from one :class:`SiteField`.
-
-**Ownership.** A face's square texture over-hangs its polygon, so neighbouring
-faces' grids sample the same ground twice. A texel counts for face ``f`` only
-when ``f`` is its nearest face centroid (the rule ``GlobalSampler`` and the
-polity label field use), which partitions the sphere: every site belongs to
-exactly one face, and a settlement placed on an owned texel lies inside its
-face.
+**Ownership.** Face textures over-hang their polygons, so a texel counts for
+face ``f`` only when ``f`` is its nearest face centroid (the rule
+``GlobalSampler`` and the polity label field use). This partitions the sphere,
+so a settlement on an owned texel lies inside its face.
 """
 from __future__ import annotations
 
@@ -21,8 +15,7 @@ from scipy.spatial import KDTree
 
 
 def _neighbor_any(mask: np.ndarray) -> np.ndarray:
-    """True where any 4-neighbour (no wrap) is True, over the last two axes of a
-    ``(..., H, W)`` boolean stack."""
+    """True where any 4-neighbour (no wrap) is True, over the last two axes of ``(..., H, W)``."""
     out = np.zeros_like(mask)
     out[..., 1:, :] |= mask[..., :-1, :]
     out[..., :-1, :] |= mask[..., 1:, :]
@@ -32,8 +25,7 @@ def _neighbor_any(mask: np.ndarray) -> np.ndarray:
 
 
 def _box_mean(values: np.ndarray, weights: np.ndarray) -> np.ndarray:
-    """Weighted 3×3 box mean over the last two axes of a ``(..., H, W)`` stack
-    (edge texels use what exists)."""
+    """Weighted 3×3 box mean over the last two axes of ``(..., H, W)`` (edges use what exists)."""
     num = np.zeros_like(values)
     den = np.zeros_like(values)
     vw = values * weights
@@ -73,10 +65,8 @@ def densify_polylines(polylines, max_step: float) -> Optional[np.ndarray]:
 def _build_confluence_tree(rivers, search_radius: float = 0.01) -> Optional[KDTree]:
     """KD-tree over river confluence points.
 
-    In the Hack decomposition each river terminates either at an ocean/sink
-    outlet or at the interior of a larger stem (a true confluence).  A mouth is
-    a confluence when it lands within ``search_radius`` (chord distance on the
-    unit sphere) of an interior vertex that belongs to a *different* river.
+    A river mouth is a confluence when it lies within ``search_radius`` (chord)
+    of an interior vertex of a different river.
     """
     if not rivers or len(rivers) < 2:
         return None
@@ -90,7 +80,7 @@ def _build_confluence_tree(rivers, search_radius: float = 0.01) -> Optional[KDTr
         if pts.ndim != 2 or pts.shape[0] < 2:
             continue
         mouths.append((i, pts[-1]))
-        interior_chunks.append(pts[:-1])          # all but the last (mouth) point
+        interior_chunks.append(pts[:-1])
         river_id_list.extend([i] * (len(pts) - 1))
 
     if not mouths or not interior_chunks:
@@ -141,9 +131,7 @@ class FaceSites:
         return self.coast_ocean | self.coast_lake
 
     def sites(self) -> np.ndarray:
-        """Indices of the owned land texels — the face's candidate sites. Falls
-        back to any land texel when ownership leaves none (a sliver of land in
-        the over-hang), so a land-bearing face always has somewhere to build."""
+        """Indices of owned land texels, else any land texel (so a land face always has a site)."""
         own = np.flatnonzero(self.land & self.owned)
         return own if own.size else np.flatnonzero(self.land)
 
@@ -151,12 +139,9 @@ class FaceSites:
 class SiteField:
     """Lazily computed :class:`FaceSites` over a mesh's face textures.
 
-    ``fertility_tex`` may be ``None`` (all sites score as equally fertile).
-    ``river_threshold_factor`` × texel spacing is how close a texel must be to a
-    river (or confluence) to count as on it. ``positions`` may pass in the
-    mesh's ``face_texture_positions`` when the caller already has them.
-    Call :meth:`prefetch` with every face you will need: it computes them in one
-    batch, which is far cheaper than face by face.
+    ``river_threshold_factor`` × texel spacing is the river/confluence snap
+    distance. ``positions`` may reuse precomputed ``face_texture_positions``.
+    :meth:`prefetch` all needed faces at once; batching is far cheaper.
     """
 
     def __init__(
@@ -190,8 +175,7 @@ class SiteField:
         river_pts = densify_polylines([entry[0] for entry in rivers], 0.5 * spacing)
         self._river_tree = KDTree(river_pts) if river_pts is not None else None
         self._confluence_tree = _build_confluence_tree(rivers, search_radius=confluence_search_radius)
-        # Texels on a channel of the stream network (``streams``, a hydrology
-        # ``StreamNetwork``); only town siting passes one.
+        # Hydrology ``StreamNetwork`` channel texels; only town siting passes one.
         self._stream = np.zeros(self._ocean.shape, dtype=bool)
         if streams is not None and len(streams):
             self._stream.reshape(-1)[streams.nodes[streams.channel]] = True

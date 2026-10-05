@@ -1,26 +1,9 @@
-"""Per-face static situational value scorer.
+"""Per-face static situational value in [0, 1] (water faces 0).
 
-Six independent components are combined into one [0, 1] situational-value
-scalar per land face.  Each component is a pure function that takes
-pre-extracted arrays, making them easy to test against a lightweight stub mesh.
-
-Components:
-
-  * **harbor quality**   — shoreline concavity (fraction of neighbors that are
-    ocean) × depth factor (mean ocean-neighbor elevation, normalized).
-  * **river confluences** — faces touched by 2 or more distinct river polylines;
-    score = tanh(count - 1) so each additional river raises the score.
-  * **navigable river heads** — the most-upstream face of each river that still
-    has ``river_navigability > 0`` (the fall-line transshipment point).
-  * **mountain passes** — faces whose land cost is substantially below the mean
-    cost of their high-cost land neighbors (cheap corridor through hard terrain).
-  * **strait adjacency** — land faces that border a strait-tagged ocean face.
-  * **delta apexes** — the face at the head of each river delta, where the
-    river starts to branch over its silt plain (Cairo, New Orleans): the last
-    firm, fertile ground before the marsh, commanding every distributary.
-
-Combination is a weighted sum normalized by total weight so individual weights
-need not sum to exactly 1; water faces are forced to 0.
+A normalised weighted sum of six components: harbor quality, river confluences,
+navigable river heads (fall-line transshipment points), mountain passes, strait
+adjacency, and delta apexes (the last firm ground before the marsh, commanding
+every distributary — Cairo, New Orleans).
 """
 from __future__ import annotations
 
@@ -44,28 +27,10 @@ def compute_harbor_quality(
     *,
     depth_scale_km: float = 0.5,
 ) -> np.ndarray:
-    """Shoreline-concavity × depth quality score in [0, 1].
+    """Harbor score in [0, 1] for coastal land faces, (N,) float32.
 
-    A harbor face is a land face adjacent to at least one ocean face.
-    Two factors are multiplied together:
-
-    * *Concavity* — fraction of the face's neighbors that are ocean.
-      A face completely surrounded by ocean (islet) scores 1; a face with one
-      ocean neighbor on an open coastline scores low.
-    * *Depth factor* — ``clip(-mean_ocean_neighbor_elev / depth_scale_km, 0, 1)``.
-      Deeper adjacent water gives a higher score (better anchorage).
-
-    Non-coastal land faces score 0.
-
-    Args:
-        mesh: object with ``faces`` and ``face_adjacency``.
-        is_ocean: (N,) bool — ocean faces.
-        face_mean_elev_km: (N,) float — per-face mean elevation in km
-            (ocean faces have negative values).
-        depth_scale_km: depth at which the depth factor saturates to 1.0.
-
-    Returns:
-        (N,) float32 in [0, 1].
+    ``concavity × depth``: concavity is the fraction of neighbours that are ocean;
+    depth is ``clip(-mean_ocean_neighbor_elev / depth_scale_km, 0, 1)``.
     """
     n = len(mesh.faces)
     is_ocean = np.asarray(is_ocean, dtype=bool)
@@ -94,21 +59,12 @@ def compute_river_confluences(
     face_centroids: np.ndarray,
     n_faces: int,
 ) -> np.ndarray:
-    """Score faces touched by multiple distinct river polylines.
-
-    For each face, count how many distinct rivers have at least one non-in-lake
-    segment endpoint mapped to that face.  A face with k rivers through it scores
-    ``tanh(k - 1)`` (≈ 0 for k=1, ≈ 0.76 for k=2, ≈ 0.96 for k=3+).
+    """``tanh(k - 1)`` for faces touched by k distinct rivers (non-lake segments), (N,) float32.
 
     Args:
-        rivers: list of ``(positions (M,3), flows, in_lake (M-1,))`` tuples as
-            stored in the ``"rivers"`` globe feature, or None.
-        face_centroids: (N, 3) float — unit-sphere centroid of each face; used
-            to map polyline positions to face indices.
-        n_faces: total face count.
-
-    Returns:
-        (N,) float32 in [0, 1].
+        rivers: ``(positions (M,3), flows, in_lake (M-1,))`` tuples (the ``"rivers"``
+            feature), or None.
+        face_centroids: (N, 3) unit-sphere face centroids.
     """
     face_centroids = np.asarray(face_centroids, dtype=np.float64)
     face_count = np.zeros(n_faces, dtype=np.int32)
@@ -135,24 +91,10 @@ def compute_navigable_heads(
     river_navigability: np.ndarray,
     n_faces: int,
 ) -> np.ndarray:
-    """Binary mask of navigable-river head faces (the fall-line points).
+    """(N,) float32 mask of each river's navigable head (the fall-line point).
 
-    For each river the navigable head is the first non-in-lake segment (walking
-    from source toward mouth) whose mapped face has ``river_navigability > 0``.
-    If the entire non-lake portion is navigable, the source face is the head.
-
-    These are the transshipment points where overland routes switch to river
-    transport (or vice versa) — historically high-value city sites.
-
-    Args:
-        rivers: list of ``(positions (M,3), flows, in_lake (M-1,))`` tuples.
-        face_centroids: (N, 3) float — unit-sphere centroid of each face.
-        river_navigability: (N,) float — per-face navigability taper (0 = rapids,
-            1 = placid); from ``CostSurfaces.river_navigability``.
-        n_faces: total face count.
-
-    Returns:
-        (N,) float32 — 1.0 at each river's navigable head face, 0 elsewhere.
+    The head is the first non-lake segment from the source whose face has
+    ``river_navigability > 0`` (0 = rapids, 1 = placid).
     """
     face_centroids = np.asarray(face_centroids, dtype=np.float64)
     nav = np.asarray(river_navigability, dtype=np.float64)
@@ -168,7 +110,7 @@ def compute_navigable_heads(
             fid = int(fids[k])
             if nav[fid] > 0.0:
                 head_fid = fid
-                break  # first navigable non-lake face from source = head
+                break
 
         if head_fid is None:
             continue
@@ -187,22 +129,11 @@ def compute_mountain_passes(
     *,
     params: "MountainPassParams",
 ) -> np.ndarray:
-    """Score low-cost corridors through high-cost terrain (mountain passes).
+    """Score low-cost corridors through high-cost terrain, (N,) float32 in [0, 1].
 
-    A pass candidate is a land face whose ``land_base_cost`` is below the mean
-    of its land neighbors, AND whose land neighbors' mean cost exceeds
-    ``min_neighbor_cost`` (ruling out flat plains where everything is cheap).
-    Score = ``contrast / (contrast + cost_scale)`` where
-    ``contrast = mean_neighbor_cost − face_cost``.
-
-    Args:
-        mesh: object with ``faces`` and ``face_adjacency``.
-        land_base_cost: (N,) float — per-face isotropic land traversal cost.
-        is_water: (N,) bool — water faces are excluded.
-        params: MountainPassParams — ``min_neighbor_cost`` + ``cost_scale``.
-
-    Returns:
-        (N,) float32 in [0, 1].
+    A land face cheaper than its land neighbours' mean, where that mean exceeds
+    ``min_neighbor_cost`` (ruling out plains), scores ``contrast / (contrast + cost_scale)``
+    with ``contrast = mean_neighbor_cost − face_cost``.
     """
     p = params
     n = len(mesh.faces)
@@ -235,19 +166,7 @@ def compute_strait_adjacency(
     is_strait: np.ndarray,
     is_water: np.ndarray,
 ) -> np.ndarray:
-    """Binary score for land faces that border a strait-tagged ocean face.
-
-    Strait-adjacent land faces can control the narrow passage, making them
-    high-value military and trade sites regardless of their local suitability.
-
-    Args:
-        mesh: object with ``faces`` and ``face_adjacency``.
-        is_strait: (N,) bool — strait-tagged ocean faces.
-        is_water: (N,) bool — water faces score 0 (they are not settlement sites).
-
-    Returns:
-        (N,) float32 — 1.0 where adjacent to a strait, 0 elsewhere.
-    """
+    """(N,) float32: 1.0 for land faces bordering a strait-tagged face, else 0."""
     is_strait = np.asarray(is_strait, dtype=bool)
     is_water = np.asarray(is_water, dtype=bool)
     n = len(mesh.faces)
@@ -265,16 +184,7 @@ def compute_strait_adjacency(
 
 
 def compute_delta_apexes(apexes: np.ndarray | None, face_centroids: np.ndarray, n_faces: int) -> np.ndarray:
-    """Binary mask of the faces holding a river delta's apex.
-
-    Args:
-        apexes: (M, 3) apex positions (``DeltaFan.apex``), or None.
-        face_centroids: (N, 3) float — unit-sphere centroid of each face.
-        n_faces: total face count.
-
-    Returns:
-        (N,) float32 — 1.0 at each apex face, 0 elsewhere.
-    """
+    """(N,) float32 mask of the faces holding a delta apex (``apexes``: (M, 3) or None)."""
     mask = np.zeros(n_faces, dtype=np.float32)
     if apexes is None or len(apexes) == 0:
         return mask
@@ -293,26 +203,10 @@ def combine_situational_value(
     params: "SituationalValueWeightParams",
     delta: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Weighted-average situational value in [0, 1]; water faces are forced to 0.
+    """Weight-normalised situational value, (N,) float32 in [0, 1]; water faces 0.
 
-    Weights are normalized so they need not sum to exactly 1.  A face that is a
-    confluence AND a navigable head scores doubly — the additive structure rewards
-    faces with multiple strategic properties (fall-line city sites, natural harbors
-    on rivers, etc.).
-
-    Args:
-        is_water: (N,) bool — open water; these faces receive 0.
-        harbor:     (N,) float32 in [0, 1].
-        confluence: (N,) float32 in [0, 1].
-        nav_head:   (N,) float32 in [0, 1].
-        passes:     (N,) float32 in [0, 1].
-        straits:    (N,) float32 in [0, 1].
-        params: SituationalValueWeightParams — the factor weights.
-        delta:      (N,) float32 in [0, 1], or None (a world without deltas;
-            its weight is then left out of the normalization).
-
-    Returns:
-        (N,) float32 in [0, 1].
+    Components are (N,) in [0, 1].  ``delta=None`` (no deltas) drops its weight
+    from the normalisation.
     """
     p = params
     delta_w = float(p.delta_weight) if delta is not None else 0.0

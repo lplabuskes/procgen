@@ -1,18 +1,9 @@
 """Measure realm settlement-population *distribution shape* vs high-medieval Europe.
 
-The physical world (elevation → climate → hydrology → resources → cost) does not
-depend on the realm parameters, so we build it once per seed and cache it to
-``saved_worlds/world_<seed>.npz`` (gitignored). Every run loads that cached world
-and re-runs only the cheap realm stage (suitability → seeding → trade →
-population), then reports the *shape* of the resulting city-size distribution.
-Populations are urban headcounts in people, but every metric here is
-dimensionless shape — absolute calibration lives in
-``measure_population_absolute.py``.
-
-The design spec (docs/plans/settlement_generation_design.md) names the rank-size curve
-as the validation signal — "done when the population distribution roughly follows
-a rank-size curve without being enforced". So the headline numbers are the
-log-log rank-size **slope** (Zipf ≈ −1) and its **R²** (how straight the line is).
+Caches the physical world per seed in ``saved_worlds/`` and re-runs only the
+realm stage.  Every metric is dimensionless shape (absolute calibration is
+``measure_population_absolute.py``); the headline numbers are the log-log
+rank-size **slope** (Zipf ≈ −1) and its **R²**.
 
 Usage:
     python3 scripts/measure_population.py              # seeds 42, 137, 999
@@ -21,20 +12,13 @@ Usage:
     python3 scripts/measure_population.py --detail     # per-seed tier populations
     python3 scripts/measure_population.py --rebuild-cache   # force rebuild worlds
 
-Tuning workflow (mirrors measure_resources.py): edit the population knobs in
-``realmgen/builder.py`` (PopulationParams / SeederParams), re-run this script, and
-compare the new row in scripts/results/population_results.md against the anchors.
-
 High-medieval Europe reference (shape only, rough — see notes in the .md):
     Zipf slope (log pop vs log rank):   ≈ -1.0   (rank-size rule)
     Rank-size fit R²:                   ≳ 0.90   (line is reasonably straight)
     Gini of settlement sizes:           ≈ 0.55
     Tier hierarchy:                     steep pyramid — villages ≫ towns > cities > capitals
-    Primacy P1/P2:                      informational only at world scale. A whole-
-                                        globe map is poly-centric (several comparable
-                                        regional capitals), so P1/P2 runs ~1.3-1.5, not
-                                        the ~2.0 of a single integrated urban system.
-                                        Measure primacy per-realm once polities exist.
+    Primacy P1/P2:                      informational only: a whole globe is poly-centric,
+                                        so ~1.3-1.5, not a single system's ~2.0.
 """
 from __future__ import annotations
 
@@ -58,11 +42,8 @@ JSON_PATH = RESULTS_DIR / "population_results.json"
 MD_PATH = RESULTS_DIR / "population_results.md"
 
 
-# Rough shape anchors for a high-medieval European city/region system. These are
-# ballpark targets, not hard bounds — the point is to watch the trend across
-# parameter-tuning sessions, not to hit a single number.
-# primacy_p1_p2 is intentionally absent: at whole-globe (multi-realm) scale the
-# system is poly-centric, so P1/P2 is reported as informational, not a target.
+# Ballpark shape anchors (high-medieval Europe), for watching trends.  No
+# primacy_p1_p2: a whole globe is poly-centric, so P1/P2 is informational only.
 MEDIEVAL_REF = {
     "zipf_slope": -1.0,
     "zipf_r2": 0.90,
@@ -105,7 +86,7 @@ def _distribution_metrics(populations: np.ndarray) -> dict:
         return out
 
     max_pop = float(pop[0])
-    # Display tiers (capital/city/town/village) exactly as the viewer derives them.
+    # Display tiers as the viewer derives them.
     tiers = [population_display_tier(float(p), max_pop) for p in pop]
     out["tier_counts"] = [int(tiers.count(t)) for t in range(4)]
 
@@ -145,7 +126,6 @@ def measure_seed(seed: int, rebuild: bool) -> dict:
     pops = np.array([s.population for s in settlements], dtype=np.float64)
     metrics = _distribution_metrics(pops)
     metrics["seed"] = seed
-    # Keep the raw sorted populations (rounded) for the --detail view.
     metrics["top_populations"] = [
         round(float(p), 4) for p in np.sort(pops)[::-1][:12]
     ]

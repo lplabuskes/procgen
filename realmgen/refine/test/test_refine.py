@@ -1,8 +1,4 @@
-"""Unit tests for realmgen.refine — pure-function / stub-mesh tests.
-
-These avoid a full worldgen build; integration is exercised by the pipeline
-smoke test elsewhere.
-"""
+"""Unit tests for realmgen.refine — pure-function / stub-mesh tests (no worldgen build)."""
 from __future__ import annotations
 
 import dataclasses
@@ -91,7 +87,6 @@ def test_snap_to_ocean_coast():
 
 
 def test_ocean_preferred_over_lake():
-    # Col 0 borders a lake (col... actually make col 3 ocean, col 0 lake-side).
     mesh = _StubMesh([1.5, 1.5, 0.0])
     ocean = np.zeros((1, 4, 4, 1), dtype=np.float64)
     ocean[0, :, 3, 0] = 1.0              # ocean on col 3 → coast col 2
@@ -376,9 +371,7 @@ def test_label_field_stronger_polity_bulges(dual):
 
 
 def test_texel_label_ignores_which_face_holds_the_texel(dual):
-    # The label is a function of position alone, so a face's over-hanging texture
-    # and its neighbour's agree wherever they sample the same ground — no seam in
-    # the fill. Put face a's texel grid in face b's slot: the labels must not move.
+    # Put face a's texel grid in face b's slot: position-only labels must not move.
     c = np.asarray(dual.face_centroids, dtype=np.float64)
     pof = np.digitize(np.arctan2(c[:, 1], c[:, 0]), [-1.0, 1.0])
     field = _field(dual, pof, warp_amplitude=0.05, warp_frequency=8.0, warp_seed=3)
@@ -464,9 +457,7 @@ def test_fill_texture_shape_and_coastline():
 
 
 def test_fill_covers_orphan_land_in_water_face():
-    """A face that is water at *face* level (>50% texels water) but holds genuine
-    land texels: those land texels belong to the claimed-land neighbour, not the
-    ocean — the polity colour must cover them at texel level."""
+    """Land texels of a face-level water face take the claimed-land neighbour's colour."""
     from realmgen.refine.fill import _polity_color_map
 
     mesh = _BorderMesh()

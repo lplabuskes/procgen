@@ -1,24 +1,15 @@
-"""One local map, end to end: fields, rivers, roads, settlements and villages.
+"""One local map, end to end: :func:`build_local_map` runs, over one regional hex:
 
-:func:`build_local_map` runs the local tier's steps in order over one regional
-hex, from the region's own refined fields, rivers and roads:
-
-1. the fields (:func:`localmap.upsample.build_local_fields`);
-2. the rivers and the region's streams (:func:`localmap.rivers.build_local_rivers`),
-   and the region's deltas moved onto the local river mouths;
-3. the cities this map owns re-sited on its coast and rivers
-   (:func:`localmap.settlements.refine_local_cities`, saved on the world);
-4. the roads (:func:`localmap.roads.build_local_roads`), fording the local
-   rivers and ending on the re-sited cities;
-5. the towns this map owns re-sited on its coast, rivers and roads
-   (:func:`localmap.settlements.refine_local_towns`, saved on the world); every
-   town and city in and around the map is then drawn where it stands, moved off
-   the local water if it is not this map's to refine;
-6. the villages (:func:`localmap.villages.place_villages`), clear of those
-   towns and cities;
-7. the cities' built-up footprints (:func:`localmap.cities.city_footprints`);
-8. the farmland around the villages, towns and cities
-   (:func:`localmap.farmland.place_farmland`).
+1. fields (:func:`localmap.upsample.build_local_fields`);
+2. rivers and the region's streams (:func:`localmap.rivers.build_local_rivers`),
+   with the region's deltas snapped onto the local mouths;
+3. this map's cities re-sited (:func:`localmap.settlements.refine_local_cities`, saved on the world);
+4. roads (:func:`localmap.roads.build_local_roads`), ending on the re-sited cities;
+5. this map's towns re-sited (:func:`localmap.settlements.refine_local_towns`, saved on the world);
+   other maps' towns and cities are drawn where they stand, moved off the local water;
+6. villages (:func:`localmap.villages.place_villages`);
+7. city footprints (:func:`localmap.cities.city_footprints`);
+8. farmland (:func:`localmap.farmland.place_farmland`).
 
 Qt-free.  Deterministic, given which settlements earlier local maps re-sited.
 """
@@ -88,8 +79,7 @@ def _local_settlements(
     local: RegionFields, globe: "World", land_reach: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """``(town_index, town_positions, town_pops, city_index, city_positions, city_pops)``
-    for the towns and cities in and around the map, where they stand (moved off
-    the local water: those another local map owns may not be refined yet)."""
+    in and around the map, moved off the local water (another map's may not be refined yet)."""
     towns = globe.get_feature("towns")
     t_idx = np.zeros(0, dtype=np.int64)
     t_pos, t_pop = np.zeros((0, 3)), np.zeros(0)
@@ -133,12 +123,10 @@ def build_local_map(
 ) -> LocalMap:
     """Build the local map of regional hex ``hex_index``.  See the module docstring.
 
-    ``region_rivers`` / ``region_roads`` / ``region_deltas`` are the region's
-    (as the region view holds them), and ``region_streams`` its streams below
-    the world's network (:func:`region.streams.build_region_streams`, with
-    ``params.streams``); without them the map has none.  The rest
-    is the world's and realm's tuning, as for the region.  Re-sites the towns
-    and cities this map owns in ``globe``'s features, in place.
+    ``region_rivers`` / ``region_roads`` / ``region_deltas`` / ``region_streams``
+    are the region's (streams from :func:`region.streams.build_region_streams`);
+    without them the map has none.  Re-sites this map's towns and cities in
+    ``globe``'s features, in place.
     """
     params = params or LocalParams()
     local = build_local_fields(
@@ -146,8 +134,7 @@ def build_local_map(
     )
     spacing = local.grid.texel_spacing_rad(local.tex_size)
     parent_spacing = region.grid.texel_spacing_rad(region.tex_size)
-    # How far a settlement on the local water moves onto land: as far as the
-    # refinement lets water spread, plus a couple of texels.
+    # How far a settlement on local water moves onto land: the water spread plus two texels.
     land_reach = (int(params.upsample.water_spread_texels) + 2) * spacing
 
     rivers = (build_local_rivers(local, region, region_rivers, globe, params.rivers, region_streams)

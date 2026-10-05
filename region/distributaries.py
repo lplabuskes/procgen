@@ -1,37 +1,27 @@
 """Delta distributaries — the channels a big river splits into over its delta.
 
-The world's delta stage (:mod:`worldgen.delta`) builds each delta as a plain of
-global texels with one river carried across it to the sea or into a lake; at ~14 km a texel
-that is all the globe can say.  A region is fine enough to show the river
-fanning out, so here the delta river's re-routed stem gets *distributaries*:
+The world's delta stage (:mod:`worldgen.delta`) carries one river across each
+delta plain; a region adds the distributaries:
 
-- **How many.**  ``base_count`` mouths in all at a mouth flow of 1000, plus
-  ``per_decade`` for each tenfold more flow, at most ``max_count``.
-- **Where they reach the sea.**  The plain's seaward edge (refined sea or lake
-  next to the refined ``delta`` plain) is split by its bearing from the apex, within
-  ``max_angle_deg`` of the fan's axis, into that many equal sectors.  The main
-  stem's own mouth holds one; each other sector gets a mouth near its middle.
-- **Shape.**  A cuspate (wave-dominated) delta has at most ``wave_mouths``:
-  waves close all but the strongest channels.  A bird's-foot delta has one
-  mouth at the tip of each finger the world built, and its branches leave near
-  the old shore (``birdfoot_junction_min``–``max`` of the way from the apex to
-  it), where the river splits into its passes.
-- **Where they leave.**  Mouths are taken outward from the main stem on each
-  side, each branching off the channel nearest it on that side — the main stem
-  for the first, then the branch before it — at a random
-  ``junction_min``–``junction_max`` of its distance from the apex.  Outer
-  branches thus split off further upstream and the fan nests like a real one.
-- **How they run.**  The least-cost path from junction to mouth on the
-  rivers' raster, through a corridor around a gently bent guide line
-  (``wander``): low ground is preferred like any river, water is avoided until
-  the mouth, and ground beside another channel costs more (``separation``), so
-  branches spread out instead of doubling one another.
+- **Count** — ``base_count`` mouths at flow 1000, ``per_decade`` more per tenfold
+  flow, at most ``max_count``.
+- **Mouths** — the plain's seaward edge is split by bearing from the apex (within
+  ``max_angle_deg`` of the axis) into equal sectors; the main stem holds one,
+  each other gets a mouth near its middle.
+- **Shape** — cuspate deltas have at most ``wave_mouths``; bird's-foot deltas put
+  one mouth at each finger tip, branching near the old shore
+  (``birdfoot_junction_min``–``max`` of apex→shore).
+- **Junctions** — mouths are taken outward from the main stem on each side, each
+  branching off the previous channel at a random ``junction_min``–``junction_max``
+  of its apex distance, so outer branches leave further upstream.
+- **Routing** — least-cost on the rivers' raster around a bent guide line
+  (``wander``): valley-seeking, water avoided until the mouth, and ground beside
+  another channel dearer (``separation``).
 
-A branch carries its mouth's share of the apex flow — ``main_share`` stays with
-the main stem, the rest is split evenly — plus the shares of the branches that
-leave it downstream.  The stem keeps its full path and flow; branches are extra
-paths whose first vertex lies on their parent, so a local map re-routes each on
-its own like any other river.  Deterministic per world seed, region and delta.
+A branch carries its mouth's share of the apex flow (``main_share`` stays with
+the stem, the rest split evenly) plus its downstream branches' shares.  Branches
+are extra paths starting on their parent, so local maps re-route them like any
+river.  Deterministic per seed, region and delta.
 """
 from __future__ import annotations
 
@@ -67,7 +57,6 @@ class DistributaryParams:
     """Tuning for delta distributaries on regional maps."""
 
     enabled: bool = field(default=True, metadata={"label": "Distributaries"})
-    # Mouths in all (main stem included) at mouth flow 1000, and more per tenfold flow.
     base_count: int = _f(3, label="Mouths at flow 1000", min=1, max=12)
     per_decade: float = _f(2.0, label="More mouths per 10× flow", min=0.0, max=6.0, step=0.5)
     max_count: int = _f(8, label="Max mouths", min=1, max=16)
@@ -261,7 +250,7 @@ def _fan_branches(
 
     # The delta river: the largest-flow path passing the apex, to where it meets open water.
     best, best_flow, best_vertex = -1, 0.0, 0
-    # A re-routed stem stays within a corridor (one global texel) of its world line.
+    # A re-routed stem stays within ~one global texel of its world line.
     gw = globe.mesh.face_textures["elevation"].shape[2]
     global_texel = float(np.sqrt(np.mean(globe.mesh.face_areas))) / max(gw - 1, 1)
     for i, (pos, flows, _) in enumerate(rivers.paths):
@@ -277,8 +266,7 @@ def _fan_branches(
     stem_pos = np.asarray(rivers.paths[best][0], dtype=np.float64)[best_vertex:]
     stem = _path_nodes(raster, fields, stem_pos)
     stem = stem[stem >= 0]
-    # A lake delta's river may run on through the lake: its stem ends where it
-    # meets open water (not a speckle of it on the plain).
+    # The stem ends at open water (a lake delta's river may run on through the lake).
     wet = raster.water[stem] & raster.sampled[stem]
     run = _OPEN_WATER_NODES
     open_water = [i for i in np.flatnonzero(wet) if wet[i:i + run].all()]
@@ -329,8 +317,7 @@ def _fan_branches(
     for side in (-1.0, 1.0):
         ordered = sorted((m for m in mouths if (bearing(m) - main_b) * side > 0),
                          key=lambda m: abs(bearing(m) - main_b))
-        # This side's outermost channel, apex to sea: the main stem up to the
-        # last junction, then the last branch — and which channel owns each node.
+        # This side's outermost channel, apex to sea, and the channel owning each node.
         trunk, owner = stem.copy(), np.zeros(len(stem), dtype=np.int64)
         for m in ordered:
             tr, tc = _grid_rc(raster, trunk)
@@ -342,8 +329,7 @@ def _fan_branches(
                 target = rng.uniform(float(dp.junction_min), float(dp.junction_max)) * np.hypot(
                     mr[0] - apex_rc[0], mc[0] - apex_rc[1])
             score = np.abs(np.hypot(tr - apex_rc[0], tc - apex_rc[1]) - target)
-            # Never at the very end of the trunk (a branch must leave over land),
-            # nor on another junction.
+            # Not at the trunk's end (must leave over land), nor on another junction.
             score[max(len(trunk) - 3, 1):] = np.inf
             if junctions:
                 jr, jc = _grid_rc(raster, np.array(junctions))

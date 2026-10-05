@@ -9,9 +9,8 @@ import numpy as np
 # province-scale); the tiers are rank *within* the set of major cities.
 TIER_NAMES = ["Great City", "Major City", "City", "Minor City"]
 
-# What a city's site offered when the refine stage chose it (bit flags), kept so
-# the finer tiers can re-site it without losing it: a harbour city stays on the
-# coast, a river city on its river.
+# Bit flags for what a city's refine-stage site offered, so finer tiers re-site it
+# without losing it (a harbour city stays on the coast, a river city on its river).
 SITE_KIND_OCEAN_COAST, SITE_KIND_LAKE_COAST, SITE_KIND_RIVER, SITE_KIND_CONFLUENCE = 1, 2, 4, 8
 
 
@@ -25,8 +24,7 @@ def format_population(population: float) -> str:
     return f"{p:.0f}"
 
 
-# RGBA display colors per tier — used at visualisation time, keyed by display tier
-# derived from population (see ``population_display_tier``), not the seeding tier.
+# RGBA per display tier (from ``population_display_tier``, not the seeding tier).
 TIER_COLORS: list[tuple[float, float, float, float]] = [
     (1.00, 0.85, 0.10, 1.0),  # gold   — great city
     (0.35, 0.60, 0.90, 1.0),  # blue   — major city
@@ -39,11 +37,7 @@ TIER_RADII: list[float] = [8.0, 5.5, 3.5, 2.2]
 
 
 def population_display_tier(population: float, max_pop: float) -> int:
-    """Map a settlement's population to a 0-3 display tier.
-
-    Tier is derived purely from ``population / max_pop`` so that visualisation
-    reflects actual importance rather than the seeding label.
-    """
+    """Map ``population / max_pop`` to a 0-3 display tier."""
     if max_pop <= 0 or population <= 0:
         return 3
     frac = population / max_pop
@@ -60,19 +54,12 @@ def population_display_tier(population: float, max_pop: float) -> int:
 class Settlement:
     """A placed settlement on the land face graph.
 
-    ``tier`` is assigned by the seeder as a label only (it governs exclusion
-    radius and seeds ``population``).  No downstream computation reads ``tier``
-    directly — all generation operates on ``population``.  Display tiers are
-    derived at render time via :func:`population_display_tier`.
+    ``tier`` is only a seeding label (exclusion radius, initial population); all
+    generation reads ``population``.
 
-    ``defensibility``, ``has_walls``, and ``wall_strength`` are set by
-    PopulationStage after final populations are known (danger + wealth inform
-    walls; ruggedness + situational value + rivers contribute to terrain defense).
-
-    ``position`` is where the city is at the finest tier that has refined it.
-    ``site_position`` is the refine stage's global-texel site, ``region_position``
-    the region tier's refinement of it (``refined``), and a local map refines that
-    in turn (``local_refined``); see ``region/cities.py``.
+    ``position`` is at the finest tier that has refined it: ``site_position`` is the
+    refine stage's site, ``region_position`` the region's refinement (``refined``),
+    then the local map's (``local_refined``); see ``region/cities.py``.
     """
 
     face_id: int

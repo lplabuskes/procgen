@@ -1,12 +1,7 @@
 """Connected-component search over the per-face pixel graph.
 
-Inter-face seam adjacency is now derived from the mesh's cached boundary pixel
-pairs (see ``RiverGenerator._build_inter_adj_from_pairs``); the former
-per-edge stitching helpers were retired in favour of that shared cache.
-
-Public API:
-    find_connected_components(mask, neighbors_fn, n_nodes, min_size=1) -> list[list[int]]
-    find_connected_components_csr(mask, indptr, indices, min_size=1) -> list[list[int]]
+Seam adjacency comes from the mesh's boundary pixel pairs
+(``RiverGenerator._build_inter_adj_from_pairs``).
 """
 from __future__ import annotations
 
@@ -56,9 +51,7 @@ def find_connected_components_csr(
 ) -> List[List[int]]:
     """:func:`find_connected_components` over a CSR neighbour graph.
 
-    Same components, in the same order and with the same node order within
-    each, as the callback version given a ``neighbors_fn`` that returns
-    ``indices[indptr[n]:indptr[n + 1]]``.
+    Identical output (component and node order) to the callback version.
     """
     mask = np.asarray(mask, dtype=bool)
     nodes, bounds = _components_kernel(mask, indptr, indices, int(min_size))

@@ -1,29 +1,20 @@
 """Regional rivers — the world's stream network re-routed over the refined relief.
 
-The hydrology stage saves its drainage tree down to a *stream* threshold far
-below the rivers' (:class:`worldgen.hydrology.types.StreamNetwork`): which texels
-carry a channel, where each drains, and how much water.  Those are facts at the
-global resolution, and the town stage already sites towns on them.  A region keeps
-all of it and refines only what its finer grid can see — *where exactly* each
-channel runs:
+The hydrology stage's :class:`worldgen.hydrology.types.StreamNetwork` (down to a
+stream threshold far below the rivers') fixes which texels carry a channel, where
+each drains and how much flows.  A region refines only where each channel runs:
 
-- The network inside the region is cut into main stems with the global stage's
-  own :func:`worldgen.hydrology.rivers.main_stem_paths`, so a region's rivers are
-  the world's rivers extended by their sub-threshold tributaries, with the same
-  confluences.
-- Each path is re-traced through a *corridor* about one global texel either side
-  of its world centreline — the uncertainty the global grid leaves — as the
-  least-cost route through the refined relief, where cost rises with the sub-grid
-  elevation anomaly.  It follows the refined valley floor but can never change
-  valley or basin.  Stems are routed before their tributaries, and a path whose
-  world mouth is here ends on whatever it drains into near that mouth: its
-  re-routed stem, a lake, or the *refined* coast.  Flow is the network's own.
+- The network is cut into main stems with
+  :func:`worldgen.hydrology.rivers.main_stem_paths`, so regional rivers are the
+  world's extended by sub-threshold tributaries, with the same confluences.
+- Each path is re-traced within ~one global texel of its world centreline as the
+  least-cost route through the refined relief (cost rises with the sub-grid
+  anomaly), so it follows the valley floor but never changes basin.  Stems go
+  before tributaries; a path whose mouth is here ends on its stem, a lake, or the
+  refined coast.
 
-Everything happens on one uniform raster over the region's local ``(s, t)``
-frame, ``margin`` past the cell, at the regional texel spacing — but only the
-nodes some corridor can reach are ever sampled (refined fields from the nearest
-hex texel, global fields beyond the textures).  Paths leaving the raster are cut
-at its edge; the view clips to the cell long before that.
+All on one uniform raster over the local ``(s, t)`` frame, ``margin`` past the
+cell; only nodes some corridor reaches are sampled.  Paths are cut at its edge.
 """
 from __future__ import annotations
 
@@ -54,9 +45,8 @@ if TYPE_CHECKING:
 # The (positions, flows, in_lake) polyline form of the world's "rivers" feature.
 RiverPath = tuple[np.ndarray, np.ndarray, np.ndarray]
 
-# A river crossing a lake passes over sub-grid islands and spits in the refined
-# shoreline; land runs this short between water along a path count as water, so
-# the crossing is hidden whole rather than drawn as dashes.
+# Land runs this short between water along a path count as water, so a lake
+# crossing over sub-grid islands is hidden whole rather than drawn as dashes.
 _SPECKLE_NODES = 2
 
 
@@ -64,22 +54,17 @@ _SPECKLE_NODES = 2
 class RegionRiverParams:
     """Tuning for regional river refinement."""
 
-    # Raster spacing as a multiple of the regional texel spacing.  1 matches the
-    # refined relief; coarser is faster but blurs the valleys it follows.
+    # In regional texels; coarser is faster but blurs the valleys.
     raster_texels: float = _f(1.0, label="River raster spacing (texels)", min=0.5, max=4.0, step=0.25)
     # How far past the cell edge the raster reaches, in local units (the cell is 1).
     margin: float = _f(0.08, label="River raster margin", min=0.0, max=0.3, step=0.01)
     # Half-width of the corridor a global river may move within, in global texels.
     corridor_global_texels: float = _f(1.0, label="Corridor half-width (global texels)", min=0.25, max=3.0, step=0.25)
-    # How strongly a re-routed river prefers low ground: the path cost of a
-    # texel is exp(valley_seeking · anomaly / σ), σ the anomaly spread in the corridor.
+    # Node cost is exp(valley_seeking · anomaly / σ), σ the corridor's anomaly spread.
     valley_seeking: float = _f(2.0, label="Valley seeking", min=0.0, max=6.0, step=0.25)
-    # Stream-network stems shorter than this many global texels are dropped as
-    # stubs.  (How far down the network goes is the hydrology stage's stream
-    # threshold — a world param, since towns are sited on the same streams.)
+    # Shorter stems are dropped (network depth is the hydrology stage's stream threshold).
     min_global_nodes: int = _f(3, label="Min stream length (global texels)", min=2, max=20)
     smoothing_iterations: int = _f(8, label="Path smoothing iterations", min=0, max=20)
-    # The channels a delta river fans out into (region.distributaries).
     distributaries: DistributaryParams = field(
         default_factory=DistributaryParams, metadata={"label": "Delta distributaries"}
     )
@@ -90,19 +75,15 @@ class RegionRivers:
     """Regional river polylines, in the world ``"rivers"`` feature's form."""
 
     region_id: int
-    # The stream network's stems re-routed over the refined relief: the world's
-    # rivers (extended upstream by their largest streams) and the streams below
-    # the river threshold alike, told apart only by their flow.
+    # Re-routed stems: world rivers and sub-threshold streams alike, told apart by flow.
     paths: list[RiverPath]
     # (K, 3) where a path ends on another one — the confluences town siting rewards.
     confluences: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))
     # (J, 3) where a path ends on the refined sea, and the flow it arrives with.
     mouths: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))
     mouth_flows: np.ndarray = field(default_factory=lambda: np.zeros(0))
-    # Local maps only: the region's own streams below the world's network
-    # (region.streams), re-routed.  Drawn and sited on by villages, but not
-    # among the confluences or mouths — towns, cities and deltas keep to the
-    # world's channels.
+    # Local maps only: the region's own streams (region.streams), re-routed; used
+    # by villages but not among confluences or mouths.
     streams: list[RiverPath] = field(default_factory=list)
 
 
@@ -110,12 +91,7 @@ class RegionRivers:
 
 
 def _valley_cost(raster: Raster, valley_seeking: float) -> EdgeCost:
-    """Edge cost that seeks the refined valley floor.
-
-    Node cost is exponential in the sub-grid anomaly, normalised by its spread in
-    the corridor, so a river seeks the valley on a plain as much as in the
-    mountains.
-    """
+    """Edge cost exponential in the sub-grid anomaly, normalised by its corridor spread."""
     cache: dict = {}
 
     def edge_cost(sub: np.ndarray, a: np.ndarray, b: np.ndarray, length: np.ndarray) -> np.ndarray:
@@ -139,15 +115,10 @@ def _route_run(
     ends_here: bool,
     params: RegionRiverParams,
 ) -> Optional[np.ndarray]:
-    """Least-cost node path along one in-raster stretch of a stream path.
+    """Least-cost node path along one in-raster stretch, within ``radius_nodes`` of the world line.
 
-    The path is confined to nodes within ``radius_nodes`` of the world polyline.
-    It starts at the stretch's first vertex and ends at its last — or, when the
-    stream's world mouth is in this stretch (``ends_here``), at the cheapest
-    ``sinks`` node near that mouth (its re-routed stem, a lake, the refined sea).
-    The stem this river joins was re-routed within its own corridor, so it can
-    sit up to a corridor width off the world confluence: the search widens to
-    twice the corridor around the mouth.
+    With ``ends_here`` it ends on the cheapest ``sinks`` node within twice the
+    corridor of the mouth (the joined stem may sit a corridor width off).
     """
     return route_corridor(
         raster, s, t, radius_nodes, _valley_cost(raster, float(params.valley_seeking)),
@@ -171,8 +142,7 @@ def _run_flows(
 
 @dataclass
 class StreamPath:
-    """One path to re-route, inside the raster, in the map's local coordinates: a
-    main stem of the world's network (region), or a region's river (local map)."""
+    """One path to re-route, in the map's local coordinates."""
 
     s: np.ndarray
     t: np.ndarray
@@ -194,7 +164,7 @@ def _stream_paths(
     downstream = streams.receiver[idx]
     receiver = np.where(downstream >= 0, local[np.maximum(downstream, 0)], -1)
     receiver[downstream < 0] = -1
-    # Where the tree carries on beyond the raster, a path is cut, not ended.
+    # Where the tree continues beyond the raster, a path is cut, not ended.
     leaves_raster = (downstream >= 0) & (receiver < 0)
 
     flow = streams.flow[idx].astype(np.float64)
@@ -237,18 +207,13 @@ def build_region_rivers(
     globe: "World",
     params: Optional[RegionRiverParams] = None,
 ) -> RegionRivers:
-    """Re-route the world's stream network through ``fields``' refined relief.
-
-    Needs the hydrology stage's ``"streams"`` feature; a world without one gets
-    no rivers.  Deterministic, like the refinement itself.
-    """
+    """Re-route the world's ``"streams"`` network through ``fields``' refined relief."""
     params = params or RegionRiverParams()
     streams = globe.get_feature("streams")
     if streams is None or len(streams) == 0:
         return RegionRivers(region_id=fields.region_id, paths=[])
     lo, step, n = raster_frame(fields, params.raster_texels, params.margin)
 
-    # Corridor half-width in raster nodes: global texel spacing over node spacing.
     mesh = globe.mesh
     gw = mesh.face_textures["elevation"].shape[2]
     global_spacing = float(np.sqrt(np.mean(mesh.face_areas))) / max(gw - 1, 1)
@@ -271,9 +236,7 @@ def route_stream_paths(
 ) -> RegionRivers:
     """Re-route ``paths`` (largest flow first) over ``fields``' raster ``(lo, step, n)``.
 
-    The tier-agnostic half of :func:`build_region_rivers`: a region feeds it the
-    world's stream network, a local map the region's re-routed rivers and then
-    its streams (``minor``), which end on those rivers and on each other.
+    Tier-agnostic: a local map feeds the region's rivers, then its streams (``minor``).
     """
     reach = corridor_reach([(p.s, p.t) for p in paths], lo, step, n, 2.0 * radius_nodes + 2.0)
     raster = sample_raster(fields, globe, lo, step, n, reach)
@@ -308,13 +271,7 @@ def route_stream_paths(
 
 
 def snap_deltas(deltas: np.ndarray, rivers: RegionRivers, reach: float) -> np.ndarray:
-    """Move each world delta onto the mouth of its re-routed river.
-
-    A delta sits on a world river's mouth, which the region re-routed onto the
-    refined coast.  Each delta moves to the largest-flow regional mouth within
-    ``reach`` (chord on the unit sphere) — the river itself rather than a stream
-    that happens to reach the sea closer by; one with no mouth that near stays.
-    """
+    """Move each world delta to the largest-flow regional mouth within ``reach`` (chord), if any."""
     out = np.array(deltas, dtype=np.float64).reshape(-1, 3)
     if len(rivers.mouths) == 0 or len(out) == 0:
         return out

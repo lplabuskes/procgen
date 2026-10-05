@@ -19,9 +19,7 @@ BOUNDARY_COLORS = {
     "transform":  (0.60, 0.20, 0.80, 1.0),
 }
 
-# Separate elevation color scales for ocean and land pixels.
-# Ocean pixels are colored by depth; land pixels by elevation (including
-# below-sea-level depressions that are not ocean-connected).
+# Ocean pixels coloured by depth, land by elevation (incl. unconnected sub-sea-level depressions).
 _OCEAN_ELEVATION_STOPS = [
     (-8.0, (0.02, 0.06, 0.35, 1.0)),  # abyssal plain
     (-3.5, (0.06, 0.22, 0.62, 1.0)),  # deep ocean
@@ -120,11 +118,7 @@ def _elevation_color(meta: dict) -> tuple:
 
 
 def elevation_legend_entries(n: int = 5) -> list[tuple[str, tuple]]:
-    """Ordered (label, rgba) entries for a land-elevation gradient legend, low→high.
-
-    Entries are evenly spaced in elevation across the full stop range, with
-    colors interpolated from _LAND_ELEVATION_STOPS.
-    """
+    """(label, rgba) entries evenly spaced over _LAND_ELEVATION_STOPS, low→high."""
     e_min = _LAND_ELEVATION_STOPS[0][0]
     e_max = _LAND_ELEVATION_STOPS[-1][0]
     elevations = np.linspace(e_min, e_max, n)
@@ -141,8 +135,7 @@ def elevation_rgba(elevs: np.ndarray, ocean_mask: np.ndarray | None = None) -> n
 
     Args:
         elevs: (...) float array of elevations in km.
-        ocean_mask: optional bool array, same shape as elevs. True = ocean pixel.
-            Falls back to elevs < 0 when not provided (backward-compatible).
+        ocean_mask: optional bool array, same shape as elevs; defaults to elevs < 0.
 
     Returns:
         (..., 4) float32 RGBA array.

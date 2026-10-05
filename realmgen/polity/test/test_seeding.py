@@ -1,7 +1,4 @@
-"""Unit tests for realmgen.polity.seeding — defensibility, capitals, scalars.
-
-Lightweight stub graphs, no worldgen run.
-"""
+"""Unit tests for realmgen.polity.seeding — defensibility, capitals, scalars (stub graphs)."""
 from __future__ import annotations
 
 import numpy as np

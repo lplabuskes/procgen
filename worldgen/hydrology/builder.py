@@ -21,9 +21,8 @@ LAKE_COLOR = np.array([0.28, 0.65, 0.90, 1.0], dtype=np.float32)
 @paramclass
 class HydrologyParams:
     river_flow_threshold: float = _f(500.0, label="Flow threshold (faces)", min=1.0, max=1000.0)
-    # The streams below the rivers: the same accumulation tree cut this low. Towns
-    # favour them, and a region draws them as its tributaries. Same units as the
-    # river threshold (≈ upstream texels at mean rainfall).
+    # The same accumulation tree cut lower: streams for town siting and region
+    # tributaries. Units ≈ upstream texels at mean rainfall.
     stream_flow_threshold: float = _f(100.0, label="Stream threshold (faces)", min=1.0, max=1000.0)
     min_lake_pixels: int = _f(50, label="Min lake pixels", min=1, max=500)
     pet_baseline_mm_yr: float = _f(100.0, label="PET baseline (mm/yr)", min=0.0, max=500.0)
@@ -32,15 +31,11 @@ class HydrologyParams:
 
 
 class HydrologyBuilder(Stage):
-    """Runs the hydrology stage (river routing, lake detection) — a pipeline ``Stage``.
+    """Hydrology stage: river routing and lake detection.
 
-    ``build(ctx)`` reads the mesh and its ``"elevation"`` texture from the world,
-    stores rivers / lake polygons, attaches `filled_height` and `lake_mask`
-    single-channel face textures, and registers the ``"rivers"`` (flattened
-    polylines for rendering/serialization), ``"river_objects"`` (the rich
-    ``River`` objects downstream stages consume) and ``"lakes"`` features.  The
-    delta stage (``worldgen.delta``) runs next and extends the rivers and
-    streams in place over the land it deposits.
+    Writes `filled_height` / `lake_mask` textures and the ``"rivers"``,
+    ``"river_objects"``, ``"streams"`` and ``"lakes"`` features.  The delta stage
+    later extends rivers and streams in place.
     """
 
     name = "hydrology"
@@ -50,10 +45,7 @@ class HydrologyBuilder(Stage):
         self.rivers: Optional[List[River]] = None
         self.lake_polygons: Optional[List[np.ndarray]] = None
         self.streams: Optional[StreamNetwork] = None
-        # The flattened ``(positions, flows, in_lake)`` polyline tuples registered
-        # as the "rivers" feature. Cached here because ``serialize`` (no world
-        # access) must reproduce it from either a fresh build (River objects) or a
-        # load (already-flattened tuples).
+        # The "rivers" feature tuples; cached since ``serialize`` has no world access.
         self._river_feature: Optional[list] = None
 
     def build(self, ctx: BuildContext) -> None:
@@ -90,8 +82,6 @@ class HydrologyBuilder(Stage):
         LAKE_MASK.write(mesh, lake_mask)
 
         if self.rivers:
-            # Rich River objects for downstream stages (resources, cost); the
-            # flattened polylines for rendering + serialization.
             RIVER_OBJECTS.write(ctx.world, self.rivers)
             paths_with_flow = self._flatten_rivers()
             if paths_with_flow:
@@ -101,9 +91,7 @@ class HydrologyBuilder(Stage):
             ctx.world.add_feature("lakes", self.lake_polygons)
 
     def _flatten_rivers(self) -> list:
-        """Flatten ``self.rivers`` (List[River]) into ``(positions, flows,
-        in_lake)`` polyline tuples — the form used by both the world feature and
-        the serialized arrays."""
+        """Flatten ``self.rivers`` into ``(positions, flows, in_lake)`` polyline tuples."""
         if self.rivers is None:
             return []
         paths = []
@@ -164,8 +152,7 @@ class HydrologyBuilder(Stage):
             in_lake_flat = arrays["river_in_lake_flat"]
             pos_offs = arrays["river_pos_offsets"]
             flow_offs = arrays["river_flow_offsets"]
-            # Rehydrated rivers are the flattened polyline tuples, not River
-            # objects (no downstream stage re-runs after load).
+            # Loaded rivers stay flattened tuples (no downstream stage re-runs).
             paths_with_flow = [
                 (
                     pos_flat[pos_offs[i]:pos_offs[i + 1]],

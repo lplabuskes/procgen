@@ -4,140 +4,113 @@ Part of `realmgen/`. [Back to realmgen overview](realmgen.md)
 
 ## Overview
 
-The last realm stage. It adds the settlements below the city floor: **towns** of
-`town_min` (1k) up to `PopulationParams.city_min` (7k) people, the layer the
-population stage deliberately leaves unmodeled (see `city_surplus_share` in
-[realm_population.md](realm_population.md)). Towns are **display-only**: no
-stage reads them. They are drawn in the region and local views.
+Last realm stage. Adds **towns** of `town_min` (1k) up to
+`PopulationParams.city_min` (7k) people — the layer the population stage leaves
+unmodeled (`city_surplus_share`, [realm_population.md](realm_population.md)).
+**Display-only**: no stage reads them; drawn in region and local views.
 
-Town people come **out of** the rural population. After this stage a face's
-`rural_population` is its countryside *net of* its towns and `town_population`
-is the difference, so rural + towns is exactly what the population stage
-computed. Global totals (`measure_population_absolute.py`) are unchanged.
-
-Everything is decided per global face, keyed on `(world.seed, face)`, and
-independent of the region being viewed. A region view later *refines* each
-town's position within its global texel (below); that too is independent of
-which region is viewed, since each town has exactly one owning region.
+- Town people come **out of** rural population: afterwards a face's
+  `rural_population` is countryside *net of* towns, `town_population` the
+  difference; rural + towns = the population stage's figure (global totals
+  unchanged).
+- Per global face, keyed `(world.seed, face)`, independent of any region viewed.
+  Region refinement (below) is also view-order independent (each town has one
+  owning region).
 
 ## Files
 
-- `realmgen/towns/builder.py` — `TownStage`, `TownParams`, `town_site_context` (the cities' exclusion discs and the route / mineral points, shared with the region and local re-siting), the Rural Density display (`rural_density_recipe`)
-- `realmgen/towns/placement.py` — pure functions: `compute_rural_density`, `draw_town_sizes`, `site_log_weight_and_kind` (the site weight below, reused by the finer tiers), `place_towns`, `texel_owners`
-- `realmgen/towns/types.py` — `Towns` (the `towns` feature: parallel arrays plus the refinement fields and `reset_refinement` / `reset_local_refinement`), kind codes, names and colours
-- Reuses `realmgen/refine/sites.py` (`SiteField`) — see [realm_refine.md](realm_refine.md)
+- `realmgen/towns/builder.py` — `TownStage`, `TownParams`, `town_site_context` (city exclusion discs, route/mineral points; shared with region/local re-siting), Rural Density display (`rural_density_recipe`)
+- `realmgen/towns/placement.py` — `compute_rural_density`, `draw_town_sizes`, `site_log_weight_and_kind` (reused by finer tiers), `place_towns`, `texel_owners`
+- `realmgen/towns/types.py` — `Towns` (`towns` feature: parallel arrays + refinement fields, `reset_refinement` / `reset_local_refinement`), kind codes, names, colours
+- Reuses `realmgen/refine/sites.py` (`SiteField`; [realm_refine.md](realm_refine.md))
 
 ## Steps
 
-1. **Rural density** (`compute_rural_density`). Each face's farmers (rural
-   population less `FISHING_POPULATION`) are spread over the land texels it owns
-   (nearest centroid) in proportion to the rural model's own food base,
-   `fertility_tex ** γ` (γ = `PopulationParams.fertility_exponent`); its fishers
-   go evenly onto its owned **shore** texels (`shore_texels`: land with water
-   among its 8 neighbours), or join the farmers if it owns no shore. The fishers'
-   part is also written as the `fishing_density` texture, reduced with the rest
-   in step 4, so the region and local maps keep them on the shore. Each owned texel stands for
-   `face_area / n_owned`, so the face total is conserved exactly. An
-   over-hanging texel uses its owner face's scale, which makes the field a
-   function of position that agrees across face seams. A face whose owned land
-   is all barren spreads its people evenly. The face's **miners**
-   (`MINING_POPULATION`, from the population stage's
-   [Miners](realm_population.md#miners)) are not spread: each deposit's
-   (`mine_workers`) are split over its workings by share (`mineral_sites`,
-   see [resources.md](resources.md)) and each working's go on the owned land
-   texel nearest it
-   (`compute_mining_density`), written as the `mining_density` texture so the
-   finer tiers keep them by the mine. Result: the `rural_density` face
-   texture (people/km², float32) — farmers + fishers + miners — reduced by the
-   towns in step 4.
-2. **Town sizes** (`draw_town_sizes`). A face spends `town_fraction ×` its
-   farmers and fishers on towns, and separately `mining_town_fraction ×` its
-   miners on mining towns, drawing truncated-Pareto sizes (`pdf ∝ x^-(α+1)` on
-   `[town_min, city_min]`, α = `size_exponent`), largest first. The draw that
-   would overspend is cut to what is left. A remainder under `town_min` becomes
-   one more minimum-size town with probability `remainder / town_min`, so the
-   expected total is exact and thinly peopled faces still get the odd town.
-3. **Town sites** (`place_towns`). All towns on the globe are sited largest
-   first, each on one of its face's owned land texels, by weighted random choice
-   (Gumbel-max over the log site weight):
+1. **Rural density** (`compute_rural_density`) → `rural_density` face texture
+   (people/km², float32; farmers + fishers + miners):
+   - farmers (rural − `FISHING_POPULATION`) over the face's owned land texels
+     (nearest centroid) ∝ `fertility_tex ** γ` (`PopulationParams.fertility_exponent`);
+   - fishers evenly on owned **shore** texels (`shore_texels`: land with water in
+     its 8-neighbourhood), else with the farmers; also written as
+     `fishing_density` (so finer tiers keep them on the shore);
+   - miners (`MINING_POPULATION`, [Miners](realm_population.md#miners)): each
+     deposit's `mine_workers` split over its workings by share (`mineral_sites`,
+     [resources.md](resources.md)), each working's on the nearest owned land
+     texel (`compute_mining_density`) → `mining_density` texture.
+   - Each owned texel = `face_area / n_owned`, so face totals are exact.
+     Over-hang uses its owner face's scale (function of position, seamless).
+     All-barren land → spread evenly.
+2. **Town sizes** (`draw_town_sizes`). Budget `town_fraction ×` farmers+fishers,
+   and separately `mining_town_fraction ×` miners for mining towns; truncated
+   Pareto (`pdf ∝ x^-(α+1)` on `[town_min, city_min]`, α = `size_exponent`),
+   largest first; the overspending draw is cut to what's left. A remainder <
+   `town_min` becomes one minimum town with probability `remainder / town_min`
+   (expected total exact; thin faces still get the odd town).
+3. **Town sites** (`place_towns`). Globally largest first, each on an owned land
+   texel of its face by Gumbel-max over the log weight:
 
    `w = (ρ / ρ̄_face + 0.05) × (1 + port·coast + confluence·conf + river·river + stream·stream + route·route) + mining·mine`
 
-   ρ is the texel's rural density. `stream` means the texel is a channel of the
-   hydrology stream network (`"streams"`, cut at `stream_flow_threshold`, far
-   below the rivers) and not already a river or confluence site; the water
-   bonuses do not stack. City siting shares `SiteField` but passes no network,
-   so streams never draw cities. `route` means within `route_radius_km` of a
-   trade route, and `mine` means within `mining_radius_km` of a mineral working.
-   The 0.05 floor keeps barren sites possible for mining camps and waypoints. A
-   site is rejected if it lies within the exclusion radius of a town or city
-   already placed. A pair must be the larger of their two radii apart:
-   `town_spacing_km × (pop / town_min)^0.25` for a town (20 km at 1k, ~33 km at
-   7k) and `city_clearance_km × (pop / city_min)^0.25` for a city (25 km at 7k,
-   ~73 km at 500k). The check only looks at the face and its neighbours, which
-   is exact while every radius is shorter than a face (~200 km). Inland sites
-   are jittered by up to `site_jitter` × texel spacing so towns do not sit on
-   the texel lattice; coast sites are not jittered (it could step into the sea),
-   and a jitter that would leave the face is dropped.
+   - ρ = rural density. `stream` = channel of the hydrology `"streams"` network
+     (cut at `stream_flow_threshold`) not already river/confluence; water bonuses
+     don't stack. Cities get no network, so streams never draw cities. `route` =
+     within `route_radius_km` of a trade route; `mine` = within
+     `mining_radius_km` of a working. The 0.05 floor keeps barren sites possible.
+   - **Spacing**: a pair must be ≥ the larger of their radii apart — town
+     `town_spacing_km × (pop / town_min)^0.25` (20 km at 1k, ~33 at 7k), city
+     `city_clearance_km × (pop / city_min)^0.25` (25 km at 7k, ~73 at 500k).
+     Checked over the face and neighbours (exact while radii < a face, ~200 km).
+   - Inland sites jittered ≤ `site_jitter` × texel spacing (off the lattice);
+     coast sites not (could step into sea); jitter leaving the face dropped.
+   - **Mining towns**: same pass and spacing, only among sites within `2 ×
+     mining_radius_km` of the face's worked workings, weighted `Σ miners ·
+     exp(−(d / mining_radius)²)`; always mining kind. Need no farmland (barren
+     icecap/desert faces with worked deposits still get one).
+4. **Accounting.** `town_population` = sited towns per face; `rural_population`
+   and density reduced to match — mining towns out of miners (the odd minimum
+   one beyond them out of farmers), others out of farmers+fishers. A town with no
+   legal site is dropped; its people stay rural (a mining town's stay in the
+   camps, drawn by local maps as mining villages).
 
-   **Mining towns** are sited in the same largest-first pass with the same
-   spacing rules, but only among the face's sites within `2 × mining_radius_km`
-   of one of its deposits' worked workings, weighted `Σ miners · exp(−(d / mining_radius)²)`
-   so they favour the bigger mines and stand close by, and are always of the
-   mining kind. They do not need farmland, so a barren icecap or desert face
-   whose deposits are worked still gets its mining town.
-4. **Accounting.** `town_population` is the sum of sited towns per face, and
-   `rural_population` and the density texture are reduced to match: a mining
-   town out of the miners (the odd minimum-size one drawn beyond them out of
-   the farmers), every other town out of the farmers and fishers. A town with
-   no legal site is dropped and its people stay rural — a mining town's in the
-   camps by its deposit, which the local maps draw as mining villages.
-
-The stage reads the pre-town countryside as `rural_population +
+**Idempotent**: the stage reads pre-town countryside as `rural_population +
 town_population`, and `PopulationStage` zeroes `town_population` whenever it
-writes a fresh `rural_population`. Re-running the town stage alone therefore
-gives the same result, and never carves towns out twice.
+writes fresh rural — re-running never carves towns twice.
 
-**Kind** is what the chosen site offered, in precedence order: port (coast),
-mining, river (river, confluence or stream), waypoint (trade route), otherwise
-market town. **Parent** is the `hinterland_id` of the town's face: the index of the
-city whose hinterland holds it.
+**Kind** (precedence): port (coast), mining, river (river/confluence/stream),
+waypoint (route), else market. **Parent** = the face's `hinterland_id` (city
+whose hinterland holds it).
 
 ## `TownParams`
 
-`town_fraction` (0.12), `mining_town_fraction` (0.6 — the rest of the miners
-live in camps and hamlets by the mine), `town_min` (1000), `size_exponent` (1.0),
-`town_spacing_km` (20), `city_clearance_km` (25), the site bonuses `port_bonus`
-(2), `confluence_bonus` (2), `river_bonus` (1), `stream_bonus` (1), `route_bonus` (1),
-`mining_bonus` (1.5), `route_radius_km` (15), `mining_radius_km` (25), and
-`site_jitter` (hidden, 0.4). The town ceiling is `PopulationParams.city_min`,
-so towns and cities do not overlap in size.
+`town_fraction` (0.12), `mining_town_fraction` (0.6; the rest live in camps by
+the mine), `town_min` (1000), `size_exponent` (1.0), `town_spacing_km` (20),
+`city_clearance_km` (25); bonuses `port_bonus` (2), `confluence_bonus` (2),
+`river_bonus` (1), `stream_bonus` (1), `route_bonus` (1), `mining_bonus` (1.5);
+`route_radius_km` (15), `mining_radius_km` (25), `site_jitter` (hidden, 0.4).
+Ceiling = `PopulationParams.city_min` (no size overlap with cities).
 
 ## Display
 
 - **Region refinement.** Entering a region moves each town whose site is in it
-  within ~one global texel of that site, onto the region's finer terrain — a
-  river town onto the drawn river or stream, a port onto the refined coast —
-  and writes the result into this feature: `positions` is the town's actual
-  position, `site_positions` the stage's site, `refined` which towns have been
-  refined, `region_positions` the region's result (all saved). It shares the
-  stage's weights (`site_log_weight_and_kind`) and `town_site_context`. See
-  [region_features.md](region_features.md#towns-and-cities). A local
-  map then refines the town again from its region position
-  (`local_refined`; [local_settlements.md](local_settlements.md#towns-and-cities)),
-  and cities are refined at both tiers too.
-- **Towns overlay** (checked by default). Small dots coloured by kind and sized
-  by population (`_draw_towns` in `viz/mapview/overlays.py`), with a categorical
-  legend. Drawn **only in the region and local views** (the overlay projector's
-  `regional` flag), never on the world map. There, towns and cities that land
-  on the refined water are nudged onto land (see [viz_regionview.md](viz_regionview.md)).
-- **Hover**: none on the world map. A region view counts the hovered hexagon's towns (`Towns in hex: N (pop)` plus a breakdown by kind); a local map names the town under the cursor (kind and population). See [viz_regionview.md](viz_regionview.md).
-- **Rural Density** (`--debug` layer). The `rural_density` texture,
-  sqrt-scaled to its 99th land percentile (`rural_density_recipe`). A region
-  redraws it from its refined `rural_density` (see
-  [region_fields.md](region_fields.md)); a local map from the countryside net of
-  its villages. Land inside faces the globe calls water shows as empty,
-  because the population model gives those faces no rural people.
+  within ~one global texel onto finer terrain (river town → drawn river/stream,
+  port → refined coast), writing into this feature: `positions` (actual),
+  `site_positions` (stage's), `refined`, `region_positions` (all saved). Uses
+  `site_log_weight_and_kind` and `town_site_context`
+  ([region_features.md](region_features.md#towns-and-cities)). Local maps refine
+  again from the region position (`local_refined`;
+  [local_settlements.md](local_settlements.md#towns-and-cities)); cities are
+  refined at both tiers too.
+- **Towns overlay** (checked by default): dots by kind, sized by population
+  (`_draw_towns`), categorical legend. **Region/local views only** (projector
+  `regional` flag). Settlements on refined water are nudged to land
+  ([viz_regionview.md](viz_regionview.md)).
+- **Hover**: none on world map; region counts the hovered hex's towns (`Towns in
+  hex: N (pop)` + kinds); local names the town under the cursor.
+- **Rural Density** (`--debug`): `rural_density` sqrt-scaled to its 99th land
+  percentile (`rural_density_recipe`). Region draws its refined
+  `rural_density` ([region_fields.md](region_fields.md)); local maps draw
+  countryside net of villages. Land inside globe-water faces shows empty (those
+  faces have no rural people).
 
 ## Numbers (seeds 4 / 31 / 35)
 
@@ -149,16 +122,13 @@ so towns and cities do not overlap in size.
 | nearest-town distance, median | 37 km | 37 km | 35 km |
 | stage time | 1.3 s | 1.4 s | 1.3 s |
 
-About 70% are market towns, 20–25% waypoints, and the rest ports, river towns
-and mining towns. With the stream bonus, river towns on seed 4 went from 586
-(3.9%) to 956 (6.4%), mostly out of market towns.
+~70% market, 20–25% waypoints, rest ports, river and mining. The stream bonus
+took seed 4 river towns from 586 (3.9%) to 956 (6.4%).
 
 ## Validation
 
-`realmgen/towns/test/test_towns.py` covers:
-- size bounds, budget and cap, and unbiasedness for tiny budgets
-- per-face density conservation and the barren-face fallback
-- siting: spacing, towns staying in their face, dropped towns staying rural, determinism
-- the stream bonus making river towns, and a `SiteField` without a network ignoring it
-- the `Towns` pack round trip
-- the stage end to end: rural + towns conserved, `town_population` matches the towns, idempotent re-run
+`realmgen/towns/test/test_towns.py`: size bounds/budget/cap and tiny-budget
+unbiasedness; density conservation and barren fallback; siting (spacing,
+in-face, dropped stay rural, determinism); stream bonus (and no-network
+`SiteField` ignoring it); `Towns` pack round trip; end-to-end (rural + towns
+conserved, `town_population` matches, idempotent re-run).

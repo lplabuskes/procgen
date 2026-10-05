@@ -1,12 +1,7 @@
 """Per-pixel dominant crop classification.
 
-Mirrors the structure of `worldgen/climate/classification.py`: a simple
-threshold table (first-match wins) applied to per-pixel growing-season
-temperature, annual precipitation, and elevation. Fertility acts as a
-gate — pixels below `FERTILITY_GATE` yield CROP_NONE regardless of climate.
-
-Crops are ordered from most-specific to least-specific so the first match
-is the tightest ecological fit.
+A first-match-wins threshold table (most specific first) over growing-season temperature, annual
+precipitation and elevation; pixels below `FERTILITY_GATE` get CROP_NONE.
 """
 from __future__ import annotations
 
@@ -27,13 +22,10 @@ CROP_NAMES: list[str] = [
 N_CROPS = len(CROP_NAMES)
 CROP_NONE = 0
 
-# Fertility below this threshold → CROP_NONE regardless of climate.
 FERTILITY_GATE = 0.08
 
-# ── threshold table ──────────────────────────────────────────────────────────
-# Each row: (crop_index, t_grow_min, t_grow_max, p_annual_min, p_annual_max,
-#            elev_min_km, elev_max_km)
-# Applied in forward order; first match wins.
+# (crop_index, t_grow_min, t_grow_max, p_annual_min, p_annual_max, elev_min_km, elev_max_km);
+# first match wins.
 _CROP_TABLE: list[tuple] = [
     # Sugarcane: hot lowland tropics, very wet.
     (2,  22.0, 50.0, 1800.0, 9999.0, -9.0, 1.0),
@@ -60,17 +52,7 @@ def default_crop(
     elevation_km: float,
     fertility: float,
 ) -> int:
-    """Scalar crop classifier.
-
-    Args:
-        temperature_c: (K,) per-season temperatures in °C.
-        precipitation_mm: (K,) per-season precipitation in mm.
-        elevation_km: pixel elevation.
-        fertility: pixel fertility in [0, 1].
-
-    Returns:
-        Crop index (0 = None).
-    """
+    """Scalar crop classifier from (K,) per-season °C and mm; returns the crop index (0 = None)."""
     if fertility < FERTILITY_GATE:
         return CROP_NONE
 
@@ -97,18 +79,7 @@ def classify_crops(
     fertility_tex: np.ndarray,
     ocean_mask_tex: np.ndarray,
 ) -> np.ndarray:
-    """Vectorised crop classifier over (N, H, W, *) textures.
-
-    Args:
-        temperature_tex: (N, H, W, K) float32 °C.
-        precipitation_tex: (N, H, W, K) float32 mm/season.
-        elevation_tex: (N, H, W, 1) float32 km.
-        fertility_tex: (N, H, W, 1) float32 in [0, 1].
-        ocean_mask_tex: (N, H, W, 1) float32; 1 = ocean.
-
-    Returns:
-        (N, H, W, 1) uint8 crop indices.
-    """
+    """Vectorised :func:`default_crop` over (N, H, W, *) textures; returns (N, H, W, 1) uint8."""
     t = temperature_tex.astype(np.float32)
     warm = t > 5.0
     warm_count = warm.sum(axis=-1).astype(np.float32)         # (N, H, W)
@@ -124,8 +95,7 @@ def classify_crops(
     fertility = fertility_tex[..., 0].astype(np.float32)           # (N, H, W)
     ocean = ocean_mask_tex[..., 0] > 0.5                           # (N, H, W) bool
 
-    # Start with CROP_NONE everywhere; apply table in reverse so earlier
-    # (more-specific) rows override later (less-specific) ones.
+    # Apply in reverse so earlier (more specific) rows win.
     crop = np.zeros(t_grow.shape, dtype=np.uint8)
     for crop_idx, t_min, t_max, p_min, p_max, e_min, e_max in reversed(_CROP_TABLE):
         mask = (

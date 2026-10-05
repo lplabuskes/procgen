@@ -90,8 +90,7 @@ class TestTarjanAPs:
         assert _tarjan_aps_iterative({0, 1}, [[1], [0]]) == set()
 
     def test_subgraph_restriction(self):
-        # Full graph is a path 0-1-2-3, but we only pass nodes {0, 1, 2}.
-        # Node 1 is still an AP within that subgraph.
+        # Path 0-1-2-3 restricted to {0, 1, 2}: node 1 is still an AP.
         adj = self._adj(4, [(0, 1), (1, 2), (2, 3)])
         aps = _tarjan_aps_iterative({0, 1, 2}, adj)
         assert aps == {1}

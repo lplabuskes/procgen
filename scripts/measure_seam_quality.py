@@ -6,22 +6,10 @@ Usage:
     python3 scripts/measure_seam_quality.py --random 5       # 5 random seeds
     python3 scripts/measure_seam_quality.py --pre-noise 42   # base texture only (no noise)
 
-Outputs a table of mean / median / RMS / max boundary jump (km) per seed.
-Useful for gauging how much elevation discontinuity exists at face seams before
-and after any changes to the elevation texture pipeline.
-
-Background
-----------
-Each face has its own elevation texture computed independently via barycentric
-interpolation of vertex elevations. Pixels near a shared edge should agree with
-their counterpart in the neighbouring face, but in practice the fan-triangulation
-apex pulls each side toward a different unshared vertex, creating a small jump.
-The jump is also inflated by the coast-proximity noise modulation when a face
-boundary happens to straddle a coastline.
-
-`measure_boundary_elevation_jumps` (worldgen.geology.elevation) quantifies this
-by matching pixel pairs along every shared edge via their t-parameter and
-reporting summary statistics over all ~350 k matched pairs.
+Outputs mean / median / RMS / max boundary jump (km) per seed, over ~350k pixel
+pairs matched along shared edges (``measure_boundary_elevation_jumps``).  Each
+face's texture is interpolated independently, and the fan-triangulation apex
+pulls each side of an edge toward a different vertex.
 """
 from __future__ import annotations
 
@@ -50,8 +38,7 @@ from worldgen.geology.volcanism import compute_volcanism
 def _build_base_textures(seed: int):
     """Run the pipeline up to elevation textures *before* noise is applied.
 
-    Returns (dual_mesh, base_textures, params) so the caller can measure the
-    base texture seam quality independently from the noise contribution.
+    Returns (dual_mesh, base_textures, params).
     """
     p = ElevationParams()
 

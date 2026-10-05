@@ -15,8 +15,8 @@ def generate_plates(
 ) -> List[int]:
     """Assign each face to a plate via per-plate randomized-priority flood fill.
 
-    Each step picks a plate uniformly at random (so frontier size gives no compounding
-    advantage) and expands it one face using a distance-biased heap (compactness knob).
+    Each step picks a plate at random (not by frontier size, which would compound)
+    and grows it one face from a distance-biased heap (compactness knob).
     """
     rng = random.Random(seed)
     n_faces = len(mesh.faces)
@@ -29,7 +29,7 @@ def generate_plates(
     seed_centroids = face_centroids[seeds]
 
     def push(heap: list, plate_id: int, face_idx: int) -> None:
-        # dist proxy: (1 - cos θ) / 2 normalizes angular distance to [0, 1]
+        # (1 - cos θ) / 2: angular distance proxy in [0, 1]
         cos_theta = float(np.dot(seed_centroids[plate_id], face_centroids[face_idx]))
         dist = (1.0 - cos_theta) / 2.0
         priority = compactness * dist + (1.0 - compactness) * rng.random()
@@ -41,8 +41,7 @@ def generate_plates(
         for neighbor in adjacency[face_idx]:
             push(heaps[plate_id], plate_id, neighbor)
 
-    # Each plate gets a random weight; weighted selection produces a realistic
-    # spread of plate sizes rather than near-uniform areas.
+    # Random per-plate weights spread plate sizes instead of near-uniform areas.
     active = list(range(n_plates))
     active_weights = [rng.random() ** 0.25 for _ in range(n_plates)]
     while active:
@@ -126,35 +125,28 @@ def generate_plate_velocities(
 ) -> np.ndarray:
     """Return angular velocity vectors for each plate, shape (n_plates, 3).
 
-    The velocity of a point p on the unit sphere belonging to plate k is omega[k] x p.
-    Each plate's omega is a sum of a drift component (perpendicular to the plate centroid,
-    translating the plate across the sphere) and a spin component (along the centroid,
-    rotating the plate in place).  Real plates have much smaller spin than drift, so
-    spin_scale defaults to a tenth of drift_scale.
+    Velocity at p on plate k is omega[k] x p.  omega = drift (perpendicular to the
+    plate centroid) + spin (along it); real plates spin far less than they drift.
     """
     rng = np.random.default_rng(seed)
 
     plate_centroids, _ = compute_plate_centroids(mesh, plate_ids, n_plates)
 
-    # Draw a random drift pole (uniform on S²) and a random speed for each plate.
     drift_axes = rng.standard_normal((n_plates, 3))
     drift_axes /= np.linalg.norm(drift_axes, axis=1, keepdims=True)
     drift_speeds = rng.exponential(scale=drift_scale, size=n_plates)
     drift_omega = drift_axes * drift_speeds[:, np.newaxis]
 
-    # Project out the centroid component so drift is purely tangential.
     dot = np.einsum("ij,ij->i", drift_omega, plate_centroids)
     drift_omega -= dot[:, np.newaxis] * plate_centroids
 
-    # Spin: random magnitude along the centroid axis.
     spin_speeds = rng.normal(scale=spin_scale, size=n_plates)
     spin_omega = spin_speeds[:, np.newaxis] * plate_centroids
 
     plate_omegas = (drift_omega + spin_omega).astype(np.float64)
 
-    # No-net-rotation correction: subtract the area-weighted mean angular velocity.
-    # Weight each face by area × crustal density if plate_type is in face metadata,
-    # otherwise fall back to area alone.
+    # No-net-rotation: subtract the mass-weighted mean (area × density, or area
+    # alone when plate_type metadata is absent).
     _DENSITY = {"oceanic": 3.0, "continental": 2.7}
     face_areas = mesh.face_areas
     sample_type = mesh.face_metadata[0].get("plate_type") if mesh.face_metadata else None
@@ -180,17 +172,14 @@ def compute_face_velocities(
     plate_ids: List[int],
     plate_omegas: np.ndarray,
 ) -> np.ndarray:
-    """Return (n_faces, 3) surface velocity vectors.
-
-    velocity[i] = plate_omegas[plate_ids[i]] x face_centroids[i]
-    """
+    """Return (n_faces, 3) surface velocities, omega x centroid."""
     face_centroids = mesh.face_centroids
     omegas = plate_omegas[np.array(plate_ids, dtype=np.int32)]
     return np.cross(omegas, face_centroids)
 
 
 def _tarjan_aps_iterative(nodes: set, adjacency: list) -> set:
-    """Find articulation points in the subgraph induced by nodes using iterative Tarjan's."""
+    """Articulation points of the subgraph induced by ``nodes`` (iterative Tarjan)."""
     if len(nodes) <= 2:
         return set()
 
@@ -250,10 +239,8 @@ def relax_plates(
 ) -> List[int]:
     """Iteratively remove appendages from plates using articulation point detection.
 
-    An appendage is a set of faces reachable from the rest of its plate only through
-    a single face (the articulation point). Each pass: for every plate, find articulation
-    points, identify the faces stranded behind each one, and reassign those faces to
-    whichever neighboring plate they border most. Repeats until stable or max_passes.
+    An appendage is reachable from the rest of its plate only through one
+    articulation point; its faces go to the neighbouring plate they border most.
     """
     adjacency = mesh.face_adjacency
     current = list(plate_ids)
@@ -263,7 +250,6 @@ def relax_plates(
         for i, pid in enumerate(current):
             plate_faces.setdefault(pid, set()).add(i)
 
-        # Representative face for each plate: closest to the plate's unit centroid.
         n_plates_local = max(plate_faces.keys()) + 1
         _, centroid_faces = compute_plate_centroids(mesh, current, n_plates_local)
         plate_reps: dict[int, int] = {pid: centroid_faces[pid] for pid in plate_faces}
@@ -282,7 +268,7 @@ def relax_plates(
             for ap in aps:
                 remaining = faces - {ap} - appendage_faces
                 if rep in remaining:
-                    # Normal case: BFS from rep; unreachable faces are appendages.
+                    # Faces unreachable from rep are appendages.
                     visited: set[int] = {rep}
                     queue = [rep]
                     while queue:
@@ -293,8 +279,7 @@ def relax_plates(
                                 queue.append(nb)
                     appendage_faces |= remaining - visited
                 else:
-                    # rep is the AP itself: find all components of remaining and
-                    # keep the largest; everything else is an appendage.
+                    # rep is the AP itself: all but the largest component are appendages.
                     components: list[set[int]] = []
                     unvisited = set(remaining)
                     while unvisited:
@@ -317,7 +302,7 @@ def relax_plates(
                             if comp is not main:
                                 appendage_faces |= comp
 
-            # Assign boundary appendage faces (those with external plate neighbors) first.
+            # Faces with external neighbours first, then propagate inward.
             boundary_queue: list[int] = []
             for f in appendage_faces:
                 counts: dict[int, int] = {}
@@ -329,7 +314,6 @@ def relax_plates(
                     reassignments[f] = max(counts, key=counts.__getitem__)
                     boundary_queue.append(f)
 
-            # Propagate inward to appendage faces with no external neighbours.
             while boundary_queue:
                 f = boundary_queue.pop()
                 for nb in adjacency[f]:
@@ -342,9 +326,8 @@ def relax_plates(
         for f, new_pid in reassignments.items():
             current[f] = new_pid
 
-        # Batch reassignment can leave disconnected islands (not just isolated
-        # single faces).  For each plate with multiple components, absorb every
-        # minor component into its neighbors via BFS from the boundary inward.
+        # Batch reassignment can disconnect plates; absorb minor components into
+        # their neighbours from the boundary inward.
         repaired = True
         while repaired:
             repaired = False
@@ -409,17 +392,11 @@ def classify_plate_boundaries(
     plate_ids: List[int],
     plate_omegas: np.ndarray,
 ) -> List[dict]:
-    """Classify each face's boundary context and return richer per-face data.
+    """Classify each face by its mean normal vs shear relative velocity over inter-plate edges.
 
-    For each inter-plate edge adjacent to a face, decompose the relative plate
-    velocity at the boundary midpoint into a normal component (convergence/divergence)
-    and a shear component (transform). The face is classified by whichever signal
-    dominates, averaged over all its inter-plate edges.
-
-    Returns a list of dicts with keys:
+    Returns per-face dicts:
         boundary_type: 'interior' | 'convergent' | 'divergent' | 'transform'
-        normal_avg: float — mean normal velocity component (positive = diverging,
-            negative = converging). Zero for interior faces.
+        normal_avg: float — mean normal velocity (positive = diverging); 0 if interior.
         neighbor_plate_types: set[str] — plate types seen across inter-plate edges.
     """
     adjacency = mesh.face_adjacency
@@ -454,8 +431,7 @@ def classify_plate_boundaries(
 
             v_rel = np.cross(plate_omegas[pid_a], m) - np.cross(plate_omegas[pid_b], m)
 
-            # Boundary-normal direction: from neighbor centroid toward this face's centroid,
-            # projected onto the tangent plane at m. Positive v_n means plates diverge.
+            # Normal: neighbour → this face, tangent at m. Positive v_n = diverging.
             d = face_centroids[face_idx] - face_centroids[nb]
             d = d - np.dot(d, m) * m
             d_norm = float(np.linalg.norm(d))
@@ -493,11 +469,7 @@ def assign_plate_types(
     oceanic_fraction: float = 0.7,
     seed: Optional[int] = None,
 ) -> List[str]:
-    """Classify each plate as 'oceanic' or 'continental'.
-
-    Returns a list of length n_plates. oceanic_fraction controls the expected
-    proportion of oceanic plates (default 0.7 matches Earth's rough ratio).
-    """
+    """Classify each plate as 'oceanic' or 'continental' (expected oceanic share = oceanic_fraction)."""
     rng = random.Random(seed)
     return [
         "oceanic" if rng.random() < oceanic_fraction else "continental"

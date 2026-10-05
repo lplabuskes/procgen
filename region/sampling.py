@@ -1,18 +1,11 @@
 """Sampling the global face model at arbitrary sphere positions.
 
-Regional upsampling needs two things from the globe at every regional texel:
+Provides the smooth (bilinear) read of a global texture and the **anchor**, the
+global texel each regional texel must average back to (the conservation
+invariant in ``docs/plans/regional_local_maps_design.md``).
 
-- a **smooth** reading of a global texture (bilinear across the owning face's
-  texel grid) — the coarse field the detail is added to;
-- the **anchor**: which single global texel that regional texel belongs to.  The
-  anchor is the aggregation target — every regional texel sharing an anchor must
-  average back to that global texel's value (the conservation invariant in
-  ``docs/plans/regional_local_maps_design.md``).
-
-Face ownership is by nearest centroid.  The mesh dual's faces are very nearly the
-Voronoi cells of those centroids, so this agrees with the rendered polygons
-except within a texel of the seams — and face textures over-hang their polygon,
-so a point assigned to a neighbour still reads a valid (seam-smoothed) value.
+Face ownership is by nearest centroid, which matches the rendered polygons
+except within a texel of the seams; textures over-hang, so reads stay valid there.
 """
 from __future__ import annotations
 
@@ -32,17 +25,16 @@ if TYPE_CHECKING:
     from core.mesh import PolygonMesh
 
 
-# mesh → {(h, w): owners}.  Ownership depends only on the geometry, so every
-# sampler of a mesh (each region and local map makes its own) shares it.
+# mesh → {(h, w): owners}, shared by every sampler of a mesh (geometry-only).
 _OWNERS: "weakref.WeakKeyDictionary[PolygonMesh, dict[tuple[int, int], np.ndarray]]" = weakref.WeakKeyDictionary()
 
 
 def bilinear_plan(
     items: np.ndarray, x: np.ndarray, y: np.ndarray, h: int, w: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """``(corners (4, P), fx (P, 1), fy (P, 1))`` for bilinear reads of ``(N, H, W, C)``
-    textures at texel coordinates ``(x, y)`` of item ``items``: the flat
-    ``(N·H·W)`` indices of the four corners and the fractions between them."""
+    """``(corners (4, P), fx (P, 1), fy (P, 1))`` for bilinear reads of ``(N, H, W, C)`` textures.
+
+    ``corners`` are flat ``(N·H·W)`` indices at texel coords ``(x, y)`` of ``items``."""
     x0 = np.clip(np.floor(x).astype(np.int64), 0, max(w - 2, 0))
     y0 = np.clip(np.floor(y).astype(np.int64), 0, max(h - 2, 0))
     x1 = np.minimum(x0 + 1, w - 1)
@@ -110,10 +102,8 @@ class GlobalSampler:
     ) -> np.ndarray:
         """Bilinear read of an ``(N, H, W, C)`` texture → ``(P, C)`` float64.
 
-        A point just outside its face's texture square (the face's Voronoi cell
-        pokes past it near some corners) is extrapolated from the edge texels
-        rather than clamped, so the read keeps its slope there instead of
-        flattening into a wedge.
+        Points just outside the texture square are extrapolated, not clamped,
+        so the read keeps its slope instead of flattening into a wedge.
         """
         tex = np.asarray(texture)
         _, h, w, c = tex.shape
@@ -135,10 +125,8 @@ class GlobalSampler:
     ) -> np.ndarray:
         """``(P,)`` flat index ``face*H*W + row*W + col`` of the global texel owning each point.
 
-        The nearest texel of the owning face, passed through :meth:`owners`: a
-        point within half a texel of a seam can be nearest a texel whose own
-        centre lies across the seam, and then belongs to the neighbour's texel
-        there instead, so every anchor's points sit around its own centre.
+        The nearest texel, passed through :meth:`owners` so points near a seam
+        go to the texel whose centre is on their side.
         """
         return self.owners(h, w)[self._nearest_texels(faces, u, v, h, w)]
 
@@ -153,11 +141,8 @@ class GlobalSampler:
     def owners(self, h: int, w: int) -> np.ndarray:
         """``(N*H*W,)`` the texel owning each global texel's position.
 
-        Its own index when the texel's centre lies in its own face's territory
-        (nearest centroid); otherwise the neighbouring face's texel nearest it.
-        A seam's duplicated edge texels both point at one of the pair; the
-        over-hang past a face's polygon points at the neighbour.  Idempotent:
-        an owner owns itself.
+        Its own index when its centre is in its face's territory, else the
+        neighbouring face's nearest texel.  Idempotent: an owner owns itself.
         """
         cached = self._owners.get((h, w))
         if cached is not None:
@@ -187,10 +172,8 @@ class GlobalSampler:
 def settle_owners(owner: np.ndarray) -> np.ndarray:
     """Make a texel → owning-texel map idempotent (every owner owns itself).
 
-    An owner's own centre can lie just across another seam, so ownership forms
-    chains — and, where duplicated seam texels each sit a hair inside the
-    other's territory, cycles.  Chains are followed to the cycle they end on
-    (a fixed point is a cycle of one), and each cycle goes to its smallest member.
+    Ownership can form chains and (duplicated seam texels) cycles; chains are
+    followed to their cycle, and each cycle goes to its smallest member.
     """
     owner = np.asarray(owner, dtype=np.int64)
     landed = owner.copy()
@@ -212,10 +195,9 @@ def anchor_means(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Per-anchor weighted mean of ``(P, C)`` values → ``((n_anchors, C), counts)``.
 
-    ``weights`` is the ``(P,)`` inclusion weight — 1 for texels that count toward
-    the aggregate, 0 for the over-hang duplicates.  Anchors with no weight get a
-    mean of 0 and a count of 0; callers must leave those samples uncorrected.
-    ``counts`` is the per-anchor total weight when the caller already has it.
+    ``weights`` is the ``(P,)`` inclusion weight (0 for over-hang).  Anchors with
+    no weight get mean and count 0; callers must leave those uncorrected.
+    ``counts`` may be passed if already known.
     """
     vals = np.asarray(values, dtype=np.float64)
     if vals.ndim == 1:
@@ -230,8 +212,7 @@ def anchor_means(
 
 @njit(cache=True)
 def _weighted_anchor_sums(vals, anchors, w, n_anchors):  # pragma: no cover - compiled
-    """``(n_anchors, C)`` sums of ``w × vals`` per anchor — every channel's
-    ``np.bincount(anchors, weights=w * vals[:, k])`` in one pass, same add order."""
+    """``(n_anchors, C)`` per-anchor sums of ``w × vals``; same add order as ``np.bincount``."""
     sums = np.zeros((n_anchors, vals.shape[1]))
     for p in range(vals.shape[0]):
         a = anchors[p]

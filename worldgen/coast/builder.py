@@ -1,22 +1,9 @@
-"""Coast stage — CoastBuilder.
+"""Coast stage: per-face *coast smoothness* in [0, 1] and its continuous texture.
 
-Runs after the climate lake-feedback pass. Writes a per-face *coast smoothness*
-in [0, 1] and its continuous texture: the style of the shorelines the region
-and local tiers draw. The globe's own coast is not changed — at ~14 km texels
-there is no shoreline shape to style; the field only steers the sub-grid noise
-one and two tiers down (``region/upsample.py``).
-
-Ruggedness is a sum of physical causes plus a low-frequency noise term, so
-two coasts in the same setting still differ:
-
-- **tectonic** — active (convergent) margins and volcanism: cliffs, headlands,
-  island arcs;
-- **glacial** — cold coasts: fjords and skerries;
-- **deltaic** (subtracted) — the mouths of large rivers: sediment-built, smooth;
-- **noise** — the rest of the variety.
-
-Smoothness is ``1 − ruggedness``, clipped, diffused over the face graph and
-rasterised by shared-vertex interpolation so it has no steps at face edges.
+The globe's coast is unchanged (no shoreline shape at ~14 km texels); the field steers the region and
+local tiers' shoreline noise (``region/upsample.py``).  Ruggedness sums tectonic (convergent margins,
+volcanism), glacial (cold coasts), minus deltaic (large river mouths), plus low-frequency noise.
+Smoothness = ``1 − ruggedness``, clipped, diffused over the face graph and rasterised seam-free.
 """
 from __future__ import annotations
 
@@ -49,18 +36,15 @@ class CoastParams:
     noise_weight: float = _f(0.35, label="Noise weight", min=0.0, max=1.0, step=0.05)
     # Simplex frequency on the unit sphere; 5 → features ~1,000–2,000 km across.
     noise_frequency: float = _f(5.0, label="Noise frequency", min=0.5, max=30.0, step=0.5)
-    # Convergent plate boundaries: full weight on the boundary, e-folding over
-    # this many faces (~220 km each).
+    # Convergent boundaries: full weight on the boundary, e-folding over this many faces (~220 km each).
     tectonic_weight: float = _f(0.4, label="Tectonic weight", min=0.0, max=1.0, step=0.05)
     tectonic_decay_hops: float = _f(2.0, label="Tectonic decay (faces)", min=0.1, max=10.0, step=0.1)
     volcanic_weight: float = _f(0.3, label="Volcanic weight", min=0.0, max=1.0, step=0.05)
-    # Glacial ruggedness ramps from 0 at the warm limit to full at the cold one
-    # (annual mean, °C).
+    # Glacial ruggedness ramps from 0 at the warm limit to full at the cold one (annual mean, °C).
     glacial_weight: float = _f(0.5, label="Glacial weight", min=0.0, max=1.0, step=0.05)
     glacial_warm_c: float = _f(4.0, label="Glacial onset (°C)", min=-30.0, max=30.0, step=0.5)
     glacial_cold_c: float = _f(-6.0, label="Glacial full (°C)", min=-40.0, max=20.0, step=0.5)
-    # River mouths smooth the coast by sqrt(flow / largest flow), e-folding over
-    # this many faces.
+    # River mouths smooth by sqrt(flow / largest flow), e-folding over this many faces.
     delta_weight: float = _f(0.6, label="Delta weight", min=0.0, max=2.0, step=0.05)
     delta_decay_hops: float = _f(1.5, label="Delta decay (faces)", min=0.1, max=10.0, step=0.1)
     # Neighbour-mean diffusion over the face graph before rasterising.
@@ -71,11 +55,7 @@ class CoastParams:
 def _decayed_max(
     adjacency: list, strength: np.ndarray, decay_hops: float, max_hops: int = _MAX_HOPS
 ) -> np.ndarray:
-    """``max over sources s of strength[s] · exp(-hops(s, ·) / decay_hops)``.
-
-    A max-plus relaxation over the face graph: each sweep lets every face take
-    its neighbours' value one hop further decayed.
-    """
+    """``max over sources s of strength[s] · exp(-hops(s, ·) / decay_hops)``, by max-plus relaxation."""
     factor = float(np.exp(-1.0 / max(decay_hops, 1e-6)))
     value = np.asarray(strength, dtype=np.float64).copy()
     for _ in range(max_hops):
@@ -120,9 +100,7 @@ def coast_smoothness(
 ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
     """Per-face smoothness in [0, 1] and each term's ruggedness contribution.
 
-    Every physical input is optional; a missing one contributes nothing.
-    ``mouth_strength`` is the per-face delta strength in [0, 1] (non-zero only
-    on river-mouth faces).
+    Missing inputs contribute nothing.  ``mouth_strength`` is per-face in [0, 1], non-zero at river mouths.
     """
     n, adjacency = len(mesh.faces), mesh.face_adjacency
     p = params
@@ -234,8 +212,7 @@ class CoastBuilder(Stage):
         reg.add_hover(_coast_hover)
 
     # ── Persistence ───────────────────────────────────────────────────────────
-    # The texture is saved with the mesh; the per-face values are its face means
-    # up to the rasterisation, so they are restored from the saved array.
+    # The texture is saved with the mesh; per-face values are restored as its face means.
 
     def serialize(self) -> dict:
         return {}

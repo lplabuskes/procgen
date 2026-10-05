@@ -1,22 +1,8 @@
 """Mineral deposit placement — hybrid geology + noise model.
 
-Geology assigns candidate faces per mineral type; fBm simplex noise clusters
-the candidates into deposits and sets abundance.
-
-Mineral      Geological seed
------------  ----------------------------------------------------------
-Iron         convergent boundary faces
-Copper       convergent boundary faces (independent noise draw)
-Gold         volcanic faces  (volcanic_activity ≥ gold_volcanic_threshold)
-Gems         volcanic faces  (volcanic_activity ≥ gem_volcanic_threshold; rarer)
-Coal         sedimentary basins: continental, low elevation, far from boundaries
-Tin          divergent boundary faces
-Rare Metals  divergent + hot-spot faces (volcanic_activity ≥ rare_volcanic_threshold)
-
-For each type a single-octave + 2-octave-harmonic simplex noise field is
-sampled at face centroids.  Faces where noise > deposit_threshold AND the
-geological candidate mask is True become deposit sites; abundance is the
-normalised excess above the threshold.
+Geology gives each mineral type a candidate mask of land faces (convergent / divergent boundaries,
+volcanism, sedimentary or evaporite basins); an independent fBm noise draw per type, sampled at face
+centroids, makes candidates above the type's threshold deposits, with abundance the normalised excess.
 """
 from __future__ import annotations
 
@@ -71,10 +57,7 @@ MINERAL_PALETTE = np.array([
 
 
 def _fbm_noise(centroids: np.ndarray, frequency: float, seed: int, octaves: int = 3) -> np.ndarray:
-    """fBm simplex noise at unit-sphere centroids, normalized to [0, 1].
-
-    Returns (N,) float32.
-    """
+    """(N,) float32 fBm simplex noise at unit-sphere centroids, normalized to [0, 1]."""
     perm = make_perm(seed % (2**31))
     xyz = centroids.astype(np.float64)
     amp, freq, total = 1.0, float(frequency), 0.0
@@ -101,13 +84,6 @@ def place_mineral_deposits(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Place mineral deposits on the globe using the hybrid geology+noise model.
 
-    Args:
-        mesh: fully-built dual mesh (geology + climate metadata present).
-        params: MineralParams — noise frequency, per-type deposit thresholds, and
-            the volcanic / boundary-hop / elevation gates.
-        seed: base RNG seed; each mineral type uses seed + type_offset so their
-            noise draws are spatially independent.
-
     Returns:
         positions:   (M, 3) float32  — unit-sphere face centroids of deposits.
         kinds:       (M,)   int8     — MINERAL_* index.
@@ -117,7 +93,6 @@ def place_mineral_deposits(
     n = len(mesh.faces)
     centroids = mesh.face_centroids.astype(np.float32)
 
-    # ── read face metadata into flat arrays ─────────────────────────────
     boundary_type = BOUNDARY_TYPE.read(mesh)
     plate_type = PLATE_TYPE.read(mesh)
     volcanic = VOLCANIC_ACTIVITY.read(mesh).astype(np.float32)
@@ -125,13 +100,11 @@ def place_mineral_deposits(
     is_ocean = IS_OCEAN.read(mesh)
     biome = BIOME.read(mesh)
 
-    # ── geological candidate masks ───────────────────────────────────────
     is_convergent = boundary_type == "convergent"
     is_divergent = boundary_type == "divergent"
     is_continental = plate_type == "continental"
 
-    # Coal: sedimentary basin proxy — continental, non-ocean, low elevation,
-    # far from any active plate boundary.
+    # Coal: sedimentary basins — continental, low, far from any plate boundary.
     boundary_seed_mask = boundary_type != "interior"
     if boundary_seed_mask.any():
         boundary_hops = face_hops_from_seeds(
@@ -148,8 +121,7 @@ def place_mineral_deposits(
         & (boundary_hops >= p.coal_min_boundary_hops)
     )
 
-    # Salt: evaporite basins — continental, arid biome, low-to-moderate elevation,
-    # tectonically quiet (reuses boundary_hops gate from coal).
+    # Salt: evaporite basins — continental, arid, low-to-moderate, tectonically quiet.
     _SEMI_ARID, _DESERT = 7, 8
     is_arid = (biome == _SEMI_ARID) | (biome == _DESERT)
     salt_candidates = (
@@ -165,9 +137,7 @@ def place_mineral_deposits(
 
     land = ~is_ocean
 
-    # ── per-mineral (kind, candidate_mask, seed_offset, threshold) tuples ─
-    # Offset keeps each type's noise draw spatially independent.
-    # All types are gated on land — ocean deposits are not modelled.
+    # (kind, candidate_mask, seed_offset, threshold); offsets keep noise draws independent.  Land only.
     dt = p.deposit_threshold
     specs: list[tuple[int, np.ndarray, int, float]] = [
         (IRON,        land & is_convergent,                                           0, p.iron_deposit_threshold),
@@ -192,7 +162,6 @@ def place_mineral_deposits(
 
         noise = _fbm_noise(centroids, p.noise_frequency, seed + offset * 1000)
 
-        # Score = noise masked to candidates; deposit where score > threshold.
         score = noise * candidate_mask.astype(np.float32)
         deposit_mask = (score > threshold) & candidate_mask
 
@@ -233,11 +202,9 @@ def place_mineral_sites(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Split each deposit into the workings it is mined at, inside its face.
 
-    A deposit (one face and kind) is ``min_sites``–``max_sites`` workings, each
-    on a different owned land texel of the face (one whose nearest face
-    centroid is the deposit's face), interior texels before coastal ones, at a
-    random point within the texel.  Each takes a Dirichlet(``share_concentration``)
-    share of the deposit, so a few workings carry most of it.
+    Each deposit gets ``min_sites``–``max_sites`` workings on distinct owned land texels (nearest
+    centroid is the deposit's face), interior before coastal, jittered within the texel.  Shares are
+    Dirichlet(``share_concentration``), so a few workings carry most of it.
 
     Args:
         deposit_faces: (M,) face of each deposit.
@@ -284,8 +251,7 @@ def place_mineral_sites(
             continue
         k = min(int(rng.integers(lo, hi + 1)), cand.size)
         picked = cand[:k]
-        # A random point within each interior texel (half a spacing either way
-        # along the grid); coast texels keep their centre, off the sea.
+        # Jitter interior texels by up to half a spacing; coast texels keep their centre, off the sea.
         r, c = np.divmod(picked, w)
         du = rng.uniform(-0.5, 0.5, k)
         dv = rng.uniform(-0.5, 0.5, k)
@@ -311,9 +277,10 @@ def site_workers(deposit: np.ndarray, share: np.ndarray, workers: np.ndarray) ->
 
 
 def mineral_workings(world) -> Optional[tuple[np.ndarray, np.ndarray, np.ndarray]]:
-    """``(positions (K, 3) unit float64, deposit (K,), share (K,))`` — the
-    workings of ``world``'s mineral deposits (each deposit is one working, at its
-    own position, when the world has no ``mineral_sites``); None without deposits."""
+    """``(positions (K, 3) unit float64, deposit (K,), share (K,))`` of ``world``'s mineral workings.
+
+    Without ``mineral_sites`` each deposit is one working at its own position; None without deposits.
+    """
     minerals = world.get_feature("minerals")
     if minerals is None or len(minerals[0]) == 0:
         return None

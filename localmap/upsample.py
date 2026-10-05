@@ -1,18 +1,14 @@
 """Local refinement: a regional hex's fields refined onto its local map.
 
-The same recipe as :mod:`region.upsample` one tier down — bilinear read of the
-parent, detail above the parent grid's Nyquist, per-parent-texel conservation —
-run by :func:`region.upsample.refine_fields` with the region as the parent
-(:class:`region.source.RegionSource`).  Downsampling a local map by averaging
+:mod:`region.upsample`'s recipe one tier down (:func:`region.upsample.refine_fields`
+with the region as parent via :class:`region.source.RegionSource`); downsampling
 recovers the region's texels to float noise (:func:`local_conservation_report`).
 
-At the defaults (``n_cols=16``, ``tex_size=64``) a local hex is ~23 km across
-and a texel ~365 m, against the region's ~4.5 km: a 12× refinement, which buys
-the detail band ~3 octaves.
+Defaults (``n_cols=16``, ``tex_size=64``): local hex ~23 km, texel ~365 m vs the
+region's ~4.5 km — a 12× refinement, ~3 octaves of detail.
 
-The noise stream is shared by every local map of a world, so two neighbouring
-local maps of one region agree where they meet (up to their parents'
-per-texel corrections); regions, seeded per region, do not.
+The noise stream is shared by every local map of a world, so neighbouring local
+maps of one region agree at their seam; regions, seeded per region, do not.
 """
 from __future__ import annotations
 
@@ -36,16 +32,12 @@ _SEED_SALT_LOCAL = 0x10CA
 
 @paramclass
 class LocalUpsampleParams(RegionUpsampleParams):
-    """:class:`RegionUpsampleParams` with the local tier's defaults.
-
-    The relief numbers are a first cut, not yet tuned against real terrain.
-    """
+    """:class:`RegionUpsampleParams` with the local tier's defaults (relief not yet tuned)."""
 
     n_cols: int = _f(16, label="Hex columns per local map", min=4, max=64)
     tex_size: int = _f(64, label="Hex texture size", min=4, max=128)
-    # The parent is the region, whose sub-grid slopes run ~0.003–0.035 km/km
-    # over a ~9 km detail wavelength: saturating at 0.03 gives mountains a few
-    # hundred metres of local relief, and the lower floor keeps plains to ~15 m.
+    # Regional sub-grid slopes run ~0.003–0.035 km/km: saturating at 0.03 gives
+    # mountains a few hundred metres of local relief; the floor keeps plains to ~15 m.
     slope_reference: float = _f(
         0.03, label="Slope saturation (km/km)", min=0.0005, max=0.1, step=0.0005
     )
@@ -53,8 +45,7 @@ class LocalUpsampleParams(RegionUpsampleParams):
     max_relief_km: float = _f(0.6, label="Max detail relief (km)", min=0.0, max=5.0)
     # About one regional texel (~4.5 km / ~365 m).
     water_spread_texels: int = _f(12, label="Shoreline spread (texels)", min=0, max=32)
-    # The classifiers average the climate over about one regional texel (~4.5 km),
-    # so biome edges follow the region's pattern rather than local relief speckle.
+    # ~One regional texel, so biome edges follow the region rather than local speckle.
     biome_smoothing: int = _f(13, label="Biome climate averaging (texels)", min=0, max=31)
     # Local slopes over ~365 m texels are far steeper than the region's.
     slope_saturation: float = _f(
@@ -73,11 +64,10 @@ def build_local_fields(
 ) -> RegionFields:
     """Refine regional hex ``hex_index`` of ``region`` onto its local map.
 
-    Returns a :class:`RegionFields` so every consumer of a region (display,
-    hover, corridors) reads a local map the same way: ``anchors`` / ``faces`` /
-    ``face_uv`` stay *global*, ``parent_anchors`` holds the regional texel each
-    local texel conserves, and ``in_map`` marks the parent hexagon.
-    ``region_id`` and ``geometry.region_id`` are the parent region's.
+    Returns a :class:`RegionFields` so region consumers read it unchanged:
+    ``anchors`` / ``faces`` / ``face_uv`` stay global, ``parent_anchors`` holds
+    the regional texel each local texel conserves, ``in_map`` marks the parent
+    hexagon, and ``region_id`` is the parent region's.
     """
     params = params or LocalUpsampleParams()
     tex_size = int(params.tex_size)
@@ -121,11 +111,8 @@ def build_local_fields(
 
 
 def local_conservation_report(local: RegionFields, region: RegionFields) -> dict[str, dict[str, float]]:
-    """Does downsampling the local map recover its region's texels?
-
-    :func:`region.upsample.conservation_report` one tier down: per regional
-    texel inside the parent hexagon, the local mean against the regional value.
-    """
+    """:func:`region.upsample.conservation_report` one tier down: per regional
+    texel in the parent hexagon, the local mean against the regional value."""
     if local.parent_anchors is None:
         raise ValueError("not a local map: no parent_anchors")
     return anchor_residuals(local.textures, local.parent_anchors, local.domain, region.textures)

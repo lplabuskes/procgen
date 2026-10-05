@@ -1,41 +1,23 @@
-"""River deltas: the sediment a large river lays down where it meets the sea or a lake.
+"""River deltas: the sediment plain a large river lays down where it meets the sea or a lake.
 
-A delta is a low plain at a big river's mouth, built out into the sea (or a
-lake) from what the river carries.  Each one here is a *footprint* of global
-texels around the river's lower course, grown by a priority flood from that
-course:
+Each delta is a footprint of global texels grown by a priority flood from the river's lower course:
 
-- **Where.**  The fan spreads from an *apex* on the river some way upstream of
-  its mouth (the head of the delta, where it starts to branch) and opens
-  seaward.  A texel's priority is its distance from the apex, raised the
-  further off the river's axis it lies (``lateral_cost``), the deeper the water
-  it would fill (``depth_scale_km``), and on land (``land_cost``), so the fan
-  hugs the river on land and bulges out over a shallow shelf.  Hills
-  (``max_land_elevation_km``) and deep water (``max_depth_km``) are never
-  taken, nor other water, nor another delta's texels.
-- **How much.**  The flood stops at an area that grows with the river's
-  sediment supply — its mouth flow, less the silt lakes upstream trapped
-  (:mod:`worldgen.delta.sediment`) — as
-  ``area_km2 · (supply / 1000) ** area_exponent``, or — in a lake — once the
-  lake has lost ``max_lake_share`` of its area to deltas.
-- **Lakes.**  A river entering a lake builds its delta there.  Heights and
-  depths are then measured from the lake's surface instead of sea level.
-- **Its shape.**  The balance of river power against the wave power at the
-  mouth (:mod:`worldgen.delta.shape`) bends the priority toward long fingers
-  in calm water (bird's-foot), a rounded fan, or a blunt cusp with beaches
-  running along shore where waves rework the sediment (cuspate).
-- **What it becomes.**  Every footprint texel — built land and flattened
-  lowland alike — is set to a plain falling from ``apex_height_km`` at the apex
-  to ``front_height_km`` at the delta front; the sea in front shoals over
-  ``skirt_rings`` rings (the prodelta).  Texels that were sea turn to land.
-- **The rivers.**  A river (or saved stream) that ended on the old shore now
-  ends inside the plain, so it is carried on across it: the delta's own river
-  out to the front along the fan's axis, the others to the nearest open water or
-  onto the delta river's new reach, whichever is nearer.  A river that ran on
-  through the lake rejoins its old course past the plain.
+- **Where.**  The fan spreads seaward from an apex upstream of the mouth.  Priority is distance from
+  the apex, raised off the river's axis (``lateral_cost``), over deeper water (``depth_scale_km``) and on
+  land (``land_cost``).  Hills (``max_land_elevation_km``), deep water (``max_depth_km``), other water
+  bodies and other deltas' texels are never taken.
+- **How much.**  Area ``area_km2 · (supply / 1000) ** area_exponent``, where supply is mouth flow less
+  the silt upstream lakes trapped (:mod:`worldgen.delta.sediment`); in a lake, capped once it has lost
+  ``max_lake_share`` of its area.  Lake deltas measure heights from the lake surface.
+- **Shape.**  River vs wave power (:mod:`worldgen.delta.shape`) bends the priority toward bird's-foot
+  fingers, a rounded fan, or a cuspate front.
+- **Result.**  The footprint becomes a plain falling from ``apex_height_km`` to ``front_height_km``; the
+  water in front shoals over ``skirt_rings`` rings (the prodelta).
+- **Rivers.**  Rivers and streams that ended on the old shore are carried across the plain: the delta
+  river along the fan's axis, others to the nearest open water or onto the delta river's new reach.  A
+  river that ran on through a lake rejoins its old course past the plain.
 
-The flood runs over the texels *inside* their face polygons; a texture's
-over-hang copies the texel nearest it, so neighbouring faces agree at seams.
+The flood runs over in-polygon texels; over-hang texels copy their nearest in-polygon texel so seams agree.
 """
 from __future__ import annotations
 

@@ -1,8 +1,4 @@
-"""Tests for realmgen.trade.network — pure-function unit tests.
-
-All tests use lightweight stub meshes so there is no dependency on a full
-worldgen run.  Topology: small linear and ring graphs.
-"""
+"""Unit tests for realmgen.trade.network on small linear and ring stub meshes."""
 from __future__ import annotations
 
 import numpy as np
@@ -164,8 +160,7 @@ class TestBuildHybridCostGraph:
             settlement_demands=np.array([1.0]),
             port_cost=7.0,
         )
-        # No land→sea transitions should exist (no sea faces)
-        # Check the sea half of the matrix has no cross-surface edges involving land nodes
+        # No sea faces → no land→sea transitions.
         assert float(g[0, n + 1]) == 0.0  # sparse default is 0 = not present
 
     def test_virtual_source_edges(self):

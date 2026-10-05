@@ -1,52 +1,72 @@
 # Resources Stage
 
-See also: `docs/plans/resources_generation_spec.md` for the original design.
+Original design: `docs/plans/resources_generation_spec.md`.
 
 ## Files
-- `worldgen/resources/builder.py` — stage orchestration + params
-- `worldgen/resources/terrain.py` — per-face helper functions
-- `worldgen/resources/fertility.py`
-- `worldgen/resources/forest.py`
-- `worldgen/resources/crops.py`
-- `worldgen/resources/minerals.py`
-- `worldgen/resources/rare_bio.py`
-- `worldgen/resources/display.py`
-- `worldgen/resources/channels.py` — `FERTILITY_MEAN`, `MINERALS`, `MINERAL_SITES`, `RARE_BIO`
+`worldgen/resources/`: `builder.py` (stage + params), `terrain.py` (per-face
+helpers), `fertility.py`, `forest.py`, `crops.py`, `minerals.py`, `rare_bio.py`,
+`display.py`, `channels.py` (`FERTILITY_MEAN`, `MINERALS`, `MINERAL_SITES`,
+`RARE_BIO`).
 
 ## `builder.py`
 
-**`ResourcesParams`** (dataclass): Nested params — `fertility: FertilityParams`, `forest_density: ForestDensityParams`, `minerals: MineralParams`, `rare_bio: RareBioParams`, optional `seed` (forest noise, minerals and rare resources are seeded from it, 0 when unset — not from the world seed). Biome-indexed lookup tables (`BIOME_FERTILITY_MULT`, `BIOME_FOREST_BASELINE`, `BIOME_PRECIP_REFERENCE_MM`) live as **module-level constants** in `fertility.py` / `forest.py` — they define the model, not tune it.
+**`ResourcesParams`**: `fertility`, `forest_density`, `minerals`, `rare_bio`,
+optional `seed` (forest noise, minerals, rare resources; 0 when unset — **not**
+the world seed). Biome LUTs (`BIOME_FERTILITY_MULT`, `BIOME_FOREST_BASELINE`,
+`BIOME_PRECIP_REFERENCE_MM`) are module constants in `fertility.py` / `forest.py`
+— they define the model, not tune it.
 
-**`ResourcesBuilder`**: A pipeline `Stage`, runs after climate's lake-feedback pass. Reads: `"river_objects"` and (for aquatic fertility) `"currents"` world features, plus `temperature`, `precipitation`, `elevation`, `ocean_mask`, `lake_mask` face textures, and per-face `biome`, `is_ocean`, `volcanic_activity`, `boundary_type`, `plate_type`, `elevation` metadata (the last four by the mineral model).
+**`ResourcesBuilder`** (after climate lake feedback). Reads features
+`"river_objects"`, `"currents"` (aquatic fertility); textures `temperature`,
+`precipitation`, `elevation`, `ocean_mask`, `lake_mask`; per-face `biome`,
+`is_ocean`, and for minerals `volcanic_activity`, `boundary_type`, `plate_type`,
+`elevation`.
 
-Order: forest density → fertility (with the forest penalty) → the delta silt bonus (`apply_delta_fertility`, when the `delta` texture is present; see [delta.md](delta.md)) → aquatic fertility written over ocean/lake texels → crops → minerals (and their workings) → rare resources.
+Order: forest → fertility (with forest penalty) → delta silt bonus
+(`apply_delta_fertility`, if `delta` texture; [delta.md](delta.md)) → aquatic
+fertility over ocean/lake texels → crops → minerals + workings → rare resources.
 
-Attaches face textures:
-- `"fertility"` `(N,H,W,1) float16`
-- `"forest_density"` `(N,H,W,1) float16`
-- `"dominant_crop"` `(N,H,W,1) uint8`
-
-Writes per-face metadata: `fertility_mean`, `forest_density_mean`, `dominant_crop` (modal crop over the face's non-ocean texels). Stores `minerals` and `rare_bio` as `(positions, kinds, abundances)` 3-tuples and registers them directly as `"minerals"` and `"rare_bio"` globe features, and the deposits' workings as `"mineral_sites"` (`MINERAL_SITES`).
+- Textures: `"fertility"` `(N,H,W,1) float16`, `"forest_density"` float16, `"dominant_crop"` uint8.
+- Per face: `fertility_mean`, `forest_density_mean`, `dominant_crop` (mode over non-ocean texels).
+- Features: `"minerals"`, `"rare_bio"` (`(positions, kinds, abundances)`), `"mineral_sites"` (workings).
 
 ## Individual modules
 
-**`terrain.py`**: Per-face helpers.
-- `face_elevation_range(elevation_tex) → (N,) float32 km` — per-face pixel elevation span as a ruggedness proxy (per-pixel slope is dominated by noise at default tex_size)
-- `face_hops_from_seeds(mesh, seed_mask, max_hops) → (N,) int32` — BFS hop count from any seed face; faces beyond `max_hops` get sentinel `max_hops+1`
-- `river_traversed_faces(rivers, n_faces)` / `lake_containing_faces(lake_mask_tex)` — seed masks for water-proximity BFS
-- `coastal_ocean_faces(mesh, is_ocean) → (N,) bool` — ocean faces adjacent to land, used as seeds for ocean depth BFS
-- `volcanic_faces(mesh, threshold)` — seed mask for volcanism-proximity BFS
+**`terrain.py`**:
+- `face_elevation_range(elevation_tex)` — per-face pixel elevation span as ruggedness (per-pixel slope is noise-dominated at default tex_size)
+- `face_hops_from_seeds(mesh, seed_mask, max_hops)` — BFS hops; beyond → `max_hops+1`
+- `river_traversed_faces` / `lake_containing_faces` — water-proximity seeds
+- `coastal_ocean_faces(mesh, is_ocean)` — ocean faces next to land (depth BFS seeds)
+- `volcanic_faces(mesh, threshold)`
 
-**`fertility.py`** — `compute_fertility()`: Multiplicative product of five per-face factors — climate (bell-curve in growing-season T and log-P), terrain (penalizes rugged faces by elevation range), water proximity (floodplain BFS hop-decay bonus), volcanism proximity (volcanic-soil BFS hop-decay bonus), and a biome LUT modifier — plus an optional per-pixel forest penalty. Per-face factors rasterized with `rasterize_face_values` (a smooth field of position) so adjacent faces blend continuously. Also exports `compute_aquatic_fertility()` — a separate per-face scalar for ocean/lake faces, driven by SST (temperature), ocean depth hops (upwelling proxy), and lake river-proximity; the builder writes these values over ocean/lake pixels in the fertility texture so coastal fishing is captured in carrying capacity. A land face has no aquatic value of its own, so `neighbour_water_fertility()` gives its sea pixels the mean of its neighbouring ocean faces' and its lake pixels the mean of its neighbouring lake faces' (0 with none) — a coastal face's shallows are the same fishing grounds, and they feed its fishers ([realm_population.md](realm_population.md#farmers-and-fishers)). `apply_delta_fertility()` raises the river deltas' plains toward `delta_fertility` (0.9) × the growing-season temperature bell (the river, not the rain, waters a delta), docked by `delta_marsh_penalty` (0.4) on the marsh. It only ever raises fertility.
+**`fertility.py`**:
+- `compute_fertility()` — product of five per-face factors: climate (bell in growing-season T and log-P), terrain (elevation-range penalty), water proximity (floodplain hop-decay bonus), volcanism proximity (volcanic-soil bonus), biome LUT; plus optional per-pixel forest penalty. Factors rasterised with `rasterize_face_values` so faces blend continuously.
+- `compute_aquatic_fertility()` — per-face scalar for ocean/lake faces from SST, ocean depth hops (upwelling proxy) and lake river-proximity; written over water pixels so fishing enters carrying capacity.
+- `neighbour_water_fertility()` — land faces have no aquatic value, so their sea pixels take the mean of neighbouring ocean faces' and lake pixels of neighbouring lake faces' (0 if none): a coast's shallows are the same fishing grounds, feeding its fishers ([realm_population.md](realm_population.md#farmers-and-fishers)).
+- `apply_delta_fertility()` — raises delta plains toward `delta_fertility` (0.9) × growing-season T bell (the river, not rain, waters a delta), marsh docked by `delta_marsh_penalty` (0.4). Only raises.
 
-**`forest.py`** — `compute_forest_density()`: Biome baseline × precipitation modulation (tanh centred on per-biome reference P) × treeline taper, plus a riparian bonus and a small per-pixel fBm simplex noise overlay (`noise_amplitude`); zero on ocean. Per-face inputs rasterized before combining so biome boundaries blend continuously.
+**`forest.py`** — `compute_forest_density()`: biome baseline × precipitation
+modulation (tanh about per-biome reference P) × treeline taper, + riparian bonus
++ small per-pixel fBm noise (`noise_amplitude`); 0 on ocean. Inputs rasterised
+before combining so biome boundaries blend.
 
-**`crops.py`** — `classify_crops()`: First-match-wins threshold table (T_grow, P_annual, elevation) over 8 crop types. Fertility gates the whole classifier — pixels below `FERTILITY_GATE` (0.08) yield no crop. Vectorised implementation mirrors the scalar `default_crop` reference exactly.
+**`crops.py`** — `classify_crops()`: first-match threshold table (T_grow,
+P_annual, elevation) over 8 crops; pixels below `FERTILITY_GATE` (0.08) get none.
+Vectorised version mirrors scalar `default_crop` exactly.
 
-**`minerals.py`** — `place_mineral_deposits()`: Hybrid geology + fBm noise model. Nine mineral types (Iron, Copper, Gold, Gems, Coal, Tin, Rare Metals, Salt, Marble) each have a geological candidate mask derived from boundary type, plate type, volcanic activity, and elevation; independent 3-octave fBm noise fields cluster deposits within those candidates. Returns `(positions (M,3), kinds (M,) int8, abundances (M,) float32)` — one deposit per (face, kind), at the face centroid.
+**`minerals.py`**:
+- `place_mineral_deposits()` — geology + fBm hybrid. Nine types (Iron, Copper, Gold, Gems, Coal, Tin, Rare Metals, Salt, Marble), each with a geological candidate mask (boundary type, plate type, volcanism, elevation) and independent 3-octave fBm clustering. Returns `(positions (M,3), kinds int8, abundances float32)`, one deposit per (face, kind) at the centroid.
+- `place_mineral_sites()` — splits each deposit into **workings**: `min_sites`–`max_sites` (2–5) on distinct owned land texels (nearest centroid; interior before coastal), at a random point in an interior texel (coastal keeps its centre, off the sea), Dirichlet(`site_share_concentration` = 1) shares (a few workings carry most). Returns `(positions (K,3), deposit int32, share float32)`, shares sum to 1 per deposit; deterministic per deposit. No owned land → one working at the centroid. Seed 4: 415 deposits → 1,416 workings, ~80 km from face centre on average.
+- `mineral_workings(world)` reads them back (one per deposit at the deposit if absent); `site_workers(deposit, share, mine_workers)` gives each working its share of miners.
+- World map draws one marker per deposit; region/local maps draw workings ([realm_towns.md](realm_towns.md), [region_fields.md](region_fields.md)).
 
-`place_mineral_sites()` splits each deposit into the **workings** it is mined at: `min_sites`–`max_sites` (2–5) of them, each on a different land texel the face owns (nearest face centroid; interior texels before coastal ones), at a random point inside an interior texel (a coastal one keeps its centre, off the sea), with a Dirichlet(`site_share_concentration` = 1) share of the deposit — so a few workings carry most of it. Returns `(positions (K,3), deposit (K,) int32, share (K,) float32)`, shares summing to 1 per deposit; deterministic per deposit. A face with no owned land keeps one working at its centroid. On seed 4, 415 deposits make 1,416 workings, ~80 km from the face centre on average. `mineral_workings(world)` reads them back (one working per deposit, at the deposit, on a world without them); `site_workers(deposit, share, mine_workers)` gives each working its share of its deposit's miners. The world map still draws one marker per deposit; the region and local maps draw the workings (see [realm_towns.md](realm_towns.md), [region_fields.md](region_fields.md)).
+**`rare_bio.py`** — `place_rare_bio_resources()`: ten resources (Spices, Tea,
+Silk, Ivory, Furs, Incense, Dyes, Amber, Rubber, Pearls) via narrow ecological
+criteria (biome, T, P, elevation, distance_to_coast) + fBm; a global per-type cap
+keeps only the top candidates (world-level rarity).
 
-**`rare_bio.py`** — `place_rare_bio_resources()`: Ten rare biological resources (Spices, Tea, Silk, Ivory, Furs, Incense, Dyes, Amber, Rubber, Pearls) placed via narrow ecological criteria (biome, T_annual, P_annual, elevation, distance_to_coast) plus fBm noise. A global per-type cap enforces world-level rarity by keeping only the top-scoring candidates.
-
-**`display.py`**: Color schemes, legends and the `TextureRecipe`s (`FERTILITY_RECIPE`, `FOREST_DENSITY_RECIPE`, `DOMINANT_CROP_RECIPE`) for the resource layers; the region view reruns them on its refined textures. Fertility and forest density use multi-stop gradients; crops and resources use categorical palettes. Registration gating: everything is `--debug` only — the **Fertility**, **Forest Density** and **Dominant Crop** schemes, the **Minerals** and **Rare Resources** overlays (unchecked), and the fertility / forest / crop, mineral and rare-resource hovers.
+**`display.py`** — schemes, legends, recipes (`FERTILITY_RECIPE`,
+`FOREST_DENSITY_RECIPE`, `DOMINANT_CROP_RECIPE`; rerun by the region view). All
+`--debug`: **Fertility**, **Forest Density**, **Dominant Crop** schemes;
+**Minerals**, **Rare Resources** overlays (unchecked); fertility/forest/crop,
+mineral and rare-resource hovers.
