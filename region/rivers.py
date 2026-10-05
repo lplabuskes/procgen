@@ -246,7 +246,7 @@ def route_stream_paths(
     routed: list[tuple[np.ndarray, np.ndarray]] = []
     minor: list[tuple[np.ndarray, np.ndarray]] = []
     for p in paths:
-        sinks = occupied | raster.ocean | raster.lake
+        sinks = occupied | raster.sinks
         nodes = _route_run(raster, p.s, p.t, radius_nodes, sinks, p.ends_here, params)
         if nodes is None or len(nodes) < 2:
             continue
@@ -255,9 +255,8 @@ def route_stream_paths(
         if not p.minor:
             on_path[nodes] += 1
 
-    # A path ending on another one (not on water) is a confluence.
-    water = raster.ocean | raster.lake
-    ends = [int(nodes[-1]) for nodes, _ in routed if on_path[nodes[-1]] > 1 and not water[nodes[-1]]]
+    # A path ending on another one (not in water it ends in) is a confluence.
+    ends = [int(nodes[-1]) for nodes, _ in routed if on_path[nodes[-1]] > 1 and not raster.sinks[nodes[-1]]]
     drawn = [_to_path(raster, nodes, flows, params) for nodes, flows in routed]
     at_sea = [i for i, (nodes, _) in enumerate(routed) if raster.ocean[nodes[-1]]]
     return RegionRivers(

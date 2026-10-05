@@ -3,8 +3,9 @@ import numpy as np
 import pytest
 
 from region.corridor import raster_frame
+from region.drainage import accumulate, priority_flood
 from region.rivers import build_region_rivers
-from region.streams import RegionStreamParams, _flood, _accumulate, _river_nodes, build_region_streams
+from region.streams import RegionStreamParams, _river_nodes, build_region_streams
 from region.upsample import RegionUpsampleParams, build_region_fields
 
 REGION_ID = 40   # coast, a lake and a peak (see conftest)
@@ -36,7 +37,7 @@ def test_flood_drains_every_node_to_an_outlet():
     elevation[3, 3] = -1.0                                         # a pit
     outlet = np.zeros((n, n), dtype=bool)
     outlet[:, 0] = True
-    parent, order = _flood(elevation.ravel(), outlet.ravel(), n)
+    parent, order, _ = priority_flood(elevation.ravel(), outlet.ravel(), n)
     assert len(order) == n * n
     rank = np.empty(n * n, dtype=np.int64)
     rank[order] = np.arange(n * n)
@@ -48,7 +49,7 @@ def test_flood_drains_every_node_to_an_outlet():
             steps += 1
             assert steps <= n * n
         assert outlet.ravel()[node]
-    acc = _accumulate(parent, order, np.where(outlet.ravel(), 0.0, 1.0))
+    acc = accumulate(parent, order, np.where(outlet.ravel(), 0.0, 1.0))
     assert acc[outlet.ravel()].sum() == pytest.approx(n * (n - 1))
 
 

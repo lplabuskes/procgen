@@ -14,11 +14,9 @@ import numpy as np
 from scipy.ndimage import distance_transform_edt
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import dijkstra
-from scipy.spatial import KDTree
 
-from region.grid import RegionHexGrid
 from region.sampling import GlobalSampler
-from region.upsample import RegionFields
+from region.upsample import SMALL_LAKE_KEY, RegionFields
 
 if TYPE_CHECKING:
     from core.world import World
@@ -49,10 +47,16 @@ class Raster:
     anomaly: np.ndarray          # (P,) refined − coarse elevation, km
     ocean: np.ndarray            # (P,) bool
     lake: np.ndarray             # (P,) bool
+    small_lake: np.ndarray       # (P,) bool: the part of ``lake`` too small for the globe
 
     @property
     def water(self) -> np.ndarray:
         return self.ocean | self.lake
+
+    @property
+    def sinks(self) -> np.ndarray:
+        """Water a channel ends in: the sea and the globe's lakes (small lakes are flowed through)."""
+        return self.ocean | (self.lake & ~self.small_lake)
 
     def index(self, s: np.ndarray, t: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Nearest ``(flat node, inside)`` for local points."""
@@ -75,25 +79,6 @@ def node_spacing_rad(fields: RegionFields, step: float) -> float:
     return float(np.linalg.norm(pair[1] - pair[0]))
 
 
-def _hex_texel_lookup(
-    grid: RegionHexGrid, tex_size: int, s: np.ndarray, t: np.ndarray
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """``(hex, row, col, covered)`` of the nearest hex texel to each local point.
-
-    Unlike :meth:`RegionHexGrid.texels_at` this reaches past the cell edge via
-    the over-hang; ``covered`` is False where no texture reaches.
-    """
-    _, hexes = KDTree(grid.centers).query(np.column_stack([s, t]), k=1, workers=-1)
-    hexes = np.asarray(hexes, dtype=np.int64)
-    half = grid.radius
-    ds = s - (grid.centers[hexes, 0] - half)
-    dt = (grid.centers[hexes, 1] + half) - t
-    covered = (ds >= 0.0) & (ds <= 2.0 * half) & (dt >= 0.0) & (dt <= 2.0 * half)
-    cols = np.clip((ds / (2.0 * half) * tex_size).astype(np.int64), 0, tex_size - 1)
-    rows = np.clip((dt / (2.0 * half) * tex_size).astype(np.int64), 0, tex_size - 1)
-    return hexes, rows, cols, covered
-
-
 def sample_raster(
     fields: RegionFields, globe: "World", lo: float, step: float, n: int, sampled: np.ndarray,
     keys: Sequence[str] = (),
@@ -113,7 +98,7 @@ def sample_raster(
     mesh = globe.mesh
     sampler = GlobalSampler(mesh)
     faces, u, v = sampler.locate(pts)
-    hexes, hrows, hcols, covered = _hex_texel_lookup(grid, tex, s, t)
+    hexes, hrows, hcols, covered = grid.nearest_texels(s, t, tex)
 
     def read(key: str) -> Optional[np.ndarray]:
         fine = (fields.textures[key][hexes, hrows, hcols].astype(np.float64).sum(axis=-1)
@@ -126,7 +111,7 @@ def sample_raster(
     coarse = sampler.sample(mesh.face_textures["elevation"], faces, u, v)[:, 0]
     elevation = read("elevation")
     assert elevation is not None
-    ocean_r, lake_r = read("ocean_mask"), read("lake_mask")
+    ocean_r, lake_r, small_r = read("ocean_mask"), read("lake_mask"), read(SMALL_LAKE_KEY)
 
     size = n * n
     positions = np.zeros((size, 3))
@@ -138,6 +123,9 @@ def sample_raster(
     lake = np.zeros(size, dtype=bool)
     if lake_r is not None:
         lake[idx] = lake_r > 0.5
+    small = np.zeros(size, dtype=bool)
+    if small_r is not None:
+        small[idx] = small_r > 0.5
     values: dict[str, np.ndarray] = {}
     for key in ("elevation", *keys):
         got = elevation if key == "elevation" else read(key)
@@ -147,7 +135,7 @@ def sample_raster(
         full[idx] = got
         values[key] = full
     return Raster(lo=lo, step=step, n=n, sampled=sampled, positions=positions, values=values,
-                  anomaly=anomaly, ocean=ocean, lake=lake)
+                  anomaly=anomaly, ocean=ocean, lake=lake, small_lake=small & lake)
 
 
 def centreline(

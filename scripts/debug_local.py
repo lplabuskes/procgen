@@ -45,7 +45,9 @@ from region.grid import RegionHexGrid  # noqa: E402
 from region.rivers import build_region_rivers, river_length_km  # noqa: E402
 from region.streams import build_region_streams  # noqa: E402
 from region.roads import build_region_roads  # noqa: E402
-from region.upsample import EARTH_RADIUS_KM, RegionFields, RegionUpsampleParams, build_region_fields  # noqa: E402
+from region.upsample import (  # noqa: E402
+    EARTH_RADIUS_KM, SMALL_LAKE_KEY, RegionFields, RegionUpsampleParams, build_region_fields,
+)
 from debug_region import LAYERS, draw_region  # noqa: E402  (shared with the region check)
 from _common import get_realm_world  # noqa: E402
 
@@ -147,7 +149,7 @@ def report_shoreline(local: RegionFields, region: RegionFields) -> None:
     assert local.parent_anchors is not None
     anchors = local.parent_anchors.reshape(-1)
     inside = local.domain.reshape(-1)
-    for key in ("ocean_mask", "lake_mask"):
+    for key in ("ocean_mask", "lake_mask", SMALL_LAKE_KEY):
         if key not in local.textures or key not in region.textures:
             continue
         refined = local.textures[key].reshape(-1) > 0.5
@@ -210,7 +212,7 @@ def main() -> None:
 
     # The honest "no refinement" baseline, as in debug_region.
     coarse_params = dataclasses.replace(
-        params.upsample, relief_factor=0.0, orographic_gain=0.0, refine_water_masks=False,
+        params.upsample, relief_factor=0.0, orographic_gain=0.0, refine_water_masks=False, small_lakes=False,
     )
     coarse = build_local_fields(world, region, hex_index, coarse_params)
     fields = local.fields

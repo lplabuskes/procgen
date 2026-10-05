@@ -26,7 +26,7 @@ from localmap.params import LocalParams
 from localmap.rivers import build_local_rivers
 from localmap.roads import build_local_roads
 from localmap.settlements import refine_local_cities, refine_local_towns
-from localmap.upsample import build_local_fields
+from localmap.upsample import build_local_fields, path_segments
 from localmap.villages import VILLAGE_MINING, Villages, place_villages
 from realmgen.towns.types import TOWN_MINING
 from region.display import snap_to_land
@@ -131,6 +131,7 @@ def build_local_map(
     params = params or LocalParams()
     local = build_local_fields(
         globe, region, hex_index, params.upsample, resources=resources, fertility_exponent=fertility_exponent,
+        drains=path_segments(region_rivers.paths) if region_rivers is not None else None,
     )
     spacing = local.grid.texel_spacing_rad(local.tex_size)
     parent_spacing = region.grid.texel_spacing_rad(region.tex_size)

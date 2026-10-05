@@ -32,7 +32,7 @@ from core.display import SchemeSpec, TextureRecipe  # noqa: E402
 from region.display import build_layer_texture  # noqa: E402
 from region.geometry import N_REGIONS, ecef_to_cell  # noqa: E402
 from region.upsample import (  # noqa: E402
-    RegionFields, RegionUpsampleParams, build_region_fields, conservation_report,
+    SMALL_LAKE_KEY, RegionFields, RegionUpsampleParams, build_region_fields, conservation_report,
 )
 from worldgen.climate.display import (  # noqa: E402
     ANNUAL_TEMPERATURE_RECIPE, BIOME_RECIPE, PRECIPITATION_RECIPE,
@@ -108,17 +108,23 @@ def report_shoreline(fields: RegionFields, world) -> None:  # type: ignore[no-un
     is fighting the global masks.
     """
     anchors = fields.anchors.reshape(-1)
+    inside = fields.in_hex.reshape(-1)
+    small = fields.textures.get(SMALL_LAKE_KEY)
+    small = small.reshape(-1) > 0.5 if small is not None else np.zeros(len(anchors), dtype=bool)
     for key in ("ocean_mask", "lake_mask"):
         if key not in fields.textures or key not in world.mesh.face_textures:
             continue
-        refined = fields.textures[key].reshape(-1) > 0.5
+        refined = (fields.textures[key].reshape(-1) > 0.5) & ~small
         coarse = np.asarray(world.mesh.face_textures[key]).reshape(-1)[anchors] > 0.5
-        inside = fields.in_hex.reshape(-1)
         gained = (refined & ~coarse)[inside].mean()
         lost = (~refined & coarse)[inside].mean()
         print(f"  {key}: {refined[inside].mean():>6.2%} of the region "
               f"(global {coarse[inside].mean():.2%}) · "
               f"flooded {gained:.2%}, dried {lost:.2%}")
+    ocean = fields.textures.get("ocean_mask")
+    land = inside & ~(ocean.reshape(-1) > 0.5 if ocean is not None else False)
+    print(f"  small lakes (region/lakes.py): {small[inside].sum()} texels, "
+          f"{small[land].sum() / max(land.sum(), 1):.2%} of the land")
 
 
 def main() -> None:
@@ -147,11 +153,12 @@ def main() -> None:
     if args.relief is not None:
         params.relief_factor = args.relief
 
-    # "No refinement" baseline: no added relief, water masks copied from the anchor texel.
+    # "No refinement" baseline: no added relief, water masks copied from the anchor texel, no small lakes.
     coarse_params = RegionUpsampleParams(**vars(params))
     coarse_params.relief_factor = 0.0
     coarse_params.orographic_gain = 0.0
     coarse_params.refine_water_masks = False
+    coarse_params.small_lakes = False
 
     refined = build_region_fields(world, region_id, params)
     coarse = build_region_fields(world, region_id, coarse_params)

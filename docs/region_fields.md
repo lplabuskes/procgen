@@ -7,6 +7,8 @@ from its region's — see [local.md](local.md)).
 ## Files
 - `region/upsample.py` — `RegionUpsampleParams`, `RegionFields`, `refine_fields`, `build_region_fields`, conservation steps, water flood, coast style (`CoastStyle`, `coast_style`) and shore reshaping (`reshape_to_target`), `conservation_report` / `anchor_residuals`
 - `region/resources.py` — `RefineContext`, `refine_resources`, `refined_slope`
+- `region/lakes.py` — `find_small_lakes`, `basin_lake_levels` (the tier's own small lakes)
+- `region/drainage.py` — `priority_flood`, `accumulate` (shared with `region/streams.py`)
 - `region/smooth.py` — `FaceFanField`
 - `region/source.py` — the `ParentSource` the refinement reads ([region.md](region.md#parent-sources-regionsourcepy))
 
@@ -53,7 +55,8 @@ shared relief signal puts moisture/temperature bands on the contours.
 | `temperature` | lapse rate on refined relief (sub-sea-level ground counts as sea level) | additively, smooth |
 | `precipitation` | orographic: × `1 + orographic_gain · anomaly` (per km, clipped ±0.9) | multiplicatively, smooth |
 | `biome` | reclassified from **area-averaged** refined climate | derived |
-| `ocean_mask`, `lake_mask`, `filled_height` | re-flooded to the parent's water surface over refined relief | surface exact; shoreline refined |
+| `ocean_mask`, `lake_mask`, `filled_height` | re-flooded to the parent's water surface over refined relief, plus the tier's [small lakes](#small-lakes-regionlakespy) | surface exact; shoreline refined |
+| `small_lake_mask` | the part of `lake_mask` below the globe's resolution (`SMALL_LAKE_KEY`), the parent's re-flooded + this tier's | no |
 | `coast_smoothness` | bilinear copy of parent's (if any) | no — a style for the tier below |
 | `delta` | bilinear copy of parent's delta plain/marsh ([delta.md](delta.md)), clipped [0, 1] | no — guides distributaries |
 | `forest_density` | treeline on refined elevation | multiplicatively, over land |
@@ -88,6 +91,9 @@ lake at its Priority-Flood `filled_height`); only the shoreline moves.
   `refine_water_masks=False` → verbatim anchor copy.
 - Seed 4 region 49: coast gains 0.14% / loses 0.17% of the region.
 
+- The parent's small lakes and its other lakes flood apart too (and keep
+  `small_lake_mask`), so a refined tier's lakes carry down a tier.
+
 **Detail fades under water.** Lakes are shallow (median ~40 m) vs ~15–30 m of
 sub-grid relief; zero-mean noise would poke lake beds into the air and dither the
 mask into confetti. Amplitude is scaled by water depth over
@@ -113,6 +119,50 @@ temperature, precipitation, rural density over the whole domain; fertility and
 forest over texels dry on both maps (`anchor_residuals`, reused by the local
 tier). Residuals are float32 rounding (~1e-7 km) by construction (each field's
 last step is that correction). Pinned by `region/test/test_upsample.py`.
+
+## Small lakes (`region/lakes.py`)
+
+The globe keeps lakes of `min_lake_pixels` (50) global texels, ~10,000 km², and
+up. Each refined tier finds its own in its refined relief, after the water masks
+and climate and before resources (`_add_small_lakes`; `small_lakes=False` →
+none). They join `lake_mask` / `filled_height` and are marked in
+`small_lake_mask`; resources, rural density and fishers then treat them as water
+(conservation unchanged — all totals still exact), and the tier below re-floods
+them like any lake. No noise of its own.
+
+- **Basins.** Priority-flood on a raster at the tier's texel spacing (one hex
+  radius past the map; nearest-centre texel, uncovered nodes at the parent's
+  height) from the outlets: water already there, uncovered nodes, the raster
+  edge and the parent's channels (`drains`: a region drains along the world's
+  stream network, a local map along the region's rivers) — a river that big
+  would have cut any sill on its course.
+- **Water balance.** Inflow = catchment runoff (Fu's Budyko curve, w = 2.6,
+  from precipitation and the globe's PET formula, `HydrologyParams` defaults);
+  a basin fills to its spill level when that covers PET off the full lake, else
+  to the level where it does (as the globe's endorheic lakes). None where
+  precipitation / PET < `lake_min_aridity_index` (0.2, UNEP "arid": playas)
+  or on ice cap (warmest season < 0 °C); both judged per basin.
+- **Breaching.** A lake must be deeper than the parent surface drops over
+  `lake_breach_parent_texels` parent texels (parent slope × length) — erosion
+  cuts sills fastest on steep ground, and slope-proportional detail digs its
+  deepest pits there, so without this lakes crowd mountain flanks — and than
+  `lake_min_depth_km`, and at least `lake_min_texels` big. In the cold the
+  length shrinks by `lake_glacial_factor` (annual mean ≤ 0 °C, fading out by
+  10 °C): glacial lake country.
+- **Texels.** Each node's surface is carried a node onto its shore (not onto
+  outlets); a texel is lake below its nearest node's surface.
+
+Region defaults (`lake_breach_parent_texels` 6, `lake_glacial_factor` 0.3,
+`lake_min_depth_km` 0.002, `lake_min_texels` 2), seed 4's six most land-rich
+regions: 0.7% of land — taiga 11%, tundra 2.4%, temperate 0.7%, tropical 0.4%,
+desert ~0 (Earth: lakes 40–10,000 km² ~0.5–1% of land, concentrated in
+formerly glaciated country). ~0.2 s per region. `debug_region.py` prints the
+share.
+
+Rivers and streams flow through small lakes rather than end in them
+(`Raster.sinks` = sea + the globe's lakes): stream outlets, river mouth sinks
+and confluences use it, and segments in small lakes are hidden (`in_lake`).
+Harbours (`tier_sites.coast_lake`) stay on the globe's lakes.
 
 ## Coast style
 
