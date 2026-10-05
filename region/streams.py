@@ -99,17 +99,18 @@ def _accumulate(parent: np.ndarray, order: np.ndarray, weight: np.ndarray) -> np
 
 
 def _river_nodes(fields: RegionFields, rivers: RegionRivers, lo: float, step: float, n: int) -> np.ndarray:
-    """``(n²,)`` mask of the raster nodes the region's rivers run through."""
+    """``(n²,)`` mask of the raster nodes the region's drawn (not hidden) rivers run through."""
     hit = np.zeros((n, n), dtype=bool)
     hi = lo + step * (n - 1)
-    for positions, _, _ in rivers.paths:
+    for positions, _, in_water in rivers.paths:
         s, t, valid = fields.geometry.ecef_to_local(np.asarray(positions, dtype=np.float64))
         inside = valid & (s >= lo) & (s <= hi) & (t >= lo) & (t <= hi)
-        # One run per visit, so a path leaving and re-entering is not bridged.
-        idx = np.flatnonzero(inside)
+        # Segments drawn and inside; one run each, so no run bridges a lake or a visit outside.
+        idx = np.flatnonzero(~np.asarray(in_water, dtype=bool) & inside[:-1] & inside[1:])
         for run in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1):
             if run.size:
-                rows, cols = centreline(lo, step, n, s[run], t[run])
+                verts = np.append(run, run[-1] + 1)
+                rows, cols = centreline(lo, step, n, s[verts], t[verts])
                 hit[rows, cols] = True
     return hit.ravel()
 

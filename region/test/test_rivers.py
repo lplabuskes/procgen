@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from region.rivers import RegionRiverParams, build_region_rivers
+from region.rivers import RegionRiverParams, _hide_reentries, build_region_rivers
 from region.upsample import RegionUpsampleParams, build_region_fields
 
 REGION_ID = 40   # coast, a lake and a peak (see conftest)
@@ -121,3 +121,12 @@ def test_deltas_snap_to_the_biggest_mouth_in_reach(region_rivers):
     moved = snap_deltas(np.stack([near, far]), region_rivers, reach=1e-3)
     assert np.allclose(moved[0], mouths[big])
     assert np.allclose(moved[1], far)
+
+
+def test_leaving_and_reentering_one_lake_stays_hidden():
+    # Lake 1, a shore crossing, lake 1 again, land, lake 2, land: only the
+    # crossing back into the same lake is hidden; the run to lake 2 and the
+    # outflow are real.
+    bodies = np.array([0, 1, 1, 0, 0, 1, 0, 0, 2, 0])
+    hidden = _hide_reentries(bodies > 0, bodies)
+    assert hidden.tolist() == [False, True, True, True, True, True, False, False, True, False]

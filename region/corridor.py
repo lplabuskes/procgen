@@ -8,10 +8,11 @@ the cost (:func:`route_corridor`'s ``edge_cost``).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cached_property
 from typing import TYPE_CHECKING, Callable, Optional, Sequence
 
 import numpy as np
-from scipy.ndimage import distance_transform_edt
+from scipy.ndimage import distance_transform_edt, label
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import dijkstra
 from scipy.spatial import KDTree
@@ -53,6 +54,12 @@ class Raster:
     @property
     def water(self) -> np.ndarray:
         return self.ocean | self.lake
+
+    @cached_property
+    def water_bodies(self) -> np.ndarray:
+        """``(n²,)`` connected water body (8-connected, over sampled nodes) of each node; 0 on land."""
+        labelled = label(self.water.reshape(self.n, self.n), structure=np.ones((3, 3), dtype=bool))
+        return np.asarray(labelled[0]).ravel()  # type: ignore[index]
 
     def index(self, s: np.ndarray, t: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Nearest ``(flat node, inside)`` for local points."""

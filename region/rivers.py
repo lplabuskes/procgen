@@ -14,7 +14,8 @@ each drains and how much flows.  A region refines only where each channel runs:
   refined coast.
 
 All on one uniform raster over the local ``(s, t)`` frame, ``margin`` past the
-cell; only nodes some corridor reaches are sampled.  Paths are cut at its edge.
+cell.  Paths are cut at its edge.  A path that leaves a lake (or the sea) and
+re-enters the same one is hidden for the whole stretch between.
 """
 from __future__ import annotations
 
@@ -28,7 +29,6 @@ from core.params import param_field as _f, paramclass
 from region.corridor import (
     EdgeCost,
     Raster,
-    corridor_reach,
     node_spacing_rad,
     raster_frame,
     route_corridor,
@@ -193,12 +193,33 @@ def _fill_short_gaps(flags: np.ndarray, max_gap: int) -> np.ndarray:
     return out
 
 
-def _to_path(raster: Raster, nodes: np.ndarray, flows: np.ndarray, params: RegionRiverParams) -> RiverPath:
+def _hide_reentries(water: np.ndarray, bodies: np.ndarray) -> np.ndarray:
+    """``water`` set from each body's first node along the path to its last.
+
+    A path that leaves a lake (or the sea) and comes back to the same one never
+    really left: the stretch between is the world's in-lake course crossing a
+    refined shore, not a river.
+    """
+    out = water.copy()
+    for body in np.unique(bodies[bodies > 0]):
+        at = np.flatnonzero(bodies == body)
+        out[at[0]:at[-1] + 1] = True
+    return out
+
+
+def _hidden_nodes(raster: Raster, nodes: np.ndarray) -> np.ndarray:
+    """Per node of a routed path, whether it counts as under water (not drawn)."""
+    water = _hide_reentries(raster.water[nodes], raster.water_bodies[nodes])
+    return _fill_short_gaps(water, _SPECKLE_NODES)
+
+
+def _to_path(
+    raster: Raster, nodes: np.ndarray, flows: np.ndarray, hidden: np.ndarray, params: RegionRiverParams,
+) -> RiverPath:
     pts = [raster.positions[k] for k in nodes]
     smooth = laplacian_smooth_sphere(pts, iterations=int(params.smoothing_iterations), alpha=0.5)
-    water = _fill_short_gaps(raster.ocean[nodes] | raster.lake[nodes], _SPECKLE_NODES)
     # Hidden where both ends are under water, so a river still reaches its coast.
-    in_water = water[:-1] & water[1:]
+    in_water = hidden[:-1] & hidden[1:]
     return np.stack(smooth).astype(np.float32), np.asarray(flows, dtype=np.float32), in_water
 
 
@@ -238,35 +259,39 @@ def route_stream_paths(
 
     Tier-agnostic: a local map feeds the region's rivers, then its streams (``minor``).
     """
-    reach = corridor_reach([(p.s, p.t) for p in paths], lo, step, n, 2.0 * radius_nodes + 2.0)
-    raster = sample_raster(fields, globe, lo, step, n, reach)
+    # Sampled whole, not just the corridors, so a lake is one water body (_hide_reentries).
+    raster = sample_raster(fields, globe, lo, step, n, np.ones(n * n, dtype=bool))
 
+    # Only drawn stretches take tributaries or count towards confluences: a
+    # hidden one is under water, or a lake crossing (_hide_reentries) over land.
     occupied = np.zeros(n * n, dtype=bool)
     on_path = np.zeros(n * n, dtype=np.int64)
-    routed: list[tuple[np.ndarray, np.ndarray]] = []
-    minor: list[tuple[np.ndarray, np.ndarray]] = []
+    routed: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+    minor: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
     for p in paths:
         sinks = occupied | raster.ocean | raster.lake
         nodes = _route_run(raster, p.s, p.t, radius_nodes, sinks, p.ends_here, params)
         if nodes is None or len(nodes) < 2:
             continue
-        (minor if p.minor else routed).append((nodes, _run_flows(raster, nodes, p.s, p.t, p.edge_flows)))
-        occupied[nodes] = True
+        hidden = _hidden_nodes(raster, nodes)
+        flows = _run_flows(raster, nodes, p.s, p.t, p.edge_flows)
+        (minor if p.minor else routed).append((nodes, flows, hidden))
+        occupied[nodes[~hidden]] = True
         if not p.minor:
-            on_path[nodes] += 1
+            on_path[nodes[~hidden]] += 1
 
-    # A path ending on another one (not on water) is a confluence.
-    water = raster.ocean | raster.lake
-    ends = [int(nodes[-1]) for nodes, _ in routed if on_path[nodes[-1]] > 1 and not water[nodes[-1]]]
-    drawn = [_to_path(raster, nodes, flows, params) for nodes, flows in routed]
-    at_sea = [i for i, (nodes, _) in enumerate(routed) if raster.ocean[nodes[-1]]]
+    # A path ending on another one's drawn stretch is a confluence.
+    ends = [int(nodes[-1]) for nodes, _, hidden in routed
+            if on_path[nodes[-1]] - (0 if hidden[-1] else 1) > 0]
+    drawn = [_to_path(raster, nodes, flows, hidden, params) for nodes, flows, hidden in routed]
+    at_sea = [i for i, (nodes, _, _) in enumerate(routed) if raster.ocean[nodes[-1]]]
     return RegionRivers(
         region_id=fields.region_id,
         paths=drawn,
         confluences=raster.positions[ends].reshape(-1, 3),
         mouths=np.array([drawn[i][0][-1] for i in at_sea], dtype=np.float64).reshape(-1, 3),
         mouth_flows=np.array([float(drawn[i][1][-1]) for i in at_sea], dtype=np.float64),
-        streams=[_to_path(raster, nodes, flows, params) for nodes, flows in minor],
+        streams=[_to_path(raster, nodes, flows, hidden, params) for nodes, flows, hidden in minor],
     )
 
 

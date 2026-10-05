@@ -231,7 +231,7 @@ def _fan_branches(
     fields: RegionFields, globe: "World", rivers: "RegionRivers", fan, fan_index: int,
     lo: float, step: float, n: int, params: "RegionRiverParams",
 ) -> list["RiverPath"]:
-    from region.rivers import _to_path
+    from region.rivers import _hidden_nodes, _to_path
 
     dp: DistributaryParams = params.distributaries
     node_km = node_spacing_rad(fields, step) * EARTH_RADIUS_KM
@@ -357,7 +357,7 @@ def _fan_branches(
     out: list["RiverPath"] = []
     for i, ch in enumerate(channels[1:], start=1):
         flows = np.full(len(ch.nodes) - 1, apex_flow * served(i), dtype=np.float32)
-        pts, f, in_water = _to_path(raster, ch.nodes, flows, params)
+        pts, f, in_water = _to_path(raster, ch.nodes, flows, _hidden_nodes(raster, ch.nodes), params)
         parent_line = drawn[ch.parent]
         pts = pts.copy()
         pts[0] = parent_line[int(np.argmin(np.linalg.norm(parent_line - pts[0][None, :], axis=1)))]
