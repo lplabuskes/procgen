@@ -33,11 +33,13 @@ if TYPE_CHECKING:
 
 @paramclass
 class LocalSettlementParams:
-    """Tuning for refining town and city positions on a local map."""
+    """Tuning for refining town and city positions on a local map, and where settlements stand by rivers."""
 
     # How far a town or city may move from where its region put it, in regional texels.
     refine_radius_parent_texels: float = _f(
         1.5, label="Refinement radius (regional texels)", min=0.0, max=4.0, step=0.25)
+    # Towns, cities and villages stand this far past a river's bank, not in its channel.
+    bank_clearance_km: float = _f(0.1, label="Clearance from river banks (km)", min=0.0, max=2.0, step=0.05)
 
 
 def local_owned(

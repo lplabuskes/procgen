@@ -11,15 +11,21 @@
 7. city footprints (:func:`localmap.cities.city_footprints`);
 8. farmland (:func:`localmap.farmland.place_farmland`).
 
+Rivers are drawn at their physical width (:mod:`localmap.banks`): towns, cities
+and villages are shown just off the channel (display only: the world keeps its
+positions; roads follow their cities), and steps 6–8 skip the texels a channel covers.
+
 Qt-free.  Deterministic, given which settlements earlier local maps re-sited.
 """
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
+from localmap.banks import covered_texels, onto_banks, river_channels
 from localmap.cities import CityFootprints, city_footprints
 from localmap.farmland import Farmland, place_farmland
 from localmap.params import LocalParams
@@ -31,8 +37,9 @@ from localmap.villages import VILLAGE_MINING, Villages, place_villages
 from realmgen.towns.types import TOWN_MINING
 from region.display import snap_to_land
 from region.rivers import RegionRivers, RiverPath, snap_deltas
-from region.roads import RegionRoads
+from region.roads import RegionRoads, move_points
 from region.upsample import RegionFields
+from worldgen.hydrology.discharge import discharge_per_flow_unit
 
 if TYPE_CHECKING:
     from core.world import World
@@ -98,6 +105,24 @@ def _local_settlements(
     return t_idx, t_pos, t_pop, c_idx, c_pos, c_pop
 
 
+def _move_road_ends(roads: RegionRoads, moved: tuple[np.ndarray, np.ndarray]) -> RegionRoads:
+    """``roads`` with ends at an old position of ``moved = (old, new)`` at its new one."""
+    def ends(a, b):
+        pts = move_points(np.array([a, b], dtype=np.float64), moved).astype(np.float32)
+        return pts[0], pts[1]
+
+    sea = [(*ends(a, b), f) for a, b, f in roads.sea]
+    segments = list(sea)
+    polylines = []
+    for verts, flows in zip(roads.polylines, roads.polyline_flows):
+        verts = np.asarray(verts, dtype=np.float64).copy()
+        verts[[0, -1]] = move_points(verts[[0, -1]], moved)
+        polylines.append(verts)
+        segments.extend((verts[k].astype(np.float32), verts[k + 1].astype(np.float32), float(flows[k]))
+                        for k in range(len(verts) - 1))
+    return dataclasses.replace(roads, segments=segments, polylines=polylines, sea=sea)
+
+
 def _town_kinds(globe: "World", t_idx: np.ndarray) -> np.ndarray:
     towns = globe.get_feature("towns")
     return np.asarray(towns.kind)[t_idx] if towns is not None and len(towns) else np.zeros(0, dtype=np.int8)
@@ -155,16 +180,28 @@ def build_local_map(
     )
 
     t_idx, t_pos, t_pop, c_idx, c_pos, c_pop = _local_settlements(local, globe, land_reach)
+    channels = river_channels(rivers, discharge_per_flow_unit(globe.mesh))
+    covered = covered_texels(local, channels)
+    clearance = float(params.settlements.bank_clearance_km)
+    t_pos = onto_banks(channels, t_pos, clearance)
+    c_banked = onto_banks(channels, c_pos, clearance)
+    shifted = np.any(c_banked != c_pos, axis=1)
+    if shifted.any():
+        roads = _move_road_ends(roads, (c_pos[shifted], c_banked[shifted]))
+    c_pos = c_banked
     # One village stream per (world, region, hex); non-negative for SeedSequence.
     seed = (int(globe.seed or 0) & 0xFFFFFFFF) * 1_000_003 + int(region.region_id) * 4_099 + int(hex_index)
     villages = place_villages(
         local, rivers, roads, np.concatenate([t_pos, c_pos]), np.concatenate([t_pop, c_pop]), seed, params.villages,
+        river_covered=covered,
     )
-    footprints = city_footprints(local, c_pos, c_pop, seed, params.cities)
+    villages.positions = onto_banks(channels, villages.positions, clearance)
+    footprints = city_footprints(local, c_pos, c_pop, seed, params.cities, river_covered=covered)
     farmland = place_farmland(
         local, villages.positions, villages.population, t_pos, t_pop, footprints, seed, params.farmland,
         village_mining=villages.kind == VILLAGE_MINING,
         town_mining=_town_kinds(globe, t_idx) == TOWN_MINING,
+        channels=channels, river_covered=covered,
     )
     return LocalMap(
         fields=local, rivers=rivers, roads=roads, villages=villages,

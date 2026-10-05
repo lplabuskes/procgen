@@ -5,6 +5,7 @@
 - Sizes: the town stage's truncated Pareto (:func:`realmgen.towns.placement.draw_town_sizes`),
   whose stochastic remainder gives thin land the odd village.
 - Sites: largest first, Gumbel-max over a log weight among the budget's dry texels
+  (not under a river's channel)
   (rural density, river/stream, confluence, coast, road raise it; slope lowers it).
   Exclusion radius ``spacing_km · (pop / village_min)^0.25``; towns and cities
   clear ``settlement_clearance_km`` scaled from 1,000 people.
@@ -95,11 +96,14 @@ def place_villages(
     settlement_populations: np.ndarray,
     seed: int,
     params: Optional[VillageParams] = None,
+    river_covered: Optional[np.ndarray] = None,
 ) -> Villages:
     """Size and site the villages of local map ``local``.
 
     ``settlement_positions`` / ``settlement_populations``: towns and cities in and
     around the map, which villages keep clear of.  ``seed`` identifies world and map.
+    ``river_covered``: ``(M, T, T)`` texels under a river (:func:`localmap.banks.covered_texels`),
+    never a site.
     """
     p = params or VillageParams()
     tex = local.textures
@@ -118,6 +122,8 @@ def place_villages(
 
     # ── candidate sites: dry texels of the domain ────────────────────────────
     dry = domain & ~water
+    if river_covered is not None:
+        dry &= ~river_covered
     cand_pos = local.positions[dry]
     cand_budget = np.searchsorted(budget_anchor, anchors[dry])
     cand_rho = rho[dry]

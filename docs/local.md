@@ -5,7 +5,7 @@ the region exactly as a region is from the globe ([region.md](region.md)). Plan
 and status: [plans/local_maps.md](plans/local_maps.md).
 
 This doc: frame, fields, rivers, roads. Rest of the tier:
-- [local_settlements.md](local_settlements.md) — towns and cities re-sited locally, city footprints, farmland, villages
+- [local_settlements.md](local_settlements.md) — towns and cities re-sited locally, river banks, city footprints, farmland, villages
 - [viz_regionview.md](viz_regionview.md) — the viewer (`RegionView` shows local maps too)
 
 ## Files
@@ -14,7 +14,7 @@ This doc: frame, fields, rivers, roads. Rest of the tier:
 - `localmap/upsample.py` — `LocalUpsampleParams`, `build_local_fields`, `local_conservation_report`
 - `localmap/rivers.py` — `LocalRiverParams`, `build_local_rivers`
 - `localmap/roads.py` — `LocalRoadParams`, `build_local_roads`
-- `localmap/settlements.py`, `villages.py`, `cities.py`, `farmland.py` — ([local_settlements.md](local_settlements.md))
+- `localmap/settlements.py`, `villages.py`, `cities.py`, `farmland.py`, `banks.py` — ([local_settlements.md](local_settlements.md))
 - `localmap/params.py` — `LocalParams`: `upsample`, `streams` (`RegionStreamParams`), `rivers`, `roads`, `settlements`, `villages`, `cities`, `farmland` (`AppParams.local`, **Local map** dialog; view-side only)
 - `localmap/builder.py` — `LocalMap`, `build_local_map`
 

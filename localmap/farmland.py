@@ -13,8 +13,9 @@ Texels are claimed by distance stretched by ``1 + fertility_weight·(1 − ferti
 + slope_weight·slope + forest_weight·forest`` (slope relative to
 ``slope_saturation``) and jittered (``edge_roughness``).  Garden rings go first;
 then towns and villages claim together, cheapest (settlement, texel) pair first,
-so neighbours share ground rather than first-served taking it.  Water and
-built-up texels are never claimed.
+so neighbours share ground rather than first-served taking it.  Water, built-up
+texels and texels under a river's channel are never claimed, and a village farms
+only its own bank of a river at least ``river_barrier_width_m`` wide.
 
 Display-only, Qt-free, deterministic.
 """
@@ -27,6 +28,7 @@ import numpy as np
 from scipy.spatial import KDTree
 
 from core.params import param_field as _f, paramclass
+from localmap.banks import Channels, crossing_pairs
 from localmap.cities import CityFootprints
 from region.resources import refined_slope
 from region.upsample import EARTH_RADIUS_KM, RegionFields
@@ -63,6 +65,9 @@ class FarmlandParams:
     forest_weight: float = _f(1.0, label="Forest stretch", min=0.0, max=5.0, step=0.1)
     slope_saturation: float = _f(0.15, label="Slope saturation (km/km)", min=0.01, max=1.0, step=0.01)
     edge_roughness: float = _f(0.25, label="Field edge roughness (× distance)", min=0.0, max=1.0, step=0.05)
+    # Villages don't farm across a river at least this wide (no ford).
+    river_barrier_width_m: float = _f(
+        50.0, label="Village fields stop at rivers wider than (m)", min=0.0, max=1_000.0, step=5.0)
 
 
 @dataclass
@@ -106,10 +111,15 @@ def place_farmland(
     *,
     village_mining: Optional[np.ndarray] = None,
     town_mining: Optional[np.ndarray] = None,
+    channels: Optional[Channels] = None,
+    river_covered: Optional[np.ndarray] = None,
 ) -> Farmland:
     """Claim every settlement's farmland.  See the module docstring.
 
     ``village_mining`` / ``town_mining``: per-settlement bool mining flags.
+    ``channels``: the map's rivers (:func:`localmap.banks.river_channels`), whose
+    wide ones bound village fields; ``river_covered``: ``(M, T, T)`` texels under
+    them (:func:`localmap.banks.covered_texels`), never farmed.
     """
     p = params or FarmlandParams()
     shape = local.in_hex.shape
@@ -141,6 +151,8 @@ def place_farmland(
             water |= local.textures[key][..., 0] > 0.5
     built = footprints.owner >= 0 if footprints is not None else np.zeros(shape, dtype=bool)
     free = local.in_hex & ~water & ~built
+    if river_covered is not None:
+        free &= ~river_covered
     cells = np.flatnonzero(free.reshape(-1))
     if cells.size == 0:
         return result()
@@ -189,6 +201,13 @@ def place_farmland(
         texel = (np.concatenate([np.asarray(x, dtype=np.int64) for x in lists]) if counts.sum()
                  else np.zeros(0, np.int64))
         who = np.repeat(np.arange(len(s_pos), dtype=np.int64), counts)
+        if channels is not None and len(v_pos):
+            # A village's fields stop at a river too wide to ford.
+            barriers = channels.at_least(float(p.river_barrier_width_m) * 1e-3)
+            village = who < len(v_pos)
+            far_bank = np.zeros(who.size, dtype=bool)
+            far_bank[village] = crossing_pairs(barriers, v_pos, who[village], pos[texel[village]], reach[:len(v_pos)])
+            who, texel = who[~far_bank], texel[~far_bank]
         cost = np.linalg.norm(pos[texel] - s_pos[who], axis=1) * stretch[texel]
         order = np.argsort(cost, kind="stable").astype(np.int64)
         owner_s = np.full(cells.size, -1, dtype=np.int64)

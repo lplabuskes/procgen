@@ -2,8 +2,8 @@
 
 A city of ``P`` people claims ``P / density_per_ha`` of dry texels (~200 people/ha,
 walled medieval), nearest first with jittered distance (``edge_roughness``) for a
-ragged edge.  Water is never claimed; rivers are vectors, so a city spans its
-river.  Larger cities claim first; no texel has two owners.
+ragged edge.  Water and texels under a river's channel are never claimed; a city
+spans its river.  Larger cities claim first; no texel has two owners.
 
 Display-only (no rural density is carved out).  Qt-free and deterministic.
 """
@@ -58,9 +58,12 @@ def _texel_corners(local: RegionFields, texels: np.ndarray) -> np.ndarray:
 
 def city_footprints(
     local: RegionFields, positions: np.ndarray, population: np.ndarray, seed: int,
-    params: Optional[CityParams] = None,
+    params: Optional[CityParams] = None, river_covered: Optional[np.ndarray] = None,
 ) -> CityFootprints:
-    """Claim each city's built-up texels.  See the module docstring."""
+    """Claim each city's built-up texels.  See the module docstring.
+
+    ``river_covered``: ``(M, T, T)`` texels under a river (:func:`localmap.banks.covered_texels`).
+    """
     params = params or CityParams()
     positions = np.asarray(positions, dtype=np.float64).reshape(-1, 3)
     population = np.asarray(population, dtype=np.float64).reshape(-1)
@@ -76,6 +79,8 @@ def city_footprints(
     for key in ("ocean_mask", "lake_mask"):
         if key in local.textures:
             water |= local.textures[key][..., 0] > 0.5
+    if river_covered is not None:
+        water |= river_covered
     dry = np.flatnonzero((local.in_hex & ~water).reshape(-1))
     if dry.size == 0:
         return empty

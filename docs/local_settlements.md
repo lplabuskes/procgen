@@ -9,6 +9,28 @@ Drawing: [viz_regionview.md](viz_regionview.md).
 - `localmap/cities.py` — `CityParams`, `CityFootprints`, `city_footprints` (display-only)
 - `localmap/farmland.py` — `FarmlandParams`, `Farmland`, `place_farmland`, `farmland_rgba` (display-only)
 - `localmap/villages.py` — `VillageParams`, `Villages`, `place_villages`, `village_budget_report`
+- `localmap/banks.py` — `Channels`, `river_channels`, `covered_texels`, `onto_banks`, `crossing_pairs`
+
+## River banks (`localmap/banks.py`)
+
+Local maps draw rivers and streams at bankfull width (`channel_width_km`, 7 m ×
+√Q; seed 4: world rivers ~180–380 m, up to km near big mouths; region streams
+~20–170 m), so towns and cities sited *on* a river (within 1.5 texels of its centre
+line) can sit in the channel.
+
+- **Banks.** Towns, cities and villages are drawn `bank_clearance_km` (0.1)
+  past the nearest bank, on the side they already stand (on the centre line:
+  left of the flow); up to four rounds for confluences. Display only: the world
+  keeps its positions. Road ends follow moved cities.
+- **Covered texels** (centre under a channel) are never a village site, city
+  footprint or field. Water masks and rural density are unchanged.
+- **Field barrier.** A village farms only its own bank of a river at least
+  `river_barrier_width_m` (50 m) wide: a (village, texel) pair whose straight
+  line crosses such a channel is dropped. Towns and gardens may still cross.
+
+Seed 4, six largest river cities: four stood in the channel (up to 1.6 km in);
+all now 0.1 km off the bank. Before the barrier, 359 / 111 village-field texels
+lay across a wide river on two of those maps.
 
 ## Towns and cities
 
@@ -43,7 +65,7 @@ clear of final positions.
 Display-only. A city of `P` covers `P / density_per_ha` (200/ha — walled
 medieval) of dry ground: that many local texels (~0.12 km², ≥ 1), claimed outward
 by distance × `1 + edge_roughness · U[0,1)` (0.25). Never water (coastal cities
-wrap the shore); rivers are vectors, so cities span them. Larger cities claim
+wrap the shore) or a river's covered texels; cities span their rivers. Larger cities claim
 first; no sharing. `CityFootprints`: per-texel `owner`, each claimed texel's
 `city` and four `corners`, each city's `area_km2`. Seed 4: largest (~540k) ~27
 km² (~225 texels, ~6 km across); 19k city ~1 km² (8 texels). Rural density not
@@ -67,7 +89,9 @@ Display-only; medieval rules of thumb:
 - Garden rings first (vs the map's median stretch, so nominal width on typical
   ground); then towns and villages together, cheapest (settlement, texel) pair
   first (numba), each until its quota — neighbours share ground.
-- Never water or built-up; leftover rural density (hamlets) gets no fields.
+- Never water, built-up or under a river; village fields stop at rivers ≥
+  `river_barrier_width_m` (see [River banks](#river-banks-localmapbankspy)).
+  Leftover rural density (hamlets) gets no fields.
 - `farmland_rgba(farmland, show)` bakes translucent per-hex RGBA (wheat fields,
   dark-olive gardens, ±10% patchwork) for kinds whose overlays are on.
 
@@ -86,7 +110,7 @@ settlement_populations, seed, params) → Villages`.
 - **Sizes**: town stage's truncated Pareto (`draw_town_sizes`) on
   `[village_min, village_max]` = [200, 1000], α = `size_exponent` (1), with
   stochastic remainder.
-- **Sites**, largest first, among the budget's dry domain texels, Gumbel-max over
+- **Sites**, largest first, among the budget's dry domain texels not under a river, Gumbel-max over
   `log((ρ/ρ̄ + 0.05) · (1 + river·r + confluence·c + coast·k + road·d) · (1 −
   slope_penalty · slope))` (bonuses 2 / +1 / 1 / 1; river = rivers and streams;
   reach `water_reach_km` / `road_reach_km` 0.6 km).
