@@ -360,11 +360,12 @@ def _smooth_chains(ids: np.ndarray, points: np.ndarray, junctions: frozenset,
 def smooth_polity_borders(mesh, polities: List, field: PolityLabelField,
                           ocean_tex: np.ndarray, lake_tex: Optional[np.ndarray],
                           *, iterations: int = 2, lattice_depth: Optional[int] = None,
-                          bisect_steps: int = 5) -> dict:
+                          lattice_offset: int = 0, bisect_steps: int = 5) -> dict:
     """Return ``{depth: (M, 6)}`` continuous, Chaikin-smoothed polity borders.
 
     Contours ``field`` on an icosphere lattice about as fine as the face texels
-    (``lattice_depth`` overrides that), with water read from the ``ocean_tex`` /
+    (``lattice_offset`` levels finer or coarser; ``lattice_depth`` overrides
+    both), with water read from the ``ocean_tex`` /
     ``lake_tex`` masks so borders end at the texel coastline.
     """
     if not polities:
@@ -372,7 +373,7 @@ def smooth_polity_borders(mesh, polities: List, field: PolityLabelField,
     from region.sampling import GlobalSampler
 
     if lattice_depth is None:
-        lattice_depth = lattice_depth_for(len(mesh.faces), int(ocean_tex.shape[2]))
+        lattice_depth = max(0, lattice_depth_for(len(mesh.faces), int(ocean_tex.shape[2])) + lattice_offset)
     verts, tris, edges, tri_edges = _icosphere_lattice(int(lattice_depth))
 
     sampler = GlobalSampler(mesh)

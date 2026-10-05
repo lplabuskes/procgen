@@ -12,6 +12,12 @@ from typing import TYPE_CHECKING, Optional, Sequence
 import numpy as np
 from scipy.spatial import KDTree
 
+try:
+    from numba import njit
+except ImportError:  # pragma: no cover - numba is an optional accelerator
+    def njit(func=None, **_):  # type: ignore[misc]
+        return func if func is not None else (lambda f: f)
+
 from realmgen.refine.sites import SiteField
 from realmgen.towns.types import TOWN_MARKET, TOWN_MINING, TOWN_PORT, TOWN_RIVER, TOWN_ROUTE, Towns
 
@@ -372,58 +378,111 @@ def site_largest_first(
         key=lambda t: (-t[0], t[1], t[2], t[3]),
     )
 
-    # Per face: exclusion discs already placed (fixed ones, then towns), in
-    # preallocated buffers — ``disc_pos[f][:n_disc[f]]`` are live.
+    # Flat candidate arrays, ``cand_off[r]:cand_off[r + 1]`` being request r's,
+    # and each request's Gumbel noise (one row per town) flat from ``gum_off[r]``.
+    n_cand = np.array([candidates[r].positions.shape[0] for r in range(len(requests))], dtype=np.int64)
+    cand_off = np.zeros(len(requests) + 1, dtype=np.int64)
+    np.cumsum(n_cand, out=cand_off[1:])
+    cand_pos = (np.concatenate([np.asarray(c.positions, dtype=np.float64).reshape(-1, 3) for c in candidates])
+                if len(candidates) else np.zeros((0, 3)))
+    cand_logw = (np.concatenate([np.asarray(c.log_weight, dtype=np.float64).reshape(-1) for c in candidates])
+                 if len(candidates) else np.zeros(0))
+    gumbel = [
+        rngs[r].gumbel(size=(len(sizes), candidates[r].positions.shape[0])).reshape(-1)
+        for r, (_, sizes) in enumerate(requests)
+    ]
+    gum_off = np.zeros(len(requests) + 1, dtype=np.int64)
+    np.cumsum([g.size for g in gumbel], out=gum_off[1:])
+    gum = np.concatenate(gumbel) if gumbel else np.zeros(0)
+
+    # Per face: room for its exclusion discs (fixed ones — cities — then towns),
+    # ``disc_off[f]:disc_off[f] + n_disc[f]`` live.
     n_towns = np.zeros(n, dtype=np.int64)
     for f, sizes in requests:
         n_towns[int(f)] += len(sizes)
     disc_faces = np.asarray(disc_faces, dtype=np.int64)
     n_fixed = np.bincount(disc_faces, minlength=n) if disc_faces.size else np.zeros(n, dtype=np.int64)
-    disc_pos = [np.empty((int(c), 3)) for c in n_towns + n_fixed]
-    disc_rad = [np.empty(int(c)) for c in n_towns + n_fixed]
-    n_disc = np.zeros(n, dtype=np.int64)
+    disc_off = np.zeros(n + 1, dtype=np.int64)
+    np.cumsum(n_towns + n_fixed, out=disc_off[1:])
+    by_face = np.argsort(disc_faces, kind="stable")
+    rank = np.arange(by_face.size) - np.searchsorted(disc_faces[by_face], disc_faces[by_face])
+    disc_pos = np.zeros((int(disc_off[-1]), 3))
+    disc_rad = np.zeros(int(disc_off[-1]))
+    slots = disc_off[disc_faces[by_face]] + rank
+    disc_pos[slots] = np.asarray(disc_positions, dtype=np.float64).reshape(-1, 3)[by_face]
+    disc_rad[slots] = np.asarray(disc_radii, dtype=np.float64).reshape(-1)[by_face]
+    n_disc = n_fixed.copy()
 
-    def _add_disc(f: int, p: np.ndarray, r: float) -> None:
-        k = n_disc[f]
-        disc_pos[f][k] = p
-        disc_rad[f][k] = r
-        n_disc[f] = k + 1
+    adj_ptr = np.zeros(n + 1, dtype=np.int64)
+    np.cumsum([len(a) for a in adjacency], out=adj_ptr[1:])
+    adj_idx = np.fromiter((g for a in adjacency for g in a), dtype=np.int64, count=int(adj_ptr[-1]))
 
-    for p, f, r in zip(disc_positions, disc_faces, disc_radii):
-        _add_disc(int(f), np.asarray(p, dtype=np.float64), float(r))
-
-    gumbel = [
-        rngs[r].gumbel(size=(len(sizes), candidates[r].positions.shape[0]))
-        for r, (_, sizes) in enumerate(requests)
-    ]
-
+    town = np.array(order, dtype=np.float64).reshape(-1, 4)
+    chosen, unplaced = _site_towns(
+        town[:, 0].copy(), town[:, 1].astype(np.int64), town[:, 2].astype(np.int64), town[:, 3].astype(np.int64),
+        cand_off, cand_pos, cand_logw, gum_off, gum, disc_off, disc_pos, disc_rad, n_disc,
+        adj_ptr, adj_idx, float(town_spacing), float(town_min), float(SPACING_EXPONENT), n,
+    )
     placed: list[tuple[int, int, float, np.ndarray, int]] = []
-    unplaced = np.zeros(n, dtype=np.float64)
-
-    for size, f, r, j in order:
-        cand = candidates[r]
-        if cand.positions.shape[0] == 0:
-            unplaced[f] += size
+    for t, c in enumerate(chosen.tolist()):
+        if c < 0:
             continue
-
-        radius = town_spacing * (size / town_min) ** SPACING_EXPONENT
-        score = cand.log_weight + gumbel[r][j]
-        near = [g for g in (f, *adjacency[f]) if n_disc[g]]
-        if near:
-            near_pos = np.concatenate([disc_pos[g][:n_disc[g]] for g in near])
-            near_rad = np.maximum(np.concatenate([disc_rad[g][:n_disc[g]] for g in near]), radius)
-            # Unit vectors: |a − b| ≥ r  ⇔  a·b ≤ 1 − r²/2.
-            ok = (cand.positions @ near_pos.T <= 1.0 - 0.5 * near_rad ** 2).all(axis=1)
-            score = np.where(ok, score, -np.inf)
-        best = int(np.argmax(score))
-        if not np.isfinite(score[best]):
-            unplaced[f] += size
-            continue
-
-        p = cand.positions[best]
-        _add_disc(f, p, radius)
-        placed.append((r, f, size, p, int(cand.kind[best])))
+        size, f, r, _j = order[t]
+        k = c - int(cand_off[r])
+        placed.append((r, f, size, candidates[r].positions[k], int(candidates[r].kind[k])))
     return placed, unplaced
+
+
+@njit(cache=True)
+def _site_towns(size, face, req, row, cand_off, cand_pos, cand_logw, gum_off, gum,
+                disc_off, disc_pos, disc_rad, n_disc, adj_ptr, adj_idx,
+                town_spacing, town_min, exponent, n_faces):  # pragma: no cover - compiled
+    """The :func:`site_largest_first` loop: each town in turn takes its best-scoring
+    candidate clear of every disc on its face and the neighbours, then adds its own.
+
+    Returns ``(chosen candidate per town or −1, unplaced people per face)``.
+    """
+    n_t = size.shape[0]
+    chosen = np.full(n_t, -1, dtype=np.int64)
+    unplaced = np.zeros(n_faces)
+    for t in range(n_t):
+        f, r = face[t], req[t]
+        c0, c1 = cand_off[r], cand_off[r + 1]
+        radius = town_spacing * (size[t] / town_min) ** exponent
+        g0 = gum_off[r] + row[t] * (c1 - c0)
+        best = -1
+        best_score = -np.inf
+        for c in range(c0, c1):
+            score = cand_logw[c] + gum[g0 + c - c0]
+            if not score > best_score:          # argmax keeps the first of equals
+                continue
+            ok = True
+            for a in range(adj_ptr[f] - 1, adj_ptr[f + 1]):
+                g = f if a < adj_ptr[f] else adj_idx[a]
+                for q in range(disc_off[g], disc_off[g] + n_disc[g]):
+                    rr = max(disc_rad[q], radius)
+                    # Unit vectors: |a − b| ≥ r  ⇔  a·b ≤ 1 − r²/2.
+                    dot = (cand_pos[c, 0] * disc_pos[q, 0] + cand_pos[c, 1] * disc_pos[q, 1]
+                           + cand_pos[c, 2] * disc_pos[q, 2])
+                    if dot > 1.0 - 0.5 * rr * rr:
+                        ok = False
+                        break
+                if not ok:
+                    break
+            if ok:
+                best = c
+                best_score = score
+        if best < 0:
+            unplaced[f] += size[t]
+            continue
+        chosen[t] = best
+        q = disc_off[f] + n_disc[f]
+        disc_pos[q, 0] = cand_pos[best, 0]
+        disc_pos[q, 1] = cand_pos[best, 1]
+        disc_pos[q, 2] = cand_pos[best, 2]
+        disc_rad[q] = radius
+        n_disc[f] += 1
+    return chosen, unplaced
 
 
 def _towns_from(placed: list[tuple[int, float, np.ndarray, int]], hinterland: np.ndarray) -> Towns:

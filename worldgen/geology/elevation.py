@@ -278,15 +278,52 @@ def face_elevations_from_texture(elevation_textures: np.ndarray) -> np.ndarray:
 RASTER_SUPPORT_SPACINGS = 2.0
 
 
-def _wendland_c2(r: np.ndarray) -> np.ndarray:
-    """Wendland's C² compact kernel on ``r`` = distance / support (0 for r ≥ 1)."""
-    s = np.clip(1.0 - r, 0.0, None)
-    return s ** 4 * (4.0 * r + 1.0)
+@njit(cache=True)
+def _stencil_rows(dist, idx, inv_support):  # pragma: no cover - compiled
+    """CSR pieces ``(data, cols, counts)`` of the normalised Wendland C² weights.
+
+    ``dist``/``idx`` are each texel's k nearest centroids; the kernel is
+    ``(1 − r)⁴ (4r + 1)`` on ``r`` = distance / support (0 for r ≥ 1), and only
+    positive weights are kept.  A texel farther than the support from every
+    centroid (a badly stretched face) falls back to its nearest face.
+    """
+    n_rows, k = dist.shape
+    data = np.empty(n_rows * k, dtype=np.float32)
+    cols = np.empty(n_rows * k, dtype=np.int32)
+    counts = np.zeros(n_rows, dtype=np.int64)
+    w = np.empty(k)
+    n = 0
+    for p in range(n_rows):
+        total = 0.0
+        for j in range(k):
+            r = dist[p, j] * inv_support
+            s = 1.0 - r
+            if s > 0.0:
+                s2 = s * s
+                w[j] = s2 * s2 * (4.0 * r + 1.0)
+                total += w[j]
+            else:
+                w[j] = 0.0
+        if total <= 1e-12:
+            data[n] = 1.0
+            cols[n] = idx[p, 0]
+            counts[p] = 1
+            n += 1
+            continue
+        inv = 1.0 / total
+        row_start = n
+        for j in range(k):
+            if w[j] > 0.0:
+                data[n] = np.float32(w[j] * inv)
+                cols[n] = idx[p, j]
+                n += 1
+        counts[p] = n - row_start
+    return data[:n], cols[:n], counts
 
 
 # mesh → {(tex_size, support_spacings): (P, N) CSR raster stencil}.  Every
 # texel's normalised kernel weights depend only on the geometry, so a build's
-# many rasters share them; ~0.5 GB at tex_size 16, so the globe pipeline drops
+# many rasters share them; ~0.3 GB at tex_size 16, so the globe pipeline drops
 # them when it finishes (:func:`clear_raster_stencils`).
 _RASTER_STENCILS: "weakref.WeakKeyDictionary[PolygonMesh, Dict[Tuple[int, float], csr_matrix]]" = (
     weakref.WeakKeyDictionary()
@@ -325,19 +362,10 @@ def _raster_stencil(mesh: PolygonMesh, tex_size: int, support_spacings: float) -
     chunk = 1 << 18
     for start in range(0, P, chunk):
         dist, idx = tree.query(positions[start:start + chunk], k=k, workers=-1)
-        idx = np.asarray(idx)
-        w = _wendland_c2(dist / support)
-        total = w.sum(axis=1)
-        # A texel farther than the support from every centroid (a badly
-        # stretched face) falls back to its nearest face.
-        bare = total <= 1e-12
-        w[bare, 0] = 1.0
-        total[bare] = 1.0
-        w /= total[:, None]
-        keep = w > 0.0
-        data.append(w[keep])
-        cols.append(idx[keep].astype(np.int32))
-        counts.append(keep.sum(axis=1))
+        d, c, n = _stencil_rows(np.asarray(dist, dtype=np.float64), np.asarray(idx, dtype=np.int64), 1.0 / support)
+        data.append(d)
+        cols.append(c)
+        counts.append(n)
     indptr = np.concatenate([[0], np.cumsum(np.concatenate(counts))])
     stencil = csr_matrix((np.concatenate(data), np.concatenate(cols), indptr), shape=(P, N))
     per_mesh[key] = stencil

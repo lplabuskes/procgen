@@ -36,6 +36,11 @@ settlements and an ocean mask. The warp and city jitter are seeded from
   adjacent faces could both take the shared edge.
 - `border_smoothing_iterations` (default 2) — Chaikin corner-cutting passes applied
   to the chained border polylines. Higher = rounder, denser lines.
+- `border_lattice_offset` (hidden, default 0) — levels finer (+) or coarser (−)
+  than the texel-fine contour lattice (`lattice_depth_for`, depth 9 at defaults).
+  −1 doubles the lattice edge length: ~0.6 s faster per build (and ~1.1 s less
+  on a session's first build), but wiggles and enclaves under ~2 texels vanish
+  from the lines while the fill still shows them.
 - `border_control_floor` (hidden, default 1e-3) — floor on per-face authority so a
   zero-authority (unclaimed-adjacent) face still yields a finite Voronoi weight.
 - `boundary_warp_amplitude` (default 0.012) — magnitude (unit-sphere units, ~⅓ of a

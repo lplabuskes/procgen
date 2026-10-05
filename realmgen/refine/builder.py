@@ -44,6 +44,9 @@ class RefineParams:
     border_smoothing_iterations: int = _f(
         2, label="Border smoothing (Chaikin passes)", min=0, max=5, step=1
     )
+    border_lattice_offset: int = _f(
+        0, label="Border lattice depth offset (vs texel-fine)", min=-3, max=1, step=1, hidden=True
+    )
     border_control_floor: float = _f(
         1e-3, label="Border control floor", min=1e-6, max=1.0, hidden=True
     )
@@ -109,6 +112,7 @@ class RefineStage(Stage):
                 world.add_feature("polity_borders", smooth_polity_borders(
                     mesh, polities, field, ocean_tex, lake_tex,
                     iterations=int(p.border_smoothing_iterations),
+                    lattice_offset=int(p.border_lattice_offset),
                 ))
                 rgba = colorize_labels(labels, polities, ocean_tex, lake_tex)
                 mesh.set_face_textures("polity_fill", rgba.astype(np.float16), n_channels=4)

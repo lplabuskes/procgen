@@ -47,6 +47,8 @@ Feature registry: `add_feature(name, data)`, `get_feature(name, default=None)`, 
 
 `World.__init__` calls `mesh_cache.build` when the cache is not populated, then `mesh_cache.load_random(seed)`. Changing `MeshParams` does not rebuild an existing cache.
 
+**Derived geometry.** A loaded mesh carries a `geometry_store` (`_SidecarStore`) that persists its texel positions (`face_texture_positions`) and boundary pixel pairs (`boundary_pixel_pairs`) as `mesh_<i>.<key>.npz` beside the mesh (~40 MB per mesh at `tex_size` 16), so only the first build on each mesh computes them (~1 s). Files are stamped with `GEOMETRY_VERSION` and the mesh file's size/mtime — **bump `GEOMETRY_VERSION` when either computation changes**. Meshes built any other way (`geometry_store is None`) cache in memory only.
+
 ## `core/persistence.py` — Save / load
 
 Generic, numpy-only slice of persistence. A `.npz` holds `params_json` (the params dataclass tree), the mesh geometry (`mesh_vertices` / `mesh_face_sizes` / `mesh_face_data`), every face texture as `tex_<name>` except display-only `*_rgba` ones, `face_metadata_json`, and whatever each stage's `serialize()` adds.

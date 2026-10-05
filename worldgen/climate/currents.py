@@ -20,6 +20,7 @@ exposed by `surface_temperatures` and `surface_precipitation`.
 """
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import Sequence, TYPE_CHECKING
 
@@ -39,32 +40,52 @@ EARTH_RADIUS_KM = 6371.0
 EARTH_ROTATION_RAD_S = 7.292e-5
 
 
-def _build_voronoi_weights(mesh, is_ocean: np.ndarray) -> dict:
-    """For each directed ocean→any edge, compute w = edge_len / centroid_dist.
+def _adjacency_pairs(mesh) -> tuple[np.ndarray, np.ndarray]:
+    """``(src, dst)`` int64 of every directed face adjacency, in adjacency order."""
+    counts = np.fromiter((len(a) for a in mesh.face_adjacency), dtype=np.int64, count=len(mesh.faces))
+    src = np.repeat(np.arange(len(mesh.faces), dtype=np.int64), counts)
+    dst = np.fromiter((j for a in mesh.face_adjacency for j in a), dtype=np.int64, count=int(counts.sum()))
+    return src, dst
 
-    Returns dict (f, nb) -> float for ocean faces only. Edges with degenerate
-    topology (shared vertex count != 2) are skipped.
+
+def _voronoi_edges(mesh, is_ocean: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """``(src, dst, w)`` for each directed ocean→any edge: w = edge_len / centroid_dist.
+
+    In adjacency order, ocean faces only. A neighbour sharing no polygon edge
+    (degenerate topology) is skipped.
     """
-    verts = np.array(mesh.vertices, dtype=np.float64)
-    face_vert_sets = [set(f) for f in mesh.faces]
-    centroids = mesh.face_centroids.astype(np.float64)
-    weights: dict = {}
-    for f in range(len(mesh.faces)):
-        if not is_ocean[f]:
-            continue
-        fverts = face_vert_sets[f]
-        for nb in mesh.face_adjacency[f]:
-            shared = list(fverts & face_vert_sets[nb])
-            if len(shared) != 2:
-                continue
-            edge_len = EARTH_RADIUS_KM * np.arccos(
-                float(np.clip(verts[shared[0]] @ verts[shared[1]], -1.0, 1.0))
-            )
-            d_km = EARTH_RADIUS_KM * np.arccos(
-                float(np.clip(centroids[f] @ centroids[nb], -1.0, 1.0))
-            )
-            weights[(f, nb)] = edge_len / max(d_km, 1e-6)
-    return weights
+    n = len(mesh.faces)
+    verts = np.asarray(mesh.vertices, dtype=np.float64)
+    centroids = np.asarray(mesh.face_centroids, dtype=np.float64)
+
+    # Every polygon edge, keyed by its sorted vertex pair; a key held by two
+    # faces is the edge they share.
+    sizes = np.fromiter((len(f) for f in mesh.faces), dtype=np.int64, count=n)
+    fv = np.fromiter((v for f in mesh.faces for v in f), dtype=np.int64, count=int(sizes.sum()))
+    face_of = np.repeat(np.arange(n, dtype=np.int64), sizes)
+    starts = np.repeat(np.cumsum(sizes) - sizes, sizes)
+    nxt = fv[starts + (np.arange(fv.size) - starts + 1) % np.repeat(sizes, sizes)]
+    va, vb = np.minimum(fv, nxt), np.maximum(fv, nxt)
+    order = np.argsort(va * len(verts) + vb, kind="stable")
+    key = (va * len(verts) + vb)[order]
+    same = np.flatnonzero(key[1:] == key[:-1])
+    e0, e1 = order[same], order[same + 1]
+    pair_key = np.concatenate([face_of[e0] * n + face_of[e1], face_of[e1] * n + face_of[e0]])
+    pair_edge = np.concatenate([e0, e0])
+    by_key = np.argsort(pair_key, kind="stable")
+    pair_key, pair_edge = pair_key[by_key], pair_edge[by_key]
+
+    src, dst = _adjacency_pairs(mesh)
+    ocean = is_ocean[src]
+    src, dst = src[ocean], dst[ocean]
+    q = src * n + dst
+    loc = np.minimum(np.searchsorted(pair_key, q), max(pair_key.size - 1, 0))
+    found = pair_key[loc] == q if pair_key.size else np.zeros(q.size, dtype=bool)
+    src, dst, e = src[found], dst[found], pair_edge[loc[found]]
+
+    edge_len = EARTH_RADIUS_KM * np.arccos(np.clip(np.sum(verts[va[e]] * verts[vb[e]], axis=1), -1.0, 1.0))
+    d_km = EARTH_RADIUS_KM * np.arccos(np.clip(np.sum(centroids[src] * centroids[dst], axis=1), -1.0, 1.0))
+    return src, dst, edge_len / np.maximum(d_km, 1e-6)
 
 
 @dataclass
@@ -102,7 +123,7 @@ def _solve_streamfunction(mesh: PolygonMesh,
                           beta_scale: float = 1.0,
                           tol: float = 1e-6,
                           max_iter: int = 200) -> np.ndarray:
-    """GMRES solve of (L - β·D_east)·ψ = rhs on the ocean face graph, ψ=0 on land.
+    """Sparse solve of (L - β·D_east)·ψ = rhs on the ocean face graph, ψ=0 on land.
 
     L is the Voronoi-weighted graph Laplacian (w = edge_len / centroid_dist).
     The β·D_east term (Stommel planetary vorticity gradient) breaks symmetry,
@@ -112,29 +133,12 @@ def _solve_streamfunction(mesh: PolygonMesh,
     centroids = face_centroids.astype(np.float64)
 
     # Voronoi-weighted Laplacian
-    voronoi_weights = _build_voronoi_weights(mesh, is_ocean)
-    src_list: list[int] = []
-    dst_list: list[int] = []
-    w_list: list[float] = []
-    for f in range(n):
-        if not is_ocean[f]:
-            continue
-        for nb in mesh.face_adjacency[f]:
-            wt = voronoi_weights.get((f, nb))
-            if wt is None:
-                continue
-            src_list.append(f)
-            dst_list.append(int(nb))
-            w_list.append(wt)
-    if not src_list:
+    src, dst, w = _voronoi_edges(mesh, is_ocean)
+    if not src.size:
         return np.zeros(n, dtype=np.float64)
-    src = np.asarray(src_list, dtype=np.int64)
-    dst = np.asarray(dst_list, dtype=np.int64)
-    w = np.asarray(w_list, dtype=np.float64)
 
     # Laplacian: diagonal − off-diagonal ocean→ocean entries; identity for land.
-    diag_vals = np.zeros(n, dtype=np.float64)
-    np.add.at(diag_vals, src, w)
+    diag_vals = np.bincount(src, weights=w, minlength=n)
     diag_vals[~is_ocean] = 1.0
 
     ocean_dst_mask = is_ocean[dst]
@@ -154,19 +158,15 @@ def _solve_streamfunction(mesh: PolygonMesh,
     beta_arr = beta_scale * 2.0 * EARTH_ROTATION_RAD_S * np.cos(lat) / EARTH_RADIUS_KM
 
     east_axes, _ = _tangent_frames(centroids)
+    a_src, a_dst = _adjacency_pairs(mesh)
+    proj = np.sum((centroids[a_dst] - centroids[a_src]) * east_axes[a_src], axis=1) * EARTH_RADIUS_KM
+    # Each face's most-eastward neighbour (the first, on a tie).
+    order = np.lexsort((np.arange(a_src.size), -proj, a_src))
+    first = order[np.flatnonzero(np.r_[True, a_src[order][1:] != a_src[order][:-1]])]
     east_dst = np.full(n, -1, dtype=np.int64)
     east_proj = np.ones(n, dtype=np.float64)
-    for f in range(n):
-        if not is_ocean[f]:
-            continue
-        best_proj = -np.inf
-        for nb in mesh.face_adjacency[f]:
-            proj = float((centroids[nb] - centroids[f]) @ east_axes[f]) * EARTH_RADIUS_KM
-            if proj > best_proj:
-                best_proj = proj
-                east_dst[f] = nb
-        if east_dst[f] >= 0:
-            east_proj[f] = best_proj
+    east_dst[a_src[first]] = a_dst[first]
+    east_proj[a_src[first]] = proj[first]
 
     has_east = (east_dst >= 0) & is_ocean
     he_idx = np.where(has_east)[0].astype(np.int64)
@@ -187,7 +187,13 @@ def _solve_streamfunction(mesh: PolygonMesh,
     b = np.zeros(n, dtype=np.float64)
     b[is_ocean] = rhs[is_ocean] * EARTH_RADIUS_KM
 
-    psi, _ = spla.gmres(A, b, rtol=tol, restart=min(max_iter, n), maxiter=max_iter)
+    # Direct solve; every ocean basin borders land, which pins ψ. Only a world
+    # with no land leaves A singular — fall back to GMRES's best effort there.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", spla.MatrixRankWarning)
+        psi = np.asarray(spla.spsolve(A.tocsc(), b), dtype=np.float64)
+    if not np.all(np.isfinite(psi)):
+        psi, _ = spla.gmres(A, b, rtol=tol, restart=min(max_iter, n), maxiter=max_iter)
     psi[~is_ocean] = 0.0
     return psi
 

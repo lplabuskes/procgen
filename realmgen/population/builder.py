@@ -415,6 +415,8 @@ class PopulationStage(Stage):
             if not self.settlements:
                 break
 
+            if pass_idx == n_passes - 1:
+                break    # the final trade network below replaces this one before anything reads it
             max_p = float(population.max())
             norm_demands = population / max_p if max_p > 0 else np.ones_like(population)
             self.trade_result = _compute_trade(self.settlements, settlement_demands=norm_demands)

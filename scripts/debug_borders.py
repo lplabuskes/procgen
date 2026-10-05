@@ -51,11 +51,14 @@ DEFAULT_SEEDS = [4]
 DEPTH_COLORS = ["black", "#d62728", "#1f77b4", "#2ca02c", "#9467bd", "#8c564b"]
 
 
-def build_realm(seed: int, rebuild: bool):
+def build_realm(seed: int, rebuild: bool, lattice_offset: int | None = None):
     """Build the cached physical world + realm pipeline; return the texel labels
     and borders it produced (so they come from the current fill/border code)."""
     world = get_physical_world(seed, rebuild)
-    realm = RealmPipeline(RealmParams())
+    params = RealmParams()
+    if lattice_offset is not None:
+        params.refine.border_lattice_offset = lattice_offset
+    realm = RealmPipeline(params)
     realm.build(BuildContext(world=world, seed=seed))
     mesh = world.mesh
 
@@ -129,11 +132,13 @@ def main() -> None:
     ap.add_argument("--seams", action="store_true", help="overlay hexagon seam outlines")
     ap.add_argument("--vertices", action="store_true", help="mark border segment vertices")
     ap.add_argument("--rebuild-cache", action="store_true", help="force rebuild worlds")
+    ap.add_argument("--lattice-offset", type=int, default=None,
+                    help="border lattice depth offset (default: RefineParams.border_lattice_offset)")
     ap.add_argument("--out", default=None, help="output PNG (default scripts/results/borders_<seed>.png)")
     args = ap.parse_args()
 
     seed = resolve_seeds(args, DEFAULT_SEEDS)[0]
-    world, mesh, polities, labels, borders = build_realm(seed, args.rebuild_cache)
+    world, mesh, polities, labels, borders = build_realm(seed, args.rebuild_cache, args.lattice_offset)
     N, H, W = labels.shape
     in_poly = np.asarray(mesh.face_texture_in_polygon(H, W))
     positions = np.asarray(mesh.face_texture_positions(H, W), dtype=np.float64)

@@ -1,7 +1,19 @@
 import random
-from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Protocol, Sequence, Tuple
 
 import numpy as np
+
+
+class GeometryStore(Protocol):
+    """Persistent home for a mesh's derived geometry (see ``core.mesh_cache``).
+
+    ``load`` returns the arrays saved under ``key``, or ``None`` when there are
+    none (or they are stale); ``save`` may silently fail.
+    """
+
+    def load(self, key: str) -> Optional[Tuple[np.ndarray, ...]]: ...
+
+    def save(self, key: str, arrays: Tuple[np.ndarray, ...]) -> None: ...
 
 
 def _edge_pixels(
@@ -75,6 +87,9 @@ class PolygonMesh:
         self._boundary_pair_cache: Dict[int, Tuple[np.ndarray, ...]] = {}
         # Likewise every face's texel positions, per (h, w); read-only.
         self._texture_position_cache: Dict[Tuple[int, int], np.ndarray] = {}
+        # Where both of those persist across loads of the same mesh, if anywhere
+        # (set by ``core.mesh_cache``; bump its GEOMETRY_VERSION when either changes).
+        self.geometry_store: Optional[GeometryStore] = None
         self.face_adjacency: List[List[int]] = self._build_face_adjacency()
         self.face_centroids: np.ndarray = self._compute_face_centroids()
         self.face_areas: np.ndarray = self._compute_face_areas()
@@ -372,7 +387,12 @@ class PolygonMesh:
         if cached is not None:
             return cached
 
-        result = self._compute_boundary_pairs(tex_size)
+        key = f"boundary_pairs_{tex_size}"
+        result = self.geometry_store.load(key) if self.geometry_store is not None else None
+        if result is None:
+            result = self._compute_boundary_pairs(tex_size)
+            if self.geometry_store is not None:
+                self.geometry_store.save(key, result)
         self._boundary_pair_cache[tex_size] = result
         return result
 
@@ -408,7 +428,14 @@ class PolygonMesh:
         if cached is not None:
             return cached if faces is None else cached[np.asarray(faces, dtype=np.int64)]
         if faces is None:
-            positions = self._face_texture_positions(h, w, None)
+            key = f"texture_positions_{h}x{w}"
+            stored = self.geometry_store.load(key) if self.geometry_store is not None else None
+            if stored is not None:
+                positions = stored[0]
+            else:
+                positions = self._face_texture_positions(h, w, None)
+                if self.geometry_store is not None:
+                    self.geometry_store.save(key, (positions,))
             positions.flags.writeable = False
             self._texture_position_cache[(h, w)] = positions
             return positions
