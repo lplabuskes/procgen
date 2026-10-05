@@ -6,9 +6,17 @@ from collections import deque
 from typing import Dict, List, Tuple, TYPE_CHECKING
 
 import numpy as np
+from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import connected_components
 
 from utils.simplex import fbm_sum, make_perm
 from core.mesh import PolygonMesh
+
+try:
+    from numba import njit
+except ImportError:  # pragma: no cover - numba is an optional accelerator
+    def njit(func=None, **_):  # type: ignore[misc]
+        return func if func is not None else (lambda f: f)
 
 if TYPE_CHECKING:
     from scipy.sparse import csr_matrix
@@ -372,22 +380,43 @@ def smooth_texture_seams(
     if fa.size == 0:
         return textures
 
-    a_idx = (fa, ra, ca)
-    b_idx = (fb, rb, cb)
-    ones = np.ones(fa.size, dtype=np.int32)
+    N, H, W = textures.shape[:3]
+    flat_a = (fa.astype(np.int64) * H + ra) * W + ca
+    flat_b = (fb.astype(np.int64) * H + rb) * W + cb
+    flat = textures.reshape(N * H * W, -1)
     for _ in range(n_passes):
-        partner_sum = np.zeros_like(textures)
-        partner_count = np.zeros(textures.shape[:3], dtype=np.int32)
-        # Each pixel collects its partner's value (both directions of the pair).
-        np.add.at(partner_sum, a_idx, textures[b_idx])
-        np.add.at(partner_sum, b_idx, textures[a_idx])
-        np.add.at(partner_count, a_idx, ones)
-        np.add.at(partner_count, b_idx, ones)
-        mask = partner_count > 0
-        cnt = (1 + partner_count[mask]).astype(np.float32)[:, None]
-        textures[mask] = (textures[mask] + partner_sum[mask]) / cnt
-
+        _seam_pass(flat, flat_a, flat_b)
+    if not np.shares_memory(flat, textures):
+        textures[...] = flat.reshape(textures.shape)
     return textures
+
+
+@njit(cache=True)
+def _seam_pass(tex, flat_a, flat_b):  # pragma: no cover - compiled
+    """One :func:`smooth_texture_seams` pass over ``(P, K)`` texels, in place.
+
+    Each paired texel becomes the mean of itself and all its partners (pre-pass
+    values), the partner sums added in pair order — a's then b's — like the
+    ``np.add.at`` original.
+    """
+    partner_sum = np.zeros_like(tex)
+    count = np.zeros(tex.shape[0], dtype=np.int32)
+    for e in range(flat_a.shape[0]):
+        a, b = flat_a[e], flat_b[e]
+        for k in range(tex.shape[1]):
+            partner_sum[a, k] += tex[b, k]
+    for e in range(flat_a.shape[0]):
+        a, b = flat_a[e], flat_b[e]
+        for k in range(tex.shape[1]):
+            partner_sum[b, k] += tex[a, k]
+    for e in range(flat_a.shape[0]):
+        count[flat_a[e]] += 1
+        count[flat_b[e]] += 1
+    for p in range(tex.shape[0]):
+        if count[p] > 0:
+            cnt = np.float32(1 + count[p])
+            for k in range(tex.shape[1]):
+                tex[p, k] = (tex[p, k] + partner_sum[p, k]) / cnt
 
 
 def compute_elevation_textures(
@@ -417,7 +446,7 @@ def compute_ocean_mask_texture(
 
     Phase 1: faces with max elevation ≤ seed_level seed the BFS.
     Phase 2: face BFS expands to adjacent faces with max elevation ≤ sea_level.
-    Phase 3: pixel BFS propagates 4-connected intra-face and cross-face via matched pairs.
+    Phase 3: pixel flood fill spreads 4-connected intra-face and cross-face via matched pairs.
     Isolated sub-sea-level depressions unreachable from any ocean seed remain land.
     """
     N, H, W, _ = elevation_textures.shape
@@ -436,60 +465,26 @@ def compute_ocean_mask_texture(
                 is_core[fj] = True
                 face_queue.append(fj)
 
-    # Build cross-face pixel-pair adjacency, indexed by flat pixel id.
-    cross_adj: List[List[int]] = [[] for _ in range(N * H * W)]
+    # ---- Phase 3: pixel flood fill -------------------------------------------
+    # Every pixel of a core face is a seed; the fill spreads 4-connected within a
+    # face and across matched seam pairs, through pixels at or below sea level.
+    # The flooded set is the wet pixels' connected components holding a seed.
+    wet = elevs.reshape(-1) <= sea_level
+    ids = np.arange(N * H * W, dtype=np.int64).reshape(N, H, W)
     fa, fb, ra, ca, rb, cb = mesh.boundary_pixel_pairs(H)
-    flat_a = (fa.astype(np.int64) * H + ra) * W + ca
-    flat_b = (fb.astype(np.int64) * H + rb) * W + cb
-    for ia, ib in zip(flat_a.tolist(), flat_b.tolist()):
-        cross_adj[ia].append(ib)
-        cross_adj[ib].append(ia)
-
-    ocean_mask = np.zeros((N, H, W), dtype=bool)
-    pixel_queue: deque[int] = deque()
-
-    # ---- Phase 3: pixel BFS -------------------------------------------------
-    # Seed: all pixels of core ocean faces.
-    for i in np.where(is_core)[0]:
-        ocean_mask[i] = True
-        base = i * H * W
-        pixel_queue.extend(range(base, base + H * W))
-
-    # BFS with intra- and cross-face propagation over a flat pixel index.
-    elevs_flat = elevs.reshape(-1)
-    mask_flat = ocean_mask.reshape(-1)
-    HW = H * W
-    while pixel_queue:
-        pid = pixel_queue.popleft()
-        fi, rem = divmod(pid, HW)
-        r, c = divmod(rem, W)
-
-        # Intra-face: 4-connected neighbours at or below sea level.
-        if r > 0:
-            n = pid - W
-            if not mask_flat[n] and elevs_flat[n] <= sea_level:
-                mask_flat[n] = True
-                pixel_queue.append(n)
-        if r + 1 < H:
-            n = pid + W
-            if not mask_flat[n] and elevs_flat[n] <= sea_level:
-                mask_flat[n] = True
-                pixel_queue.append(n)
-        if c > 0:
-            n = pid - 1
-            if not mask_flat[n] and elevs_flat[n] <= sea_level:
-                mask_flat[n] = True
-                pixel_queue.append(n)
-        if c + 1 < W:
-            n = pid + 1
-            if not mask_flat[n] and elevs_flat[n] <= sea_level:
-                mask_flat[n] = True
-                pixel_queue.append(n)
-
-        # Cross-face: matched partner pixels at or below sea level.
-        for n in cross_adj[pid]:
-            if not mask_flat[n] and elevs_flat[n] <= sea_level:
-                mask_flat[n] = True
-                pixel_queue.append(n)
+    src = np.concatenate([
+        ids[:, :, :-1].ravel(), ids[:, :-1, :].ravel(), (fa.astype(np.int64) * H + ra) * W + ca,
+    ])
+    dst = np.concatenate([
+        ids[:, :, 1:].ravel(), ids[:, 1:, :].ravel(), (fb.astype(np.int64) * H + rb) * W + cb,
+    ])
+    keep = wet[src] & wet[dst]
+    graph = coo_matrix(
+        (np.ones(int(keep.sum()), dtype=np.int8), (src[keep], dst[keep])), shape=(N * H * W, N * H * W),
+    )
+    n_comp, label = connected_components(graph, directed=False)
+    seeded = np.zeros(n_comp, dtype=bool)
+    seeded[label.reshape(N, H, W)[is_core].ravel()] = True
+    ocean_mask = seeded[label].reshape(N, H, W)
 
     return ocean_mask[:, :, :, np.newaxis].astype(np.uint8)

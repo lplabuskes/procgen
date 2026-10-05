@@ -159,7 +159,7 @@ class PolityLabelField:
     def owner(self, points: np.ndarray) -> np.ndarray:
         """Nearest-centroid face of each ``(P, 3)`` point."""
         pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
-        _, faces = self._tree.query(pts, k=1)
+        _, faces = self._tree.query(pts, k=1, workers=-1)
         return np.asarray(faces, dtype=np.int64)
 
     def land_labels(self, points: np.ndarray, owner: Optional[np.ndarray] = None) -> np.ndarray:

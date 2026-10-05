@@ -16,7 +16,7 @@ from worldgen.hydrology.routing import (
     inter_face_fallback,
     priority_flood,
 )
-from worldgen.hydrology.stitching import find_connected_components
+from worldgen.hydrology.stitching import find_connected_components_csr
 from worldgen.hydrology.types import (
     River,
     RiverNode,
@@ -149,10 +149,10 @@ class RiverGenerator:
         """Precompute static node adjacency as CSR arrays (indptr, flat).
 
         Builds the D8 intra-face edges (vectorised across all faces) plus the
-        stitched inter-face edges, then stable-sorts them by source node. The
-        block concatenation order ([up, down, left, right, UL, UR, DL, DR] then
-        inter-face) with a *stable* sort reproduces the exact neighbour ordering
-        ``_neighbors`` emits. Consumed by the JIT Priority-Flood in routing.py.
+        stitched inter-face edges, writing each node's row in place. The
+        per-node order — [up, down, left, right, UL, UR, DL, DR] then the
+        inter-face ones — reproduces the exact neighbour ordering ``_neighbors``
+        emits. Consumed by the JIT Priority-Flood in routing.py.
         """
         res = self.resolution
         r2 = self._r2
@@ -168,34 +168,39 @@ class RiverGenerator:
             (-1, 0), (1, 0), (0, -1), (0, 1),
             (-1, -1), (-1, 1), (1, -1), (1, 1),
         )
-        src_blocks: List[np.ndarray] = []
-        dst_blocks: List[np.ndarray] = []
-        for dr, dc in directions:
-            valid = (
-                (rows + dr >= 0) & (rows + dr < res)
-                & (cols + dc >= 0) & (cols + dc < res)
-            )
-            ls = local[valid]
-            ld = ls + dr * res + dc
-            src_blocks.append((face_base + ls[None, :]).reshape(-1))
-            dst_blocks.append((face_base + ld[None, :]).reshape(-1))
+        valid = np.stack([
+            (rows + dr >= 0) & (rows + dr < res) & (cols + dc >= 0) & (cols + dc < res)
+            for dr, dc in directions
+        ])                                                       # (8, r2)
+        # Slot of each direction within a node's row: the valid ones before it.
+        slot = np.cumsum(valid, axis=0) - valid                  # (8, r2)
+        n_intra = valid.sum(axis=0)                              # (r2,)
 
         if self._inter_adj:
-            inter_src: List[int] = []
-            inter_dst: List[int] = []
-            for node, nbrs in self._inter_adj.items():
-                inter_src.extend([node] * len(nbrs))
-                inter_dst.extend(nbrs)
-            src_blocks.append(np.asarray(inter_src, dtype=np.int32))
-            dst_blocks.append(np.asarray(inter_dst, dtype=np.int32))
+            inter_src = np.fromiter(
+                (node for node, nbrs in self._inter_adj.items() for _ in nbrs), dtype=np.int64)
+            inter_dst = np.fromiter(
+                (nb for nbrs in self._inter_adj.values() for nb in nbrs), dtype=np.int32)
+        else:
+            inter_src = np.zeros(0, dtype=np.int64)
+            inter_dst = np.zeros(0, dtype=np.int32)
 
-        src = np.concatenate(src_blocks)
-        dst = np.concatenate(dst_blocks)
-        order = np.argsort(src, kind="stable")
-        self._nbr_flat: np.ndarray = dst[order]
-        counts = np.bincount(src, minlength=n_nodes)
+        intra_counts = np.tile(n_intra, n_faces)
+        counts = intra_counts + np.bincount(inter_src, minlength=n_nodes)
         indptr = np.zeros(n_nodes + 1, dtype=np.int64)
         np.cumsum(counts, out=indptr[1:])
+        flat = np.empty(int(indptr[-1]), dtype=np.int32)
+        for d, (dr, dc) in enumerate(directions):
+            ls = local[valid[d]]
+            src = (face_base + ls[None, :]).reshape(-1)
+            flat[indptr[src] + np.tile(slot[d][ls], n_faces)] = src + (dr * res + dc)
+        # Inter-face neighbours follow, each node's in its ``_inter_adj`` order.
+        order = np.argsort(inter_src, kind="stable")
+        s_sorted = inter_src[order]
+        first = np.searchsorted(s_sorted, s_sorted, side="left")
+        rank = np.arange(s_sorted.size) - first
+        flat[indptr[s_sorted] + intra_counts[s_sorted] + rank] = inter_dst[order]
+        self._nbr_flat: np.ndarray = flat
         self._nbr_indptr: np.ndarray = indptr
 
     # ------------------------------------------------------------------
@@ -209,6 +214,10 @@ class RiverGenerator:
         face = node // self._r2
         rem = node % self._r2
         return face, rem // self.resolution, rem % self.resolution
+
+    def _components(self, mask: np.ndarray, min_size: int = 1) -> List[List[int]]:
+        """``find_connected_components`` over the node graph, via the neighbour CSR."""
+        return find_connected_components_csr(mask, self._nbr_indptr, self._nbr_flat, min_size=min_size)
 
     def _neighbors(self, node: int) -> List[int]:
         """D8 intra-face connectivity plus stitched inter-face neighbours."""
@@ -281,7 +290,7 @@ class RiverGenerator:
         if self._t_annual_flat is None or self._precip_weights is None or self._mean_precip is None:
             return
 
-        components = find_connected_components(self._lake_mask, self._neighbors, self.n_nodes, min_size=1)
+        components = self._components(self._lake_mask, min_size=1)
         if not components:
             return
 
@@ -320,7 +329,7 @@ class RiverGenerator:
         """Return a bool mask containing only flooded land components >= min_lake_pixels."""
         raw = was_raised & ~self._ocean_mask
         mask = np.zeros(self.n_nodes, dtype=bool)
-        for comp in find_connected_components(raw, self._neighbors, self.n_nodes, min_size=self.min_lake_pixels):
+        for comp in self._components(raw, min_size=self.min_lake_pixels):
             mask[np.array(comp)] = True
         return mask
 
@@ -476,7 +485,7 @@ class RiverGenerator:
             return []
 
         polygons: List[np.ndarray] = []
-        for comp in find_connected_components(self._lake_mask, self._neighbors, self.n_nodes, min_size=1):
+        for comp in self._components(self._lake_mask, min_size=1):
             boundary = [
                 node for node in comp
                 if any(not self._lake_mask[nb] for nb in self._neighbors(node))

@@ -22,6 +22,12 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 from scipy.spatial import KDTree
 
+try:
+    from numba import njit
+except ImportError:  # pragma: no cover - numba is an optional accelerator
+    def njit(func=None, **_):  # type: ignore[misc]
+        return func if func is not None else (lambda f: f)
+
 if TYPE_CHECKING:
     from core.mesh import PolygonMesh
 
@@ -217,10 +223,18 @@ def anchor_means(
     w = np.asarray(weights, dtype=np.float64)
     if counts is None:
         counts = np.bincount(anchors, weights=w, minlength=n_anchors)
-    sums = np.stack(
-        [np.bincount(anchors, weights=w * vals[:, k], minlength=n_anchors)
-         for k in range(vals.shape[1])],
-        axis=1,
-    )
+    sums = _weighted_anchor_sums(vals, np.asarray(anchors, dtype=np.int64), w, int(n_anchors))
     safe = np.maximum(counts, 1e-12)[:, None]
     return sums / safe, counts
+
+
+@njit(cache=True)
+def _weighted_anchor_sums(vals, anchors, w, n_anchors):  # pragma: no cover - compiled
+    """``(n_anchors, C)`` sums of ``w × vals`` per anchor — every channel's
+    ``np.bincount(anchors, weights=w * vals[:, k])`` in one pass, same add order."""
+    sums = np.zeros((n_anchors, vals.shape[1]))
+    for p in range(vals.shape[0]):
+        a = anchors[p]
+        for k in range(vals.shape[1]):
+            sums[a, k] += w[p] * vals[p, k]
+    return sums

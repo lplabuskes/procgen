@@ -17,6 +17,21 @@ from __future__ import annotations
 
 import numpy as np
 
+try:
+    from numba import njit
+except ImportError:  # pragma: no cover - numba is an optional accelerator
+    def njit(func=None, **_):  # type: ignore[misc]
+        return func if func is not None else (lambda f: f)
+
+
+def _adjacency_csr(face_adjacency: list) -> tuple[np.ndarray, np.ndarray]:
+    """``(indptr, indices)`` int64 CSR of an adjacency list, neighbour order kept."""
+    counts = np.fromiter((len(a) for a in face_adjacency), dtype=np.int64, count=len(face_adjacency))
+    indptr = np.zeros(len(face_adjacency) + 1, dtype=np.int64)
+    np.cumsum(counts, out=indptr[1:])
+    indices = np.fromiter((j for a in face_adjacency for j in a), dtype=np.int64, count=int(indptr[-1]))
+    return indptr, indices
+
 
 def evaporation_source(
     face_temps_c: np.ndarray,
@@ -64,33 +79,43 @@ def _build_wind_edges(
     Returns:
         (src, dst, weight) int32 / int32 / float32 arrays.
     """
-    N = len(face_adjacency)
-    src_list: list[int] = []
-    dst_list: list[int] = []
-    wt_list: list[float] = []
-
-    for i in range(N):
-        c_i = face_centroids[i]
-        w_i = winds_k[i]
-        local: list[tuple[int, float]] = []
-        total_out = 0.0
-        for j in face_adjacency[i]:
-            flux = float(np.dot(w_i, face_centroids[j] - c_i))
-            if flux > 0.0:
-                local.append((j, flux))
-                total_out += flux
-        if total_out > 0.0:
-            inv = 1.0 / total_out
-            for j, flux in local:
-                src_list.append(i)
-                dst_list.append(j)
-                wt_list.append(flux * inv)
-
-    return (
-        np.array(src_list, dtype=np.int32),
-        np.array(dst_list, dtype=np.int32),
-        np.array(wt_list, dtype=np.float32),
+    indptr, indices = _adjacency_csr(face_adjacency)
+    src, dst, wt, n_out = _wind_edges_kernel(
+        np.asarray(face_centroids, dtype=np.float64), indptr, indices,
+        np.asarray(winds_k, dtype=np.float64),
     )
+    return src[:n_out], dst[:n_out], wt[:n_out]
+
+
+@njit(cache=True)
+def _wind_edges_kernel(centroids, indptr, indices, winds):  # pragma: no cover - compiled
+    m = indices.shape[0]
+    src = np.empty(m, dtype=np.int32)
+    dst = np.empty(m, dtype=np.int32)
+    wt = np.empty(m, dtype=np.float32)
+    flux = np.empty(m, dtype=np.float64)
+    n_out = 0
+    for i in range(indptr.shape[0] - 1):
+        total = 0.0
+        first = n_out
+        for e in range(indptr[i], indptr[i + 1]):
+            j = indices[e]
+            f = (winds[i, 0] * (centroids[j, 0] - centroids[i, 0])
+                 + winds[i, 1] * (centroids[j, 1] - centroids[i, 1])
+                 + winds[i, 2] * (centroids[j, 2] - centroids[i, 2]))
+            if f > 0.0:
+                dst[n_out] = j
+                flux[n_out] = f
+                total += f
+                n_out += 1
+        if total > 0.0:
+            inv = 1.0 / total
+            for e in range(first, n_out):
+                src[e] = i
+                wt[e] = np.float32(flux[e] * inv)
+        else:
+            n_out = first
+    return src, dst, wt, n_out
 
 
 def advect_moisture(
@@ -140,26 +165,34 @@ def advect_moisture(
         evap_k = evaporation[:, k]            # (N,)
         q_k = evap_k.copy()                   # initialise at source values
 
-        for _ in range(n_iter):
-            # Conservative outflow: each face loses transport_step × q total.
-            q_sent = q_k * _transport_step    # (N,) amount leaving each face
-            q_new = q_k - q_sent              # deduct before adding inflow
-
-            # Distribute outflow to downwind neighbours.
-            if len(src):
-                np.add.at(q_new, dst, q_sent[src] * w)
-
-            # Background precipitation sink.
-            q_new *= 1.0 - decay_rate
-
-            # Continuous evaporation: replenish ocean faces to their source level.
-            np.maximum(q_new, evap_k, where=is_ocean, out=q_new)
-
-            q_k = q_new
-
-        q_air[:, k] = q_k
+        q_air[:, k] = _advect_season(
+            q_k, evap_k, src, dst, w, is_ocean, int(n_iter),
+            q_k.dtype.type(_transport_step), q_k.dtype.type(1.0 - decay_rate),
+        )
 
     return q_air
+
+
+@njit(cache=True)
+def _advect_season(q, evap, src, dst, w, is_ocean, n_iter, step, keep):  # pragma: no cover - compiled
+    """``n_iter`` Jacobi transport steps of one season (see :func:`advect_moisture`).
+
+    Each step, in the field's own precision: every face sends ``step × q``
+    downwind (split by ``w``, added in edge order), keeps the rest, loses
+    ``1 − keep`` to precipitation, and ocean faces are topped back up to ``evap``.
+    """
+    n = q.shape[0]
+    for _ in range(n_iter):
+        q_sent = q * step
+        q_new = q - q_sent
+        for e in range(src.shape[0]):
+            q_new[dst[e]] += q_sent[src[e]] * w[e]
+        q_new *= keep
+        for i in range(n):
+            if is_ocean[i] and evap[i] > q_new[i]:
+                q_new[i] = evap[i]
+        q = q_new
+    return q
 
 
 def smooth_humidity(
@@ -183,13 +216,31 @@ def smooth_humidity(
         (N, K) float32 smoothed humidity.
     """
     q = q_air.astype(np.float32)
+    indptr, indices = _adjacency_csr(face_adjacency)
     for _ in range(n_passes):
-        q_next = q.copy()
-        for i, neighbors in enumerate(face_adjacency):
-            if neighbors:
-                q_next[i] += alpha * (q[list(neighbors)].mean(axis=0) - q[i])
-        q = q_next
+        q = _smooth_pass(q, indptr, indices, np.float32(alpha))
     return q
+
+
+@njit(cache=True)
+def _smooth_pass(q, indptr, indices, alpha):  # pragma: no cover - compiled
+    """One pass of :func:`smooth_humidity`, in float32 like the numpy original.
+
+    The neighbour mean sums in float32 in adjacency order and divides in float64
+    (numpy's ``mean`` divides by an integer count); the blend is float32.
+    """
+    out = q.copy()
+    for i in range(q.shape[0]):
+        s0, s1 = indptr[i], indptr[i + 1]
+        if s1 == s0:
+            continue
+        for k in range(q.shape[1]):
+            acc = q[indices[s0], k]
+            for e in range(s0 + 1, s1):
+                acc = np.float32(acc + q[indices[e], k])
+            mean = np.float32(np.float64(acc) / np.float64(s1 - s0))
+            out[i, k] = np.float32(out[i, k] + alpha * np.float32(mean - q[i, k]))
+    return out
 
 
 def per_pixel_humidity(
