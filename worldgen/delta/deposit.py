@@ -77,11 +77,10 @@ class DeltaFan:
 
 @dataclass
 class DeltaResult:
-    # (N, H, W, 2): plain membership, marsh.
+    # (N, H, W, 1): plain membership.
     delta: np.ndarray
-    # (N,) share of each face's in-polygon texels on the plain, and mean marsh.
+    # (N,) share of each face's in-polygon texels on the plain.
     plain_fraction: np.ndarray
-    marsh_fraction: np.ndarray
     fans: List[DeltaFan] = field(default_factory=list)
 
 
@@ -356,11 +355,6 @@ def _footprint(
     )
 
 
-def _smoothstep(lo: float, hi: float, x: np.ndarray) -> np.ndarray:
-    t = np.clip((x - lo) / max(hi - lo, 1e-9), 0.0, 1.0)
-    return t * t * (3.0 - 2.0 * t)
-
-
 def _apply(
     idx: TexelIndex,
     fp: _Footprint,
@@ -406,9 +400,6 @@ def _apply(
     if filled is not None:
         filled[on_plain] = surface
     delta[on_plain, 0] = 1.0
-    # Waves winnow a cuspate delta's front into sandy beach ridges: less marsh.
-    marsh_scale = 1.0 - fp.shape.cuspate * (1.0 - float(params.cuspate_marsh))
-    delta[on_plain, 1] = marsh_scale * _smoothstep(float(params.marsh_start), 1.0, s)
     claimed[on_plain] = True
 
     rings = max(int(params.skirt_rings), 1)
@@ -835,12 +826,11 @@ def build_deltas(
     bird's-foot fingers reproducible.  Edits ``elevation``, ``ocean_mask``,
     ``lake_mask`` and ``filled_height`` (``(N, H, W, 1)``) in place, extends
     ``rivers`` and ``streams`` in place, and returns the fans, the
-    ``(N, H, W, 2)`` delta texture and its per-face fractions.
+    ``(N, H, W, 1)`` delta texture and its per-face fractions.
     """
     n_faces, h, w, _ = elevation.shape
     result = DeltaResult(
-        delta=np.zeros((n_faces, h, w, 2), dtype=np.float32),
-        plain_fraction=np.zeros(n_faces), marsh_fraction=np.zeros(n_faces),
+        delta=np.zeros((n_faces, h, w, 1), dtype=np.float32), plain_fraction=np.zeros(n_faces),
     )
     mouths = [_Mouth(r, None, float(r.segments[-1].flow_rate), lake=False)
               for r in rivers if is_delta_river(r, ocean_mask[..., 0] > 0, params)]
@@ -892,7 +882,7 @@ def build_deltas(
             b = int(body[g[0]])
             level[b] = float(np.median(surface[g]))
             room[b] = float(params.max_lake_share) * float(idx.texel_area_km2[g].sum())
-    delta = np.zeros((elev.size, 2), dtype=np.float32)
+    delta = np.zeros((elev.size, 1), dtype=np.float32)
     claimed = np.zeros(elev.size, dtype=bool)
     ext = _StreamExtension(streams) if streams is not None else None
     # Open water per face (the sea) or texel (lakes), from before any delta was built.
@@ -961,7 +951,6 @@ def build_deltas(
         ))
     if ext is not None:
         ext.apply()
-    result.delta = delta.reshape(n_faces, h, w, 2)
+    result.delta = delta.reshape(n_faces, h, w, 1)
     result.plain_fraction = idx.face_fractions(delta[:, 0], n_faces)
-    result.marsh_fraction = idx.face_fractions(delta[:, 1], n_faces)
     return result

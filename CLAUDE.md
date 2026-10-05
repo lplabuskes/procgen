@@ -57,6 +57,7 @@ python3 scripts/debug_borders.py          [seed|--face F|--lat/--lon|--radius D|
 python3 scripts/debug_region.py           [seed|--region R|--layer L|--tex-size N|--n-cols N|--relief F]
 python3 scripts/debug_local.py            [seed|--region R|--hex H|--layer L|--relief F]
 python3 scripts/measure_villages.py       [seeds…|--random N|--hexes N|--rebuild-cache]
+python3 scripts/measure_wetlands.py       [seeds…|--random N|--rebuild-cache]
 ```
 
 - `measure_seam_quality.py` — mean/median/RMS/max elevation jump (km) across ~350k matched boundary pixel pairs per seed.
@@ -72,11 +73,12 @@ python3 scripts/measure_villages.py       [seeds…|--random N|--hexes N|--rebui
 - `debug_region.py` — regional upsampling check. Renders one region's hex textures side by side — left with detail off and the water masks copied verbatim (the global field, upsampled only), right with the real params — and prints the added-relief statistics, how far the refined shoreline moved (flooded/dried), and the **conservation report** (per-global-texel residual after downsampling; must stay at float32 noise). Auto-picks the most land-rich region; `--region` aims it. Writes `scripts/results/region_<seed>_<region>_<layer>.png`. See [docs/region_fields.md](docs/region_fields.md).
 - `debug_local.py` — local-map check. Renders one regional hex's local map side by side — left the region's fields upsampled only, right the real local map with its rivers, roads, towns, cities and villages — and prints the added relief, shoreline movement, the **conservation report** against the region (per regional texel; float32 noise), and the **village budget report** (rural + villages per global texel ∩ map; exact) with village counts, sizes, spacing and kinds. Defaults to the hex of the densest land; `--layer "Rural Density"` shows the countryside net of villages. Writes `scripts/results/local_<seed>_<region>_<hex>_<layer>.png`. See [docs/local.md](docs/local.md) and [docs/local_settlements.md](docs/local_settlements.md).
 - `measure_villages.py` — village statistics on local maps of hexes sampled across the rural-density range (face-density quantiles 0.5–1.0): villages per 100 km² vs the budget's prediction, size, nearest-neighbour spacing, share of rural people in villages (target `village_fraction`), share stranded in no-village budgets, kinds, conservation residual. Default seeds 4/31/35 (~85 s). Results appended to `scripts/results/village_results.json`.
+- `measure_wetlands.py` — global Wetland biome: share of land (whole-texel target ~4–6%; Earth ~6–9% finer-grained), share per climate biome, rain-fed share, largest connected complexes vs West Siberia / Pantanal / Sudd. Re-scores the cached physical world with current `WetlandParams` (no rebuild needed). Results appended to `scripts/results/wetland_results.json`.
 
 
 ## Architecture
 
-Pipeline: mesh → deregularize → dual → **elevation/tectonics** → **climate** → **hydrology** → **delta** → **climate lake-feedback** → **coast** → **resources** → **danger** → **cost** → *(optional)* **realmgen**
+Pipeline: mesh → deregularize → dual → **elevation/tectonics** → **climate** → **hydrology** → **delta** → **climate lake-feedback** → **wetland** → **coast** → **resources** → **danger** → **cost** → *(optional)* **realmgen**
 
 Top-level orchestrator: `GlobePipeline` in `worldgen/builder.py`. Each stage is a `Stage` that reads from and writes to a `BuildContext`. Realmgen is a separate `RealmPipeline` with sub-stages: scoring → placement → population (incl. trade) → polity → refine → towns. Both pipelines are wired together in `main.py` (`AppPipeline` + `AppParams`). The region and local tiers (`region/`, `localmap/`) are view-side: built on demand when a region or hex is opened, never part of the world build.
 
@@ -94,7 +96,8 @@ Stage reference docs (read the relevant one before working on a stage):
 - [docs/elevation.md](docs/elevation.md) — `worldgen/geology/`
 - [docs/climate.md](docs/climate.md) — `worldgen/climate/`
 - [docs/hydrology.md](docs/hydrology.md) — `worldgen/hydrology/`
-- [docs/delta.md](docs/delta.md) — `worldgen/delta/` (river deltas: deposited plains shaped bird's-foot / arcuate / cuspate by river vs wave power, rivers carried across them, fertility / marsh / apex consumers)
+- [docs/delta.md](docs/delta.md) — `worldgen/delta/` (river deltas: deposited plains shaped bird's-foot / arcuate / cuspate by river vs wave power, rivers carried across them, fertility / apex consumers; marshes are the wetland stage's)
+- [docs/wetland.md](docs/wetland.md) — `worldgen/wetland/`, `region/wetlands.py` (wetness score from slope, rain/PET and height above nearest drainage; the Wetland biome on the globe, refined with lower thresholds and riparian marsh on region/local maps)
 - [docs/coast.md](docs/coast.md) — `worldgen/coast/` (coast smoothness: the shore style the region/local tiers draw)
 - [docs/resources.md](docs/resources.md) — `worldgen/resources/`
 - [docs/danger.md](docs/danger.md) — `worldgen/danger/`

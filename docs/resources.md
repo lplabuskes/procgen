@@ -43,7 +43,8 @@ fertility over ocean/lake texels → crops → minerals + workings → rare reso
 - `compute_fertility()` — product of five per-face factors: climate (bell in growing-season T and log-P), terrain (elevation-range penalty), water proximity (floodplain hop-decay bonus), volcanism proximity (volcanic-soil bonus), biome LUT; plus optional per-pixel forest penalty. Factors rasterised with `rasterize_face_values` so faces blend continuously.
 - `compute_aquatic_fertility()` — per-face scalar for ocean/lake faces from SST, ocean depth hops (upwelling proxy) and lake river-proximity; written over water pixels so fishing enters carrying capacity.
 - `neighbour_water_fertility()` — land faces have no aquatic value, so their sea pixels take the mean of neighbouring ocean faces' and lake pixels of neighbouring lake faces' (0 if none): a coast's shallows are the same fishing grounds, feeding its fishers ([realm_population.md](realm_population.md#farmers-and-fishers)).
-- `apply_delta_fertility()` — raises delta plains toward `delta_fertility` (0.9) × growing-season T bell (the river, not rain, waters a delta), marsh docked by `delta_marsh_penalty` (0.4). Only raises.
+- `apply_delta_fertility()` — raises delta plains toward `delta_fertility` (0.9) × growing-season T bell (the river, not rain, waters a delta), Only raises.
+- `apply_wetland_fertility()` — Wetland-biome texels raised toward `wetland_fertility` (0.8) × growing-season T bell (watered whatever the rain), then × `(1 − wetland_penalty)` (0.4); after the delta raise ([wetland.md](wetland.md)).
 
 **`forest.py`** — `compute_forest_density()`: biome baseline × precipitation
 modulation (tanh about per-biome reference P) × treeline taper, + riparian bonus

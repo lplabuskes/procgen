@@ -32,7 +32,8 @@ from worldgen.resources.display import (
     rare_bio_legend_entries,
 )
 from worldgen.resources.fertility import (
-    apply_delta_fertility, compute_aquatic_fertility, compute_fertility, neighbour_water_fertility,
+    apply_delta_fertility, apply_wetland_fertility, compute_aquatic_fertility, compute_fertility,
+    neighbour_water_fertility,
 )
 from worldgen.resources.forest import compute_forest_density
 from worldgen.resources.minerals import place_mineral_deposits, place_mineral_sites
@@ -77,9 +78,12 @@ class FertilityParams:
     lake_river_max_hops: int = _f(6, label="Lake river max hops", min=0, max=16)
     lake_optimal_temperature_c: float = _f(15.0, label="Lake optimal T (°C)", min=-5.0, max=30.0)
     lake_temperature_sigma_c: float = _f(10.0, label="Lake T σ (°C)", min=1.0, max=30.0)
-    # Delta plains are raised toward this (× the temperature bell); marsh is docked by the penalty.
+    # Delta plains are raised toward this (× the temperature bell).
     delta_fertility: float = _f(0.9, label="Delta fertility", min=0.0, max=1.0)
-    delta_marsh_penalty: float = _f(0.4, label="Delta marsh penalty", min=0.0, max=1.0)
+    # Wetland-biome texels (delta marshes among them) are watered whatever the rain: raised toward
+    # this (× the temperature bell), then lose ``wetland_penalty`` to waterlogging.
+    wetland_fertility: float = _f(0.8, label="Wetland fertility (watered)", min=0.0, max=1.0)
+    wetland_penalty: float = _f(0.4, label="Wetland fertility penalty", min=0.0, max=1.0)
 
 
 @paramclass
@@ -268,6 +272,8 @@ class ResourcesBuilder(Stage):
 
         if DELTA.present(mesh):
             fertility = apply_delta_fertility(fertility, DELTA.read(mesh), temperature_tex, fp)
+        if "biome" in mesh.face_textures:
+            fertility = apply_wetland_fertility(fertility, mesh.face_textures["biome"], temperature_tex, fp)
 
         _report("Computing aquatic fertility…")
         current_temp_delta: np.ndarray | None = None

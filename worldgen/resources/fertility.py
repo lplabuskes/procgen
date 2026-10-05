@@ -41,6 +41,7 @@ BIOME_FERTILITY_MULT = np.array([
     0.95,  # Tropical
     0.30,  # Semi-Arid
     0.05,  # Desert
+    0.60,  # Wetland (texel-level only; a face's biome is its climate biome)
 ], dtype=np.float32)
 
 
@@ -262,12 +263,12 @@ def apply_delta_fertility(
     """Raise the river deltas' silt plains toward ``delta_fertility``.
 
     The river waters and re-silts a delta whatever the rain, so only the growing-season temperature bell
-    limits it; marsh is docked by ``delta_marsh_penalty``.  Fertility is only ever raised, by
+    limits it.  Fertility is only ever raised, by
     ``plain × (target − fertility)``.
 
     Args:
         fertility: (N, H, W, 1) float32 in [0, 1].
-        delta_tex: (N, H, W, 2) — plain membership, marsh (the delta stage's ``delta``).
+        delta_tex: (N, H, W, 1) — plain membership (the delta stage's ``delta``).
         temperature_tex: (N, H, W, K) °C.
 
     Returns:
@@ -275,10 +276,42 @@ def apply_delta_fertility(
     """
     p = params
     plain = np.clip(delta_tex[..., 0].astype(np.float32), 0.0, 1.0)
-    marsh = np.clip(delta_tex[..., 1].astype(np.float32), 0.0, 1.0)
     t_grow = _growing_season_temperature_pixel(temperature_tex)
     t_term = np.exp(-0.5 * ((t_grow - p.optimal_temperature_c) / max(p.temperature_sigma_c, 1e-3)) ** 2)
-    target = p.delta_fertility * t_term * (1.0 - p.delta_marsh_penalty * marsh)
+    target = p.delta_fertility * t_term
     fert = fertility[..., 0]
     out = fert + plain * np.maximum(target - fert, 0.0)
+    return np.clip(out, 0.0, 1.0).astype(np.float32)[..., None]
+
+
+def apply_wetland_fertility(
+    fertility: np.ndarray,
+    biome_tex: np.ndarray,
+    temperature_tex: np.ndarray,
+    params: "FertilityParams",
+) -> np.ndarray:
+    """Wetland ground is never short of water, but it is waterlogged.
+
+    Wetland-biome texels are first raised toward ``wetland_fertility`` × the growing-season
+    temperature bell (rain no longer limits them: a desert wetland is river-fed — Inner Niger
+    Delta, Mesopotamian marshes), then docked by ``wetland_penalty``.  Net: arid wetlands end
+    far above the desert around them; humid ones (already above the target) only lose the
+    penalty; cold bogs stay poor.
+
+    Args:
+        fertility: (N, H, W, 1) float32 in [0, 1].
+        biome_tex: (N, H, W, 1) biome indices.
+        temperature_tex: (N, H, W, K) °C.
+
+    Returns:
+        (N, H, W, 1) float32 in [0, 1].
+    """
+    from worldgen.climate.classification import WETLAND_BIOME
+    p = params
+    wet = np.asarray(biome_tex)[..., 0] == WETLAND_BIOME
+    t_grow = _growing_season_temperature_pixel(temperature_tex)
+    t_term = np.exp(-0.5 * ((t_grow - p.optimal_temperature_c) / max(p.temperature_sigma_c, 1e-3)) ** 2)
+    fert = fertility[..., 0]
+    watered = np.maximum(fert, p.wetland_fertility * t_term)
+    out = np.where(wet, watered * (1.0 - p.wetland_penalty), fert)
     return np.clip(out, 0.0, 1.0).astype(np.float32)[..., None]

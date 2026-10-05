@@ -2,7 +2,8 @@
 
 1. fields (:func:`localmap.upsample.build_local_fields`);
 2. rivers and the region's streams (:func:`localmap.rivers.build_local_rivers`),
-   with the region's deltas snapped onto the local mouths;
+   with the region's deltas snapped onto the local mouths, and riparian wetland along them
+   (:func:`region.wetlands.add_riparian_wetland`);
 3. this map's cities re-sited (:func:`localmap.settlements.refine_local_cities`, saved on the world);
 4. roads (:func:`localmap.roads.build_local_roads`), ending on the re-sited cities;
 5. this map's towns re-sited (:func:`localmap.settlements.refine_local_towns`, saved on the world);
@@ -37,6 +38,7 @@ from localmap.villages import VILLAGE_MINING, Villages, place_villages
 from realmgen.towns.types import TOWN_MINING
 from region.display import snap_to_land
 from region.rivers import RegionRivers, RiverPath, snap_deltas
+from region.wetlands import add_riparian_wetland
 from region.roads import RegionRoads, move_points
 from region.upsample import RegionFields
 from worldgen.hydrology.discharge import discharge_per_flow_unit
@@ -164,6 +166,7 @@ def build_local_map(
 
     rivers = (build_local_rivers(local, region, region_rivers, globe, params.rivers, region_streams)
               if region_rivers is not None else RegionRivers(region_id=local.region_id, paths=[]))
+    add_riparian_wetland(local, rivers, params.upsample)
     deltas = None
     if region_deltas is not None and len(region_deltas):
         inside = _in_box(local, np.asarray(region_deltas, dtype=np.float64), _SETTLEMENT_MARGIN)

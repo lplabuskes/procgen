@@ -101,15 +101,3 @@ def test_birdfoot_reaches_furthest_and_cuspate_spreads_along_shore(shapes):
               for s, (_, f, lat) in shapes.items()}
     assert reach[BIRDFOOT] > reach[ARCUATE] > reach[CUSPATE]
     assert spread[CUSPATE] > spread[ARCUATE]
-
-
-def test_cuspate_has_less_marsh(mesh, index):
-    marsh = {}
-    for s in (ARCUATE, CUSPATE):
-        elev, ocean, lake, filled = _textures(mesh)
-        river = _river(index, ocean, FLOW)
-        params = dataclasses.replace(DeltaParams(), **FORCED[s])
-        result = build_deltas(mesh, [river], elev, ocean, lake, filled, None, params)
-        on = result.delta[..., 0] > 0
-        marsh[s] = float(result.delta[..., 1][on].mean())
-    assert marsh[CUSPATE] < marsh[ARCUATE]

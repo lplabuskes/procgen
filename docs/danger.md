@@ -19,7 +19,7 @@ makes it continuous ([region_fields.md](region_fields.md)).
 ## `DangerBuilder`
 
 Reads metadata `volcanic_activity`, `is_ocean`, `biome`, `boundary_type`,
-`plate_type`, `fertility_mean`, `forest_density_mean` (+ `marsh_fraction` if
+`plate_type`, `fertility_mean`, `forest_density_mean` (+ `wetland_fraction` if
 present), textures `elevation`, `lake_mask`, feature `"river_objects"`. Packs a
 `DangerTerrain`: water (ocean ∪ lake faces), mean elevation and span, BFS hops for
 ocean depth (from coastal ocean), distance to coast (from coastal land), distance
@@ -51,7 +51,7 @@ can give a different danger field per run.
 | Volcanic | Dragon Lair (any land), Fire Elemental Rift (volcanic land) |
 | Ocean | Kraken Domain (deep ocean), Deadwater Zone (open ocean), Sea Serpent Territory (near coast) |
 | Highland | Harpy Peak (high, moderately rugged), Troll Hold (river faces), Giant Lair (high ground) |
-| Forest | Goblin Warband (forest), Werewolf Range (wooded steppe/savannah), Basilisk Territory (semi-arid/desert), Cursed Forest (dense forest far from fresh water), Lizardfolk Fen (delta marsh, `marsh_fraction ≥ 0.05`) |
+| Forest | Goblin Warband (forest), Werewolf Range (wooded steppe/savannah), Basilisk Territory (semi-arid/desert), Cursed Forest (dense forest far from fresh water), Lizardfolk Fen (warm wetland, `wetland_fraction ≥ 0.2`, not Icecap/Tundra/Taiga) |
 | Planar Rift | Fire (volcanic), Earth (active continental boundaries), Air (very high), Water (open ocean) |
 | Undead | Lich Stronghold (high, barren, treeless), Barrow Field (low, flat, dry), Haunt (barren coast) |
 

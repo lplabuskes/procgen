@@ -47,6 +47,13 @@ class LocalUpsampleParams(RegionUpsampleParams):
     water_spread_texels: int = _f(12, label="Shoreline spread (texels)", min=0, max=32)
     # ~One regional texel, so biome edges follow the region rather than local speckle.
     biome_smoothing: int = _f(13, label="Biome climate averaging (texels)", min=0, max=31)
+    # Lower again than the region's (0.4): fens in hollows, marsh strips along streams.
+    wetland_threshold: float = _f(0.3, label="Wetland threshold", min=0.0, max=1.0, step=0.05)
+    wetland_relief_gain: float = _f(0.08, label="Wetland relief swing", min=0.0, max=0.5, step=0.01)
+    wetland_relief_scale_m: float = _f(3.0, label="Wetland relief scale (m)", min=0.5, max=200.0, step=0.5)
+    wetland_riparian_width_km: float = _f(1.5, label="Riparian width at ref flow (km)", min=0.0, max=50.0, step=0.1)
+    wetland_riparian_slope_m_per_km: float = _f(
+        8.0, label="Riparian flatness slope scale (m/km)", min=0.1, max=50.0, step=0.1)
     # Local slopes over ~365 m texels are far steeper than the region's.
     slope_saturation: float = _f(
         0.1, label="Slope saturation, resources (km/km)", min=0.002, max=0.5, step=0.002

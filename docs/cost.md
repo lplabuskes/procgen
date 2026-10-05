@@ -16,12 +16,12 @@ adds danger on top).
 ## `builder.py`
 
 **`CostParams`**: `land`, `sea`, `strait`.
-- Land: `biome_cost_scale`, `ruggedness_cost_per_km`, `forest_cost_strength`, `marsh_cost_strength` (delta marsh), river term (`river_ford_strength`, `river_corridor_strength`, `river_flow_reference`, `river_min_mult` / `river_max_mult`), `navigable_ruggedness_km` (relief at which a river stops being navigable — the fall line).
+- Land: `biome_cost_scale`, `ruggedness_cost_per_km`, `forest_cost_strength`, `wetland_cost_strength`, river term (`river_ford_strength`, `river_corridor_strength`, `river_flow_reference`, `river_min_mult` / `river_max_mult`), `navigable_ruggedness_km` (relief at which a river stops being navigable — the fall line).
 - Sea: `coastal_cost` / `open_ocean_cost`, `open_ocean_distance_km` ramp, `strait_discount`, `navigable_flow_min`, `ice_penalty_strength` / `ice_freeze_threshold`, wind (`wind_optimal_speed`, `wind_speed_width`, `wind_penalty_strength`, `wind_direction_strength`, `wind_coast_blend_km`).
 - Strait: `opposite_dot_threshold`, `min_water_neighbors`.
 
 **`CostBuilder`** — last in the globe pipeline (does not read danger). Reads
-per-face `biome`, `is_ocean`, `forest_density_mean`, `marsh_fraction` (if
+per-face `biome`, `is_ocean`, `forest_density_mean`, `wetland_fraction` (if
 present); textures `elevation`, `lake_mask`, `temperature`; features
 `"river_objects"`, `"winds"`. `is_water = is_ocean | is_lake` (lake when ≥ 50%
 lake pixels).
@@ -40,7 +40,7 @@ and navigable rivers highlighted).
 [0,1]); `sea_base_cost` + `sea_passable` (= water ∪ navigable river);
 `strait_mask`; `wind_dir (N,3)` (coast-blended mean wind direction, or `None`).
 
-- `compute_land_base_cost` — `biome_cost_scale · BIOME_TRAVERSAL_COST[biome] + ruggedness_cost_per_km · (pixel elevation span) + forest_cost_strength · forest_density_mean`, then × `(1 + marsh_cost_strength · marsh_fraction)` in the builder ([delta.md](delta.md)). Water impassable; only realmgen's hinterland stage opts into a limited coastal-water band via its own permeable graph.
+- `compute_land_base_cost` — `biome_cost_scale · BIOME_TRAVERSAL_COST[biome] + ruggedness_cost_per_km · (pixel elevation span) + forest_cost_strength · forest_density_mean`, then × `(1 + wetland_cost_strength · wetland_fraction)` in the builder ([wetland.md](wetland.md)). Water impassable; only realmgen's hinterland stage opts into a limited coastal-water band via its own permeable graph.
 - `compute_river_flow_field` — per-face downstream unit tangent + max flow; in-lake segments skipped; `exclude_mask` zeros water faces.
 - `compute_river_navigability` — linear taper: placid → 1, `navigable_ruggedness_km` relief → 0.
 - `navigable_river_mask` — flow ≥ `navigable_flow_min` ∧ navigability > 0 ∧ not water.

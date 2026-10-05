@@ -5,7 +5,7 @@ Big rivers reaching the sea or a lake deposit a delta (:mod:`worldgen.delta.depo
 carried across it to the new front.
 
 Rewrites the relief and water textures, per-face ``is_ocean`` / ``elevation``, rivers and streams;
-adds the ``delta`` texture, ``delta_fraction`` / ``marsh_fraction``, and the ``"delta_fans"`` and
+adds the ``delta`` texture, ``delta_fraction``, and the ``"delta_fans"`` and
 ``"deltas"`` (new mouths) features.  See docs/delta.md.
 """
 from __future__ import annotations
@@ -18,7 +18,7 @@ from core.display import DisplayRegistry
 from core.params import param_field as _f, paramclass
 from core.pipeline import BuildContext, Stage
 from core.world import World
-from worldgen.delta.channels import DELTA, DELTA_FANS, DELTA_FRACTION, DELTA_MOUTHS, MARSH_FRACTION
+from worldgen.delta.channels import DELTA, DELTA_FANS, DELTA_FRACTION, DELTA_MOUTHS
 from worldgen.delta.deposit import DeltaFan, build_deltas
 from worldgen.delta.shape import ARCUATE, BIRDFOOT, CUSPATE
 from worldgen.geology.channels import ELEVATION, ELEVATION_FACE, IS_OCEAN, OCEAN_MASK
@@ -53,8 +53,6 @@ class DeltaParams:
     front_height_km: float = _f(0.002, label="Front height (km)", min=0.0, max=0.05, step=0.001)
     skirt_rings: int = _f(2, label="Prodelta rings (texels)", min=0, max=6)
     skirt_depth_km: float = _f(0.03, label="Prodelta depth (km)", min=0.0, max=0.5, step=0.01)
-    # Marsh: from this fraction of the way from apex to front, rising to 1 at the front.
-    marsh_start: float = _f(0.6, label="Marsh start (apex→front)", min=0.0, max=1.0, step=0.05)
 
     # ── Shape: river power against wave power (see worldgen/delta/shape.py) ──
     # Wave power: onshore wind³ + swell³, × fetch over open sea (capped).
@@ -77,9 +75,8 @@ class DeltaParams:
     finger_jitter: float = _f(0.5, label="Finger length jitter", min=0.0, max=0.9, step=0.05)
     finger_half_width: float = _f(0.4, label="Finger half-width (texels)", min=0.0, max=3.0, step=0.1)
     finger_cost: float = _f(8.0, label="Finger cost", min=1.0, max=20.0, step=0.5)
-    # Cuspate: angle between the two beaches, and marsh left (× arcuate marsh) on the sandy front.
+    # Cuspate: angle between the two beaches.
     cusp_angle_deg: float = _f(140.0, label="Cusp angle (°)", min=60.0, max=175.0, step=5.0)
-    cuspate_marsh: float = _f(0.4, label="Cuspate marsh (×)", min=0.0, max=1.0, step=0.05)
 
 
 # Saved shape codes.
@@ -128,7 +125,6 @@ class DeltaBuilder(Stage):
 
         DELTA.write(mesh, result.delta)
         DELTA_FRACTION.write(mesh, result.plain_fraction)
-        MARSH_FRACTION.write(mesh, result.marsh_fraction)
 
         # The rivers were extended in place; refresh their flattened polylines.
         RIVERS.write(world, _flatten(rivers))
@@ -165,7 +161,7 @@ class DeltaBuilder(Stage):
             plain = float(meta.get("delta_fraction", 0.0))
             if plain <= 0.0:
                 return []
-            line = f"Delta plain: {plain:.0%} (marsh {float(meta.get('marsh_fraction', 0.0)):.0%})"
+            line = f"Delta plain: {plain:.0%}"
             if self.fans:
                 gap = [float(np.linalg.norm(np.asarray(f.apex) - centroids[face])) for f in self.fans]
                 fan = self.fans[int(np.argmin(gap))]

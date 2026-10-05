@@ -40,6 +40,7 @@ BIOME_TRAVERSAL_COST = np.array(
         2.5,  # 6 Tropical
         1.5,  # 7 Semi-Arid
         3.0,  # 8 Desert
+        4.0,  # 9 Wetland (per texel on region/local maps; the globe uses wetland_fraction)
     ],
     dtype=np.float32,
 )

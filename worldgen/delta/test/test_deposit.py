@@ -150,12 +150,11 @@ def test_overhanging_texels_copy_the_texel_they_overlap(mesh, index):
 
 def test_face_fractions(mesh, index):
     result, *_ = _run(mesh, index)
-    plain, marsh = result.plain_fraction, result.marsh_fraction
+    plain = result.plain_fraction
     inside = mesh.face_texture_in_polygon(TEX, TEX)
     expected = (result.delta[..., 0] * inside).sum(axis=(1, 2)) / inside.sum(axis=(1, 2))
     assert np.allclose(plain, expected)
     assert plain.max() > 0 and np.all((plain >= 0) & (plain <= 1))
-    assert np.all(marsh <= plain + 1e-9)
 
 
 def test_small_or_short_rivers_get_no_delta(mesh, index):

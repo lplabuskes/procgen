@@ -30,6 +30,7 @@ BIOME_FOREST_BASELINE = np.array([
     0.85,  # Tropical
     0.02,  # Semi-Arid
     0.00,  # Desert
+    0.35,  # Wetland (swamp forest to open marsh)
 ], dtype=np.float32)
 
 # Each biome's "normal" annual precipitation (mm); wetter pixels gain density, drier ones lose it.
@@ -43,6 +44,7 @@ BIOME_PRECIP_REFERENCE_MM = np.array([
     2000.0,  # Tropical
     300.0,  # Semi-Arid
     100.0,  # Desert
+    1000.0,  # Wetland
 ], dtype=np.float32)
 
 

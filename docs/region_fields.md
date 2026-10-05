@@ -55,7 +55,8 @@ shared relief signal puts moisture/temperature bands on the contours.
 | `biome` | reclassified from **area-averaged** refined climate | derived |
 | `ocean_mask`, `lake_mask`, `filled_height` | re-flooded to the parent's water surface over refined relief | surface exact; shoreline refined |
 | `coast_smoothness` | bilinear copy of parent's (if any) | no — a style for the tier below |
-| `delta` | bilinear copy of parent's delta plain/marsh ([delta.md](delta.md)), clipped [0, 1] | no — guides distributaries |
+| `delta` | bilinear copy of parent's delta plain ([delta.md](delta.md)), clipped [0, 1] | no — guides distributaries |
+| `wetland` | parent's score ± sub-grid relief, stamped into `biome` at the tier's lower threshold; riparian marsh added once rivers are routed ([wetland.md](wetland.md)) | no — derived |
 | `forest_density` | treeline on refined elevation | multiplicatively, over land |
 | `fertility` | valleys richer, steep slopes poorer, refined forest penalty | multiplicatively, over land |
 | `dominant_crop` | reclassified from refined fields (climate area-averaged) | derived |

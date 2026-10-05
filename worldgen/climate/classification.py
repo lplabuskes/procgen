@@ -14,8 +14,10 @@ BIOME_NAMES: list[str] = [
     "Tropical",     # 6
     "Semi-Arid",    # 7
     "Desert",       # 8
+    "Wetland",      # 9 — never classified from climate; stamped by the wetland stage
 ]
 N_BIOMES = len(BIOME_NAMES)
+WETLAND_BIOME = 9
 
 
 def default_biome(temperature_c: np.ndarray,

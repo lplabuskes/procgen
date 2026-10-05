@@ -31,6 +31,7 @@ from region.towns import refine_region_towns
 from realmgen.placement.types import TIER_NAMES, format_population, population_display_tier
 from realmgen.towns.types import TOWN_KIND_NAMES, Towns
 from region.upsample import RegionFields, build_region_fields
+from region.wetlands import add_riparian_wetland
 from worldgen.hydrology.discharge import EARTH_RADIUS_KM
 from worldgen.resources.minerals import mineral_workings
 
@@ -149,8 +150,8 @@ class RegionView(QWidget):
                 fertility_exponent=float(realm.population.fertility_exponent) if realm is not None else 2.0,
             )
             self._grid = self._fields.grid
+            self._refine_features()   # first: riparian wetland edits the biome the images draw
             self._rebuild_images()
-            self._refine_features()
         self.update()
 
     def _refine_features(self) -> None:
@@ -160,6 +161,7 @@ class RegionView(QWidget):
         assert self._fields is not None and self._globe is not None
         f, globe, rp = self._fields, self._globe, self._region_params
         self._rivers = build_region_rivers(f, globe, rp.rivers)
+        add_riparian_wetland(f, self._rivers, rp.upsample)
         self._streams = None
         realm, world = self._realm_params, self._world_params
         factor = realm.refine.river_threshold_factor if realm is not None else 1.5

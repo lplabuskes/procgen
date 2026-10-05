@@ -89,6 +89,22 @@ class RegionUpsampleParams:
     # would otherwise dither every boundary.  The climate layers stay sharp.
     # 0 or 1 disables it.
     biome_smoothing: int = _f(5, label="Biome climate averaging (texels)", min=0, max=15)
+    # ── wetlands (region/wetlands.py).  The parent's score, ± relief_gain by the sub-grid
+    # relief, plus riparian marsh along this tier's rivers, marked Wetland at this tier's
+    # threshold.  Keep relief_gain below the parent's threshold minus this one.
+    wetland_threshold: float = _f(0.4, label="Wetland threshold", min=0.0, max=1.0, step=0.05)
+    wetland_relief_gain: float = _f(0.1, label="Wetland relief swing", min=0.0, max=0.5, step=0.01)
+    wetland_relief_scale_m: float = _f(10.0, label="Wetland relief scale (m)", min=0.5, max=200.0, step=0.5)
+    # Riparian: gain · (1 − distance / width) · flatness; width = width_km · (flow / ref) ** exponent,
+    # at least min_width_texels (so the smallest streams still show).
+    wetland_riparian_gain: float = _f(0.3, label="Riparian wetness", min=0.0, max=1.0, step=0.05)
+    wetland_riparian_width_km: float = _f(5.0, label="Riparian width at ref flow (km)", min=0.0, max=50.0, step=0.5)
+    wetland_riparian_ref_flow: float = _f(1000.0, label="Riparian reference flow", min=1.0, max=100000.0)
+    wetland_riparian_exponent: float = _f(0.3, label="Riparian width exponent", min=0.0, max=1.0, step=0.05)
+    wetland_riparian_min_width_texels: float = _f(
+        1.5, label="Riparian min width (texels)", min=0.0, max=10.0, step=0.25)
+    wetland_riparian_slope_m_per_km: float = _f(
+        2.0, label="Riparian flatness slope scale (m/km)", min=0.1, max=50.0, step=0.1)
     octaves: int = _f(4, label="Detail octaves (max)", min=0, max=8)
     lacunarity: float = _f(2.0, label="Detail lacunarity", min=1.1, max=4.0)
     persistence: float = _f(0.5, label="Detail persistence", min=0.1, max=0.95)
@@ -780,6 +796,20 @@ def refine_fields(
         k = int(params.biome_smoothing)
         climate_avg = (_box_filter(textures["temperature"], k), _box_filter(textures["precipitation"], k))
         textures["biome"] = classify_textures(*climate_avg, np.zeros(m))
+
+    # ── wetland: the parent's score refined by the relief, at this tier's threshold
+    if source.has("wetland") and "biome" in textures:
+        from region.wetlands import refine_wetland, stamp
+        score = refine_wetland(source.coarse("wetland", loc)[:, 0], elevation[:, 0], elev_coarse[:, 0], params)
+        land = np.ones(len(flat_pos), dtype=bool)
+        for key in ("ocean_mask", "lake_mask"):
+            if key in textures:
+                land &= textures[key].reshape(-1) <= 0.5
+        t = textures.get("temperature")
+        biome = stamp(textures["biome"].reshape(-1), score, params, land,
+                      None if t is None else t.reshape(len(flat_pos), -1))
+        textures["wetland"] = score.reshape(m, tex_size, tex_size, 1).astype(np.float32)
+        textures["biome"] = biome.reshape(m, tex_size, tex_size, 1)
 
     # ── resources, rural density and danger (region/resources.py) ────────────
     shape = (m, tex_size, tex_size)

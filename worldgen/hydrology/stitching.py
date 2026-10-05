@@ -1,7 +1,7 @@
 """Connected-component search over the per-face pixel graph.
 
 Seam adjacency comes from the mesh's boundary pixel pairs
-(``RiverGenerator._build_inter_adj_from_pairs``).
+(``hydrology.rivers.inter_face_adjacency``).
 """
 from __future__ import annotations
 

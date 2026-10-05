@@ -9,11 +9,30 @@ import numpy as np
 from core.mesh import PolygonMesh
 from worldgen.geology.channels import VOLCANIC_ACTIVITY
 
+_EARTH_RADIUS_KM = 6371.0
+
 
 def face_elevation_range(elevation_tex: np.ndarray) -> np.ndarray:
     """(N,) float32 per-face pixel elevation span (km) from an (N, H, W, 1) elevation texture."""
     elev = elevation_tex[..., 0]
     return (elev.max(axis=(1, 2)) - elev.min(axis=(1, 2))).astype(np.float32)
+
+
+def global_slope(mesh: PolygonMesh, elevation_tex: np.ndarray) -> np.ndarray:
+    """(N, H, W, 1) gradient magnitude (km/km) of the global elevation texture.
+
+    Per-face texel differences scaled by the face's tangent-frame extent.
+    """
+    elev = np.asarray(elevation_tex, dtype=np.float64)[..., 0]        # (N, H, W)
+    _, h, w = elev.shape
+    frames = mesh.face_tangent_frames()
+    u_ranges = np.asarray(frames[4], dtype=np.float64) * _EARTH_RADIUS_KM
+    v_ranges = np.asarray(frames[5], dtype=np.float64) * _EARTH_RADIUS_KM
+    d_v, d_u = np.gradient(elev, axis=(1, 2))
+    du_km = np.maximum(u_ranges / max(w - 1, 1), 1e-9)[:, None, None]
+    dv_km = np.maximum(v_ranges / max(h - 1, 1), 1e-9)[:, None, None]
+    slope = np.hypot(d_u / du_km, d_v / dv_km)
+    return slope[..., None].astype(np.float64)
 
 
 def face_hops_from_seeds(

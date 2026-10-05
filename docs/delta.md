@@ -2,8 +2,9 @@
 
 River deltas: low plains large rivers build where they meet the sea or a lake.
 The stage reshapes global relief into one of three shapes (bird's-foot, arcuate,
-cuspate) by river vs wave power; fertility, marsh (danger, land cost) and the
-apex (city site) are read downstream. On region maps the delta river fans into
+cuspate) by river vs wave power; fertility and the apex (city site) are read
+downstream. Delta marshes are the wetland stage's ([wetland.md](wetland.md)): a low
+flat plain beside a big river scores wet. On region maps the delta river fans into
 distributaries
 ([region_features.md](region_features.md#delta-distributaries-regiondistributariespy)).
 
@@ -12,7 +13,7 @@ distributaries
 - `worldgen/delta/deposit.py` — `DeltaFan`, `TexelIndex`, `build_deltas`, `face_fractions`: deposition
 - `worldgen/delta/sediment.py` — `sediment_load`, `mouth_node`: silt trapped by lakes upstream
 - `worldgen/delta/shape.py` — `WaveField`, `wave_dominance`, `DeltaShape`, `make_shape`, `shape_metric`
-- `worldgen/delta/channels.py` — `DELTA` (texture), `DELTA_FRACTION` / `MARSH_FRACTION` (per face), `DELTA_FANS` / `DELTA_MOUTHS` (features)
+- `worldgen/delta/channels.py` — `DELTA` (texture), `DELTA_FRACTION` (per face), `DELTA_FANS` / `DELTA_MOUTHS` (features)
 - `worldgen/delta/display.py` — `DELTA_RECIPE`, `delta_color`, `delta_legend_entries`
 
 ## Place in the pipeline
@@ -146,8 +147,7 @@ the **head** (river's last land vertex = old shore):
   point; cheap alongshore so the plain spreads along the coast.
 
 Area budget is shape-independent. Shapes only show from ~flow 10k (small deltas
-are a few texels). Cuspate marsh × `cuspate_marsh` (0.4, blended by cuspate
-weight; beach ridges). Bird's-foot **finger tips** (farthest plain texel per
+are a few texels). Bird's-foot **finger tips** (farthest plain texel per
 finger, ≥ 1.5 texels out) are kept for the region tier's distributary mouths;
 cuspate gets ≤ 2 mouths there.
 
@@ -157,19 +157,17 @@ cuspate gets ≤ 2 mouths there.
 |---|---|---|
 | `elevation`, `ocean_mask`, `lake_mask`, `filled_height` | textures (edited) | plain, new land, prodelta |
 | `is_ocean`, `elevation` | per-face meta (recomputed) | aggregates of edited textures |
-| `delta` | texture `(N, H, W, 2)` | ch 0: 1 on plain; ch 1: marsh `smoothstep(marsh_start, 1, s)`, `s` = apex→front fraction |
-| `delta_fraction`, `marsh_fraction` | per-face meta | in-polygon share on plain / mean marsh |
+| `delta` | texture `(N, H, W, 1)` | 1 on plain |
+| `delta_fraction` | per-face meta | in-polygon share on plain |
 | `"delta_fans"` | feature | `List[DeltaFan]`: `apex`, `mouth` (new), `axis`, `radius_km`, `flow` (water), `sediment` (silt share), `area_km2`, `head` (old shore), `wave_dominance`, `shape` (`"birdfoot"`/`"arcuate"`/`"cuspate"`), `fingers` (`(F, 3)` tips), `lake` |
 | `"deltas"` | feature | `(M, 3)` new mouths (overlay; region/local snap to re-routed mouths) |
 | `"river_objects"`, `"rivers"`, `"streams"` | features (extended in place) | see above |
 
 Consumers:
 - **Fertility** (`resources`): `apply_delta_fertility` raises the plain toward
-  `delta_fertility` (0.9), limited only by the growing-season temperature bell;
-  marsh docked by `delta_marsh_penalty` (0.4). Only raises → feeds
-  `fertility_mean` and rural population.
-- **Land cost**: × `(1 + marsh_cost_strength · marsh_fraction)` (3.0).
-- **Danger**: **Lizardfolk Fen** source on faces with `marsh_fraction ≥ 0.05`.
+  `delta_fertility` (0.9), limited only by the growing-season temperature bell.
+  Only raises → feeds `fertility_mean` and rural population (Wetland texels on it
+  are then docked, [wetland.md](wetland.md)).
 - **City sites** (realm scoring): **delta apex** factor (1 at apex faces,
   `delta_weight` 0.2).
 - **Region/local**: `delta` texture copied down (bilinear, not conserved);
@@ -177,9 +175,9 @@ Consumers:
 
 ## Display (`--debug` only)
 
-**Delta** scheme (plain green, marsh teal, else stone; texture recipe, so refined
+**Delta** scheme (plain green, else stone; texture recipe, so refined
 on region/local maps), **River Deltas** overlay (new mouths, unchecked), hover
-`Delta plain: 40% (marsh 10%) — bird's-foot, wave dominance 0.21` (nearest apex's
+`Delta plain: 40% — bird's-foot, wave dominance 0.21` (nearest apex's
 fan; `bird's-foot lake` for lakes; `, sediment 12% of flow` when trapped
 upstream).
 

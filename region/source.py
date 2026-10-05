@@ -20,30 +20,13 @@ from scipy.spatial import KDTree
 
 from region.resources import _danger_field, refined_slope
 from region.sampling import GlobalSampler, bilinear_plan, bilinear_read, settle_owners
+from worldgen.resources.terrain import global_slope
 
 if TYPE_CHECKING:
-    from core.mesh import PolygonMesh
     from core.world import World
     from region.upsample import RegionFields
 
 EARTH_RADIUS_KM = 6371.0
-
-
-def global_slope(mesh: "PolygonMesh", elevation_tex: np.ndarray) -> np.ndarray:
-    """(N, H, W, 1) gradient magnitude (km/km) of the global elevation texture.
-
-    Per-face texel differences scaled by the face's tangent-frame extent.
-    """
-    elev = np.asarray(elevation_tex, dtype=np.float64)[..., 0]        # (N, H, W)
-    _, h, w = elev.shape
-    frames = mesh.face_tangent_frames()
-    u_ranges = np.asarray(frames[4], dtype=np.float64) * EARTH_RADIUS_KM
-    v_ranges = np.asarray(frames[5], dtype=np.float64) * EARTH_RADIUS_KM
-    d_v, d_u = np.gradient(elev, axis=(1, 2))
-    du_km = np.maximum(u_ranges / max(w - 1, 1), 1e-9)[:, None, None]
-    dv_km = np.maximum(v_ranges / max(h - 1, 1), 1e-9)[:, None, None]
-    slope = np.hypot(d_u / du_km, d_v / dv_km)
-    return slope[..., None].astype(np.float64)
 
 
 def _bilinear_stencil(

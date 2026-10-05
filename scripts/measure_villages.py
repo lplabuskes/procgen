@@ -37,6 +37,7 @@ from scipy.spatial import KDTree
 from localmap import LocalParams, village_budget_report
 from localmap.villages import VILLAGE_KIND_NAMES
 from region.rivers import build_region_rivers
+from region.wetlands import add_riparian_wetland
 from region.streams import build_region_streams
 from region.roads import build_region_roads
 from region.upsample import EARTH_RADIUS_KM, RegionUpsampleParams, build_region_fields
@@ -72,6 +73,7 @@ def measure_hex(  # type: ignore[no-untyped-def]
     if region_id not in region_cache:
         region = build_region_fields(world, region_id, RegionUpsampleParams())
         rivers = build_region_rivers(region, world)
+        add_riparian_wetland(region, rivers, RegionUpsampleParams())
         region_cache[region_id] = (region, rivers, build_region_roads(region, world, rivers),
                                    build_region_streams(region, world, rivers, params.streams))
     region, rivers, roads, streams = region_cache[region_id]

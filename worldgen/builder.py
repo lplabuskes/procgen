@@ -17,6 +17,7 @@ from worldgen.geology.elevation import clear_raster_stencils
 from worldgen.geology.elevation_builder import ElevationBuilder, ElevationParams
 from worldgen.hydrology.builder import HydrologyBuilder, HydrologyParams
 from worldgen.resources.builder import ResourcesBuilder, ResourcesParams
+from worldgen.wetland.builder import WetlandBuilder, WetlandParams
 
 __all__ = [
     "GlobeParams",
@@ -34,6 +35,7 @@ class GlobeParams:
     hydrology: HydrologyParams = field(default_factory=HydrologyParams, metadata={"label": "Hydrology"})
     delta: DeltaParams = field(default_factory=DeltaParams, metadata={"label": "River deltas"})
     coast: CoastParams = field(default_factory=CoastParams, metadata={"label": "Coast style"})
+    wetland: WetlandParams = field(default_factory=WetlandParams, metadata={"label": "Wetlands"})
     resources: ResourcesParams = field(default_factory=ResourcesParams, metadata={"label": "Resources"})
     danger: DangerParams = field(default_factory=DangerParams, metadata={"label": "Danger"})
     cost: CostParams = field(default_factory=CostParams, metadata={"label": "Cost"})
@@ -53,17 +55,21 @@ class GlobePipeline(Pipeline):
         self.hydrology_builder: HydrologyBuilder = HydrologyBuilder(self.params.hydrology)
         self.delta_builder: DeltaBuilder = DeltaBuilder(self.params.delta)
         self.coast_builder: CoastBuilder = CoastBuilder(self.params.coast)
+        # Shares hydrology's PET, so lakes and wetlands see one water balance.
+        self.wetland_builder: WetlandBuilder = WetlandBuilder(self.params.wetland, pet=self.params.hydrology)
         self.resources_builder: ResourcesBuilder = ResourcesBuilder(self.params.resources)
         self.danger_builder: DangerBuilder = DangerBuilder(self.params.danger)
         self.cost_builder: CostBuilder = CostBuilder(self.params.cost)
 
-        # Lake feedback runs after the deltas so the land they build gets its own climate.
+        # Lake feedback runs after the deltas so the land they build gets its own climate;
+        # wetlands after it, as it reclassifies the biomes they are stamped onto.
         super().__init__([
             self.elevation_builder,
             self.climate_builder,
             self.hydrology_builder,
             self.delta_builder,
             self.climate_builder.lake_feedback_stage(),
+            self.wetland_builder,
             self.coast_builder,
             self.resources_builder,
             self.danger_builder,

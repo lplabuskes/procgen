@@ -27,6 +27,86 @@ from worldgen.hydrology.types import (
 from core.mesh import PolygonMesh
 
 
+def potential_evapotranspiration(
+    t_annual_c: np.ndarray, baseline_mm_yr: float, per_degree_mm_yr: float, max_mm_yr: float,
+) -> np.ndarray:
+    """Annual PET (mm/yr) = ``clamp(baseline + per_degree · max(0, T), 0, max)`` of annual mean °C."""
+    return np.clip(baseline_mm_yr + per_degree_mm_yr * np.maximum(0.0, t_annual_c), 0.0, max_mm_yr)
+
+
+def inter_face_adjacency(mesh: PolygonMesh, resolution: int) -> Dict[int, List[int]]:
+    """Sparse inter-face texel adjacency (flat ids) from the mesh's cached boundary pixel pairs."""
+    fa, fb, ra, ca, rb, cb = mesh.boundary_pixel_pairs(resolution)
+    r2 = resolution * resolution
+    node_a = (fa.astype(np.int64) * r2 + ra * resolution + ca).tolist()
+    node_b = (fb.astype(np.int64) * r2 + rb * resolution + cb).tolist()
+    inter_adj: Dict[int, List[int]] = {}
+    for a, b in zip(node_a, node_b):
+        la = inter_adj.setdefault(a, [])
+        if b not in la:
+            la.append(b)
+        lb = inter_adj.setdefault(b, [])
+        if a not in lb:
+            lb.append(a)
+    return inter_adj
+
+
+def texel_neighbor_csr(
+    n_faces: int, resolution: int, inter_adj: Dict[int, List[int]],
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Static texel adjacency over all faces as CSR ``(indptr, flat)``.
+
+    Per-node order — [up, down, left, right, UL, UR, DL, DR] then inter-face —
+    must match ``RiverGenerator._neighbors``.
+    """
+    res = resolution
+    r2 = res * res
+    n_nodes = n_faces * r2
+
+    local = np.arange(r2, dtype=np.int32)
+    rows = local // res
+    cols = local % res
+    face_base = (np.arange(n_faces, dtype=np.int32) * r2)[:, None]  # (n_faces, 1)
+
+    directions = (
+        (-1, 0), (1, 0), (0, -1), (0, 1),
+        (-1, -1), (-1, 1), (1, -1), (1, 1),
+    )
+    valid = np.stack([
+        (rows + dr >= 0) & (rows + dr < res) & (cols + dc >= 0) & (cols + dc < res)
+        for dr, dc in directions
+    ])                                                       # (8, r2)
+    # Slot within a node's row = number of valid directions before it.
+    slot = np.cumsum(valid, axis=0) - valid                  # (8, r2)
+    n_intra = valid.sum(axis=0)                              # (r2,)
+
+    if inter_adj:
+        inter_src = np.fromiter(
+            (node for node, nbrs in inter_adj.items() for _ in nbrs), dtype=np.int64)
+        inter_dst = np.fromiter(
+            (nb for nbrs in inter_adj.values() for nb in nbrs), dtype=np.int32)
+    else:
+        inter_src = np.zeros(0, dtype=np.int64)
+        inter_dst = np.zeros(0, dtype=np.int32)
+
+    intra_counts = np.tile(n_intra, n_faces)
+    counts = intra_counts + np.bincount(inter_src, minlength=n_nodes)
+    indptr = np.zeros(n_nodes + 1, dtype=np.int64)
+    np.cumsum(counts, out=indptr[1:])
+    flat = np.empty(int(indptr[-1]), dtype=np.int32)
+    for d, (dr, dc) in enumerate(directions):
+        ls = local[valid[d]]
+        src = (face_base + ls[None, :]).reshape(-1)
+        flat[indptr[src] + np.tile(slot[d][ls], n_faces)] = src + (dr * res + dc)
+    # Inter-face neighbours follow, in ``inter_adj`` order.
+    order = np.argsort(inter_src, kind="stable")
+    s_sorted = inter_src[order]
+    first = np.searchsorted(s_sorted, s_sorted, side="left")
+    rank = np.arange(s_sorted.size) - first
+    flat[indptr[s_sorted] + intra_counts[s_sorted] + rank] = inter_dst[order]
+    return indptr, flat
+
+
 class RiverGenerator:
     """End-to-end river generation pipeline.
 
@@ -117,80 +197,8 @@ class RiverGenerator:
         # Inter-face adjacency from the mesh's cached boundary pixel pairs (no
         # separate stitch pass; their strict t∈[0,1] band differs from stitch's
         # ±1e-3 slack on ~0.3% of edges — negligible).
-        self._inter_adj: Dict[int, List[int]] = self._build_inter_adj_from_pairs(mesh)
-        self._build_neighbor_csr()
-
-    def _build_inter_adj_from_pairs(self, mesh: PolygonMesh) -> Dict[int, List[int]]:
-        """Build sparse inter-face node adjacency from cached boundary pixel pairs."""
-        fa, fb, ra, ca, rb, cb = mesh.boundary_pixel_pairs(self.resolution)
-        r2 = self._r2
-        res = self.resolution
-        node_a = (fa.astype(np.int64) * r2 + ra * res + ca).tolist()
-        node_b = (fb.astype(np.int64) * r2 + rb * res + cb).tolist()
-        inter_adj: Dict[int, List[int]] = {}
-        for a, b in zip(node_a, node_b):
-            la = inter_adj.setdefault(a, [])
-            if b not in la:
-                la.append(b)
-            lb = inter_adj.setdefault(b, [])
-            if a not in lb:
-                lb.append(a)
-        return inter_adj
-
-    def _build_neighbor_csr(self) -> None:
-        """Static node adjacency as CSR (indptr, flat) for the JIT Priority-Flood.
-
-        Per-node order — [up, down, left, right, UL, UR, DL, DR] then inter-face —
-        must match ``_neighbors``.
-        """
-        res = self.resolution
-        r2 = self._r2
-        n_faces = self.n_faces
-        n_nodes = self.n_nodes
-
-        local = np.arange(r2, dtype=np.int32)
-        rows = local // res
-        cols = local % res
-        face_base = (np.arange(n_faces, dtype=np.int32) * r2)[:, None]  # (n_faces, 1)
-
-        directions = (
-            (-1, 0), (1, 0), (0, -1), (0, 1),
-            (-1, -1), (-1, 1), (1, -1), (1, 1),
-        )
-        valid = np.stack([
-            (rows + dr >= 0) & (rows + dr < res) & (cols + dc >= 0) & (cols + dc < res)
-            for dr, dc in directions
-        ])                                                       # (8, r2)
-        # Slot within a node's row = number of valid directions before it.
-        slot = np.cumsum(valid, axis=0) - valid                  # (8, r2)
-        n_intra = valid.sum(axis=0)                              # (r2,)
-
-        if self._inter_adj:
-            inter_src = np.fromiter(
-                (node for node, nbrs in self._inter_adj.items() for _ in nbrs), dtype=np.int64)
-            inter_dst = np.fromiter(
-                (nb for nbrs in self._inter_adj.values() for nb in nbrs), dtype=np.int32)
-        else:
-            inter_src = np.zeros(0, dtype=np.int64)
-            inter_dst = np.zeros(0, dtype=np.int32)
-
-        intra_counts = np.tile(n_intra, n_faces)
-        counts = intra_counts + np.bincount(inter_src, minlength=n_nodes)
-        indptr = np.zeros(n_nodes + 1, dtype=np.int64)
-        np.cumsum(counts, out=indptr[1:])
-        flat = np.empty(int(indptr[-1]), dtype=np.int32)
-        for d, (dr, dc) in enumerate(directions):
-            ls = local[valid[d]]
-            src = (face_base + ls[None, :]).reshape(-1)
-            flat[indptr[src] + np.tile(slot[d][ls], n_faces)] = src + (dr * res + dc)
-        # Inter-face neighbours follow, in ``_inter_adj`` order.
-        order = np.argsort(inter_src, kind="stable")
-        s_sorted = inter_src[order]
-        first = np.searchsorted(s_sorted, s_sorted, side="left")
-        rank = np.arange(s_sorted.size) - first
-        flat[indptr[s_sorted] + intra_counts[s_sorted] + rank] = inter_dst[order]
-        self._nbr_flat: np.ndarray = flat
-        self._nbr_indptr: np.ndarray = indptr
+        self._inter_adj: Dict[int, List[int]] = inter_face_adjacency(mesh, h)
+        self._nbr_indptr, self._nbr_flat = texel_neighbor_csr(n_faces, h, self._inter_adj)
 
     # ------------------------------------------------------------------
     # Node indexing helpers
@@ -282,10 +290,8 @@ class RiverGenerator:
         if not components:
             return
 
-        pet_mm_yr = np.clip(
-            self._pet_baseline_mm_yr + self._pet_per_degree_mm_yr * np.maximum(0.0, self._t_annual_flat),
-            0.0,
-            self._pet_max_mm_yr,
+        pet_mm_yr = potential_evapotranspiration(
+            self._t_annual_flat, self._pet_baseline_mm_yr, self._pet_per_degree_mm_yr, self._pet_max_mm_yr,
         ).astype(np.float32)
         pet_norm = pet_mm_yr / self._mean_precip  # mean-precip units
 

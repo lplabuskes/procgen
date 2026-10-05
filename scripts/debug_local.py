@@ -43,6 +43,7 @@ from realmgen.towns.builder import rural_density_recipe  # noqa: E402
 from region.geometry import RegionGeometry, ecef_to_cell  # noqa: E402
 from region.grid import RegionHexGrid  # noqa: E402
 from region.rivers import build_region_rivers, river_length_km  # noqa: E402
+from region.wetlands import add_riparian_wetland  # noqa: E402
 from region.streams import build_region_streams  # noqa: E402
 from region.roads import build_region_roads  # noqa: E402
 from region.upsample import EARTH_RADIUS_KM, RegionFields, RegionUpsampleParams, build_region_fields  # noqa: E402
@@ -87,6 +88,7 @@ def build_local(
     """The region (fields, rivers, roads) and one hex's local map, as the viewer builds them."""
     region = build_region_fields(world, region_id, region_params)
     rivers = build_region_rivers(region, world)
+    add_riparian_wetland(region, rivers, region_params or RegionUpsampleParams())
     roads = build_region_roads(region, world, rivers)
     streams = build_region_streams(region, world, rivers, (params or LocalParams()).streams)
     local = build_local_map(world, region, hex_index, params, region_rivers=rivers, region_roads=roads,

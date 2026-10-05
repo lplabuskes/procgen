@@ -26,10 +26,10 @@ from core.pipeline import BuildContext, Stage
 from core.world import World
 from worldgen.climate.channels import BIOME, TEMPERATURE
 from worldgen.cost.channels import COST_SURFACES, IS_STRAIT, IS_WATER
-from worldgen.delta.channels import MARSH_FRACTION
 from worldgen.geology.channels import ELEVATION, IS_OCEAN
 from worldgen.geology.display import LAND_COLOR, OCEAN_COLOR, is_water_meta
 from worldgen.hydrology.channels import LAKE_MASK, RIVER_OBJECTS
+from worldgen.wetland.channels import WETLAND_FRACTION
 
 
 @paramclass
@@ -45,8 +45,8 @@ class LandCostParams:
         0.6, label="Navigable ruggedness (km)", min=0.05, max=5.0
     )
     forest_cost_strength: float = _f(1.0, label="Forest cost strength", min=0.0, max=5.0)
-    # Delta marsh: land cost × (1 + strength · the face's marsh fraction).
-    marsh_cost_strength: float = _f(3.0, label="Marsh cost strength", min=0.0, max=10.0)
+    # Wetland: land cost × (1 + strength · the face's wetland fraction).
+    wetland_cost_strength: float = _f(3.0, label="Wetland cost strength", min=0.0, max=10.0)
 
 
 @paramclass
@@ -139,9 +139,9 @@ class CostBuilder(Stage):
             face_forest_density=face_forest_density,
             forest_cost_strength=p.land.forest_cost_strength,
         )
-        if MARSH_FRACTION.present(mesh):
-            marsh = np.asarray(MARSH_FRACTION.read(mesh), dtype=np.float32)
-            land_cost = (land_cost * (1.0 + p.land.marsh_cost_strength * marsh)).astype(np.float32)
+        if WETLAND_FRACTION.present(mesh):
+            wet = np.asarray(WETLAND_FRACTION.read(mesh), dtype=np.float32)
+            land_cost = (land_cost * (1.0 + p.land.wetland_cost_strength * wet)).astype(np.float32)
 
         _report("Computing river flow field…")
         # Mouth segments touch water faces; keep the land river term off them.

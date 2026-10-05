@@ -35,6 +35,7 @@ STAGE_MARKERS = [
     ("rivers and lakes", "hydrology"),
     ("river deltas", "delta"),
     ("lake humidity feedback", "lake_feedback"),
+    ("Wetland:", "wetland"),
     ("Coast:", "coast"),
     ("terrain ruggedness", "resources"),
     ("Danger:", "danger"),
@@ -48,7 +49,7 @@ STAGE_MARKERS = [
     ("Siting ", "towns"),
 ]
 STAGE_ORDER = [
-    "elevation", "climate", "hydrology", "delta", "lake_feedback", "coast", "resources", "danger", "cost",
+    "elevation", "climate", "hydrology", "delta", "lake_feedback", "wetland", "coast", "resources", "danger", "cost",
     "scoring", "placement", "population", "polity", "refine", "towns",
 ]
 

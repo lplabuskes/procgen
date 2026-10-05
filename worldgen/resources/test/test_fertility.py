@@ -8,9 +8,11 @@ import numpy as np
 from worldgen.resources.fertility import (
     BIOME_FERTILITY_MULT,
     apply_delta_fertility,
+    apply_wetland_fertility,
     compute_fertility,
     neighbour_water_fertility,
 )
+from worldgen.climate.classification import WETLAND_BIOME
 from worldgen.resources.builder import FertilityParams
 
 
@@ -184,10 +186,10 @@ class TestComputeFertility:
 # ── River deltas ─────────────────────────────────────────────────────────────
 
 
-def _delta_case(t_c: float, base: float, plain: float = 1.0, marsh: float = 0.0):
+def _delta_case(t_c: float, base: float, plain: float = 1.0):
     fert = np.full((1, 2, 2, 1), base, dtype=np.float32)
-    delta = np.zeros((1, 2, 2, 2), dtype=np.float32)
-    delta[0, 0, 0] = (plain, marsh)                       # one texel on the delta
+    delta = np.zeros((1, 2, 2, 1), dtype=np.float32)
+    delta[0, 0, 0] = plain                                # one texel on the delta
     temp = np.full((1, 2, 2, 4), t_c, dtype=np.float32)
     return apply_delta_fertility(fert, delta, temp, FertilityParams())
 
@@ -207,11 +209,28 @@ def test_delta_fertility_never_lowers_and_cold_deltas_stay_poor():
     assert 0.05 <= cold < 0.3 < warm
 
 
-def test_delta_marsh_is_docked():
+def _wetland_case(t_c: float, base: float):
+    fert = np.full((1, 2, 2, 1), base, dtype=np.float32)
+    biome = np.full((1, 2, 2, 1), 3, dtype=np.uint8)
+    biome[0, 0, 0] = WETLAND_BIOME                        # one wetland texel
+    temp = np.full((1, 2, 2, 4), t_c, dtype=np.float32)
+    return apply_wetland_fertility(fert, biome, temp, FertilityParams())
+
+
+def test_humid_wetland_is_docked():
     p = FertilityParams()
-    dry = _delta_case(p.optimal_temperature_c, base=0.0)[0, 0, 0, 0]
-    wet = _delta_case(p.optimal_temperature_c, base=0.0, marsh=1.0)[0, 0, 0, 0]
-    assert np.isclose(wet, dry * (1.0 - p.delta_marsh_penalty), atol=1e-5)
+    out = _wetland_case(p.optimal_temperature_c, base=0.95)
+    assert np.isclose(out[0, 0, 0, 0], 0.95 * (1.0 - p.wetland_penalty))
+    assert np.allclose(out[0, 1, :, 0], 0.95)             # off the wetland: untouched
+
+
+def test_arid_wetland_is_watered_but_cold_stays_poor():
+    p = FertilityParams()
+    arid = _wetland_case(p.optimal_temperature_c, base=0.02)[0, 0, 0, 0]
+    assert np.isclose(arid, p.wetland_fertility * (1.0 - p.wetland_penalty), atol=1e-5)
+    assert arid > 0.02 * 10                               # an oasis, not desert
+    cold = _wetland_case(-15.0, base=0.02)[0, 0, 0, 0]
+    assert cold < 0.5 * arid
 
 
 def test_land_faces_take_their_water_neighbours_aquatic_fertility() -> None:

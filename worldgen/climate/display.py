@@ -15,7 +15,7 @@ from worldgen.geology.display import (
 )
 
 
-# 9 biome palette, indexed by BIOME_NAMES order in classification.py.
+# Biome palette, indexed by BIOME_NAMES order in classification.py.
 BIOME_PALETTE = np.array([
     [0.95, 0.97, 0.99, 1.0],   # 0 Icecap
     [0.78, 0.82, 0.78, 1.0],   # 1 Tundra
@@ -26,6 +26,7 @@ BIOME_PALETTE = np.array([
     [0.10, 0.55, 0.20, 1.0],   # 6 Tropical
     [0.85, 0.65, 0.32, 1.0],   # 7 Semi-Arid
     [0.92, 0.85, 0.55, 1.0],   # 8 Desert
+    [0.30, 0.55, 0.52, 1.0],   # 9 Wetland
 ], dtype=np.float32)
 
 
