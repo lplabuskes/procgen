@@ -1,12 +1,15 @@
-"""Polity stage — seeds capitals, runs the forest algorithm, scores tension.
+"""Polity stage — seeds capitals, runs the forest algorithm, places forts, scores tension.
 
 Tree model per ``docs/plans/polity_generation_brief.md``. The algorithm lives in
 :mod:`realmgen.polity.forest`; this stage handles IO, cost graphs, tension and display.
+With forts on, the forest grows twice: forts are placed on the first pass's
+borders (:mod:`realmgen.polity.forts`), then make their crossings dearer for the second.
 
 Runs after population and before refine in :class:`~realmgen.builder.RealmPipeline`.
 """
 from __future__ import annotations
 
+import dataclasses
 from typing import List, Optional
 
 import numpy as np
@@ -18,8 +21,12 @@ from realmgen.channels import (
     AUTHORITY,
     BORDER_TENSION,
     CONTROL_CLASS,
+    FISHING_POPULATION,
+    FORT_POPULATION,
+    MINING_POPULATION,
     POLITY_ID,
     POPULATION,
+    RURAL_POPULATION,
     SOVEREIGN_ID,
     TRADE_FLOW,
 )
@@ -32,14 +39,36 @@ from realmgen.polity.forest import (
     ProjectionParams,
     _Ctx,
 )
+from realmgen.polity.forts import (
+    FORT_BORDER,
+    FORT_FRONTIER,
+    FORT_KIND_COLORS,
+    FORT_KIND_NAMES,
+    FORT_STRAIT,
+    FortParams,
+    Forts,
+    FortSite,
+    border_candidates,
+    find_passages,
+    fortify_land_costs,
+    fortify_landings,
+    frontier_candidates,
+    garrisons,
+    select_sites,
+    site_forts,
+    strait_candidates,
+)
 from realmgen.polity.loyalty import LoyaltyParams
 from realmgen.persistence import pack_polities, unpack_polities
 from realmgen.polity.seeding import seed_capitals
-from realmgen.polity.tension import compute_border_tension
+from realmgen.polity.tension import border_crossings, compute_border_tension
 from realmgen.polity.types import Polity
 from realmgen.refine.fill import polity_fill_recipe
+from realmgen.towns.placement import texel_owners
 from realmgen.trade.network import build_base_hybrid_graph
 from worldgen.cost.channels import COST_SURFACES, IS_WATER
+from worldgen.geology.channels import OCEAN_MASK
+from worldgen.hydrology.channels import LAKE_MASK
 
 
 @paramclass
@@ -99,6 +128,9 @@ class PolityParams:
     tension: BorderTensionParams = field(
         default_factory=BorderTensionParams, metadata={"label": "Border tension"}
     )
+    forts: FortParams = field(
+        default_factory=FortParams, metadata={"label": "Forts"}
+    )
 
 
 class PolityStage(Stage):
@@ -106,7 +138,7 @@ class PolityStage(Stage):
 
     name = "realm_polity"
     requires = (POPULATION, IS_WATER, COST_SURFACES)
-    provides = (POLITY_ID, SOVEREIGN_ID, CONTROL_CLASS, BORDER_TENSION)
+    provides = (POLITY_ID, SOVEREIGN_ID, CONTROL_CLASS, BORDER_TENSION, FORT_POPULATION)
 
     def __init__(self, params: PolityParams, danger_params=None) -> None:
         self.params = params
@@ -119,6 +151,7 @@ class PolityStage(Stage):
         self.face_tension: Optional[np.ndarray] = None
         self.pair_tension: Optional[dict] = None
         self.polity_history: List[FragmentationEvent] = []
+        self.forts: Optional[Forts] = None
 
     def build(self, ctx: BuildContext) -> None:
         world, mesh = ctx.world, ctx.mesh
@@ -189,6 +222,33 @@ class PolityStage(Stage):
         forest, self.polity_history = run_fragmentation_epochs(
             sctx, capital_sidx, land_mask, ctx.report, params=p.fragmentation
         )
+
+        # Forts on the first pass's frontiers, then the forest regrown around them.
+        sites: List[FortSite] = []
+        if p.forts.enabled:
+            sites = self._choose_fort_sites(
+                mesh, is_water, forest.sovereign_of_face, forest.polities, land_base_cost,
+                land_edge_costs, trade_flow, danger, settlement_faces,
+            )
+            fp = p.forts
+            if sites and fp.resistance > 0.0:
+                ctx.report(f"Regrowing polities around {len(sites)} forts…")
+                fort_costs = fortify_land_costs(
+                    mesh.face_adjacency, land_edge_costs, forest.sovereign_of_face,
+                    [s.face for s in sites if s.kind == FORT_BORDER], fp.resistance,
+                )
+                hybrid = self._hybrid_graph(mesh, world, is_water, fort_costs)
+                if hybrid is not None:
+                    hybrid = fortify_landings(
+                        hybrid, [s.face for s in sites if s.kind == FORT_STRAIT], n, fp.resistance)
+                fort_ctx = dataclasses.replace(
+                    sctx, land_graph=build_cost_graph(mesh.face_adjacency, fort_costs), hybrid_graph=hybrid,
+                )
+                forest, self.polity_history = run_fragmentation_epochs(
+                    fort_ctx, capital_sidx, land_mask, ctx.report, params=p.fragmentation
+                )
+        self.forts = self._build_forts(mesh, is_water, sites)
+        world.add_feature("forts", self.forts)
         polities = forest.polities
         polity_of_face = forest.polity_of_face
         sovereign_of_face = forest.sovereign_of_face
@@ -210,7 +270,8 @@ class PolityStage(Stage):
         n_sov = sum(1 for pol in polities if pol.liege is None)
         ctx.report(
             f"Polity formation done: {n_sov} sovereigns, "
-            f"{len(polities) - n_sov} vassals, {len(pair_tension)} shared borders."
+            f"{len(polities) - n_sov} vassals, {len(pair_tension)} shared borders, "
+            f"{len(self.forts)} forts ({self.forts.garrison.sum() / 1e3:.0f}k garrison)."
         )
         self._dump_tree(ctx)
 
@@ -228,23 +289,15 @@ class PolityStage(Stage):
 
     def _build_cost_graphs(self, mesh, world, is_water, danger, danger_scale):
         """Return ``(land_base_cost (N,), land_edge_costs, hybrid_graph or None)``."""
-        n = len(mesh.faces)
         if COST_SURFACES.present(world):
-            from worldgen.cost.surfaces import build_land_edge_costs, build_sea_edge_costs
+            from worldgen.cost.surfaces import build_land_edge_costs
             cs = COST_SURFACES.read(world)
             land_base_cost = np.asarray(cs.land_base_cost, dtype=np.float64) + danger_scale * danger
             land_edge_costs = build_land_edge_costs(
                 mesh, land_base_cost, cs.land_passable,
                 cs.river_flow_dir, cs.river_flow_mag, cs.river_navigability,
             )
-            sea_edge_costs = build_sea_edge_costs(
-                mesh, cs.sea_base_cost, cs.sea_passable, wind_dir=cs.wind_dir,
-            )
-            hybrid_graph = build_base_hybrid_graph(
-                n, mesh.face_adjacency,
-                land_edge_costs, cs.land_passable, sea_edge_costs, cs.sea_passable,
-            )
-            return land_base_cost, land_edge_costs, hybrid_graph
+            return land_base_cost, land_edge_costs, self._hybrid_graph(mesh, world, is_water, land_edge_costs)
 
         # No cost surfaces: land-only, no sea channel.
         base = np.where(is_water, np.inf, 1.5) + danger_scale * danger
@@ -255,16 +308,137 @@ class PolityStage(Stage):
         land_base_cost = np.where(is_water, 1.5, 1.5 + danger_scale * danger).astype(np.float64)
         return land_base_cost, land_edge_costs, None
 
+    def _hybrid_graph(self, mesh, world, is_water, land_edge_costs):
+        """The land/sea graph over ``land_edge_costs``; None without cost surfaces."""
+        if not COST_SURFACES.present(world):
+            return None
+        from worldgen.cost.surfaces import build_sea_edge_costs
+        cs = COST_SURFACES.read(world)
+        sea_edge_costs = build_sea_edge_costs(
+            mesh, cs.sea_base_cost, cs.sea_passable, wind_dir=cs.wind_dir,
+        )
+        return build_base_hybrid_graph(
+            len(mesh.faces), mesh.face_adjacency,
+            land_edge_costs, cs.land_passable, sea_edge_costs, cs.sea_passable,
+        )
+
+    # ── forts ───────────────────────────────────────────────────────────────────
+
+    def _choose_fort_sites(
+        self, mesh, is_water, sovereign_of_face, polities, land_base_cost,
+        land_edge_costs, trade_flow, danger, settlement_faces,
+    ) -> List[FortSite]:
+        """Border, strait and frontier sites on this partition (best first, spaced, off cities)."""
+        p, fp = self.params, self.params.forts
+        norm_flow, flow_ref = self._norm_flow(trade_flow)
+        power = _root_power(polities)
+        land = ~is_water
+        cost = np.asarray(land_base_cost, dtype=np.float64)
+        valid = cost[land & np.isfinite(cost)]
+        lo = float(np.percentile(valid, 50.0)) if valid.size else 0.0
+        hi = float(np.percentile(valid, 90.0)) if valid.size else 1.0
+        rugged = np.clip((cost - lo) / max(hi - lo, 1e-9), 0.0, 1.0)
+
+        src, dst, crossing = border_crossings(
+            mesh.face_adjacency, sovereign_of_face, power, land_edge_costs, norm_flow,
+            barrier_scale=p.tension.barrier_scale, flow_ref=p.tension.flow_ref,
+            artery_weight=p.tension.artery_weight,
+        )
+        border = border_candidates(
+            src, dst, crossing, rugged, rugged_weight=fp.rugged_weight, min_score=fp.border_min_score)
+        sea = is_water
+        if OCEAN_MASK.present(mesh):   # lake narrows aren't straits
+            sea = is_water & (OCEAN_MASK.read(mesh)[..., 0].mean(axis=(1, 2)) > 0.5)
+        strait = strait_candidates(
+            mesh.face_adjacency, sovereign_of_face, is_water,
+            find_passages(mesh.face_adjacency, sea, max_radius=fp.strait_max_radius), norm_flow,
+            flow_ref=p.tension.flow_ref, artery_weight=p.tension.artery_weight,
+            uncontested_weight=fp.strait_uncontested_weight, min_score=fp.strait_min_score,
+        )
+        frontier: List[FortSite] = []
+        if self.danger_params is not None and RURAL_POPULATION.present(mesh):
+            frontier = frontier_candidates(
+                mesh.face_adjacency, sovereign_of_face, is_water, danger, self._rural_before_forts(mesh),
+                danger_threshold=float(self.danger_params.block_threshold), min_score=fp.frontier_min_score,
+            )
+
+        # One spacing field, filled by kind: border forts first, then straits, then outposts.
+        blocked = np.zeros(len(mesh.faces), dtype=bool)
+        cities = {int(f) for f in settlement_faces}
+        chosen: List[FortSite] = []
+        for cands in (border, strait, frontier):
+            chosen += select_sites(
+                cands, mesh.face_adjacency, spacing_hops=fp.spacing_hops, excluded=cities, blocked=blocked)
+        return chosen
+
+    @staticmethod
+    def _rural_before_forts(mesh) -> np.ndarray:
+        """Rural people with any earlier run's garrisons put back."""
+        rural = np.asarray(RURAL_POPULATION.read(mesh), dtype=np.float64)
+        if FORT_POPULATION.present(mesh):
+            rural = rural + np.asarray(FORT_POPULATION.read(mesh), dtype=np.float64)
+        return rural
+
+    def _build_forts(self, mesh, is_water, sites: List[FortSite]) -> Forts:
+        """Site the forts and carve their garrisons out of the farmers."""
+        n = len(mesh.faces)
+        fort_pop = np.zeros(n, dtype=np.float64)
+        forts = Forts.empty()
+        have_rural = RURAL_POPULATION.present(mesh)
+        if sites:
+            faces = np.array([s.face for s in sites], dtype=np.int64)
+            positions = self._site_positions(mesh, is_water, sites, faces)
+            fp = self.params.forts
+            garrison = np.zeros(len(sites))
+            if have_rural:
+                rural = self._rural_before_forts(mesh)
+                farmers = rural.copy()
+                for ch in (FISHING_POPULATION, MINING_POPULATION):
+                    if ch.present(mesh):
+                        farmers -= np.asarray(ch.read(mesh), dtype=np.float64)
+                garrison = garrisons(sites, farmers, {
+                    FORT_BORDER: fp.border_garrison, FORT_STRAIT: fp.strait_garrison,
+                    FORT_FRONTIER: fp.frontier_garrison,
+                })
+                fort_pop = np.bincount(faces, weights=garrison, minlength=n)
+            forts = Forts(
+                positions=positions, face_id=faces.astype(np.int32),
+                facing=np.array([s.facing for s in sites], dtype=np.int32),
+                kind=np.array([s.kind for s in sites], dtype=np.int8),
+                score=np.array([s.score for s in sites], dtype=np.float64), garrison=garrison,
+            )
+        if have_rural:
+            RURAL_POPULATION.write(mesh, self._rural_before_forts(mesh) - fort_pop)
+            FORT_POPULATION.write(mesh, fort_pop)
+        return forts
+
+    @staticmethod
+    def _site_positions(mesh, is_water, sites: List[FortSite], faces: np.ndarray) -> np.ndarray:
+        centroids = np.asarray(mesh.face_centroids, dtype=np.float64)
+        if not OCEAN_MASK.present(mesh):
+            return centroids[faces] / np.linalg.norm(centroids[faces], axis=1, keepdims=True)
+        ocean = OCEAN_MASK.read(mesh)[faces, ..., 0] > 0.5
+        water = ocean | (LAKE_MASK.read(mesh)[faces, ..., 0] > 0.5) if LAKE_MASK.present(mesh) else ocean
+        h, w = ocean.shape[1:]
+        pos = np.asarray(mesh.face_texture_positions(h, w, faces), dtype=np.float64)
+        owned = texel_owners(centroids, pos) == faces[:, None, None]
+        elev = mesh.face_textures.get("elevation")
+        elev = None if elev is None else np.asarray(elev[faces, ..., 0], dtype=np.float64)
+        return site_forts(sites, centroids, pos, ~water, owned, elev)
+
     # ── tension + outputs ───────────────────────────────────────────────────────
+
+    def _norm_flow(self, trade_flow: np.ndarray) -> tuple[np.ndarray, float]:
+        pos = trade_flow[trade_flow > 0.0]
+        flow_ref = float(np.quantile(pos, 0.90)) if pos.size > 0 else 0.0
+        return (trade_flow / flow_ref if flow_ref > 0.0 else trade_flow), flow_ref
 
     def _compute_tension(
         self, mesh, land_edge_costs, trade_flow,
         sovereign_of_face: np.ndarray, polities: List[Polity],
     ) -> tuple[dict, np.ndarray]:
         p = self.params
-        pos = trade_flow[trade_flow > 0.0]
-        flow_ref = float(np.quantile(pos, 0.90)) if pos.size > 0 else 0.0
-        norm_flow = trade_flow / flow_ref if flow_ref > 0.0 else trade_flow
+        norm_flow, _ = self._norm_flow(trade_flow)
         # Sovereign partition only (top-level borders).
         return compute_border_tension(
             mesh.face_adjacency, sovereign_of_face,
@@ -379,6 +553,8 @@ class PolityStage(Stage):
         self.sovereign_of_face = sovereign_of_face
         self.control_of_face = control_of_face
         self.authority_of_face = np.zeros(n, dtype=np.float64)
+        self.forts = self._build_forts(mesh, np.zeros(n, dtype=bool), [])
+        world.add_feature("forts", self.forts)
         self.face_tension = face_tension
         self.pair_tension = pair_tension
         self._write_outputs(mesh, world, polities, polity_of_face, sovereign_of_face, control_of_face, face_tension,
@@ -439,6 +615,21 @@ class PolityStage(Stage):
             reg.add_scheme("Border Tension", disp.tension_color)
         if world is not None and world.has_feature("polity_borders"):
             reg.add_overlay("polity_borders", "Polity Borders")
+        forts = self.forts
+        if forts is not None and len(forts):
+            reg.add_overlay(
+                "forts", "Forts", checked=True,
+                legend=("categorical", list(zip(FORT_KIND_NAMES, FORT_KIND_COLORS))),
+            )
+            by_face: dict = {}
+            for k in range(len(forts)):
+                by_face.setdefault(int(forts.face_id[k]), []).append(
+                    f"{FORT_KIND_NAMES[int(forts.kind[k])]} ({forts.garrison[k]:.0f} men)")
+
+            def _fort_hover(face: int, _uv, _w) -> list:
+                return by_face.get(face, [])
+
+            reg.add_hover(_fort_hover, world_only=True)
         if debug:
             if self.sovereign_of_face is not None:
                 reg.add_scheme("Sovereigns", disp.sovereign_color)
@@ -453,9 +644,10 @@ class PolityStage(Stage):
     # Per-face fields round-trip via metadata; load() rebuilds only the Polity objects.
 
     def serialize(self) -> dict:
-        if self.polities:
-            return pack_polities(self.polities)
-        return {}
+        out = pack_polities(self.polities) if self.polities else {}
+        if self.forts is not None:
+            out.update(self.forts.pack())
+        return out
 
     def load(self, arrays, ctx: BuildContext) -> None:
         world, mesh = ctx.world, ctx.mesh
@@ -472,6 +664,9 @@ class PolityStage(Stage):
             self.face_tension = np.asarray(BORDER_TENSION.read(mesh), dtype=np.float64)
         if AUTHORITY.present(mesh):
             self.authority_of_face = np.asarray(AUTHORITY.read(mesh), dtype=np.float64)
+        if "fort_face_id" in arrays:
+            self.forts = Forts.unpack(arrays)
+            world.add_feature("forts", self.forts)
 
 
 def _root_power(polities: List[Polity]) -> np.ndarray:

@@ -11,7 +11,9 @@ from realmgen.channels import HINTERLAND_ID, MINING_POPULATION, RURAL_POPULATION
 from realmgen.population.calibration import KM2_PER_STERADIAN
 from realmgen.refine.sites import SiteField
 from realmgen.test.conftest import _settlement
-from realmgen.towns.builder import MINING_DENSITY_TEXTURE, RURAL_DENSITY_TEXTURE, TownParams, TownStage
+from realmgen.towns.builder import (
+    MINING_DENSITY_TEXTURE, RURAL_DENSITY_TEXTURE, TownParams, TownStage, roll_town_walls,
+)
 from realmgen.towns.placement import (
     compute_mining_density, compute_rural_density, draw_town_sizes, place_towns, shore_texels, texel_owners,
 )
@@ -206,6 +208,38 @@ def test_towns_pack_round_trip():
     np.testing.assert_array_equal(back.population, towns.population)
     np.testing.assert_array_equal(back.kind, towns.kind)
     np.testing.assert_array_equal(back.parent, towns.parent)
+    np.testing.assert_array_equal(back.has_walls, towns.has_walls)
+    np.testing.assert_array_equal(back.wall_strength, towns.wall_strength)
+
+
+# ── walls ────────────────────────────────────────────────────────────────────
+
+
+def _many_towns(k: int, pop: float) -> Towns:
+    return Towns(
+        positions=np.tile([1.0, 0.0, 0.0], (k, 1)), population=np.full(k, pop),
+        face_id=np.arange(k, dtype=np.int32) % 50, parent=np.full(k, -1, dtype=np.int32),
+        kind=np.zeros(k, dtype=np.int8),
+    )
+
+
+def test_town_walls_rarer_than_cities_likelier_big_and_in_danger():
+    p = TownParams()
+    calm, wild = np.zeros(50), np.ones(50)
+    small, big = _many_towns(2000, p.town_min), _many_towns(2000, 7000.0)
+    rate = {
+        (name, d): roll_town_walls(t, danger, 3, p, 7000.0)[0].mean()
+        for name, t in (("small", small), ("big", big)) for d, danger in (("calm", calm), ("wild", wild))
+    }
+    assert rate["small", "calm"] == pytest.approx(p.wall_base_prob, abs=0.02)
+    assert rate["small", "calm"] < rate["big", "calm"] < rate["big", "wild"]
+    assert rate["small", "calm"] < rate["small", "wild"]
+    # Even the likeliest town is walled less often than the least likely city (base 0.3).
+    assert rate["big", "wild"] < 0.4
+    has, strength = roll_town_walls(big, wild, 3, p, 7000.0)
+    assert np.all((strength > 0) == has)
+    assert np.all((strength[has] >= p.wall_min_strength) & (strength[has] <= p.wall_max_strength))
+    np.testing.assert_array_equal(has, roll_town_walls(big, wild, 3, p, 7000.0)[0])   # deterministic
 
 
 # ── stage ────────────────────────────────────────────────────────────────────

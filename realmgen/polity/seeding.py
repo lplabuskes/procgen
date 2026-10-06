@@ -201,14 +201,27 @@ def compute_settlement_defensibility(
         wall_base_prob + wall_danger_boost * danger_norm + wall_wealth_boost * wealth_norm,
         0.0, 1.0,
     )
+    has_walls, wall_str = roll_walls(
+        wall_prob, 0.5 * (danger_norm + wealth_norm),
+        [[int(base_seed), int(face)] for face in faces.tolist()],
+        wall_min_strength, wall_max_strength,
+    )
+    return terrain + river_bonus + wall_str, has_walls, wall_str
+
+
+def roll_walls(
+    prob: np.ndarray, bias: np.ndarray, keys: Sequence[Sequence[int]],
+    min_strength: float, max_strength: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """``(has_walls, wall_strength)``: walls with probability ``prob``, each from its
+    own ``keys[k]`` RNG stream; quality half random, half ``bias`` (both in [0, 1])."""
+    s = len(keys)
     has_walls = np.zeros(s, dtype=bool)
     wall_str = np.zeros(s, dtype=np.float64)
-    for k, face in enumerate(faces.tolist()):
-        rng = np.random.default_rng(np.random.SeedSequence([int(base_seed), int(face)]))
-        if rng.random() < float(wall_prob[k]):
+    for k, key in enumerate(keys):
+        rng = np.random.default_rng(np.random.SeedSequence([int(x) for x in key]))
+        if rng.random() < float(prob[k]):
             has_walls[k] = True
-            bias = 0.5 * (float(danger_norm[k]) + float(wealth_norm[k]))
-            quality = np.clip(0.5 * rng.random() + 0.5 * bias, 0.0, 1.0)
-            wall_str[k] = wall_min_strength + (wall_max_strength - wall_min_strength) * quality
-
-    return terrain + river_bonus + wall_str, has_walls, wall_str
+            quality = np.clip(0.5 * rng.random() + 0.5 * float(bias[k]), 0.0, 1.0)
+            wall_str[k] = min_strength + (max_strength - min_strength) * quality
+    return has_walls, wall_str

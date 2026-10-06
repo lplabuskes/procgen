@@ -12,6 +12,8 @@ downstream reads towns.
    mining towns only near worked deposits.
 4. **Accounting**: towns are carved out of ``rural_population`` and the density
    texture, so rural + towns is unchanged; unsited towns stay rural.
+5. **Walls**: rolled per town, likelier in danger and for big towns, rarer than
+   a city's (data only).
 
 All per global face, so a town doesn't depend on which region is viewed.
 """
@@ -28,6 +30,7 @@ from core.pipeline import BuildContext, Stage
 from realmgen.channels import (
     FISHING_POPULATION, HINTERLAND_ID, MINING_POPULATION, RURAL_POPULATION, TOWN_POPULATION,
 )
+from realmgen.polity.seeding import roll_walls
 from realmgen.population.builder import PopulationParams
 from realmgen.population.calibration import KM2_PER_STERADIAN
 from realmgen.refine.builder import RefineParams
@@ -55,6 +58,7 @@ FISHING_DENSITY_TEXTURE = "fishing_density"
 MINING_DENSITY_TEXTURE = "mining_density"
 _SIZE_STREAM = 1   # RNG stream tag for town sizes (sites use the bare (seed, face) stream)
 _MINING_SIZE_STREAM = 2   # ... and for mining-town sizes
+_WALL_STREAM = 3   # ... and for town walls (with the town's rank on its face)
 
 
 @paramclass
@@ -81,6 +85,12 @@ class TownParams:
     mining_radius_km: float = _f(25.0, label="Mineral-deposit reach (km)", min=1.0, max=60.0)
     site_jitter: float = _f(
         0.4, label="Site jitter (× texel spacing)", min=0.0, max=0.5, hidden=True)
+    # Rarer and weaker than a city's (PolityParams.defensibility: 0.3 + 0.3 danger + 0.3 wealth).
+    wall_base_prob: float = _f(0.05, label="Town walls: base probability", min=0.0, max=1.0)
+    wall_danger_boost: float = _f(0.15, label="Town walls: danger boost to prob", min=0.0, max=1.0)
+    wall_size_boost: float = _f(0.15, label="Town walls: size boost to prob (at the city floor)", min=0.0, max=1.0)
+    wall_min_strength: float = _f(0.2, label="Town walls: min strength", min=0.0, max=5.0)
+    wall_max_strength: float = _f(0.8, label="Town walls: max strength", min=0.0, max=5.0)
 
 
 # ── Display ───────────────────────────────────────────────────────────────────
@@ -157,6 +167,39 @@ def town_site_context(world, p: TownParams, pp: PopulationParams) -> TownSiteCon
 
 
 # ── TownStage ─────────────────────────────────────────────────────────────────
+
+
+def _face_danger(world, n: int) -> np.ndarray:
+    from worldgen.danger.channels import DANGER_ARRAY
+    if DANGER_ARRAY.present(world):
+        return np.asarray(DANGER_ARRAY.read(world), dtype=np.float64)
+    return np.zeros(n, dtype=np.float64)
+
+
+def roll_town_walls(
+    towns: Towns, danger: np.ndarray, seed: int, p: TownParams, town_max: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """``(has_walls, wall_strength)`` per town, keyed ``(seed, face, rank on face)``.
+
+    ``prob = base + danger_boost · danger + size_boost · size`` with danger over its
+    land p90 and size from ``town_min`` (0) to the city floor (1); quality is biased
+    by both, as a city's is by danger and wealth.
+    """
+    k = len(towns)
+    if k == 0:
+        return np.zeros(0, dtype=bool), np.zeros(0, dtype=np.float64)
+    pos = danger[danger > 0.0]
+    d_ref = float(np.percentile(pos, 90.0)) if pos.size else 1.0
+    d = np.clip(danger[towns.face_id] / max(d_ref, 1e-9), 0.0, 1.0)
+    size = np.clip((towns.population - p.town_min) / max(town_max - p.town_min, 1e-9), 0.0, 1.0)
+    prob = np.clip(p.wall_base_prob + p.wall_danger_boost * d + p.wall_size_boost * size, 0.0, 1.0)
+    rank: dict = {}
+    keys = []
+    for f in towns.face_id.tolist():
+        r = rank.get(f, 0)
+        rank[f] = r + 1
+        keys.append([seed, int(f), _WALL_STREAM, r])
+    return roll_walls(prob, 0.5 * (d + size), keys, p.wall_min_strength, p.wall_max_strength)
 
 
 class TownStage(Stage):
@@ -283,6 +326,9 @@ class TownStage(Stage):
             mine_workers=workers,
         )
 
+        towns.has_walls, towns.wall_strength = roll_town_walls(
+            towns, _face_danger(world, n), seed, p, town_max)
+
         # ── Carve the towns out of the countryside ───────────────────────────
         # A mining town takes miners first; any excess comes from farmers and fishers.
         town_pop = np.bincount(towns.face_id, weights=towns.population, minlength=n)
@@ -308,7 +354,8 @@ class TownStage(Stage):
         self.towns = towns
         world.add_feature("towns", towns)
         ctx.report(
-            f"Towns done: {len(towns)} towns ({town_pop.sum() / 1e6:.1f} M people), "
+            f"Towns done: {len(towns)} towns ({town_pop.sum() / 1e6:.1f} M people, "
+            f"{int(towns.has_walls.sum())} walled), "
             f"{unplaced.sum() / 1e6:.2f} M left rural for want of a site."
         )
 

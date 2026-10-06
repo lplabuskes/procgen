@@ -135,6 +135,8 @@ def draw_overlays(
             _draw_settlements(painter, globe, proj)
     if on("polity_borders"):
         _draw_polity_borders(painter, globe, proj)
+    if on("forts"):
+        _draw_forts(painter, globe.get_feature("forts"), proj)
 
 
 def _line(painter: QPainter, x0: float, y0: float, x1: float, y1: float) -> None:
@@ -420,6 +422,40 @@ def _draw_towns(painter: QPainter, towns, proj: OverlayProjector, ringed: bool =
         painter.setBrush(QBrush(QColor.fromRgbF(*rgba)))
         for x, y, r in zip(sx[mask], sy[mask], radii[mask]):
             painter.drawEllipse(QRectF(float(x) - r, float(y) - r, 2 * r, 2 * r))
+    painter.restore()
+
+
+# A keep with three merlons, in units of the marker radius (screen y down).
+_KEEP_OUTLINE = (
+    (-1.0, 1.0), (1.0, 1.0), (1.0, -1.0), (0.6, -1.0), (0.6, -0.5), (0.2, -0.5), (0.2, -1.0),
+    (-0.2, -1.0), (-0.2, -0.5), (-0.6, -0.5), (-0.6, -1.0), (-1.0, -1.0),
+)
+
+
+def _draw_forts(painter: QPainter, forts, proj: OverlayProjector) -> None:
+    """Kind-coloured crenellated keeps (unlike any settlement's round marker), white-haloed."""
+    from realmgen.polity.forts import FORT_KIND_COLORS
+    if forts is None or len(forts) == 0:
+        return
+    sx, sy, keep = proj.points(proj.on_land("forts", forts.positions))
+    r = max(3.0, 3.8 * proj.zoom ** 0.3) * (_REGION_CITY_SCALE if proj.regional else 1.0)
+    painter.save()
+    for kind, rgba in enumerate(FORT_KIND_COLORS):
+        mask = keep & (forts.kind == kind)
+        if not mask.any():
+            continue
+        shapes = [
+            QPolygonF([QPointF(float(x) + r * u, float(y) + r * v) for u, v in _KEEP_OUTLINE])
+            for x, y in zip(sx[mask], sy[mask])
+        ]
+        painter.setPen(QPen(QColor(255, 255, 255, 230), 2.6))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for poly in shapes:
+            painter.drawPolygon(poly)
+        painter.setPen(QPen(QColor(30, 26, 22, 245), 1.1))
+        painter.setBrush(QBrush(QColor.fromRgbF(*rgba)))
+        for poly in shapes:
+            painter.drawPolygon(poly)
     painter.restore()
 
 

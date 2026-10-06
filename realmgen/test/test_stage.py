@@ -12,6 +12,7 @@ from realmgen.scoring.builder import ScoringStage
 from realmgen.towns.builder import TownStage
 from realmgen.channels import (
     BORDER_TENSION,
+    FORT_POPULATION,
     HINTERLAND_ID,
     POLITY_ID,
     POPULATION,
@@ -43,6 +44,7 @@ def test_stage_channels():
     polity = PolityStage(p.polity)
     assert POLITY_ID in polity.provides
     assert BORDER_TENSION in polity.provides
+    assert FORT_POPULATION in polity.provides
 
 
 def test_realm_pipeline_has_six_stages():
@@ -106,3 +108,14 @@ def test_polity_register_display_gated_on_results():
     stage.register_display(None, reg2, debug=True)  # type: ignore[arg-type]
     assert "Polities" in reg2.schemes
     assert "Border Tension" in reg2.schemes
+    assert not any(ov.feature == "forts" for ov in reg2.overlays)
+
+    from realmgen.polity.forts import Forts
+    stage.forts = Forts(
+        positions=np.array([[1.0, 0.0, 0.0]]), face_id=np.array([2], dtype=np.int32),
+        facing=np.array([3], dtype=np.int32), kind=np.array([0], dtype=np.int8),
+        score=np.array([0.5]), garrison=np.array([300.0]),
+    )
+    reg3 = DisplayRegistry()
+    stage.register_display(None, reg3)  # type: ignore[arg-type]
+    assert any(ov.feature == "forts" and ov.checked for ov in reg3.overlays)

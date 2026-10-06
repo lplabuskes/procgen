@@ -18,7 +18,8 @@ A polity is a **tree, not a flat partition** (`docs/plans/polity_generation_brie
 - `realmgen/polity/seeding.py` — defensibility, capital seeding, scalar rolls (Stage 0)
 - `realmgen/polity/authority.py` — authority field, claiming, classification (Stages 1-3)
 - `realmgen/polity/loyalty.py` — `LoyaltyParams`, economic grip / peripheral wealth (Stage 4)
-- `realmgen/polity/tension.py` — border tension
+- `realmgen/polity/tension.py` — border crossings and tension
+- `realmgen/polity/forts.py` — `FortParams`, `Forts` (`forts` feature), fort candidates, siting, garrisons, fortified costs
 - `realmgen/polity/display.py` — colour schemes
 - `realmgen/polity/types.py` — `Polity` / `Scalars` / `ControlClass`, `POLITY_COLORS`
 
@@ -32,6 +33,7 @@ A polity is a **tree, not a flat partition** (`docs/plans/polity_generation_brie
 - **`loyalty`** (`LoyaltyParams`, Stage 4; both **off (0.0) by default**) — `economic_grip` (secession resistance ∝ intra-polity trade fraction), `peripheral_wealth_ratio` (non-capital ≥ this × its capital's trade wealth breaks away), `peripheral_external_floor` (min external trade fraction). Monotonic: more grip → fewer, bigger domains; more aggressive peripheral thresholds → more sovereigns.
 - **`fragmentation`** (`FragmentationParams`) — `n_epochs` (0 = off), `shock_scale` (max cohesion drop per epoch), `size_reference` (domain face count demanding full cohesion).
 - **`tension`** (`BorderTensionParams`) — `barrier_scale`, `flow_ref`, `artery_weight`.
+- **`forts`** (`FortParams`) — `enabled`, per-kind score floors (`border_min_score` 0.12, `strait_min_score` 0.2, `frontier_min_score` 0.2), `rugged_weight`, `strait_max_radius` (2; passage cut radius, ~2r + 1 faces across), `strait_uncontested_weight` (0.5), `spacing_hops` (2), `resistance` (4; extra edge cost at fortified crossings), per-kind garrisons (300 / 250 / 120 people).
 
 ## Types (`polity/types.py`)
 
@@ -87,10 +89,50 @@ fragments (deliberate feedback).
 
 ## Tension (`polity/tension.py`)
 
-`compute_border_tension` on the final sovereign partition: high cross-border
-trade flow (normalised to the 90th-percentile face flow) and large polities on
-both sides (`domain_power`) → high tension; costly crossings (`barrier_scale`)
-damp it.
+`border_crossings` scores every passable border edge from each side:
+`exp(−cost / barrier_scale) × balance(domain_power) × artery(trade flow, normalised
+to the 90th-percentile face flow)`. `compute_border_tension` takes the hottest
+crossing per border pair and per face, on the final sovereign partition.
+
+## Forts (`polity/forts.py`)
+
+Defensive-only sites, placed on the **first** forest's sovereign partition, then
+fed back: the forest is grown a second time (same capitals, epochs re-run) on
+fortified costs, so frontiers with forts tend to hold. Off (`enabled = False`):
+one pass, no forts.
+
+- **Border fort** (`border_candidates`): a `border_crossings` edge on its own side,
+  `crossing × (1 + rugged_weight · rugged) / (1 + rugged_weight)` (ruggedness =
+  land base cost over land p50..p90), ≥ `border_min_score`.
+- **Strait fort** (`find_passages`, `strait_candidates`): a **passage** is a coastal
+  ocean face (lakes excluded: ocean-mask face share > 0.5) where removing the sea
+  within `r ≤ strait_max_radius` hops splits its 8-hop sea neighbourhood into ≥ 2
+  pieces each holding ≥ 3 open-sea faces (sea all round) — so not a sea wrapping
+  round an island, a bay, or a one-face-wide arm of the sea into the land. A strait
+  is a connected run of passages; its forts go on the claimed shores of its **key
+  face** only (narrowest `r`, then busiest), scored `artery(peak flow in the strait)
+  × 1 / (1 + r/2) × (1 if the strait's shores hold ≥ 2 sovereigns, else
+  strait_uncontested_weight)`. Face-scale straits are rare: 0–6 per world.
+- **Frontier outpost** (`frontier_candidates`): a claimed face below
+  `DangerInfluenceParams.block_threshold` beside land at or above it:
+  `peak neighbour danger × sqrt(rural / land p90)` (guards people, not empty marches).
+- **Selection** (`select_sites`): best-first per kind (border, strait, frontier)
+  over one shared exclusion field, ≥ `spacing_hops` apart, never on a city face.
+- **Resistance**: `fortify_land_costs` adds `resistance` to a border fort's edges
+  into other sovereigns (both ways; the authority Dijkstra is undirected);
+  `fortify_landings` adds it to a strait fort's land↔water transitions in the
+  hybrid graph. Tension still uses the unfortified costs.
+- **Siting** (`site_forts`): leaning from the centroid toward the watched face
+  (0.35; strait 0.5 toward the first water face), on an owned land texel —
+  strait: nearest (the shore); others: highest within 0.3 × the centroid spacing.
+- **Garrison** (`garrisons`): `base[kind] × (0.5 + score / kind's top score)`, at
+  most the face's farmers (rural − fishing − mining), carved out of
+  `rural_population` into `FORT_POPULATION`. Re-runs put the old garrisons back
+  first; `PopulationStage` zeroes `fort_population` with fresh rural.
+
+Seeds 4 / 31 / 35: 116 / 81 / 100 forts (border 48 / 15 / 40, strait 2 / 1 / 0,
+frontier 66 / 65 / 60), 24k / 14k / 20k garrison; 1–4% of land faces change
+sovereign vs no forts; realm stage +~0.7 s.
 
 ## PolityStage
 
@@ -100,17 +142,19 @@ Fourth of six in `RealmPipeline`. Reads `IS_WATER`, `COST_SURFACES`,
 Danger × `DangerInfluenceParams.movement_scale` is added to land base cost before
 building land edge costs (`build_land_edge_costs`) and the hybrid graph
 (`build_base_hybrid_graph`, wind-directional sea edges). Seeds capitals, runs
-`run_fragmentation_epochs`, computes tension. No settlements / no qualifying
-capital → everything written empty.
+`run_fragmentation_epochs`, places forts and re-runs it on fortified costs
+([Forts](#forts-polityfortspy)), computes tension. No settlements / no qualifying
+capital → everything written empty (no forts).
 
 ## Outputs
 
-- Per face: `POLITY_ID` (direct governor), `SOVEREIGN_ID`, `CONTROL_CLASS`, `BORDER_TENSION`, `AUTHORITY` (winning field value; weights `RefineStage`'s label field).
-- Features: `polities` (forest), `polity_history` (`FragmentationEvent` list), `polity_tensions` (`(a, b, score)`), `polity_borders` (`{depth: (M, 6)}` raw hexagon-edge segments; 0 = sovereign, d > 0 = internal within a depth-d parent; replaced by smooth polylines in `RefineStage`).
+- Per face: `POLITY_ID` (direct governor), `SOVEREIGN_ID`, `CONTROL_CLASS`, `BORDER_TENSION`, `AUTHORITY` (winning field value; weights `RefineStage`'s label field), `FORT_POPULATION` (garrisons; `RURAL_POPULATION` reduced to match).
+- Features: `polities` (forest), `polity_history` (`FragmentationEvent` list), `polity_tensions` (`(a, b, score)`), `polity_borders` (`{depth: (M, 6)}` raw hexagon-edge segments; 0 = sovereign, d > 0 = internal within a depth-d parent; replaced by smooth polylines in `RefineStage`), `forts` (`Forts`: positions, face, watched face, kind, score, garrison; saved with the polities).
 
 Display: **Polities** scheme (refine's `polity_fill` + `polity_fill_recipe` when
 present, else `make_polity_tree_color`: sovereign hue, vassals lighter tints),
-**Polity Borders** overlay; hover `Pol: 3 › 7` + control class. Debug: Border
+**Polity Borders** overlay, **Forts** overlay (checked, all views; categorical
+legend by kind); hover `Pol: 3 › 7` + control class, world-map fort kind + garrison. Debug: Border
 Tension, Sovereigns, Control Class, Authority Field schemes, tension hover.
 
 Validation: `scripts/measure_polities.py`.

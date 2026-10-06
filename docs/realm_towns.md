@@ -66,7 +66,15 @@ unmodeled (`city_surplus_share`, [realm_population.md](realm_population.md)).
      mining_radius_km` of the face's worked workings, weighted `Σ miners ·
      exp(−(d / mining_radius)²)`; always mining kind. Need no farmland (barren
      icecap/desert faces with worked deposits still get one).
-4. **Accounting.** `town_population` = sited towns per face; `rural_population`
+4. **Walls** (`roll_town_walls`, data only). Probability `wall_base_prob (0.05)
+   + wall_danger_boost (0.15) · danger + wall_size_boost (0.15) · size`, danger over
+   its p90, size 0 at `town_min` … 1 at the city floor — rarer than a city's
+   `0.3 + 0.3 danger + 0.3 wealth` ([Defensibility](realm_population.md#defensibility)).
+   Strength `wall_min_strength` (0.2) … `wall_max_strength` (0.8), quality half
+   random, half danger + size (`polity/seeding.py::roll_walls`, shared with cities).
+   RNG keyed `(seed, face, stream, rank on face)`. Seed 4: ~11% of towns walled vs
+   ~37% of cities. Villages never have walls.
+5. **Accounting.** `town_population` = sited towns per face; `rural_population`
    and density reduced to match — mining towns out of miners (the odd minimum
    one beyond them out of farmers), others out of farmers+fishers. A town with no
    legal site is dropped; its people stay rural (a mining town's stay in the
@@ -86,7 +94,9 @@ whose hinterland holds it).
 the mine), `town_min` (1000), `size_exponent` (1.0), `town_spacing_km` (20),
 `city_clearance_km` (25); bonuses `port_bonus` (2), `confluence_bonus` (2),
 `river_bonus` (1), `stream_bonus` (1), `route_bonus` (1), `mining_bonus` (1.5);
-`route_radius_km` (15), `mining_radius_km` (25), `site_jitter` (hidden, 0.4).
+`route_radius_km` (15), `mining_radius_km` (25), `site_jitter` (hidden, 0.4);
+walls `wall_base_prob`, `wall_danger_boost`, `wall_size_boost`,
+`wall_min_strength`, `wall_max_strength`.
 Ceiling = `PopulationParams.city_min` (no size overlap with cities).
 
 ## Display

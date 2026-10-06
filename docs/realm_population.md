@@ -151,6 +151,7 @@ loop (trade wealth and danger final):
 - **River barrier**: face flow magnitude (normalised to land p90)
 - **Walls**: probability `wall_base_prob + wall_danger_boost·danger + wall_wealth_boost·wealth`, quality biased by danger and wealth; keyed `(world.seed, face)`
 
+Rolled by `roll_walls` (shared with town walls, [realm_towns.md](realm_towns.md)).
 Returns `(defensibility, has_walls, wall_strength)`, stamped on `Settlement`;
 read by `PolityStage`. Params: `PolityParams.defensibility`
 ([realm_polity.md](realm_polity.md)).

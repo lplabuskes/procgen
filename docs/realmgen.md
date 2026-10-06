@@ -30,7 +30,7 @@ Stage docs: [realm_scoring.md](realm_scoring.md) · [realm_placement.md](realm_p
 1. `ScoringStage` — suitability + situational value
 2. `PlacementStage` — settlement seeding
 3. `PopulationStage` — trade, relaxation loop, population, defensibility
-4. `PolityStage` — territory, hierarchy, border tension
+4. `PolityStage` — territory, hierarchy, forts (then territory again), border tension
 5. `RefineStage` — texel-level city sites, route endpoints, smooth borders, polity fill
 6. `TownStage` — display-only towns carved from rural population; rural density texture
 
@@ -38,7 +38,7 @@ Display goes through the ordinary `Stage.register_display` / inherited
 `Pipeline.apply_display` (one `DisplayRegistry` across the nested pipeline; no
 bespoke realm path).
 - Scheme **Polities** (texel fill as texture + recipe the region view reruns). `--debug`: Suitability, Situational Value, Trade Flow, Hinterland, Border Tension, Sovereigns, Control Class, Authority Field, Rural Density.
-- Overlays (checked): Settlements, Trade Routes, Polity Borders, Towns (region/local only).
+- Overlays (checked): Settlements, Trade Routes, Polity Borders, Forts, Towns (region/local only).
 - Hover: settlement tier/population, sovereign-to-leaf chain (`Pol: 3 › 7`), control class, towns; `--debug` adds suitability and border tension.
 
 **Serialization.** Each stage implements `serialize()`/`load()` (no realm rebuild

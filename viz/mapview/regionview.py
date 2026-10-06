@@ -545,6 +545,7 @@ class RegionView(QWidget):
                     positions=self._local.town_positions, population=towns.population[idx],
                     face_id=towns.face_id[idx], parent=towns.parent[idx], kind=towns.kind[idx],
                     site_positions=towns.site_positions[idx], refined=towns.refined[idx],
+                    has_walls=towns.has_walls[idx], wall_strength=towns.wall_strength[idx],
                 )
             if self._local.city_footprints is not None:
                 out["cities"] = (self._local.city_index, self._local.city_positions, self._local.city_footprints)

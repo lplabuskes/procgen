@@ -152,6 +152,38 @@ def test_towns_draw_only_in_the_region_view(app):
     assert world_proj.on_land_calls == 0 and region_proj.on_land_calls == 1
 
 
+def test_forts_draw_in_every_view_as_keeps(app):
+    from PySide6.QtGui import QColor, QImage, QPainter
+    from realmgen.polity.forts import FORT_KIND_COLORS, Forts
+    from viz.mapview.overlays import _draw_forts
+
+    class _Centre(_CountingProjector):
+        def points(self, ecef):
+            n = len(ecef)
+            return np.full(n, 20.0), np.full(n, 20.0), np.ones(n, dtype=bool)
+
+    forts = Forts(
+        positions=np.array([[1.0, 0.0, 0.0]]), face_id=np.array([0], dtype=np.int32),
+        facing=np.array([1], dtype=np.int32), kind=np.array([0], dtype=np.int8),
+        score=np.array([0.5]), garrison=np.array([300.0]),
+    )
+    for regional in (False, True):
+        image = QImage(40, 40, QImage.Format.Format_RGBA8888)
+        image.fill(QColor(0, 0, 0, 0))
+        painter = QPainter(image)
+        proj = _Centre(regional)
+        _draw_forts(painter, forts, proj)  # type: ignore[arg-type]
+        painter.end()
+        assert proj.on_land_calls == 1
+        fill = QColor.fromRgbF(*FORT_KIND_COLORS[0])
+        centre = image.pixelColor(20, 22)   # body, below the merlons
+        assert abs(centre.red() - fill.red()) < 3 and abs(centre.green() - fill.green()) < 3
+        r = max(3.0, 3.8 * proj.zoom ** 0.3) * (1.5 if regional else 1.0)
+        top = round(20 - 0.85 * r)
+        merlon, gap = image.pixelColor(20, top), image.pixelColor(round(20 + 0.4 * r), top)
+        assert merlon.alpha() == 255 and gap.alpha() == 0   # crenellated, not a disc
+
+
 def test_new_params_refine_the_region_again(app, synthetic_globe):  # noqa: F811
     """Entering a region refines its towns into the world feature. New params
     re-refine it: upsample params rebuild the fields (keeping the view), river

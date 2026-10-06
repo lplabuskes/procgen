@@ -114,6 +114,7 @@ Drawing order (feature key, registering stage):
 | `"danger_sources"` (danger, debug) | Down-triangles by source category |
 | `"trade_routes"` (population) | Yellow, hops with flow ≥ world median; width ∝ √(flow / max) (0.4–4 px) × zoom^0.4; ends follow `on_land` |
 | `"villages"` (local only) | 1.3–2.4 px dots by kind (farming, river, fishing, roadside), from `refined["villages"]` |
+| `"forts"` (`Forts`, all views) | Crenellated keep (`_KEEP_OUTLINE`) in the kind colour, dark outline over a white halo; half-size `max(3, 3.8 · zoom^0.3)` px, × 1.5 in region/local; `on_land`-snapped |
 | `"towns"` (towns; region/local only) | Kind-coloured dots 0.9–1.6 px × zoom^0.3; ringed dark-then-white on local maps |
 | `"settlements"` (population) | Tier circles, radius `TIER_RADII[tier] · zoom^0.3 · (√(pop/max_pop)·0.4 + 0.6)`. Region: × 1.5, ≥ 2 × largest town, ringed. Local: built-up footprint (`localmap/cities.py`, texels unioned via `QRegion`, tier colour, dark outline); smaller than the floor marker (2 × largest town radius) → "walled" marker (dark outline, white band, dark ring, dark centre dot), never mistaken for a town |
 | `"polity_borders"` (polity) | Black by depth (2.0 / 1.2 / 0.7 px × zoom^0.3, fainter deeper), sovereign on top |
