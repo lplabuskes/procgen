@@ -432,30 +432,38 @@ _KEEP_OUTLINE = (
 )
 
 
+FORT_COLOR = QColor(150, 140, 125)   # weathered stone
+# Fort keeps in region / local views, relative to the world map.
+_REGION_FORT_SCALE = 1.15
+
+
+def fort_markers(forts, proj: OverlayProjector) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+    """``(sx, sy, keep, r)`` of the fort keeps (``r`` = half-size px, excluding the halo)."""
+    sx, sy, keep = proj.points(proj.on_land("forts", forts.positions))
+    r = max(3.0, 3.8 * proj.zoom ** 0.3) * (_REGION_FORT_SCALE if proj.regional else 1.0)
+    return sx, sy, keep, r
+
+
 def _draw_forts(painter: QPainter, forts, proj: OverlayProjector) -> None:
-    """Kind-coloured crenellated keeps (unlike any settlement's round marker), white-haloed."""
-    from realmgen.polity.forts import FORT_KIND_COLORS
+    """Stone crenellated keeps (unlike any settlement's round marker), white-haloed; kind isn't shown."""
     if forts is None or len(forts) == 0:
         return
-    sx, sy, keep = proj.points(proj.on_land("forts", forts.positions))
-    r = max(3.0, 3.8 * proj.zoom ** 0.3) * (_REGION_CITY_SCALE if proj.regional else 1.0)
+    sx, sy, keep, r = fort_markers(forts, proj)
+    if not keep.any():
+        return
+    shapes = [
+        QPolygonF([QPointF(float(x) + r * u, float(y) + r * v) for u, v in _KEEP_OUTLINE])
+        for x, y in zip(sx[keep], sy[keep])
+    ]
     painter.save()
-    for kind, rgba in enumerate(FORT_KIND_COLORS):
-        mask = keep & (forts.kind == kind)
-        if not mask.any():
-            continue
-        shapes = [
-            QPolygonF([QPointF(float(x) + r * u, float(y) + r * v) for u, v in _KEEP_OUTLINE])
-            for x, y in zip(sx[mask], sy[mask])
-        ]
-        painter.setPen(QPen(QColor(255, 255, 255, 230), 2.6))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        for poly in shapes:
-            painter.drawPolygon(poly)
-        painter.setPen(QPen(QColor(30, 26, 22, 245), 1.1))
-        painter.setBrush(QBrush(QColor.fromRgbF(*rgba)))
-        for poly in shapes:
-            painter.drawPolygon(poly)
+    painter.setPen(QPen(QColor(255, 255, 255, 230), 2.6))
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    for poly in shapes:
+        painter.drawPolygon(poly)
+    painter.setPen(QPen(QColor(30, 26, 22, 245), 1.1))
+    painter.setBrush(QBrush(FORT_COLOR))
+    for poly in shapes:
+        painter.drawPolygon(poly)
     painter.restore()
 
 

@@ -125,10 +125,14 @@ one pass, no forts.
 - **Siting** (`site_forts`): leaning from the centroid toward the watched face
   (0.35; strait 0.5 toward the first water face), on an owned land texel —
   strait: nearest (the shore); others: highest within 0.3 × the centroid spacing.
-- **Garrison** (`garrisons`): `base[kind] × (0.5 + score / kind's top score)`, at
-  most the face's farmers (rural − fishing − mining), carved out of
-  `rural_population` into `FORT_POPULATION`. Re-runs put the old garrisons back
-  first; `PopulationStage` zeroes `fort_population` with fresh rural.
+- **Garrison** (`garrisons`): `base[kind] × (0.5 + score / kind's top score)`,
+  levied from the fort's (final) sovereign's farmers (rural − fishing − mining)
+  across all its faces, each in proportion to the farmers it has left (an
+  unclaimed fort face levies only itself), so a fort in empty mountains is still
+  manned; short only when the realm runs out. The levy comes out of
+  `rural_population` per source face (`FORT_LEVY`) and the garrison is housed at
+  the fort face (`FORT_POPULATION`). Re-runs put the old levies back first;
+  `PopulationStage` zeroes both with fresh rural.
 
 Seeds 4 / 31 / 35: 116 / 81 / 100 forts (border 48 / 15 / 40, strait 2 / 1 / 0,
 frontier 66 / 65 / 60), 24k / 14k / 20k garrison; 1–4% of land faces change
@@ -148,13 +152,13 @@ capital → everything written empty (no forts).
 
 ## Outputs
 
-- Per face: `POLITY_ID` (direct governor), `SOVEREIGN_ID`, `CONTROL_CLASS`, `BORDER_TENSION`, `AUTHORITY` (winning field value; weights `RefineStage`'s label field), `FORT_POPULATION` (garrisons; `RURAL_POPULATION` reduced to match).
+- Per face: `POLITY_ID` (direct governor), `SOVEREIGN_ID`, `CONTROL_CLASS`, `BORDER_TENSION`, `AUTHORITY` (winning field value; weights `RefineStage`'s label field), `FORT_POPULATION` (garrisons at fort faces), `FORT_LEVY` (farmers drafted per face; `RURAL_POPULATION` reduced to match).
 - Features: `polities` (forest), `polity_history` (`FragmentationEvent` list), `polity_tensions` (`(a, b, score)`), `polity_borders` (`{depth: (M, 6)}` raw hexagon-edge segments; 0 = sovereign, d > 0 = internal within a depth-d parent; replaced by smooth polylines in `RefineStage`), `forts` (`Forts`: positions, face, watched face, kind, score, garrison; saved with the polities).
 
 Display: **Polities** scheme (refine's `polity_fill` + `polity_fill_recipe` when
 present, else `make_polity_tree_color`: sovereign hue, vassals lighter tints),
-**Polity Borders** overlay, **Forts** overlay (checked, all views; categorical
-legend by kind); hover `Pol: 3 › 7` + control class, world-map fort kind + garrison. Debug: Border
+**Polity Borders** overlay, **Forts** overlay (checked, all views; one colour, kind not shown — `kind` is data
+for downstream consumers); hover `Pol: 3 › 7` + control class, world-map `Fort (300 men)`. Debug: Border
 Tension, Sovereigns, Control Class, Authority Field schemes, tension hover.
 
 Validation: `scripts/measure_polities.py`.

@@ -22,6 +22,7 @@ from realmgen.channels import (
     BORDER_TENSION,
     CONTROL_CLASS,
     FISHING_POPULATION,
+    FORT_LEVY,
     FORT_POPULATION,
     MINING_POPULATION,
     POLITY_ID,
@@ -42,8 +43,6 @@ from realmgen.polity.forest import (
 from realmgen.polity.forts import (
     FORT_BORDER,
     FORT_FRONTIER,
-    FORT_KIND_COLORS,
-    FORT_KIND_NAMES,
     FORT_STRAIT,
     FortParams,
     Forts,
@@ -138,7 +137,7 @@ class PolityStage(Stage):
 
     name = "realm_polity"
     requires = (POPULATION, IS_WATER, COST_SURFACES)
-    provides = (POLITY_ID, SOVEREIGN_ID, CONTROL_CLASS, BORDER_TENSION, FORT_POPULATION)
+    provides = (POLITY_ID, SOVEREIGN_ID, CONTROL_CLASS, BORDER_TENSION, FORT_POPULATION, FORT_LEVY)
 
     def __init__(self, params: PolityParams, danger_params=None) -> None:
         self.params = params
@@ -247,7 +246,7 @@ class PolityStage(Stage):
                 forest, self.polity_history = run_fragmentation_epochs(
                     fort_ctx, capital_sidx, land_mask, ctx.report, params=p.fragmentation
                 )
-        self.forts = self._build_forts(mesh, is_water, sites)
+        self.forts = self._build_forts(mesh, is_water, sites, forest.sovereign_of_face)
         world.add_feature("forts", self.forts)
         polities = forest.polities
         polity_of_face = forest.polity_of_face
@@ -373,16 +372,17 @@ class PolityStage(Stage):
 
     @staticmethod
     def _rural_before_forts(mesh) -> np.ndarray:
-        """Rural people with any earlier run's garrisons put back."""
+        """Rural people with any earlier run's levies put back."""
         rural = np.asarray(RURAL_POPULATION.read(mesh), dtype=np.float64)
-        if FORT_POPULATION.present(mesh):
-            rural = rural + np.asarray(FORT_POPULATION.read(mesh), dtype=np.float64)
+        if FORT_LEVY.present(mesh):
+            rural = rural + np.asarray(FORT_LEVY.read(mesh), dtype=np.float64)
         return rural
 
-    def _build_forts(self, mesh, is_water, sites: List[FortSite]) -> Forts:
-        """Site the forts and carve their garrisons out of the farmers."""
+    def _build_forts(self, mesh, is_water, sites: List[FortSite], sovereign_of_face: np.ndarray) -> Forts:
+        """Site the forts and levy their garrisons from each sovereign's farmers."""
         n = len(mesh.faces)
         fort_pop = np.zeros(n, dtype=np.float64)
+        levy = np.zeros(n, dtype=np.float64)
         forts = Forts.empty()
         have_rural = RURAL_POPULATION.present(mesh)
         if sites:
@@ -396,10 +396,10 @@ class PolityStage(Stage):
                 for ch in (FISHING_POPULATION, MINING_POPULATION):
                     if ch.present(mesh):
                         farmers -= np.asarray(ch.read(mesh), dtype=np.float64)
-                garrison = garrisons(sites, farmers, {
+                garrison, levy = garrisons(sites, farmers, {
                     FORT_BORDER: fp.border_garrison, FORT_STRAIT: fp.strait_garrison,
                     FORT_FRONTIER: fp.frontier_garrison,
-                })
+                }, sovereign_of_face)
                 fort_pop = np.bincount(faces, weights=garrison, minlength=n)
             forts = Forts(
                 positions=positions, face_id=faces.astype(np.int32),
@@ -408,8 +408,9 @@ class PolityStage(Stage):
                 score=np.array([s.score for s in sites], dtype=np.float64), garrison=garrison,
             )
         if have_rural:
-            RURAL_POPULATION.write(mesh, self._rural_before_forts(mesh) - fort_pop)
+            RURAL_POPULATION.write(mesh, self._rural_before_forts(mesh) - levy)
             FORT_POPULATION.write(mesh, fort_pop)
+            FORT_LEVY.write(mesh, levy)
         return forts
 
     @staticmethod
@@ -553,7 +554,7 @@ class PolityStage(Stage):
         self.sovereign_of_face = sovereign_of_face
         self.control_of_face = control_of_face
         self.authority_of_face = np.zeros(n, dtype=np.float64)
-        self.forts = self._build_forts(mesh, np.zeros(n, dtype=bool), [])
+        self.forts = self._build_forts(mesh, np.zeros(n, dtype=bool), [], sovereign_of_face)
         world.add_feature("forts", self.forts)
         self.face_tension = face_tension
         self.pair_tension = pair_tension
@@ -617,14 +618,10 @@ class PolityStage(Stage):
             reg.add_overlay("polity_borders", "Polity Borders")
         forts = self.forts
         if forts is not None and len(forts):
-            reg.add_overlay(
-                "forts", "Forts", checked=True,
-                legend=("categorical", list(zip(FORT_KIND_NAMES, FORT_KIND_COLORS))),
-            )
+            reg.add_overlay("forts", "Forts", checked=True)
             by_face: dict = {}
             for k in range(len(forts)):
-                by_face.setdefault(int(forts.face_id[k]), []).append(
-                    f"{FORT_KIND_NAMES[int(forts.kind[k])]} ({forts.garrison[k]:.0f} men)")
+                by_face.setdefault(int(forts.face_id[k]), []).append(f"Fort ({forts.garrison[k]:.0f} men)")
 
             def _fort_hover(face: int, _uv, _w) -> list:
                 return by_face.get(face, [])

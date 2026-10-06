@@ -7,7 +7,7 @@ from scipy.sparse import csr_matrix
 
 from core.mesh import Mesh
 from core.world import World
-from realmgen.channels import FISHING_POPULATION, FORT_POPULATION, RURAL_POPULATION
+from realmgen.channels import FISHING_POPULATION, FORT_LEVY, FORT_POPULATION, RURAL_POPULATION
 from realmgen.polity.builder import PolityParams, PolityStage
 from realmgen.polity.forts import (
     FORT_BORDER,
@@ -128,10 +128,21 @@ def test_select_sites_spaces_best_first_and_avoids_cities():
     assert later == []
 
 
-def test_garrisons_scale_by_score_and_stop_at_the_farmers():
-    sites = [_site(0, 1.0), _site(0, 0.5), _site(2, 0.2, FORT_FRONTIER)]
-    g = garrisons(sites, np.array([200.0, 0.0, 1e4]), {FORT_BORDER: 100.0, FORT_FRONTIER: 50.0})
-    np.testing.assert_allclose(g, [150.0, 50.0, 75.0])   # second border fort gets what's left
+def test_garrisons_levy_the_sovereigns_farmers_and_stop_when_the_realm_runs_out():
+    farmers = np.array([200.0, 0.0, 0.0, 100.0, 1e4])
+    sov = np.array([0, 0, 0, 1, -1])
+    sites = [_site(1, 1.0), _site(2, 0.5), _site(3, 1.0), _site(4, 0.2, FORT_FRONTIER)]
+    g, levy = garrisons(sites, farmers, {FORT_BORDER: 100.0, FORT_FRONTIER: 50.0}, sov)
+    # Farmer-less faces 1 and 2 draw on face 0 (the second fort gets what's left);
+    # sovereign 1 is short; the unclaimed outpost levies only its own face.
+    np.testing.assert_allclose(g, [150.0, 50.0, 100.0, 75.0])
+    np.testing.assert_allclose(levy, [200.0, 0.0, 0.0, 100.0, 75.0])
+
+
+def test_garrison_levy_is_spread_in_proportion_to_the_farmers():
+    g, levy = garrisons([_site(1, 1.0)], np.array([300.0, 100.0]), {FORT_BORDER: 100.0}, np.array([0, 0]))
+    np.testing.assert_allclose(g, [150.0])
+    np.testing.assert_allclose(levy, [112.5, 37.5])
 
 
 def test_site_forts_on_owned_land_near_the_target(dual):
@@ -193,7 +204,7 @@ def test_forts_pack_round_trip():
 # ── stage accounting ─────────────────────────────────────────────────────────
 
 
-def test_stage_carves_garrisons_out_of_the_farmers(dual):
+def test_stage_levies_garrisons_from_the_realm_and_houses_them_at_the_forts(dual):
     world = World.from_mesh(dual)
     mesh = world.mesh
     n = len(mesh.faces)
@@ -204,14 +215,17 @@ def test_stage_carves_garrisons_out_of_the_farmers(dual):
     sites = [_site(3, 1.0, facing=int(mesh.face_adjacency[3][0])),
              _site(7, 1.0, FORT_FRONTIER, facing=int(mesh.face_adjacency[7][0]))]
     is_water = np.zeros(n, dtype=bool)
-    forts = stage._build_forts(mesh, is_water, sites)
-    # 100 farmers each: border wants 1.5 × 300, frontier 1.5 × 120.
-    np.testing.assert_allclose(forts.garrison, [100.0, 100.0])
-    rural, fort = RURAL_POPULATION.read(mesh), FORT_POPULATION.read(mesh)
-    np.testing.assert_allclose(rural + fort, rural0)
-    assert fort[3] == 100.0 and fort[7] == 100.0
+    sov = np.zeros(n, dtype=np.int32)   # one realm
+    forts = stage._build_forts(mesh, is_water, sites, sov)
+    # 100 farmers per face, more than the fort faces hold: border 1.5 × 300, frontier 1.5 × 120.
+    np.testing.assert_allclose(forts.garrison, [450.0, 180.0])
+    rural, fort, levy = RURAL_POPULATION.read(mesh), FORT_POPULATION.read(mesh), FORT_LEVY.read(mesh)
+    np.testing.assert_allclose(levy, np.full(n, 630.0 / n))   # spread evenly over the realm
+    np.testing.assert_allclose(rural + levy, rural0)
+    np.testing.assert_allclose(rural.sum() + fort.sum(), rural0.sum())
+    assert fort[3] == 450.0 and fort[7] == 180.0
 
-    # Idempotent: a re-run puts the old garrisons back first.
-    stage._build_forts(mesh, is_water, sites)
-    np.testing.assert_allclose(RURAL_POPULATION.read(mesh) + FORT_POPULATION.read(mesh), rural0)
-    np.testing.assert_allclose(FORT_POPULATION.read(mesh)[[3, 7]], [100.0, 100.0])
+    # Idempotent: a re-run puts the old levies back first.
+    stage._build_forts(mesh, is_water, sites, sov)
+    np.testing.assert_allclose(RURAL_POPULATION.read(mesh) + FORT_LEVY.read(mesh), rural0)
+    np.testing.assert_allclose(FORT_POPULATION.read(mesh)[[3, 7]], [450.0, 180.0])

@@ -154,8 +154,8 @@ def test_towns_draw_only_in_the_region_view(app):
 
 def test_forts_draw_in_every_view_as_keeps(app):
     from PySide6.QtGui import QColor, QImage, QPainter
-    from realmgen.polity.forts import FORT_KIND_COLORS, Forts
-    from viz.mapview.overlays import _draw_forts
+    from realmgen.polity.forts import Forts
+    from viz.mapview.overlays import FORT_COLOR, _draw_forts
 
     class _Centre(_CountingProjector):
         def points(self, ecef):
@@ -175,10 +175,10 @@ def test_forts_draw_in_every_view_as_keeps(app):
         _draw_forts(painter, forts, proj)  # type: ignore[arg-type]
         painter.end()
         assert proj.on_land_calls == 1
-        fill = QColor.fromRgbF(*FORT_KIND_COLORS[0])
+        fill = FORT_COLOR
         centre = image.pixelColor(20, 22)   # body, below the merlons
         assert abs(centre.red() - fill.red()) < 3 and abs(centre.green() - fill.green()) < 3
-        r = max(3.0, 3.8 * proj.zoom ** 0.3) * (1.5 if regional else 1.0)
+        r = max(3.0, 3.8 * proj.zoom ** 0.3) * (1.15 if regional else 1.0)
         top = round(20 - 0.85 * r)
         merlon, gap = image.pixelColor(20, top), image.pixelColor(round(20 + 0.4 * r), top)
         assert merlon.alpha() == 255 and gap.alpha() == 0   # crenellated, not a disc

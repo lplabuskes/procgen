@@ -265,3 +265,34 @@ def test_farmland_follows_its_settlements_overlays(app, globe):  # noqa: F811
     view.set_overlay_visible("villages", True)
     assert len(view._farm_images) == local.fields.n_hexes
     _painted(view)
+
+
+def test_region_and_local_hover_name_the_fort_and_its_garrison(app, globe, settled):  # noqa: F811
+    from realmgen.polity.forts import Forts
+    probe = _region_view(globe)
+    fields = probe.fields
+    assert fields is not None
+    pos = fields.grid.texture_positions(fields.tex_size)[settled]
+    land = fields.textures["ocean_mask"][settled, ..., 0] < 0.5
+    rows, cols = np.nonzero(land & fields.in_hex[settled])
+    at = pos[rows[len(rows) // 2], cols[len(cols) // 2]][None].copy()
+    forts = Forts(
+        positions=at, face_id=np.array([int(fields.faces[settled, rows[0], cols[0]])], dtype=np.int32),
+        facing=np.array([0], dtype=np.int32), kind=np.array([0], dtype=np.int8),
+        score=np.array([0.5]), garrison=np.array([321.0]),
+    )
+    globe.add_feature("forts", forts)
+    try:
+        region = _region_view(globe)
+        local = _local_view()
+        local.set_local(region, settled)
+        for view in (region, local):
+            view.set_overlay_visible("forts", True)
+            _painted(view)
+            _hover_at(view, view._on_land("forts", forts.positions)[0])
+            assert view.fort_under_cursor() == "Fort (321 men)"
+            assert "Fort (321 men)" in view.settlements_under_cursor(None)
+            view._mouse = (-100.0, -100.0)
+            assert view.fort_under_cursor() is None
+    finally:
+        globe.remove_feature("forts")

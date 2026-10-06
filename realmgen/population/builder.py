@@ -10,7 +10,7 @@ from core.display import DisplayRegistry
 from core.params import field, param_field as _f, paramclass
 from core.pipeline import BuildContext, Stage
 from realmgen.channels import (
-    FISHING_POPULATION, FORT_POPULATION, HINTERLAND_ID, MINING_POPULATION, POPULATION, RURAL_POPULATION,
+    FISHING_POPULATION, FORT_LEVY, FORT_POPULATION, HINTERLAND_ID, MINING_POPULATION, POPULATION, RURAL_POPULATION,
     SITUATIONAL_VALUE, SUITABILITY, TOWN_POPULATION, TRADE_FLOW,
 )
 from realmgen.placement.builder import SeederParams
@@ -229,6 +229,7 @@ class PopulationStage(Stage):
         # All of it is countryside until the polity and town stages carve forts and towns out.
         TOWN_POPULATION.write(mesh, np.zeros(n, dtype=np.float64))
         FORT_POPULATION.write(mesh, np.zeros(n, dtype=np.float64))
+        FORT_LEVY.write(mesh, np.zeros(n, dtype=np.float64))
 
         self.settlements = list(world.get_feature("settlements"))
 

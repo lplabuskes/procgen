@@ -13,7 +13,8 @@ the forest is grown again, so fortified frontiers tend to hold.
   narrowness and whether its shores belong to different sovereigns.
 - **Frontier outpost**: on a settled face beside land too dangerous to settle.
 
-Each holds a small garrison carved out of its face's farmers (``fort_population``).
+Each holds a small garrison levied from its sovereign's farmers realm-wide
+(``fort_levy``) and housed at the fort (``fort_population``).
 """
 from __future__ import annotations
 
@@ -28,11 +29,6 @@ from core.params import param_field as _f, paramclass
 
 FORT_BORDER, FORT_STRAIT, FORT_FRONTIER = range(3)
 FORT_KIND_NAMES = ("Border fort", "Strait fort", "Frontier outpost")
-FORT_KIND_COLORS: list[tuple[float, float, float, float]] = [
-    (0.78, 0.22, 0.20, 1.0),  # brick red  — border
-    (0.25, 0.40, 0.75, 1.0),  # navy       — strait
-    (0.55, 0.62, 0.25, 1.0),  # olive      — frontier
-]
 
 
 @paramclass
@@ -373,20 +369,38 @@ def site_forts(
 
 
 def garrisons(
-    sites: Sequence[FortSite], farmers: np.ndarray, base: Mapping[int, float],
-) -> np.ndarray:
-    """``base[kind] × (0.5 + score / kind's top score)``, never more than the face's
-    farmers left after earlier forts on it."""
+    sites: Sequence[FortSite], farmers: np.ndarray, base: Mapping[int, float], sovereign_of_face: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """``base[kind] × (0.5 + score / kind's top score)`` per fort, levied from its
+    sovereign's farmers (all its faces, each in proportion to the farmers it has
+    left; an unclaimed fort face levies only itself). Returns ``(garrison per
+    fort, levy per face)``; a garrison is short only when the realm runs out."""
     left = np.maximum(np.asarray(farmers, dtype=np.float64).copy(), 0.0)
+    sov = np.asarray(sovereign_of_face)
+    levy = np.zeros(len(left), dtype=np.float64)
     top: Dict[int, float] = {}
     for s in sites:
         top[s.kind] = max(top.get(s.kind, 0.0), s.score)
+    members: Dict[int, np.ndarray] = {}
     out = np.zeros(len(sites), dtype=np.float64)
     for k, s in enumerate(sites):
         want = float(base.get(s.kind, 0.0)) * (0.5 + s.score / max(top[s.kind], 1e-12))
-        out[k] = min(want, float(left[s.face]))
-        left[s.face] -= out[k]
-    return out
+        owner = int(sov[s.face])
+        if owner < 0:
+            pool = np.array([s.face], dtype=np.int64)
+        else:
+            if owner not in members:
+                members[owner] = np.flatnonzero(sov == owner)
+            pool = members[owner]
+        avail = float(left[pool].sum())
+        if want <= 0.0 or avail <= 0.0:
+            continue
+        take = min(want, avail)
+        draw = left[pool] * (take / avail)
+        left[pool] -= draw
+        levy[pool] += draw
+        out[k] = take
+    return out, levy
 
 
 def fortify_land_costs(

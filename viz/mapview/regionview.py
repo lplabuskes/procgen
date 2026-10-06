@@ -19,7 +19,7 @@ from localmap.farmland import farmland_rgba
 from localmap.villages import VILLAGE_KIND_NAMES
 from region.display import build_layer_texture, snap_to_land
 from viz.mapview.legend import draw_legend, legend_size
-from viz.mapview.overlays import city_floor_radius, draw_overlays, settlement_markers, town_markers
+from viz.mapview.overlays import city_floor_radius, draw_overlays, fort_markers, settlement_markers, town_markers
 from region.geometry import RegionGeometry
 from region.grid import RegionHexGrid
 from region.params import RegionParams
@@ -732,12 +732,12 @@ class RegionView(QWidget):
         return texel
 
     def settlements_under_cursor(self, texel: Optional[tuple[int, int, int]]) -> list[str]:
-        """Status fragments for the settlements at the cursor: the city, then the town/village
-        dot (local map) or the towns in ``texel``'s hexagon (region)."""
+        """Status fragments for the settlements at the cursor: the fort, the city, then the
+        town/village dot (local map) or the towns in ``texel``'s hexagon (region)."""
         parts: list[str] = []
-        city = self.city_under_cursor(texel)
-        if city is not None:
-            parts.append(city)
+        for item in (self.fort_under_cursor(), self.city_under_cursor(texel)):
+            if item is not None:
+                parts.append(item)
         if self._local is None:
             parts.extend(self.towns_in_hex(texel[0]) if texel is not None else [])
         else:
@@ -793,6 +793,20 @@ class RegionView(QWidget):
                 return None
             w, tier = found, int(tiers[found])
         return f"{TIER_NAMES[min(tier, len(TIER_NAMES) - 1)]} · {float(cities[w].population):,.0f} people"
+
+    def fort_under_cursor(self) -> Optional[str]:
+        """``"Fort (<garrison> men)"`` for the fort keep under the cursor, if any."""
+        if not self._cursor_ready() or not self._overlay_visible.get("forts"):
+            return None
+        assert self._globe is not None
+        forts = self._globe.get_feature("forts")
+        if forts is None or len(forts) == 0:
+            return None
+        sx, sy, keep, r = fort_markers(forts, self._overlay_projector())
+        found = self._nearest_marker(sx, sy, keep, np.full(len(forts), r))
+        if found is None:
+            return None
+        return f"Fort ({float(forts.garrison[found]):.0f} men)"
 
     def town_under_cursor(self) -> Optional[str]:
         """``"<kind> · <people>"`` for a local map's town dot under the cursor, if any."""

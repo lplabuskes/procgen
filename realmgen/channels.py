@@ -14,8 +14,9 @@ RURAL_POPULATION = MetaChannel("rural_population", dtype=np.float64)  # per-face
 HINTERLAND_ID = MetaChannel("hinterland_id", dtype=np.int32)  # settlement index or -1
 # Towns — carved out of rural_population, which the town stage reduces to match
 TOWN_POPULATION = MetaChannel("town_population", dtype=np.float64)  # people in towns per face
-# Fort garrisons — carved out of rural_population by the polity stage, like towns
-FORT_POPULATION = MetaChannel("fort_population", dtype=np.float64)  # garrison people per face
+# Fort garrisons — levied from each sovereign's farmers by the polity stage and housed at the fort
+FORT_POPULATION = MetaChannel("fort_population", dtype=np.float64)  # garrison people per fort face
+FORT_LEVY = MetaChannel("fort_levy", dtype=np.float64)  # farmers drafted per face (rural_population reduced to match)
 # The part of a land face's rural population (before towns) fed by its own shallows
 FISHING_POPULATION = MetaChannel("fishing_population", dtype=np.float64)
 # Miners per face, counted in rural_population until the town stage gathers them into mining towns.
