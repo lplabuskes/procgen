@@ -2,8 +2,10 @@
 
 Tree model per ``docs/plans/polity_generation_brief.md``. The algorithm lives in
 :mod:`realmgen.polity.forest`; this stage handles IO, cost graphs, tension and display.
-With forts on, the forest grows twice: forts are placed on the first pass's
-borders (:mod:`realmgen.polity.forts`), then make their crossings dearer for the second.
+With forts or marches on, the forest grows twice: forts are placed on the first pass's
+borders (:mod:`realmgen.polity.forts`) and make their crossings dearer for the second,
+and the first pass's border tension raises frontier vassals' autonomy in the second
+(:mod:`realmgen.polity.marches`).
 
 Runs after population and before refine in :class:`~realmgen.builder.RealmPipeline`.
 """
@@ -58,6 +60,7 @@ from realmgen.polity.forts import (
     strait_candidates,
 )
 from realmgen.polity.loyalty import LoyaltyParams
+from realmgen.polity.marches import MarchParams, frontier_exposure
 from realmgen.persistence import pack_polities, unpack_polities
 from realmgen.polity.seeding import seed_capitals
 from realmgen.polity.tension import border_crossings, compute_border_tension
@@ -120,6 +123,9 @@ class PolityParams:
     )
     loyalty: LoyaltyParams = field(
         default_factory=LoyaltyParams, metadata={"label": "Loyalty modifiers"}
+    )
+    marches: MarchParams = field(
+        default_factory=MarchParams, metadata={"label": "Marcher autonomy"}
     )
     fragmentation: FragmentationParams = field(
         default_factory=FragmentationParams, metadata={"label": "Fragmentation epochs"}
@@ -222,8 +228,9 @@ class PolityStage(Stage):
             sctx, capital_sidx, land_mask, ctx.report, params=p.fragmentation
         )
 
-        # Forts on the first pass's frontiers, then the forest regrown around them.
+        # Forts and marches on the first pass's frontiers, then the forest regrown around them.
         sites: List[FortSite] = []
+        regrow: dict = {}
         if p.forts.enabled:
             sites = self._choose_fort_sites(
                 mesh, is_water, forest.sovereign_of_face, forest.polities, land_base_cost,
@@ -231,7 +238,6 @@ class PolityStage(Stage):
             )
             fp = p.forts
             if sites and fp.resistance > 0.0:
-                ctx.report(f"Regrowing polities around {len(sites)} forts…")
                 fort_costs = fortify_land_costs(
                     mesh.face_adjacency, land_edge_costs, forest.sovereign_of_face,
                     [s.face for s in sites if s.kind == FORT_BORDER], fp.resistance,
@@ -240,12 +246,17 @@ class PolityStage(Stage):
                 if hybrid is not None:
                     hybrid = fortify_landings(
                         hybrid, [s.face for s in sites if s.kind == FORT_STRAIT], n, fp.resistance)
-                fort_ctx = dataclasses.replace(
-                    sctx, land_graph=build_cost_graph(mesh.face_adjacency, fort_costs), hybrid_graph=hybrid,
-                )
-                forest, self.polity_history = run_fragmentation_epochs(
-                    fort_ctx, capital_sidx, land_mask, ctx.report, params=p.fragmentation
-                )
+                regrow.update(land_graph=build_cost_graph(mesh.face_adjacency, fort_costs), hybrid_graph=hybrid)
+        if p.marches.weight > 0.0:
+            _, first_tension = self._compute_tension(
+                mesh, land_edge_costs, trade_flow, forest.sovereign_of_face, forest.polities)
+            regrow["frontier"] = frontier_exposure(
+                land_graph, first_tension, reach=p.marches.reach, tension_quantile=p.marches.tension_quantile)
+        if regrow:
+            ctx.report(f"Regrowing polities around {len(sites)} forts and the first-pass marches…")
+            forest, self.polity_history = run_fragmentation_epochs(
+                dataclasses.replace(sctx, **regrow), capital_sidx, land_mask, ctx.report, params=p.fragmentation
+            )
         self.forts = self._build_forts(mesh, is_water, sites, forest.sovereign_of_face)
         world.add_feature("forts", self.forts)
         polities = forest.polities

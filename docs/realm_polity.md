@@ -8,6 +8,7 @@ A polity is a **tree, not a flat partition** (`docs/plans/polity_generation_brie
 - Seed sovereign capitals; project an authority field from each over land + sea cost surfaces; each face goes to the strongest projector.
 - Classify each settlement direct / vassal / independent (projected authority vs local power), recursing to carve vassal sub-territories.
 - Per-polity scalars (`cohesion`, `infrastructure`, `legitimacy`, `maritime_reach`), rolled per capital from `world.seed` + capital face, modulate the field; their cross-product is the main source of variety (Song ↔ Mongol ↔ HRE ↔ city-state belt).
+- **Marcher autonomy**: vassals holding a hot first-pass frontier are held more loosely, so they secede first.
 - **Stage 5 fragmentation epochs**: over-extended low-cohesion sovereigns shed peripheral seats as new sovereigns, re-resolved → successor states.
 
 ## Files
@@ -18,6 +19,7 @@ A polity is a **tree, not a flat partition** (`docs/plans/polity_generation_brie
 - `realmgen/polity/seeding.py` — defensibility, capital seeding, scalar rolls (Stage 0)
 - `realmgen/polity/authority.py` — authority field, claiming, classification (Stages 1-3)
 - `realmgen/polity/loyalty.py` — `LoyaltyParams`, economic grip / peripheral wealth (Stage 4)
+- `realmgen/polity/marches.py` — `MarchParams`, frontier exposure and marcher autonomy (Stage 4)
 - `realmgen/polity/tension.py` — border crossings and tension
 - `realmgen/polity/forts.py` — `FortParams`, `Forts` (`forts` feature), fort candidates, siting, garrisons, fortified costs
 - `realmgen/polity/display.py` — colour schemes
@@ -31,6 +33,7 @@ A polity is a **tree, not a flat partition** (`docs/plans/polity_generation_brie
 - **`claiming`** (`ClaimingParams`) — `hysteresis` (incumbent bonus), `max_iters` (claim loop), `outer_max_iters` (independence-relaxation loop; promotes independents to sovereigns until none remain — **no cap on sovereign count**).
 - **`hierarchy`** (`HierarchyParams`) — `direct_threshold` (0.8; the infra-correlation knob: lower → more negative `corr(infrastructure, vassal_frac)`), `vassal_floor` (vassal ratio floor), `power_exponent` (0.5; sqrt of raw population dampens size), `cohesion_gain_floor` / `_span`, `max_recursion_depth` (2), `vassal_cluster_distance` (15; candidates within this land cost-distance merge, largest becomes the seat; 0 = off).
 - **`loyalty`** (`LoyaltyParams`, Stage 4; both **off (0.0) by default**) — `economic_grip` (secession resistance ∝ intra-polity trade fraction), `peripheral_wealth_ratio` (non-capital ≥ this × its capital's trade wealth breaks away), `peripheral_external_floor` (min external trade fraction). Monotonic: more grip → fewer, bigger domains; more aggressive peripheral thresholds → more sovereigns.
+- **`marches`** (`MarchParams`, Stage 4; **on by default**) — `weight` (0.5; 0 = off), `reach` (6; land cost-distance e-fold from the border, ~2 faces at the median edge cost ~2.9), `tension_quantile` (0.9; border-face tension quantile that counts as full exposure). See [Marches](#marches-politymarchespy).
 - **`fragmentation`** (`FragmentationParams`) — `n_epochs` (0 = off), `shock_scale` (max cohesion drop per epoch), `size_reference` (domain face count demanding full cohesion).
 - **`tension`** (`BorderTensionParams`) — `barrier_scale`, `flow_ref`, `artery_weight`.
 - **`forts`** (`FortParams`) — `enabled`, per-kind score floors (`border_min_score` 0.12, `strait_min_score` 0.2, `frontier_min_score` 0.2), `rugged_weight`, `strait_max_radius` (2; passage cut radius, ~2r + 1 faces across), `strait_uncontested_weight` (0.5), `spacing_hops` (2), `resistance` (4; extra edge cost at fortified crossings), per-kind garrisons (300 / 250 / 120 people).
@@ -73,7 +76,7 @@ fragments (deliberate feedback).
 
 `ForestBuilder.build`:
 1. `_resolve_sovereigns` — roll, project, claim, classify; every INDEPENDENT becomes a capital; repeat (≤ `outer_max_iters`).
-2. `_build_subtree` per sovereign to `max_recursion_depth`: members below `direct_threshold` against this polity's field are vassal candidates (clustered by `vassal_cluster_distance`); territory re-claimed between capital and vassal seats (parent keeps its scalars); each vassal's share recurses. `autonomy = 1 − r / direct_threshold`.
+2. `_build_subtree` per sovereign to `max_recursion_depth`: members below `direct_threshold` against this polity's field are vassal candidates (clustered by `vassal_cluster_distance`); territory re-claimed between capital and vassal seats (parent keeps its scalars); each vassal's share recurses. `autonomy = 1 − r / direct_threshold`, raised by `march_autonomy` when `_Ctx.frontier` is set ([Marches](#marches-politymarchespy)).
 3. Renumber sovereigns first; `authority_of_face` = max field over sovereign capitals.
 
 `_Ctx`: read-only shared inputs (centroids, settlements, graphs, params, `base_seed = world.seed`).
@@ -94,12 +97,32 @@ fragments (deliberate feedback).
 to the 90th-percentile face flow)`. `compute_border_tension` takes the hottest
 crossing per border pair and per face, on the final sovereign partition.
 
+## Marches (`polity/marches.py`)
+
+Border tension is scored on the final partition, so it can't feed the forest that
+makes it (the brief's chicken-and-egg). Instead it lags one pass, like forts:
+`PolityStage` scores tension on the **first** forest's sovereign borders, and the
+second growth reads it.
+- `frontier_exposure`: face tension ÷ its `tension_quantile` over border faces
+  (clipped to 1; raw tension is small, median ~0.05), spread inward as
+  `max_b t[b] · exp(−d(b, f) / reach)` over the unfortified land graph (one
+  Dijkstra from a virtual source tied to each border face at cost `−reach · ln t[b]`).
+  Stored as `_Ctx.frontier`.
+- `march_autonomy`: in `_build_subtree`, each vassal's autonomy becomes
+  `1 − (1 − a)(1 − weight · e)` with `e` the peak exposure over its claimed sub-territory.
+- Autonomy only drives which vassal a fragmenting sovereign sheds
+  ([epochs](#fragmentation-epochs-polityepochspy-stage-5)), so the lever changes who
+  secedes, not how many. Seeds 4/31/35: vassals on a final sovereign border average
+  0.50–0.53 autonomy vs 0.33–0.43 interior (0.27–0.31 vs 0.28–0.35 without);
+  sovereign counts ±1.
+
 ## Forts (`polity/forts.py`)
 
 Defensive-only sites, placed on the **first** forest's sovereign partition, then
 fed back: the forest is grown a second time (same capitals, epochs re-run) on
-fortified costs, so frontiers with forts tend to hold. Off (`enabled = False`):
-one pass, no forts.
+fortified costs, so frontiers with forts tend to hold. The same second growth
+carries the marches' frontier exposure; with forts and marches both off there's
+one pass.
 
 - **Border fort** (`border_candidates`): a `border_crossings` edge on its own side,
   `crossing × (1 + rugged_weight · rugged) / (1 + rugged_weight)` (ruggedness =
@@ -146,8 +169,9 @@ Fourth of six in `RealmPipeline`. Reads `IS_WATER`, `COST_SURFACES`,
 Danger × `DangerInfluenceParams.movement_scale` is added to land base cost before
 building land edge costs (`build_land_edge_costs`) and the hybrid graph
 (`build_base_hybrid_graph`, wind-directional sea edges). Seeds capitals, runs
-`run_fragmentation_epochs`, places forts and re-runs it on fortified costs
-([Forts](#forts-polityfortspy)), computes tension. No settlements / no qualifying
+`run_fragmentation_epochs`, places forts and scores first-pass march exposure,
+re-runs it on fortified costs with that exposure ([Forts](#forts-polityfortspy),
+[Marches](#marches-politymarchespy)), computes tension. No settlements / no qualifying
 capital → everything written empty (no forts).
 
 ## Outputs

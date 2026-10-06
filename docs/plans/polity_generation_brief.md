@@ -216,10 +216,12 @@ toggleable and inspectable.
   logic itself is the remaining work.
 
 **Fragmentation triggers (override classification):**
-- **Marcher autonomy.** ⚠️ *Conflict not resolved.* Border tension is an output of this stage
-  (computed post-classification), so using it as input is chicken-and-egg. Resolution paths:
-  recompute tension inside the classification loop, or switch to the authority-field saddle
-  depth as a proxy for "contested fringe."
+- **Marcher autonomy.** ✅ *Implemented* (`realmgen/polity/marches.py`). The chicken-and-egg is
+  broken with a one-pass lag, like forts: tension is scored on the first forest's sovereign
+  borders, spread inward as frontier exposure, and raises vassal autonomy in the second growth
+  (`1 − (1 − a)(1 − weight · exposure)`). On by default (`weight = 0.5`). Validated on seeds
+  4/31/35: frontier vassals average 0.50–0.53 autonomy vs 0.33–0.43 interior, so epochs shed
+  marches first.
 - **Peripheral wealth secession.** ✅ *Implemented* (`realmgen/polity/loyalty.py`).
   `peripheral_wealth_breakaways` flags a non-capital settlement that is claimed, outward-facing
   (external trade fraction ≥ `peripheral_external_floor`), and whose trade wealth is ≥
@@ -244,12 +246,12 @@ a squeezed peripheral realm tightens then loosens (external pressure); rich vass
 > aggregate scalar `trade_wealth` is still available and equals each settlement's import-column
 > sum to within transit flow.)
 
-> ⚠️ **Conflict — border tension is an *output*, not an input.** It's produced by this stage
+> ✅ **Resolved (one-pass lag) — border tension is an *output*, not an input.** It's produced by this stage
 > *after* assignment (`compute_border_tension`, run on `polity_of_face`) and stored two ways:
 > per-face (`face_tension` / `BORDER_TENSION` channel) **and** per-pair (`pair_tension` dict →
 > `"polity_tensions"` feature). So marcher-autonomy is chicken-and-egg: tension derives from the
-> partition the lever perturbs. Resolution: recompute tension inside the relaxation loop, or move
-> it pre-classification onto the authority fields.
+> partition the lever perturbs. Resolved by scoring tension on the first forest (the pass forts
+> already sit on) and applying it in the second growth — see `realmgen/polity/marches.py`.
 
 > ✅ **Unblocked — danger field exists.** `DangerBuilder` (`worldgen/danger/builder.py`) writes
 > `DANGER_ARRAY` (a `(N,)` float32 world feature in [0, 1]); `PolityStage` already reads it and
@@ -289,7 +291,7 @@ work, in recommended order:
    - ✅ Peripheral wealth secession (implemented — `realmgen/polity/loyalty.py`)
    - External pressure consolidation (danger field is available, no new infra needed)
    - Capital archetype bonus (requires deriving or storing settlement archetypes first)
-   - Marcher autonomy (resolve border-tension chicken-and-egg; consider authority saddle depth as proxy)
+   - ✅ Marcher autonomy (implemented — `realmgen/polity/marches.py`, first-pass tension lag)
 2. **Stage 5** — Fragmentation epochs: ✅ implemented (`realmgen/polity/epochs.py`).
 
 ## Design guidelines

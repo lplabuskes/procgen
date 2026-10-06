@@ -25,6 +25,7 @@ from realmgen.polity.loyalty import (
     economic_grip_multiplier,
     peripheral_wealth_breakaways,
 )
+from realmgen.polity.marches import march_autonomy
 from realmgen.polity.seeding import cohesion_to_gain, roll_polity_scalars
 from realmgen.polity.types import ControlClass, Polity, Scalars
 
@@ -96,6 +97,7 @@ class _Ctx:
     base_seed: int
     p: "PolityParams"
     face_to_settlement: Dict[int, int]
+    frontier: Optional[np.ndarray] = None  # (N,) march exposure from a previous pass; None = off
     distances: ProjectionDistances = field(init=False)
 
     def __post_init__(self) -> None:
@@ -365,10 +367,12 @@ class ForestBuilder:
                 v_terr = np.flatnonzero(sub_assign == j)
                 if v_terr.size == 0:
                     v_terr = np.array([int(s.settlement_faces[vm])], dtype=np.int64)
+                v_autonomy = vassal_autonomy.get(vm, 0.0)
+                if s.frontier is not None:  # a march: territory reaching a hot frontier
+                    v_autonomy = march_autonomy(v_autonomy, float(s.frontier[v_terr].max()), p.marches.weight)
                 child_ids.append(self._build_subtree(
                     vm, sub.take(j), v_terr, self._members_on(v_terr),
-                    liege_id=pid, root_id=root_id, depth=depth + 1,
-                    autonomy=vassal_autonomy.get(vm, 0.0),
+                    liege_id=pid, root_id=root_id, depth=depth + 1, autonomy=v_autonomy,
                 ))
                 self.control_of_face[int(s.settlement_faces[vm])] = int(ControlClass.VASSAL)
 
