@@ -1,13 +1,16 @@
 """Small lakes: basins in a tier's refined relief, too small for its parent."""
 import numpy as np
 import pytest
+from scipy.spatial import KDTree
 
 from region.corridor import raster_frame, sample_raster
 from region.grid import RegionHexGrid
 from region.geometry import RegionGeometry
 from region.lakes import basin_lake_levels, budyko_runoff_ratio, drain_nodes, glacial_breach_scale, smooth_land
+from region.source import GlobalSource
 from region.upsample import (
     SMALL_LAKE_KEY, RegionUpsampleParams, build_region_fields, conservation_report, reshape_to_target,
+    world_channel_segments,
 )
 
 REGION_ID = 51   # mostly land, and thaws (conftest's lake region 40 is ice cap: no small lakes)
@@ -167,3 +170,23 @@ def test_no_small_lakes_on_ice_cap(synthetic_globe):
         lake_min_aridity_index=0.0))
     assert ice.textures["temperature"].max(axis=-1).max() < 0.0
     assert not (ice.textures[SMALL_LAKE_KEY] > 0.5).any()
+
+
+def _parent_texels_to_channels(fields, globe) -> np.ndarray:
+    """Per small-lake texel, its distance to the globe's channels in global texels."""
+    segments = world_channel_segments(globe)
+    assert segments is not None
+    points = np.concatenate([a + np.linspace(0.0, 1.0, 50)[:, None] * (b - a) for a, b in segments])
+    points /= np.linalg.norm(points, axis=1, keepdims=True)
+    small = (fields.textures[SMALL_LAKE_KEY][..., 0] > 0.5) & fields.in_hex
+    distance, _ = KDTree(points).query(fields.positions[small])
+    return distance / GlobalSource(globe).spacing_rad
+
+
+def test_no_small_lake_within_the_rivers_clearance(synthetic_globe):
+    def build(clearance: float):
+        return build_region_fields(synthetic_globe, REGION_ID, RegionUpsampleParams(
+            n_cols=6, tex_size=16, lake_breach_parent_texels=0.0, lake_min_depth_km=0.0, lake_min_texels=1,
+            lake_min_aridity_index=0.0, lake_drain_clearance_parent_texels=clearance))
+    assert (_parent_texels_to_channels(build(0.0), synthetic_globe) < 0.9).any()
+    assert (_parent_texels_to_channels(build(1.0), synthetic_globe) > 0.9).all()

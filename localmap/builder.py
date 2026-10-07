@@ -158,7 +158,8 @@ def build_local_map(
     params = params or LocalParams()
     local = build_local_fields(
         globe, region, hex_index, params.upsample, resources=resources, fertility_exponent=fertility_exponent,
-        drains=path_segments(region_rivers.paths) if region_rivers is not None else None,
+        drains=(path_segments(list(region_rivers.paths) + list(region_streams or []))
+                if region_rivers is not None else None),
     )
     spacing = local.grid.texel_spacing_rad(local.tex_size)
     parent_spacing = region.grid.texel_spacing_rad(region.tex_size)

@@ -6,8 +6,11 @@ its texel spacing over the map plus a margin:
 
 - **Basins.** Priority-flood (:mod:`region.drainage`) from the outlets: water
   already there (sea, the parent's lakes), uncovered nodes and the raster edge,
-  and the parent's channels (``drains``) — a river that big would have cut
-  through any sill on its course.
+  and the parent's channels (``drains``) widened by
+  ``drain_clearance_parent_texels`` — a river that big would have cut through
+  any sill on its course, and the tier re-routes it anywhere within about a
+  parent texel of it, so a lake any closer would sit tangent to it or be
+  clipped by it.
 - **Water balance.** A basin's inflow is its catchment's runoff (Fu's Budyko
   curve from precipitation and PET, the globe's PET formula); it fills to its
   spill level when that covers evaporation off the full lake, else to the level
@@ -216,6 +219,7 @@ def find_small_lakes(
     min_texels: int = 2,
     max_parent_texels: float = 0.0,
     smoothing_parent_texels: float = 0.5,
+    drain_clearance_parent_texels: float = 0.0,
     inherited: Optional[np.ndarray] = None,
     hydrology: Optional[HydrologyParams] = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -227,7 +231,8 @@ def find_small_lakes(
     precipitation / PET < ``min_aridity_index`` holds no lake), ``frozen`` ground
     that never thaws (a basin mostly on ice cap holds no lake); the breach
     length shrinks by ``glacial_factor`` in the cold (:func:`glacial_breach_scale`).  ``drains`` the
-    parent's channels as ``(K, 2, 3)`` unit-vector segments.  A lake must be
+    parent's channels as ``(K, 2, 3)`` unit-vector segments, with no lake within
+    ``drain_clearance_parent_texels`` of them.  A lake must be
     deeper than ``min_depth_km`` and than the parent's surface drops over
     ``breach_parent_texels`` of its texels (parent slope × that length).
     ``inherited`` (``(M, T, T)`` bool, part of ``water``) is the parent's small
@@ -260,9 +265,14 @@ def find_small_lakes(
     if inherited is not None:
         seed = covered & inherited[hexes, hr, hc]
         wet &= ~seed
-    if drains is not None:
-        outlet |= drain_nodes(grid, drains, lo, step, n) & ~seed
     n_t = source.spacing_rad / max(grid.texel_spacing_rad(tex), 1e-12)
+    if drains is not None:
+        on = drain_nodes(grid, drains, lo, step, n)
+        if drain_clearance_parent_texels > 0.0 and on.any():
+            pair = grid.geometry.local_to_ecef(np.array([0.5, 0.5 + step]), np.array([0.5, 0.5]))
+            reach = float(drain_clearance_parent_texels) * source.spacing_rad / float(np.linalg.norm(pair[1] - pair[0]))
+            on = (np.asarray(ndimage.distance_transform_edt(~on.reshape(n, n))) <= reach).ravel()
+        outlet |= on & ~seed
     sigma = float(smoothing_parent_texels) * n_t
     e = smooth_land(e.reshape(n, n), wet.reshape(n, n), sigma).ravel()
 

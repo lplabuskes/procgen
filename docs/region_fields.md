@@ -156,8 +156,15 @@ them with its own (below). No noise of its own.
   radius past the map; nearest-centre texel, uncovered nodes at the parent's
   height) from the outlets: water already there, uncovered nodes, the raster
   edge and the parent's channels (`drains`: a region drains along the world's
-  stream network, a local map along the region's rivers) — a river that big
-  would have cut any sill on its course.
+  stream network, a local map along the region's rivers and streams) — a river
+  that big would have cut any sill on its course — widened to
+  `lake_drain_clearance_parent_texels` (1.25) each side. The tier re-routes
+  each river anywhere within its corridor (1 parent texel each side of the
+  parent's line), so a lake any closer sat tangent to the drawn river or was
+  clipped by its edge (seed 4 regions 48/51/16/45/25: 63 of 363 lakes before,
+  4 after, at 18% of the lake area; local maps: 172 of 535 before, 8 after).
+  So rivers never pass through a tier's own small lakes, only through
+  inherited ones.
 - **Water balance.** Inflow = catchment runoff (Fu's Budyko curve, w = 2.6,
   from precipitation and the globe's PET formula, `HydrologyParams` defaults);
   a basin fills to its spill level when that covers PET off the full lake, else
@@ -193,7 +200,9 @@ them with its own (below). No noise of its own.
   and not drained by `drains` (the parent's river runs under them).
 
 Region defaults (`lake_smoothing_parent_texels` 0.5, `lake_breach_parent_texels` 1,
-`lake_glacial_factor` 0.3, `lake_min_depth_km` 0.001, `lake_min_texels` 2).
+`lake_glacial_factor` 0.3, `lake_min_depth_km` 0.001, `lake_min_texels` 2,
+`lake_drain_clearance_parent_texels` 1.25). With the clearance the five regions
+below hold 0.41% of land; the figures below predate it.
 Smoothed basins are shallower, so the breach length and depth floor dropped
 from 6 / 0.002 on raw relief. Seed 4's five lake-richest regions (48/51/16/45/25):
 0.51% of land in 438 lakes with 1 island, vs 1.20% in 2,207 lakes with 33

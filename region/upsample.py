@@ -187,6 +187,12 @@ class RegionUpsampleParams:
     lake_smoothing_parent_texels: float = _f(
         0.5, label="Small lake smoothing (parent texels)", min=0.0, max=3.0, step=0.05
     )
+    # No lake within this of the parent's channels: wider than the rivers' re-route
+    # corridor (corridor_global_texels / corridor_parent_texels, 1), so no routed
+    # river skims a lake's shore or clips its edge.
+    lake_drain_clearance_parent_texels: float = _f(
+        1.25, label="Small lake river clearance (parent texels)", min=0.0, max=5.0, step=0.25
+    )
     # ── resources, population and danger (region/resources.py) ──
     # Refined slope (km/km) at which slope-driven terms saturate.
     slope_saturation: float = _f(
@@ -874,6 +880,7 @@ def _add_small_lakes(
         max_parent_texels=float(params.lake_max_parent_texels),
         min_aridity_index=float(params.lake_min_aridity_index), glacial_factor=float(params.lake_glacial_factor),
         smoothing_parent_texels=float(params.lake_smoothing_parent_texels),
+        drain_clearance_parent_texels=float(params.lake_drain_clearance_parent_texels),
         inherited=inherited,
     )
     if inherited.any():

@@ -82,8 +82,8 @@ neighbouring local maps never double-count a texel.
 - **Slope** = region's refined slope; **lakes** from the region's
   `filled_height` (its small lakes re-flooded too) plus the map's own
   [small lakes](region_fields.md#small-lakes-regionlakespy), drained along the
-  region's rivers (`build_local_map` passes `path_segments(region_rivers.paths)`
-  as `drains`); **danger** = region's continuous danger, bilinear, conserved
+  region's rivers and streams (`build_local_map` passes their `path_segments`
+  as `drains`), with none within 1.25 regional texels of them; **danger** = region's continuous danger, bilinear, conserved
   per regional texel.
 - **Noise** seeded `world.seed XOR 0x10CA`, shared by all local maps of a world,
   so neighbours agree where they meet.
