@@ -50,6 +50,13 @@ def test_too_small_basins_are_dropped():
     assert not np.isfinite(basin_lake_levels(elevation, outlet, N, min_nodes=size + 1)).any()
 
 
+def test_too_big_basins_stay_dry():
+    elevation, outlet = _bowl()
+    size = int(np.isfinite(basin_lake_levels(elevation, outlet, N)).sum())
+    assert not np.isfinite(basin_lake_levels(elevation, outlet, N, max_nodes=size - 1)).any()
+    assert np.isfinite(basin_lake_levels(elevation, outlet, N, max_nodes=size)).sum() == size
+
+
 def test_dry_basins_shrink_and_vetoed_ones_vanish():
     elevation, outlet = _bowl()
     full = np.isfinite(basin_lake_levels(elevation, outlet, N))

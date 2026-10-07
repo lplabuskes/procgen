@@ -171,6 +171,11 @@ them with its own (below). No noise of its own.
   `lake_min_depth_km`, and at least `lake_min_texels` big. In the cold the
   length shrinks by `lake_glacial_factor` (annual mean ≤ 0 °C, fading out by
   10 °C): glacial lake country.
+- **Size cap.** With `lake_max_parent_texels` > 0, a lake bigger than that many
+  parent texels is dropped (its basin stays dry): the parent could have drawn
+  it and didn't. Off (0) on regions, whose lakes run up to the globe's
+  `min_lake_pixels`; 1 on local maps, so they only add lakes below the region's
+  resolution (~20 km²) rather than region-sized ones the region left out.
 - **Texels.** Each node's surface is carried a node onto its shore (not onto
   outlets); a texel is lake where its smoothed height (bilinear) is below its
   nearest node's surface.

@@ -177,6 +177,10 @@ class RegionUpsampleParams:
     # Precipitation / PET below which a basin holds a playa, not a lake (0.2: UNEP "arid").
     lake_min_aridity_index: float = _f(0.2, label="Small lake min aridity index", min=0.0, max=2.0, step=0.05)
     lake_min_texels: int = _f(2, label="Small lake min size (texels)", min=1, max=200)
+    # 0: no cap.  A region's lakes up to the globe's min_lake_pixels are its own to draw.
+    lake_max_parent_texels: float = _f(
+        0.0, label="Small lake max size (parent texels, 0 = none)", min=0.0, max=50.0, step=0.5
+    )
     # Basins and shores are found on the relief smoothed over this (Gaussian σ):
     # off, texel detail gives lacy shores and speckle islands, and a tier down the
     # conservation staircase gives lakes filling whole parent texels.
@@ -867,6 +871,7 @@ def _add_small_lakes(
         source, grid, elevation, water | inherited, temperature=temperature, precipitation=precipitation, frozen=frozen,
         drains=drains, min_depth_km=float(params.lake_min_depth_km),
         breach_parent_texels=float(params.lake_breach_parent_texels), min_texels=int(params.lake_min_texels),
+        max_parent_texels=float(params.lake_max_parent_texels),
         min_aridity_index=float(params.lake_min_aridity_index), glacial_factor=float(params.lake_glacial_factor),
         smoothing_parent_texels=float(params.lake_smoothing_parent_texels),
         inherited=inherited,

@@ -20,6 +20,9 @@ its texel spacing over the map plus a margin:
   and valley floors — and than ``lake_min_depth_km``, and at least
   ``lake_min_texels`` big.  In the cold the breach length shrinks by
   ``lake_glacial_factor``: glacially scoured ground is lake country.
+- **Size cap.** Optionally no bigger than ``lake_max_parent_texels`` parent
+  texels: a basin the parent could have drawn a lake in, but didn't, stays dry
+  (the local tier only adds lakes below the region's resolution).
 
 All of it on the relief smoothed over ``smoothing_parent_texels`` (a Gaussian,
 water left out): the raw texels carry texel-scale detail and, a tier down, the
@@ -144,14 +147,15 @@ def basin_lake_levels(
     elevation: np.ndarray, outlet: np.ndarray, n: int, *,
     runoff: Optional[np.ndarray] = None, evaporation: Optional[np.ndarray] = None,
     breach: Optional[np.ndarray] = None, allowed: Optional[np.ndarray] = None,
-    min_depth: float = 0.0, min_nodes: int = 1,
+    min_depth: float = 0.0, min_nodes: int = 1, max_nodes: int = 0,
 ) -> np.ndarray:
     """``(n²,)`` lake surface on every lake node of an ``n × n`` raster, ``+inf`` elsewhere.
 
     Basins are the priority-flood's raised nodes; ``runoff`` (per node) and
     ``evaporation`` (per node, same units) shrink a basin whose inflow can't
     cover evaporation off its full lake (none given → every basin is full).
-    A lake is kept when at least ``min_nodes`` big and deeper than both
+    A lake is kept when at least ``min_nodes`` big (and, ``max_nodes`` > 0, at
+    most that), and deeper than both
     ``min_depth`` and its nodes' mean ``breach`` (per node, elevation units),
     and (given ``allowed``, per node) mostly over allowed nodes.
     """
@@ -184,6 +188,8 @@ def basin_lake_levels(
     depth = np.asarray(ndimage.maximum(np.where(wet, node_level - elevation, 0.0), labels, ids))
     size = np.bincount(labels[wet], minlength=k + 1)[1:]
     keep = (depth >= float(min_depth)) & (size >= int(min_nodes)) & (depth > 0.0)
+    if max_nodes > 0:
+        keep &= size <= int(max_nodes)
     if breach is not None:
         keep &= depth >= np.asarray(ndimage.mean(breach, labels, ids))
     if allowed is not None:
@@ -208,6 +214,7 @@ def find_small_lakes(
     min_aridity_index: float = 0.2,
     glacial_factor: float = 0.3,
     min_texels: int = 2,
+    max_parent_texels: float = 0.0,
     smoothing_parent_texels: float = 0.5,
     inherited: Optional[np.ndarray] = None,
     hydrology: Optional[HydrologyParams] = None,
@@ -273,6 +280,7 @@ def find_small_lakes(
     levels = basin_lake_levels(
         e, outlet, n, runoff=runoff, evaporation=evaporation,
         breach=breach, allowed=allowed, min_depth=float(min_depth_km), min_nodes=int(min_texels),
+        max_nodes=int(np.ceil(float(max_parent_texels) * n_t * n_t)) if max_parent_texels > 0.0 else 0,
     ).reshape(n, n)
     # Carry each surface a node onto its shore so texels between nodes see it
     # (not onto outlets: nothing stands on a drain).

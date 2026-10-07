@@ -98,9 +98,12 @@ to ~0.03% at `T=64` (tiers count rim texels slightly differently, ~1/T).
 `RegionUpsampleParams` with local defaults: `n_cols=16`, `slope_reference=0.03`,
 `slope_floor=0.03`, `max_relief_km=0.6`, `lake_smoothing_parent_texels=0.25` (~3 local
 texels, ~1 km: rounds the staircase's parent-texel pits off; 0.5 leaves no local lakes),
-`lake_breach_parent_texels=7` (at the region's 1, local maps flood ~20% of their land;
-seed 4, 24 maps in regions 48/51/16/45: 1.8% of land in small lakes, inherited
-included, vs 1.5–2.1% on raw relief, with 10 islands vs ~100), `water_spread_texels=12` (~one regional
+`lake_max_parent_texels=1` (only lakes below the region's resolution, ~20 km²; uncapped,
+a local map found region-sized lakes the region had left dry — 93% of its own lake area),
+`lake_breach_parent_texels=1.5` (~7 km, near the region's ~15 km; with the cap it only sets
+how many sub-texel lakes: seed 4, 40 maps in regions 48/51/16/45/25, 577 local-only lakes,
+0.27% of land, median ~10 km², 50–80 per map in lake districts, 0–10 elsewhere),
+`water_spread_texels=12` (~one regional
 texel), `biome_smoothing=13` (~one regional texel, so biome edges follow the
 region), `slope_saturation=0.1`. Relief numbers are a first cut, untuned (seed 4
 region 34: ~50 m land relief std vs parent texel). Coast params keep region
