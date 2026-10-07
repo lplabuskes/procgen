@@ -93,7 +93,7 @@ def build_local_fields(
         RegionSource(region), positions, domain, grid.texel_spacing_rad(tex_size), texel_area_km2,
         params, int(globe.seed or 0) ^ _SEED_SALT_LOCAL,
         resources=resources, fertility_exponent=fertility_exponent,
-        mine_points=worked_mine_points(globe),
+        mine_points=worked_mine_points(globe), neighbours=grid.texel_neighbours(tex_size, in_map),
     )
     gh, gw = globe.mesh.face_textures["elevation"].shape[1:3]
     sampler = GlobalSampler(globe.mesh)

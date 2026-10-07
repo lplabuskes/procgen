@@ -7,6 +7,7 @@ from region.upsample import (
     _box_filter,
     build_region_fields,
     conservation_report,
+    connect_ocean,
     flood_to_level,
 )
 from region.source import global_slope
@@ -218,6 +219,61 @@ def test_flood_to_level_stops_at_a_ridge():
     assert flood_to_level(elevation, seed, level, 2).tolist() == [
         [[True, True, True, False, False, False]]
     ]
+
+
+def _strip(elevation):
+    """A 1 × n row of texels: neighbours left/right, the left end at the map's edge."""
+    n = len(elevation)
+    nb = np.full((n, 4), -1, dtype=np.int64)
+    nb[:, 0] = nb[:, 1] = -3          # no up/down neighbour, but drawn
+    nb[1:, 2] = np.arange(n - 1)
+    nb[:-1, 3] = np.arange(1, n)
+    nb[n - 1, 3] = -3
+    nb[nb == -3] = np.arange(n).repeat(4).reshape(n, 4)[nb == -3]   # self-links: no edge
+    return np.asarray(elevation, dtype=np.float64), nb
+
+
+def test_connect_ocean_channels_a_pocket_and_keeps_anchor_means():
+    elev, nb = _strip([-0.5, -0.3, 0.02, 0.01, -0.2, -0.3, 0.05, 0.05])
+    ocean = elev < 0.0
+    anchors = np.array([0, 0, 1, 1, 0, 0, 1, 1])     # the cut is absorbed by 6 and 7
+    weights = np.ones(8)
+    e, wet = connect_ocean(elev, ocean, nb, anchors, weights, 2, RegionUpsampleParams())
+    assert wet.tolist() == [True, True, True, True, True, True, False, False]
+    assert (e[2:4] < 0.0).all()
+    assert np.allclose(np.bincount(anchors, e), np.bincount(anchors, elev))
+    assert (e[6:] > 0.0).all()
+
+
+def test_connect_ocean_dries_a_pocket_it_cannot_reach():
+    elev, nb = _strip([-0.5, 0.5, 0.5, -0.2, 0.5, 0.5])
+    params = RegionUpsampleParams(channel_max_cost=10.0)
+    e, wet = connect_ocean(elev, elev < 0.0, nb, np.zeros(6, dtype=np.int64), np.ones(6), 1, params)
+    assert wet.tolist() == [True, False, False, False, False, False]
+    assert np.array_equal(e, elev)
+
+
+def test_connect_ocean_leaves_undrawn_texels_and_lakes_alone():
+    elev, nb = _strip([-0.5, 0.02, -0.2, 0.02, -0.3, 0.1])
+    nb[4] = -2                          # undrawn over-hang: keeps its own flood
+    lake = np.array([False, False, False, True, False, False])
+    e, wet = connect_ocean(elev, elev < 0.0, nb, np.zeros(6, dtype=np.int64), np.ones(6), 1,
+                           RegionUpsampleParams(), blocked=lake)
+    assert wet.tolist() == [True, True, True, False, True, False]
+    assert e[3] == elev[3]
+
+
+def test_refined_sea_is_one_connected_body_per_edge(synthetic_globe):
+    """No drawn ocean texel is cut off from the map's edge (or the largest body)."""
+    from region.upsample import _ocean_pockets
+    for region_id in (REGION_ID, BIOME_REGION):
+        f = build_region_fields(synthetic_globe, region_id, _params())
+        nb = f.grid.texel_neighbours(TEX_SIZE)
+        src = np.repeat(np.arange(len(nb)), 4)
+        dst = nb.reshape(-1)
+        keep = dst >= 0
+        ocean = (f.textures["ocean_mask"][..., 0].reshape(-1) > 0.5) & (nb[:, 0] != -2)
+        assert not _ocean_pockets(ocean, src[keep], dst[keep], nb)[0].any()
 
 
 def test_biome_indices_are_valid(fields):

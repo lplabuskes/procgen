@@ -21,7 +21,8 @@ ridges and valleys instead.
 - **Biome** — reclassified from the refined climate with the global classifier.
 - **Ocean / lake masks** — water surfaces are taken from the globe (sea level, a
   lake's Priority-Flood level); only the shoreline moves, by a level-constrained
-  flood seeded from the global mask.
+  flood seeded from the global mask; sea the relief walls off is channelled back
+  to the open sea (:func:`connect_ocean`).
 
 Octaves run from the global grid's Nyquist to the regional grid's, so a region no
 finer than the globe gets no detail (``RegionFields.detail_octaves == 0``).
@@ -32,6 +33,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import connected_components, dijkstra
 
 from core.params import param_field as _f, paramclass
 from region.geometry import N_REGIONS, RegionGeometry
@@ -85,6 +88,18 @@ class RegionUpsampleParams:
     # How far water may advance into global land texels, in regional texels;
     # about one global texel keeps the shore inside the coast's own texels.
     water_spread_texels: int = _f(4, label="Shoreline spread (texels)", min=0, max=16)
+    # Sub-grid rises can wall off parts of the parent's sea.  Each cut-off pocket
+    # gets a one-texel channel to the connected sea along the cheapest route:
+    # each texel costs 1 plus its cut (to channel_depth_km below sea level) over
+    # channel_cut_km.  Pockets with no route within channel_max_cost go dry
+    # (ground below sea level, as hollows the flood never reaches).  The cut is
+    # absorbed by raising the parent texel's dry ground, at most channel_max_scale ×
+    # (the coast's limit is too tight for low shores in a mostly-wet parent texel).
+    connect_ocean: bool = _f(True, label="Channel cut-off sea", min=0, max=1)
+    channel_depth_km: float = _f(0.002, label="Channel depth (km)", min=0.0005, max=0.05, step=0.0005)
+    channel_cut_km: float = _f(0.01, label="Channel cut per texel step (km)", min=0.001, max=1.0, step=0.001)
+    channel_max_cost: float = _f(64.0, label="Channel max cost (texels)", min=1.0, max=512.0)
+    channel_max_scale: float = _f(8.0, label="Channel edit max scale", min=0.0, max=50.0, step=0.5)
     # The biome classifier reads box-averaged climate: ~1 °C texel-to-texel swings
     # would otherwise dither every boundary.  The climate layers stay sharp.
     # 0 or 1 disables it.
@@ -608,6 +623,97 @@ def _refine_water_masks(
     return masks
 
 
+def connect_ocean(
+    elevation: np.ndarray, ocean: np.ndarray, neighbours: np.ndarray, anchors: np.ndarray,
+    weights: np.ndarray, n_anchors: int, params: RegionUpsampleParams,
+    blocked: Optional[np.ndarray] = None, max_rounds: int = 4,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Channel every cut-off pocket of ``ocean`` to the open sea; flat ``(P,)`` arrays.
+
+    The open sea is the drawn ocean touching the map's edge (``neighbours`` as
+    :meth:`RegionHexGrid.texel_neighbours`), or the largest body when none does.
+    Each pocket cuts a one-texel channel along its cheapest route (see
+    ``RegionUpsampleParams.connect_ocean``), avoiding ``blocked`` (lake) texels;
+    the cut is absorbed by the rest of each anchor as :func:`reshape_to_target`
+    does, so anchor means hold.  Pockets left unconnected go dry.
+    Returns ``(elevation, ocean)``.
+    """
+    e = np.asarray(elevation, dtype=np.float64).copy()
+    undrawn = neighbours[:, 0] == -2
+    given = np.asarray(ocean, dtype=bool)
+    ocean = given & ~undrawn
+    blocked = np.zeros_like(ocean) if blocked is None else np.asarray(blocked, dtype=bool)
+    n = len(e)
+    src = np.repeat(np.arange(n), 4)
+    dst = neighbours.reshape(-1)
+    real = dst >= 0
+    # Links across hexagon edges are only near-symmetric: use both directions.
+    src, dst = np.r_[src[real], dst[real]], np.r_[dst[real], src[real]]
+    depth = float(params.channel_depth_km)
+    refused = np.zeros(n, dtype=bool)
+    for _ in range(max_rounds):
+        pocket, body = _ocean_pockets(ocean, src, dst, neighbours)
+        if not pocket.any():
+            break
+        # Search out from the open sea (a virtual source, node n), so every pocket
+        # gets its cheapest route, through other pockets if need be.  Stepping onto
+        # a texel is free through sea, 1 + cut / cut_km over land; lakes and texels
+        # whose parent texel refused a cut are avoided.
+        cut = np.maximum(e - (SEA_LEVEL_KM - depth), 0.0)
+        step = np.where(ocean, 1e-9, 1.0 + cut / float(params.channel_cut_km))
+        avoid = blocked | refused
+        ok = ~avoid[dst] & ~avoid[src]
+        sea = np.flatnonzero(ocean & ~pocket)
+        graph = csr_matrix(
+            (np.r_[step[dst[ok]], np.full(len(sea), 1e-9)],
+             (np.r_[src[ok], np.full(len(sea), n)], np.r_[dst[ok], sea])),
+            shape=(n + 1, n + 1),
+        )
+        dist, pred = dijkstra(
+            graph, indices=n, return_predecessors=True, limit=float(params.channel_max_cost),
+        )
+        # Each pocket's cheapest texel, walked back to the sea.
+        wet = np.flatnonzero(pocket & np.isfinite(dist[:n]))
+        order = np.lexsort((dist[wet], body[wet]))
+        first = np.r_[True, body[wet][order][1:] != body[wet][order][:-1]] if len(wet) else []
+        channel = np.zeros(n, dtype=bool)
+        for node in wet[order][first]:
+            while 0 <= node < n and not channel[node]:
+                channel[node] = True
+                node = pred[node]
+        channel &= ~ocean
+        if not channel.any():
+            break
+        target = np.where(channel, SEA_LEVEL_KM - depth, e)
+        e = reshape_to_target(
+            e, target, anchors, weights, n_anchors, level=SEA_LEVEL_KM, active=~blocked,
+            max_scale=float(params.channel_max_scale), min_offset=depth, max_offset=depth,
+        )
+        refused |= channel & (e > SEA_LEVEL_KM)
+        ocean |= channel & (e <= SEA_LEVEL_KM)
+    pocket, _ = _ocean_pockets(ocean, src, dst, neighbours)
+    # Undrawn (over-hang) texels keep their own flood.
+    return e, np.where(undrawn, given, ocean & ~pocket)
+
+
+def _ocean_pockets(
+    ocean: np.ndarray, src: np.ndarray, dst: np.ndarray, neighbours: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Ocean texels in a body cut off from the open sea (see :func:`connect_ocean`), and each texel's body."""
+    wet = ocean[src] & ocean[dst]
+    n = len(ocean)
+    _, label = connected_components(
+        csr_matrix((np.ones(int(wet.sum())), (src[wet], dst[wet])), shape=(n, n)), directed=False,
+    )
+    if not ocean.any():
+        return np.zeros(n, dtype=bool), label
+    open_sea = np.zeros(label.max() + 1, dtype=bool)
+    open_sea[label[ocean & (neighbours == -1).any(axis=1)]] = True
+    if not open_sea.any():
+        open_sea[np.bincount(label[ocean]).argmax()] = True
+    return ocean & ~open_sea[label], label
+
+
 def _shore_band(source: ParentSource, loc: Located, key: str, params: RegionUpsampleParams) -> np.ndarray:
     """The tent on the parent's bilinear ``key`` fraction (see :func:`coast_style`)."""
     frac = np.clip(source.coarse(key, loc)[:, 0], 0.0, 1.0)
@@ -687,6 +793,7 @@ def refine_fields(
     resources: Optional["ResourcesParams"] = None,
     fertility_exponent: float = 2.0,
     mine_points: Optional[np.ndarray] = None,
+    neighbours: Optional[np.ndarray] = None,
 ) -> tuple[dict[str, np.ndarray], Located, int]:
     """Refine ``source``'s fields onto a child tier's ``(M, T, T, 3)`` texels.
 
@@ -694,6 +801,7 @@ def refine_fields(
     map a region (:class:`region.source.RegionSource`).  ``weights`` is the
     ``(M, T, T)`` aggregation mask, ``spacing_rad`` the child's texel spacing.
     ``mine_points`` are worked deposits (unit vectors) for the miners' density.
+    ``neighbours`` (:meth:`RegionHexGrid.texel_neighbours`) enables :func:`connect_ocean`.
     Returns ``(textures, located, detail_octaves)``.
     """
     m, tex_size = positions.shape[0], positions.shape[1]
@@ -739,17 +847,25 @@ def refine_fields(
             elevation, water, style, source, loc, flat_pos, seed, weights, slope,
             (m, tex_size), base_frequency, feature_length_km, spacing_rad, params,
         )
+
+    # ── water masks: the water surface is the parent's, the shoreline is refined
+    masks = _refine_water_masks(water, elevation[:, 0].reshape(m, tex_size, tex_size), params)
+    if neighbours is not None and params.connect_ocean and params.refine_water_masks and "ocean_mask" in masks:
+        lake = masks["lake_mask"].reshape(-1) > 0.5 if "lake_mask" in masks else None
+        e, ocean = connect_ocean(
+            elevation[:, 0], masks["ocean_mask"].reshape(-1) > 0.5, neighbours, anchors, weights, n_anchors,
+            params, blocked=lake,
+        )
+        elevation = e[:, None]
+        masks["ocean_mask"] = ocean.reshape(m, tex_size, tex_size, 1).astype(np.float32)
+        if "filled_height" in masks and lake is not None:
+            masks["filled_height"] = np.where(lake, masks["filled_height"].reshape(-1), e).reshape(
+                m, tex_size, tex_size, 1).astype(np.float32)
+    textures.update(masks)
     textures["elevation"] = elevation.reshape(m, tex_size, tex_size, 1).astype(np.float32)
 
     # Sub-grid relief (km), ~zero-mean per anchor: drives every derived field.
     relief_anomaly = elevation[:, 0] - elev_coarse[:, 0]
-
-    # ── water masks: the water surface is the parent's, the shoreline is refined
-    textures.update(
-        _refine_water_masks(
-            water, elevation[:, 0].reshape(m, tex_size, tex_size), params
-        )
-    )
 
     # Copied (bilinear, not conserved) so the tier below styles its shores alike.
     if style is not None:
@@ -876,7 +992,7 @@ def build_region_fields(
         source, positions, in_hex, grid.texel_spacing_rad(tex_size), texel_area_km2,
         params, int(globe.seed or 0) ^ int(region_id),
         resources=resources, fertility_exponent=fertility_exponent,
-        mine_points=worked_mine_points(globe),
+        mine_points=worked_mine_points(globe), neighbours=grid.texel_neighbours(tex_size),
     )
     faces, u, v = loc.data
     return RegionFields(

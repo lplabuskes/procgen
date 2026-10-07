@@ -85,6 +85,20 @@ lake at its Priority-Flood `filled_height`); only the shoreline moves.
   called land (≈ one global texel) but never over a rise above its surface.
 - Ocean and lake flood separately and can't take each other's texels (a walled
   coastal lake below sea level isn't swallowed).
+- **Cut-off sea is channelled back** (`connect_ocean`, on with `connect_ocean`).
+  Sub-grid rises can wall off part of the seeded sea — on coastal local maps
+  most often (seeds 4/31/35: about half of coastal maps, pockets of 1 to ~1,350
+  texels). Across the whole map (drawn texels linked over hexagon edges by
+  `RegionHexGrid.texel_neighbours`), the open sea is the ocean touching the
+  map's edge (else the largest body). A Dijkstra out from it gives every
+  pocket its cheapest route — 1 per texel plus the cut to `channel_depth_km`
+  below sea level per `channel_cut_km` — and a one-texel channel is cut along
+  it, avoiding lakes. The cut is absorbed by raising the rest of the parent
+  texel's dry ground (`reshape_to_target`, ≤ `channel_max_scale` ×), so
+  conservation is exact; texels whose parent texel can't absorb it are routed
+  around on the next round. Pockets with no route under `channel_max_cost` go
+  dry (seeds 4/31/35: none). Over-hang texels keep their own flood. ~0.15 s
+  per map.
 - No `filled_height` (no hydrology) → lakes copied from the anchor.
   `refine_water_masks=False` → verbatim anchor copy.
 - Seed 4 region 49: coast gains 0.14% / loses 0.17% of the region.

@@ -148,6 +148,55 @@ class RegionHexGrid:
         rows = np.clip((((ct + half) - t) / (2.0 * half) * tex_size).astype(np.int64), 0, tex_size - 1)
         return hexes, np.where(inside, rows, 0), np.where(inside, cols, 0), inside
 
+    def texel_neighbours(self, tex_size: int, domain: Optional[np.ndarray] = None) -> np.ndarray:
+        """``(M*T*T, 4)`` flat index of each drawn texel's up/down/left/right neighbour.
+
+        A texel is drawn where it lies in its own hexagon (and ``domain``, an
+        ``(M, T, T)`` mask); a neighbour across a hexagon edge is the texel drawn
+        at that point.  ``-1`` marks the map's edge (off the cell or ``domain``);
+        rows of texels that aren't drawn are all ``-2``.
+        """
+        m, t = len(self), int(tex_size)
+        in_hex = self.texture_in_hexagon(t)
+        drawn = in_hex
+        if domain is not None:
+            drawn = drawn & np.asarray(domain, dtype=bool)
+        flat_drawn = drawn.reshape(-1)
+        local = self.texture_local(t)
+        step = 2.0 * _TEXTURE_HALF_WIDTH * self.radius / t
+        idx = np.arange(m * t * t).reshape(m, t, t)
+        h, r, c = np.meshgrid(np.arange(m), np.arange(t), np.arange(t), indexing="ij")
+        out = np.full((m * t * t, 4), -1, dtype=np.int64)
+        for k, (dr, dc) in enumerate(((-1, 0), (1, 0), (0, -1), (0, 1))):
+            r2, c2 = r + dr, c + dc
+            same = (r2 >= 0) & (r2 < t) & (c2 >= 0) & (c2 < t)
+            same[same] = drawn[h[same], r2[same], c2[same]]
+            nb = np.full((m, t, t), -1, dtype=np.int64)
+            nb[same] = idx[h[same], r2[same], c2[same]]
+            # Across a hexagon edge: whichever texel is drawn there (rows run top → bottom).
+            # The texel under that point may straddle its hexagon's edge (centre
+            # outside); then take the nearest one inside around it, same texture.
+            cross = drawn & ~same
+            p = np.column_stack([local[..., 0][cross] + dc * step, local[..., 1][cross] - dr * step])
+            hh, rr, cc, inside = self.texels_at(p[:, 0], p[:, 1], t)
+            best = np.full(len(p), -1, dtype=np.int64)
+            best_d2 = np.full(len(p), np.inf)
+            for or_ in (-1, 0, 1):
+                for oc in (-1, 0, 1):
+                    r3, c3 = rr + or_, cc + oc
+                    ok = inside & (r3 >= 0) & (r3 < t) & (c3 >= 0) & (c3 < t)
+                    r3, c3 = np.clip(r3, 0, t - 1), np.clip(c3, 0, t - 1)
+                    ok &= in_hex[hh, r3, c3]
+                    d2 = ((local[hh, r3, c3] - p) ** 2).sum(axis=1)
+                    better = ok & (d2 < best_d2)
+                    best = np.where(better, idx[hh, r3, c3], best)
+                    best_d2 = np.where(better, d2, best_d2)
+            # Outside ``domain`` is the map's edge.
+            nb[cross] = np.where((best >= 0) & flat_drawn[np.maximum(best, 0)], best, -1)
+            out[:, k] = nb.reshape(-1)
+        out[~flat_drawn] = -2
+        return out
+
     def texel_spacing_rad(self, tex_size: int) -> float:
         """Mean angular spacing (radians) between neighbouring texels on the sphere (cached)."""
         cached = self._spacing.get(tex_size)

@@ -106,3 +106,37 @@ def test_texel_at_is_none_outside_the_cell():
     grid = _grid(n_cols=5)
     assert grid.texel_at(-0.01, 0.5, 8) is None
     assert grid.texel_at(0.5, 1.01, 8) is None
+
+
+def test_texel_neighbours_are_symmetric_and_close():
+    """Drawn texels link to drawn texels about one texel away, across hexagon edges too."""
+    grid, t = _grid(n_cols=4), 8
+    nb = grid.texel_neighbours(t)
+    drawn = nb[:, 0] != -2
+    assert np.array_equal(drawn, grid.texture_in_hexagon(t).reshape(-1))
+    local = grid.texture_local(t).reshape(-1, 2)
+    step = 2.0 * grid.radius / t
+    src = np.repeat(np.arange(len(nb)), 4)[nb.reshape(-1) >= 0]
+    dst = nb.reshape(-1)[nb.reshape(-1) >= 0]
+    assert drawn[dst].all()
+    # Hexagon textures don't share a lattice: across an edge a link may reach ~2 steps.
+    assert np.linalg.norm(local[src] - local[dst], axis=1).max() < 2.5 * step
+    # …and links are only near-symmetric.
+    pairs = set(zip(src.tolist(), dst.tolist()))
+    assert np.mean([(b, a) in pairs for a, b in pairs]) > 0.9
+    # Some links cross hexagon edges; the map's edge is marked -1.
+    hexes = np.repeat(np.arange(len(grid)), t * t)
+    assert (hexes[src] != hexes[dst]).any()
+    assert (nb[drawn] == -1).any()
+
+
+def test_texel_neighbours_respect_the_domain():
+    grid, t = _grid(n_cols=4), 8
+    domain = grid.texture_local(t)[..., 0] < 0.5
+    nb = grid.texel_neighbours(t, domain)
+    drawn = nb[:, 0] != -2
+    assert not drawn[~domain.reshape(-1)].any()
+    # Texels on the cut line see the edge.
+    s = grid.texture_local(t)[..., 0].reshape(-1)
+    near_cut = drawn & (s > 0.5 - 2.0 * grid.radius / t)
+    assert (nb[near_cut] == -1).any(axis=1).all()
