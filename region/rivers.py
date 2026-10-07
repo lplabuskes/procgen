@@ -23,13 +23,17 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
+from scipy.ndimage import distance_transform_edt
 from scipy.spatial import KDTree
 
 from core.params import param_field as _f, paramclass
 from region.corridor import (
+    CROSS_COST,
     EdgeCost,
     Raster,
+    centreline,
     corridor_reach,
+    diagonal_corners,
     node_spacing_rad,
     raster_frame,
     route_corridor,
@@ -50,6 +54,13 @@ RiverPath = tuple[np.ndarray, np.ndarray, np.ndarray]
 # crossing over sub-grid islands is hidden whole rather than drawn as dashes.
 _SPECKLE_NODES = 2
 
+# A branch (``starts_on_path``) leaves its parent without the separation cost within this many nodes.
+_LEAVING_NODES = 3.0
+# Beyond this many nodes the separation cost (e^(−d/2)) is negligible.
+_SEPARATION_REACH = 8
+# A junction is cut at a crossing with the line it meets within this many segments of its end.
+_JUNCTION_SEGMENTS = 6
+
 
 @paramclass
 class RegionRiverParams:
@@ -66,6 +77,9 @@ class RegionRiverParams:
     # Shorter stems are dropped (network depth is the hydrology stage's stream threshold).
     min_global_nodes: int = _f(3, label="Min stream length (global texels)", min=2, max=20)
     smoothing_iterations: int = _f(8, label="Path smoothing iterations", min=0, max=20)
+    # Cost × (1 + separation · e^(−d/2)) d nodes from an earlier path, so two
+    # channels sharing a valley run side by side rather than braid once smoothed.
+    separation: float = _f(3.0, label="Channel separation", min=0.0, max=10.0, step=0.5)
     distributaries: DistributaryParams = field(
         default_factory=DistributaryParams, metadata={"label": "Delta distributaries"}
     )
@@ -240,6 +254,139 @@ def _water_factor(
     return np.where(raster.water & ~free, WATER_COST, 1.0)
 
 
+def _avoid_factor(
+    raster: Raster, taken: np.ndarray, blocked: np.ndarray, s: np.ndarray, t: np.ndarray,
+    p: StreamPath, radius_nodes: float, separation: float,
+) -> Optional[np.ndarray]:
+    """``(n²,)`` node cost factor keeping a path off the ones routed before it.
+
+    ``taken``: their drawn nodes; ``blocked``: those plus their diagonal corners
+    (:func:`~region.corridor.diagonal_corners`).  Blocked nodes cost
+    ``CROSS_COST``, others near a taken one ``1 + separation · e^(−d/2)`` (so a
+    tributary meets its stem head-on rather than alongside, which smoothing would
+    turn into a crossing).  Near its mouth (:func:`_route_run`'s disc) a taken
+    node is free: the first one touched ends the path, so it joins rather than
+    crosses.  A branch starts on its parent and may leave it without the
+    separation cost.
+    """
+    if not blocked.any():
+        return None
+    n = raster.n
+    # Only the corridor (and mouth disc) is routed over: work in a window around
+    # it, wide enough that the separation term has died away at its edge.
+    rows, cols = centreline(raster.lo, raster.step, n, s, t)
+    pad = int(np.ceil(2.0 * radius_nodes)) + 1 + _SEPARATION_REACH
+    r0, r1 = max(int(rows.min()) - pad, 0), min(int(rows.max()) + pad + 1, n)
+    c0, c1 = max(int(cols.min()) - pad, 0), min(int(cols.max()) + pad + 1, n)
+    win = (np.arange(r0, r1)[:, None] * n + np.arange(c0, c1)[None, :]).ravel()
+    d = np.asarray(distance_transform_edt(~taken[win].reshape(r1 - r0, c1 - c0))).ravel()
+    near = 1.0 + separation * np.exp(-d / 2.0)
+    wr, wc = np.divmod(win, n)
+
+    def disc(k: int, radius: float) -> np.ndarray:
+        return np.hypot(wc - (s[k] - raster.lo) / raster.step, wr - (t[k] - raster.lo) / raster.step) <= radius
+
+    if p.starts_on_path:
+        near[disc(0, _LEAVING_NODES)] = 1.0
+    local = np.where(blocked[win], CROSS_COST, near)
+    if p.ends_here:
+        local[disc(-1, 2.0 * radius_nodes) & taken[win]] = 1.0
+    factor = np.ones(n * n)
+    factor[win] = local
+    if p.starts_on_path:
+        start, inside = raster.index(s[:1], t[:1])
+        if inside[0]:
+            factor[start[0]] = 1.0
+    return factor
+
+
+def _trim_crossed_head(nodes: np.ndarray, blocked: np.ndarray, reach_nodes: float) -> np.ndarray:
+    """``nodes`` starting past the last earlier path it crosses within ``reach_nodes`` steps of its source.
+
+    A source is placed no better than the world's grid; one that lands beside a
+    stem re-routed onto its side would otherwise begin by crossing it.
+    """
+    head = np.flatnonzero(blocked[nodes[:int(reach_nodes) + 1]])
+    return nodes if head.size == 0 else nodes[int(head[-1]) + 1:]
+
+
+def _join_at_first_touch(n: int, nodes: np.ndarray, owner: np.ndarray) -> np.ndarray:
+    """A path ending on another one, cut where it first comes beside (8-neighbour) it, ending on it.
+
+    The stem's re-route can move across the tributary's course upstream of the
+    world confluence; the tributary joins it there rather than crossing it.
+    """
+    stem = int(owner[nodes[-1]])
+    if stem < 0:
+        return nodes
+    on_stem = (owner == stem).reshape(n, n)
+    rows, cols = np.divmod(nodes, n)
+    for k in range(len(nodes) - 1):
+        r, c = int(rows[k]), int(cols[k])
+        if on_stem[r, c]:
+            return nodes[:k + 1] if k > 0 else nodes
+        # 4-neighbours first, so a join never steps diagonally past a stem node.
+        for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)):
+            rr, cc = r + dr, c + dc
+            if 0 <= rr < n and 0 <= cc < n and on_stem[rr, cc]:
+                return np.append(nodes[:k + 1], rr * n + cc)
+    return nodes
+
+
+def _segment_crossings(a: np.ndarray, b: np.ndarray) -> list[tuple[int, float]]:
+    """``(segment, t)`` along polyline ``a`` (``(M, 3)``, near unit sphere) wherever it crosses polyline ``b``.
+
+    Planar, on the tangent plane at ``a[0]`` — exact enough over a junction, and
+    well conditioned for the sub-km segments here (unlike the globe's
+    :func:`~worldgen.hydrology.crossings.crossing_pairs`).  Touches at an end of
+    either segment don't count.
+    """
+    ref = a[0] / np.linalg.norm(a[0])
+    e1 = np.cross(ref, [0.0, 0.0, 1.0] if abs(ref[2]) < 0.9 else [1.0, 0.0, 0.0])
+    e1 /= np.linalg.norm(e1)
+    e2 = np.cross(ref, e1)
+    pa, pb = np.stack([a @ e1, a @ e2], axis=1), np.stack([b @ e1, b @ e2], axis=1)
+    r, q = np.diff(pa, axis=0), np.diff(pb, axis=0)            # (M-1, 2), (K-1, 2)
+    d = r[:, None, 0] * q[None, :, 1] - r[:, None, 1] * q[None, :, 0]
+    w = pb[None, :-1, :] - pa[:-1, None, :]                    # b start − a start
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t = (w[..., 0] * q[None, :, 1] - w[..., 1] * q[None, :, 0]) / d
+        u = (w[..., 0] * r[:, None, 1] - w[..., 1] * r[:, None, 0]) / d
+    eps = 1e-4
+    hit = (np.abs(d) > 0) & (t > eps) & (t < 1 - eps) & (u > eps) & (u < 1 - eps)
+    return [(int(i), float(t[i, j])) for i, j in zip(*np.nonzero(hit))]
+
+
+def meet_line(
+    path: RiverPath, line: np.ndarray, at_end: bool, cut: Optional[list[np.ndarray]] = None,
+) -> RiverPath:
+    """``path`` with its end (or start) on the polyline ``line``.
+
+    That point moves to ``line``'s nearest vertex; then, if ``path`` crosses
+    ``line`` (or any of ``cut``, default ``[line]``) within ``_JUNCTION_SEGMENTS``
+    of it, it is cut at the crossing nearest that end instead.
+    """
+    pts, flows, in_water = path
+    out = np.array(pts, dtype=np.float64)
+    k = -1 if at_end else 0
+    out[k] = line[int(np.argmin(np.linalg.norm(line - out[k][None, :], axis=1)))]
+    m = min(_JUNCTION_SEGMENTS, len(out) - 1)
+    lo = len(out) - 1 - m if at_end else 0
+    window = out[lo:lo + m + 1]
+    hits = [h for other in (cut if cut is not None else [line])
+            for h in _segment_crossings(window, np.asarray(other, dtype=np.float64))]
+    if hits:
+        si, t = (min if at_end else max)(hits, key=lambda h: h[0] + h[1])
+        seg = lo + si
+        cp = out[seg] + t * (out[seg + 1] - out[seg])
+        cp *= np.linalg.norm(out[seg]) / np.linalg.norm(cp)
+        if at_end:
+            out, flows, in_water = np.vstack([out[:seg + 1], cp]), flows[:seg + 1], in_water[:seg + 1]
+        else:
+            out, flows, in_water = np.vstack([cp, out[seg + 1:]]), flows[seg:], in_water[seg:]
+    return out.astype(np.asarray(pts).dtype), flows, in_water
+
+
 def _start_on_drawn(
     raster: Raster, on_path: np.ndarray, s: np.ndarray, t: np.ndarray, reach_nodes: float,
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -310,45 +457,69 @@ def route_stream_paths(
     # Only drawn stretches take tributaries or count towards confluences: a
     # hidden one is under water, or a lake crossing (_hide_reentries) over land.
     occupied = np.zeros(n * n, dtype=bool)
+    # Occupied plus the corners of its diagonal steps (_avoid_factor).
+    blocked = np.zeros(n * n, dtype=bool)
     on_path = np.zeros(n * n, dtype=np.int64)
-    routed: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
-    minor: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
-    starts_on: list[bool] = []
-    for p in paths:
+    # The (last) path drawn through each node; -1 none.
+    owner = np.full(n * n, -1, dtype=np.int64)
+    # Per routed path: its index in ``paths``, nodes, flows, hidden, and the paths
+    # it starts on / ends on (-1: none).
+    done: list[tuple[int, np.ndarray, np.ndarray, np.ndarray, int, int]] = []
+    for i, p in enumerate(paths):
         sinks = occupied | raster.ocean | raster.lake
         s, t = p.s, p.t
         if p.starts_on_path:
             s, t = _start_on_drawn(raster, on_path, s, t, 2.0 * radius_nodes)
-        factor = None if p.hidden_edges is None else _water_factor(raster, s, t, p.hidden_edges, radius_nodes)
+        factor = _avoid_factor(raster, occupied, blocked, s, t, p, radius_nodes, float(params.separation))
+        if p.hidden_edges is not None:
+            water = _water_factor(raster, s, t, p.hidden_edges, radius_nodes)
+            factor = water if factor is None else factor * water
         nodes = _route_run(raster, s, t, radius_nodes, sinks, p.ends_here, params, factor)
         if nodes is None or len(nodes) < 2:
             continue
+        if not p.starts_on_path:
+            nodes = _trim_crossed_head(nodes, blocked, 2.0 * radius_nodes)
+            if len(nodes) < 2:
+                continue
+            if p.ends_here:
+                nodes = _join_at_first_touch(n, nodes, owner)
         hidden = _hidden_nodes(raster, nodes)
         flows = _run_flows(raster, nodes, s, t, p.edge_flows)
-        (minor if p.minor else routed).append((nodes, flows, hidden))
+        parent = int(owner[nodes[0]]) if p.starts_on_path else -1
+        stem = int(owner[nodes[-1]]) if p.ends_here and not hidden[-1] else -1
+        done.append((i, nodes, flows, hidden, parent, stem))
+        owner[nodes[~hidden]] = i
         occupied[nodes[~hidden]] = True
+        blocked[nodes[~hidden]] = True
+        blocked[diagonal_corners(n, nodes, ~(hidden[:-1] & hidden[1:]))] = True
         if not p.minor:
             on_path[nodes[~hidden]] += 1
-            starts_on.append(p.starts_on_path)
 
+    # Smoothed independently, a junction may stop short of the line it meets or
+    # poke through it: put it on that line as drawn (stems before their tributaries).
+    lines: dict[int, np.ndarray] = {}
+    drawn: dict[int, RiverPath] = {}
+    for i, nodes, flows, hidden, parent, stem in done:
+        path = _to_path(raster, nodes, flows, hidden, params)
+        if parent in lines:
+            path = meet_line(path, lines[parent], at_end=False)
+        if stem in lines:
+            path = meet_line(path, lines[stem], at_end=True)
+        drawn[i] = path
+        lines[i] = np.asarray(path[0], dtype=np.float64)
+
+    major = [(i, nodes) for i, nodes, *_ in done if not paths[i].minor]
     # A path ending on another one's drawn stretch is a confluence.
-    ends = [int(nodes[-1]) for nodes, _, hidden in routed
-            if on_path[nodes[-1]] - (0 if hidden[-1] else 1) > 0]
-    drawn = [_to_path(raster, nodes, flows, hidden, params) for nodes, flows, hidden in routed]
-    # A branch's first point exactly on the line it leaves, as the region draws it.
-    for i in np.flatnonzero(starts_on):
-        others = [drawn[j][0] for j in range(len(drawn)) if j != i]
-        if others:
-            line = np.concatenate(others)
-            drawn[i][0][0] = line[int(np.argmin(np.linalg.norm(line - drawn[i][0][0][None, :], axis=1)))]
-    at_sea = [i for i, (nodes, _, _) in enumerate(routed) if raster.ocean[nodes[-1]]]
+    ends = [int(nodes[-1]) for i, nodes, _, hidden, _, _ in done
+            if not paths[i].minor and on_path[nodes[-1]] - (0 if hidden[-1] else 1) > 0]
+    at_sea = [i for i, nodes in major if raster.ocean[nodes[-1]]]
     return RegionRivers(
         region_id=fields.region_id,
-        paths=drawn,
+        paths=[drawn[i] for i, _ in major],
         confluences=raster.positions[ends].reshape(-1, 3),
         mouths=np.array([drawn[i][0][-1] for i in at_sea], dtype=np.float64).reshape(-1, 3),
         mouth_flows=np.array([float(drawn[i][1][-1]) for i in at_sea], dtype=np.float64),
-        streams=[_to_path(raster, nodes, flows, hidden, params) for nodes, flows, hidden in minor],
+        streams=[drawn[i] for i, *_ in done if paths[i].minor],
     )
 
 

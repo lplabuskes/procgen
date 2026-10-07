@@ -67,6 +67,25 @@ local maps over the region's rivers ([local.md](local.md)).
 - Flow = the network's tree accumulation (running max along the stem, so
   monotonic). Paths leaving the raster are cut at its edge.
 
+**Keeping paths apart.** Corridors overlap, so two world stems a texel apart
+would otherwise share one refined valley and braid.
+- A later path pays `CROSS_COST` (1e4, `region/corridor.py`) on an earlier
+  path's drawn nodes and on one corner of each of its diagonal steps
+  (`diagonal_corners`, so nothing slips between), and × `1 + separation ·
+  e^(−d/2)` within `d` nodes of one. Waived in its mouth disc for the nodes it
+  may end on, and for a branch (`starts_on_path`) near its start.
+- A source within two corridors of a path it is forced across starts past it
+  (`_trim_crossed_head`); a path ending on a stem ends where it first comes
+  beside that stem (`_join_at_first_touch`) — the stem's re-route can move
+  across the tributary's course upstream of the world confluence.
+- Smoothed independently, a junction can stop short of the line it meets or
+  poke through it: `meet_line` snaps the end (or a branch's start) to the
+  line's nearest vertex, then cuts at the crossing nearest it (planar test,
+  `_segment_crossings`; the globe's `crossing_pairs` is ill-conditioned for
+  sub-km segments).
+- Left: a mid-course crossing where a stem's re-route cuts clean across another
+  stem's corridor (a few per world).
+
 **Deltas.** `mouths` = path ends on the refined sea. `snap_deltas` moves each
 world delta to the largest-flow regional mouth within two river corridors + twice
 the settlement snap reach, so the marker sits on its drawn river; none in reach
@@ -80,7 +99,7 @@ route shared edges independently (shown alone, so no seam visible).
 ### `RegionRiverParams`
 `raster_texels` (1.0), `margin` (0.08), `corridor_global_texels` (1.0),
 `valley_seeking` (2.0), `min_global_nodes` (3), `smoothing_iterations` (8),
-`distributaries` (`DistributaryParams`).
+`separation` (3.0), `distributaries` (`DistributaryParams`).
 
 ## Delta distributaries (`region/distributaries.py`)
 
@@ -113,8 +132,10 @@ Needs the refined `delta` texture (copied down from the globe).
   length wide around a guide bent sideways up to `wander` (0.15) × length.
   Cost: valley-seeking (`valley_seeking` 1.0), ×50 on water before the mouth,
   × `1 + separation · exp(−d / 2)` within `d` nodes of an existing channel
-  (`separation` 3.0, waived within 3 nodes of the junction). Routes not ending
-  on water are dropped.
+  (`separation` 3.0, waived within 3 nodes of the junction), × `CROSS_COST` on
+  any other channel's nodes. Routes not ending on water, or crossing another
+  channel on land, are dropped. Each branch's start is put on its parent with
+  `meet_line`, cut against the whole stem and the branches before it.
 - **Flow.** Branch = apex flow × (its mouth's share + shares of branches leaving
   it downstream). Stem keeps `main_share` (0.5); other mouths split the rest
   evenly. The stem's path and flow are unchanged; branches are extra paths

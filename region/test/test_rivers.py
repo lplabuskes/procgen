@@ -2,9 +2,10 @@
 import numpy as np
 import pytest
 
-from region.corridor import Raster
+from region.corridor import Raster, diagonal_corners
 from region.rivers import (
-    RegionRiverParams, _hide_reentries, _route_run, _start_on_drawn, _water_factor, build_region_rivers,
+    RegionRiverParams, StreamPath, _avoid_factor, _hide_reentries, _join_at_first_touch, _route_run,
+    _segment_crossings, _start_on_drawn, _trim_crossed_head, _water_factor, build_region_rivers, meet_line,
 )
 from region.upsample import RegionUpsampleParams, build_region_fields
 
@@ -166,3 +167,79 @@ def test_a_branch_starts_on_the_nearest_drawn_node():
     assert (s[0], t[0]) == (4.0, 7.0) and (s[1], t[1]) == (9.0, 2.0)
     far, _ = _start_on_drawn(raster, on_path, np.array([15.0, 9.0]), np.array([8.0, 2.0]), 3.0)
     assert far[0] == 15.0
+
+
+def test_drawn_paths_never_cross(region_rivers):
+    paths = [(np.asarray(pos, dtype=np.float64), hidden) for pos, _, hidden in region_rivers.paths]
+    for i, (a, hidden_a) in enumerate(paths):
+        for b, hidden_b in paths[i + 1:]:
+            assert not [k for k, _ in _segment_crossings(a, b) if not hidden_a[k]]
+
+
+def _valley_raster(n: int = 21) -> Raster:
+    """Unit-step raster with one valley floor down column 10."""
+    cols = np.arange(n * n) % n
+    return Raster(lo=0.0, step=1.0, n=n, sampled=np.ones(n * n, dtype=bool), positions=np.zeros((n * n, 3)),
+                  values={}, anomaly=0.1 * np.abs(cols - 10.0), ocean=np.zeros(n * n, dtype=bool),
+                  lake=np.zeros(n * n, dtype=bool))
+
+
+def test_a_later_path_keeps_off_an_earlier_one():
+    raster = _valley_raster()
+    n = raster.n
+    # The earlier path takes the valley floor, zig-zagging so it has diagonal steps.
+    earlier = np.arange(n) * n + 10 + (np.arange(n) % 2)
+    taken = np.zeros(n * n, dtype=bool)
+    taken[earlier] = True
+    blocked = taken.copy()
+    blocked[diagonal_corners(n, earlier)] = True
+    s, t = np.full(2, 12.0), np.array([0.0, 20.0])
+    no_sinks = np.zeros(n * n, dtype=bool)
+    params = RegionRiverParams()
+    free = _route_run(raster, s, t, 3.0, no_sinks, False, params)
+    assert free is not None and taken[free].any()             # alone, it takes the valley floor too
+    p = StreamPath(s=s, t=t, edge_flows=np.ones(1), ends_here=False)
+    factor = _avoid_factor(raster, taken, blocked, s, t, p, 3.0, float(params.separation))
+    kept = _route_run(raster, s, t, 3.0, no_sinks, False, params, factor)
+    assert kept is not None and not blocked[kept].any()
+
+
+def test_a_tributary_joins_where_it_first_meets_its_stem():
+    n = 10
+    owner = np.full(n * n, -1)
+    owner[np.arange(n) * n + 5] = 0                           # the stem, down column 5
+    # (row, col): down beside the stem from row 6 on, meeting it at row 8.
+    rc = [(2, 1), (2, 2), (2, 3), (3, 3), (4, 3), (5, 3), (6, 4), (7, 4), (8, 5)]
+    nodes = np.array([r * n + c for r, c in rc])
+    joined = _join_at_first_touch(n, nodes, owner)
+    assert joined.tolist() == [r * n + c for r, c in rc[:7] + [(6, 5)]]   # joins at row 6, beside it
+    # Ending elsewhere (here, nothing), it is left alone.
+    assert _join_at_first_touch(n, nodes[:-1], owner).tolist() == nodes[:-1].tolist()
+
+
+def test_a_source_beside_a_stem_starts_past_it():
+    blocked = np.zeros(20, dtype=bool)
+    blocked[[2, 15]] = True
+    nodes = np.arange(20)
+    assert _trim_crossed_head(nodes, blocked, 6.0).tolist() == list(range(3, 20))   # 15: too far from the source
+    assert _trim_crossed_head(nodes, blocked, 1.0).tolist() == nodes.tolist()
+
+
+def _sphere(points) -> np.ndarray:
+    """Points ``(y, z)`` near ``(1, 0, 0)``, on the unit sphere."""
+    p = np.array([[1.0, y, z] for y, z in points])
+    return p / np.linalg.norm(p, axis=1, keepdims=True)
+
+
+def test_a_junction_poking_through_its_line_is_cut_on_it():
+    line = _sphere([(y, 0.0) for y in np.linspace(-0.01, 0.01, 11)])
+    # A tributary from the north whose smoothed end overshoots the stem.
+    path = (_sphere([(0.0, 0.004), (0.0005, 0.002), (0.001, -0.0005), (0.0011, -0.001)]),
+            np.arange(3, dtype=np.float32), np.zeros(3, dtype=bool))
+    pts, flows, in_water = meet_line(path, line, at_end=True)
+    assert len(pts) == 3 and len(flows) == 2 and len(in_water) == 2
+    assert abs(pts[-1][2]) < 1e-9 and np.all(pts[:-1, 2] > 0)
+    assert _segment_crossings(pts, line) == []
+    # One stopping short is snapped onto the line's nearest vertex.
+    short = (_sphere([(0.0, 0.004), (0.0004, 0.001)]), np.ones(1, dtype=np.float32), np.zeros(1, dtype=bool))
+    assert np.allclose(meet_line(short, line, at_end=True)[0][-1], line[5])

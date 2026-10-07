@@ -32,7 +32,9 @@ import numpy as np
 from scipy.ndimage import distance_transform_edt
 
 from core.params import field, param_field as _f, paramclass
-from region.corridor import Raster, node_spacing_rad, raster_frame, route_corridor, sample_raster
+from region.corridor import (
+    CROSS_COST, Raster, diagonal_corners, node_spacing_rad, raster_frame, route_corridor, sample_raster,
+)
 from region.upsample import EARTH_RADIUS_KM, RegionFields
 from worldgen.delta.shape import BIRDFOOT, CUSPATE
 
@@ -193,7 +195,7 @@ def _node_cost(raster: Raster, plain: np.ndarray, params: DistributaryParams) ->
 
 def _route_branch(
     raster: Raster, start: int, mouth: int, base_cost: np.ndarray, occupied: np.ndarray,
-    params: DistributaryParams, rng: np.random.Generator,
+    blocked: np.ndarray, params: DistributaryParams, rng: np.random.Generator,
 ) -> Optional[np.ndarray]:
     n = raster.n
     (sr,), (sc,) = _grid_rc(raster, np.array([start]))
@@ -215,6 +217,9 @@ def _route_branch(
     gr, gc = np.divmod(np.arange(n * n), n)
     leaving = np.hypot(gr - sr, gc - sc) <= 3.0           # free to leave its parent
     cost = base_cost * (1.0 + float(params.separation) * np.where(leaving, 0.0, near))
+    # Off every other channel but the node it leaves from.
+    cost = np.where(blocked, cost * CROSS_COST, cost)
+    cost[start] = base_cost[start]
 
     def edge_cost(sub: np.ndarray, a: np.ndarray, b: np.ndarray, step: np.ndarray) -> np.ndarray:
         c = cost[sub]
@@ -224,14 +229,18 @@ def _route_branch(
 
     sinks = raster.water & raster.sampled
     radius = max(float(params.corridor) * length, 2.0)
-    return route_corridor(raster, s, t, radius, edge_cost, sinks=sinks, mouth_radius=2.0)
+    path = route_corridor(raster, s, t, radius, edge_cost, sinks=sinks, mouth_radius=2.0)
+    # A mouth reached only across another channel (on land) is not this delta's.
+    if path is not None and (blocked & ~raster.water)[path[2:]].any():
+        return None
+    return path
 
 
 def _fan_branches(
     fields: RegionFields, globe: "World", rivers: "RegionRivers", fan, fan_index: int,
     lo: float, step: float, n: int, params: "RegionRiverParams",
 ) -> list["RiverPath"]:
-    from region.rivers import _hidden_nodes, _to_path
+    from region.rivers import _hidden_nodes, _to_path, meet_line
 
     dp: DistributaryParams = params.distributaries
     node_km = node_spacing_rad(fields, step) * EARTH_RADIUS_KM
@@ -263,7 +272,8 @@ def _fan_branches(
             best, best_flow, best_vertex = i, float(np.max(flows)), j
     if best < 0:
         return []
-    stem_pos = np.asarray(rivers.paths[best][0], dtype=np.float64)[best_vertex:]
+    stem_line = np.asarray(rivers.paths[best][0], dtype=np.float64)
+    stem_pos = stem_line[best_vertex:]
     stem = _path_nodes(raster, fields, stem_pos)
     stem = stem[stem >= 0]
     # The stem ends at open water (a lake delta's river may run on through the lake).
@@ -309,9 +319,14 @@ def _fan_branches(
     share = (1.0 - float(dp.main_share)) / max(len(mouths), 1)
     channels = [_Channel(nodes=stem, mouth_share=float(dp.main_share), parent=-1, children=[])]
     occupied = np.zeros(n * n, dtype=bool)
+    # Occupied plus the corners of its diagonal steps (no branch slips across between nodes).
+    blocked = np.zeros(n * n, dtype=bool)
     for pos, _, _ in rivers.paths:
         nodes = _path_nodes(raster, fields, pos)
-        occupied[nodes[nodes >= 0]] = True
+        on = nodes >= 0
+        occupied[nodes[on]] = True
+        blocked[diagonal_corners(n, nodes, on[:-1] & on[1:])] = True
+    blocked |= occupied
     base_cost = _node_cost(raster, plain, dp)
     junctions: list[int] = []
     for side in (-1.0, 1.0):
@@ -338,13 +353,15 @@ def _fan_branches(
             if not np.isfinite(score).any():
                 continue
             j = int(np.argmin(score))
-            path = _route_branch(raster, int(trunk[j]), m, base_cost, occupied, dp, rng)
+            path = _route_branch(raster, int(trunk[j]), m, base_cost, occupied, blocked, dp, rng)
             if path is None or len(path) < 3 or not raster.water[path[-1]]:
                 continue
             parent = int(owner[j])
             channels.append(_Channel(nodes=path, mouth_share=share, parent=parent, children=[]))
             channels[parent].children.append(len(channels) - 1)
             occupied[path] = True
+            blocked[path] = True
+            blocked[diagonal_corners(n, path)] = True
             junctions.append(int(trunk[j]))
             trunk = np.concatenate([trunk[:j], path])
             owner = np.concatenate([owner[:j], np.full(len(path), len(channels) - 1)])
@@ -357,10 +374,10 @@ def _fan_branches(
     out: list["RiverPath"] = []
     for i, ch in enumerate(channels[1:], start=1):
         flows = np.full(len(ch.nodes) - 1, apex_flow * served(i), dtype=np.float32)
-        pts, f, in_water = _to_path(raster, ch.nodes, flows, _hidden_nodes(raster, ch.nodes), params)
-        parent_line = drawn[ch.parent]
-        pts = pts.copy()
-        pts[0] = parent_line[int(np.argmin(np.linalg.norm(parent_line - pts[0][None, :], axis=1)))]
+        pts, f, in_water = meet_line(
+            _to_path(raster, ch.nodes, flows, _hidden_nodes(raster, ch.nodes), params), drawn[ch.parent], at_end=False,
+            cut=[stem_line, *drawn[1:]],
+        )
         drawn.append(pts.astype(np.float64))
         out.append((pts, f, in_water))
     return out

@@ -32,6 +32,10 @@ _D8 = ((-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1))
 # nodes and ``length`` their length in raster steps (1 or √2).  Non-finite = no edge.
 EdgeCost = Callable[[np.ndarray, np.ndarray, np.ndarray, np.ndarray], np.ndarray]
 
+# Node cost factor on an earlier channel: a later one crosses it only when its
+# corridor has no other way through.
+CROSS_COST = 1e4
+
 
 @dataclass
 class Raster:
@@ -185,6 +189,19 @@ def corridor_reach(
     if far.all():
         return np.zeros(n * n, dtype=bool)
     return (np.asarray(distance_transform_edt(far)) <= reach_nodes).ravel()
+
+
+def diagonal_corners(n: int, nodes: np.ndarray, edges: Optional[np.ndarray] = None) -> np.ndarray:
+    """One corner node of each diagonal step along ``nodes`` (among ``edges``, a ``(len - 1,)`` mask).
+
+    With them a path is 4-connected, so no later 8-connected path slips across
+    between two of its nodes.
+    """
+    rows, cols = np.divmod(np.asarray(nodes, dtype=np.int64), n)
+    diagonal = (rows[:-1] != rows[1:]) & (cols[:-1] != cols[1:])
+    if edges is not None:
+        diagonal &= edges
+    return rows[:-1][diagonal] * n + cols[1:][diagonal]
 
 
 def route_corridor(
