@@ -30,7 +30,7 @@ finer than the globe gets no detail (``RegionFields.detail_octaves == 0``).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
 from scipy.sparse import csr_matrix
@@ -167,15 +167,22 @@ class RegionUpsampleParams:
     # surface drops over the breach length (or than the min depth), or smaller
     # than the min size, counts as breached by erosion the relief doesn't model.
     small_lakes: bool = _f(True, label="Small lakes", min=0, max=1)
+    # Measured on the smoothed relief (lake_smoothing_parent_texels), whose basins are shallower.
     lake_breach_parent_texels: float = _f(
-        6.0, label="Small lake breach length (parent texels)", min=0.0, max=30.0, step=0.5
+        1.0, label="Small lake breach length (parent texels)", min=0.0, max=30.0, step=0.25
     )
-    lake_min_depth_km: float = _f(0.002, label="Small lake min depth (km)", min=0.0, max=0.1, step=0.001)
+    lake_min_depth_km: float = _f(0.001, label="Small lake min depth (km)", min=0.0, max=0.1, step=0.0005)
     # Breach length multiplier at an annual mean ≤ 0 °C (fading out by 10 °C): glacial lake country.
     lake_glacial_factor: float = _f(0.3, label="Small lake glacial breach factor", min=0.05, max=1.0, step=0.05)
     # Precipitation / PET below which a basin holds a playa, not a lake (0.2: UNEP "arid").
     lake_min_aridity_index: float = _f(0.2, label="Small lake min aridity index", min=0.0, max=2.0, step=0.05)
     lake_min_texels: int = _f(2, label="Small lake min size (texels)", min=1, max=200)
+    # Basins and shores are found on the relief smoothed over this (Gaussian σ):
+    # off, texel detail gives lacy shores and speckle islands, and a tier down the
+    # conservation staircase gives lakes filling whole parent texels.
+    lake_smoothing_parent_texels: float = _f(
+        0.5, label="Small lake smoothing (parent texels)", min=0.0, max=3.0, step=0.05
+    )
     # ── resources, population and danger (region/resources.py) ──
     # Refined slope (km/km) at which slope-driven terms saturate.
     slope_saturation: float = _f(
@@ -424,10 +431,15 @@ def _flood(
 # ── conservation ─────────────────────────────────────────────────────────────
 
 
+# The most a two-sided :func:`reshape_to_target` moves a texel towards the level (share of its height/depth).
+_TOWARD_MAX = 0.9
+
+
 def reshape_to_target(
     elevation: np.ndarray, target: np.ndarray, anchors: np.ndarray, weights: np.ndarray,
     n_anchors: int, *, level: float | np.ndarray = 0.0, active: Optional[np.ndarray] = None,
     max_scale: float = 1.0, min_offset: float = 0.001, max_offset: float = 0.02,
+    two_sided: bool = False,
 ) -> np.ndarray:
     """Edit ``elevation`` so its side of ``level`` matches ``target``'s, keeping every anchor's mean.
 
@@ -436,7 +448,10 @@ def reshape_to_target(
     clipped to ``[min_offset, max_offset]`` past the level; the anchor's mean
     change is absorbed by scaling its texels on the side that can take it without
     crossing (dry raised or wet deepened, proportional to height/depth).  Anchors
-    needing more than ``max_scale`` ×, or with nothing to absorb, are unchanged.
+    needing more than ``max_scale`` ×, or with nothing to absorb, are unchanged —
+    unless ``two_sided``: then such an anchor takes it on the other side, moved
+    towards the level (dry lowered or wet made shallower) by at most
+    ``_TOWARD_MAX`` of their height/depth, so none crosses.
     """
     e0 = np.asarray(elevation, dtype=np.float64)
     lvl = np.broadcast_to(np.asarray(level, dtype=np.float64), e0.shape)
@@ -459,6 +474,14 @@ def reshape_to_target(
     ok = (delta == 0.0) | (k <= max_scale)
     k = np.where(ok, np.where(np.isfinite(k), k, 0.0), 0.0)
     out = np.where(absorb, new * (1.0 + k[anchors]), new)
+    if two_sided:
+        toward = act & ~absorb
+        cap_t = np.bincount(anchors, weights=np.where(toward, weights * np.abs(new), 0.0), minlength=n_anchors)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            k_t = np.where(cap_t > 0.0, np.abs(delta) / cap_t, np.inf)
+        use = ~ok & (k_t <= _TOWARD_MAX)
+        out = np.where(use[anchors] & toward, new * (1.0 - np.where(use, k_t, 0.0)[anchors]), out)
+        ok |= use
     return np.where(ok[anchors], out + lvl, e0)
 
 
@@ -793,7 +816,7 @@ def _reshape_coasts(
         bays = _varying_persistence_fbm(flat_pos, seed ^ _SEED_SALT_COAST, freqs, style.persistence)
         goal = goal + bays * np.clip(wander * 2.0 * feature_length_km * slope, 0.0, float(params.max_relief_km))
 
-    edit = dict(
+    edit: dict[str, Any] = dict(
         max_scale=float(params.coast_max_scale),
         min_offset=float(params.coast_edit_min_km), max_offset=float(params.coast_edit_max_km),
     )
@@ -819,10 +842,19 @@ def _reshape_coasts(
 def _add_small_lakes(
     textures: dict[str, np.ndarray], source: ParentSource, grid: RegionHexGrid,
     drains: Optional[np.ndarray], params: RegionUpsampleParams,
+    loc: Located, weights: np.ndarray,
 ) -> None:
-    """Add this tier's own lakes (:func:`region.lakes.find_small_lakes`) to the water textures, in place."""
+    """Add this tier's own lakes (:func:`region.lakes.find_small_lakes`) to the water textures, in place.
+
+    Their shores are the smoothed relief's, and so are the parent's small lakes'
+    (re-flooded on it at the parent's surface, as :func:`_refine_water_masks`
+    floods the raw relief); the raw elevation is edited to agree
+    (:func:`reshape_to_target`, each anchor's mean kept), and a texel the edit
+    can't move stays dry.
+    """
     elevation = textures["elevation"][..., 0]
-    lake = textures["lake_mask"][..., 0] > 0.5
+    inherited = textures[SMALL_LAKE_KEY][..., 0] > 0.5
+    lake = (textures["lake_mask"][..., 0] > 0.5) & ~inherited
     water = lake.copy()
     if "ocean_mask" in textures:
         water |= textures["ocean_mask"][..., 0] > 0.5
@@ -831,19 +863,46 @@ def _add_small_lakes(
         temperature = textures["temperature"].mean(axis=-1)
         precipitation = textures["precipitation"].sum(axis=-1)
         frozen = textures["temperature"].max(axis=-1) < ICECAP_WARMEST_C
-    new, level = find_small_lakes(
-        source, grid, elevation, water, temperature=temperature, precipitation=precipitation, frozen=frozen,
+    new, surface, smoothed = find_small_lakes(
+        source, grid, elevation, water | inherited, temperature=temperature, precipitation=precipitation, frozen=frozen,
         drains=drains, min_depth_km=float(params.lake_min_depth_km),
         breach_parent_texels=float(params.lake_breach_parent_texels), min_texels=int(params.lake_min_texels),
         min_aridity_index=float(params.lake_min_aridity_index), glacial_factor=float(params.lake_glacial_factor),
+        smoothing_parent_texels=float(params.lake_smoothing_parent_texels),
+        inherited=inherited,
     )
+    if inherited.any():
+        old, old_level = _flood(
+            smoothed, inherited, np.where(inherited, textures["filled_height"][..., 0], np.inf),
+            int(params.water_spread_texels), blocked=water | new,
+        )
+        # The edit band reaches about a parent texel onto their shores, as find_small_lakes's does.
+        band = old_level
+        n_t = source.spacing_rad / max(grid.texel_spacing_rad(elevation.shape[1]), 1e-12)
+        for _ in range(max(int(np.ceil(n_t)), 1)):
+            band = np.where(np.isfinite(band) | water, band, _neighbour_min(band))
+        surface = np.where(new, surface, np.where(old, old_level, np.minimum(surface, band)))
+        new = new | old
     if not new.any():
         return
+    # Drag the raw relief to the smoothed shores: under the surface in the lake, above it on the shore.
+    target = np.where(new, np.minimum(smoothed, surface), np.maximum(smoothed, surface + 1e-6))
+    flat = elevation.reshape(-1).astype(np.float64)
+    edited = reshape_to_target(
+        flat, target.reshape(-1), loc.anchors, weights, source.n_anchors,
+        level=surface.reshape(-1), active=np.isfinite(surface).reshape(-1),
+        max_scale=float(params.coast_max_scale),
+        min_offset=float(params.coast_edit_min_km), max_offset=float(params.coast_edit_max_km),
+        two_sided=True,
+    )
+    edited = conserve_additive(edited[:, None], loc.anchors, source.anchor_values("elevation", loc), weights,
+                               source.n_anchors)[:, 0].reshape(elevation.shape)
+    new &= edited < surface
+    textures["elevation"] = edited[..., None].astype(np.float32)
     textures["lake_mask"] = (lake | new)[..., None].astype(np.float32)
-    small = textures[SMALL_LAKE_KEY][..., 0] > 0.5
-    textures[SMALL_LAKE_KEY] = (small | new)[..., None].astype(np.float32)
+    textures[SMALL_LAKE_KEY] = new[..., None].astype(np.float32)
     filled = textures["filled_height"][..., 0]
-    textures["filled_height"] = np.where(new, level, filled)[..., None].astype(np.float32)
+    textures["filled_height"] = np.where(new, surface, np.where(lake, filled, edited))[..., None].astype(np.float32)
 
 
 def refine_fields(
@@ -976,7 +1035,9 @@ def refine_fields(
 
     # ── small lakes: basins in the refined relief, below the parent's resolution
     if grid is not None and params.small_lakes and "filled_height" in textures:
-        _add_small_lakes(textures, source, grid, drains, params)
+        _add_small_lakes(textures, source, grid, drains, params, loc, weights)
+        # Their shores edit the relief: the fields below read the edited one.
+        elevation = textures["elevation"].reshape(-1, 1).astype(np.float64)
 
     # ── biome: reclassify from the area-averaged refined climate ─────────────
     climate_avg = None

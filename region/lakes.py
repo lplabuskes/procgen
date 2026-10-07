@@ -21,8 +21,14 @@ its texel spacing over the map plus a margin:
   ``lake_min_texels`` big.  In the cold the breach length shrinks by
   ``lake_glacial_factor``: glacially scoured ground is lake country.
 
-The lake surface is then spread a node onto the shore and every texel below it
-(and not already water) becomes lake.  Deterministic; no noise of its own.
+All of it on the relief smoothed over ``smoothing_parent_texels`` (a Gaussian,
+water left out): the raw texels carry texel-scale detail and, a tier down, the
+conservation staircase (metre steps at parent-texel edges), whose pits and sills
+would give lacy shores, speckle islands and lakes filling whole parent texels.
+The lake surface is then spread a node onto the shore and every texel whose
+smoothed height is below it (and not already water) becomes lake; the caller
+edits the raw relief to agree (:func:`region.upsample.reshape_to_target`).
+Deterministic; no noise of its own.
 """
 from __future__ import annotations
 
@@ -118,6 +124,22 @@ def _neighbour_min_2d(values: np.ndarray) -> np.ndarray:
     return out
 
 
+def smooth_land(elevation: np.ndarray, water: np.ndarray, sigma_nodes: float) -> np.ndarray:
+    """``(n, n)`` ``elevation`` Gaussian-smoothed over ``sigma_nodes``, averaging land (``~water``) only.
+
+    Water nodes keep their height, so neither a lake bed nor the sea floor drags its shore down.
+    """
+    e = np.asarray(elevation, dtype=np.float64)
+    if sigma_nodes <= 0.0:
+        return e.copy()
+    land = ~np.asarray(water, dtype=bool)
+    w = ndimage.gaussian_filter(land.astype(np.float64), sigma_nodes, mode="nearest")
+    v = ndimage.gaussian_filter(np.where(land, e, 0.0), sigma_nodes, mode="nearest")
+    with np.errstate(divide="ignore", invalid="ignore"):
+        out = np.where(w > 1e-6, v / w, e)
+    return np.where(land, out, e)
+
+
 def basin_lake_levels(
     elevation: np.ndarray, outlet: np.ndarray, n: int, *,
     runoff: Optional[np.ndarray] = None, evaporation: Optional[np.ndarray] = None,
@@ -186,9 +208,11 @@ def find_small_lakes(
     min_aridity_index: float = 0.2,
     glacial_factor: float = 0.3,
     min_texels: int = 2,
+    smoothing_parent_texels: float = 0.5,
+    inherited: Optional[np.ndarray] = None,
     hydrology: Optional[HydrologyParams] = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """The tier's own lakes over its ``(M, T, T)`` refined ``elevation``: ``(lake, level)``.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The tier's own lakes over its ``(M, T, T)`` refined ``elevation``: ``(lake, surface, smoothed)``.
 
     ``water`` is the water already there (an outlet; never made lake),
     ``temperature`` / ``precipitation`` the annual mean (°C) / total (mm) per
@@ -199,7 +223,14 @@ def find_small_lakes(
     parent's channels as ``(K, 2, 3)`` unit-vector segments.  A lake must be
     deeper than ``min_depth_km`` and than the parent's surface drops over
     ``breach_parent_texels`` of its texels (parent slope × that length).
-    ``level`` is the lake surface (km) on lake texels, ``+inf`` elsewhere.
+    ``inherited`` (``(M, T, T)`` bool, part of ``water``) is the parent's small
+    lakes: smoothed over as land (the caller re-shores them on ``smoothed``),
+    and no ``drains`` through them (the parent's channel runs under them).
+    Basins and shores are of the relief smoothed over ``smoothing_parent_texels``
+    (:func:`smooth_land`); ``smoothed`` is that relief at each texel.
+    ``surface`` is the lake surface (km) on lake texels and about a parent
+    texel onto their shores, ``+inf`` elsewhere: the band where the raw relief
+    is edited to agree, wide enough to keep each parent texel's mean.
     """
     m, tex = elevation.shape[0], elevation.shape[1]
     step = 2.0 * grid.radius / tex
@@ -216,9 +247,17 @@ def find_small_lakes(
     breach = source.slope(loc) * float(breach_parent_texels) * source.spacing_rad * EARTH_RADIUS_KM
     edge = np.zeros((n, n), dtype=bool)
     edge[[0, -1], :] = edge[:, [0, -1]] = True
-    outlet = ~covered | water[hexes, hr, hc] | edge.ravel()
+    wet = covered & water[hexes, hr, hc]
+    outlet = ~covered | wet | edge.ravel()
+    seed = np.zeros(n * n, dtype=bool)
+    if inherited is not None:
+        seed = covered & inherited[hexes, hr, hc]
+        wet &= ~seed
     if drains is not None:
-        outlet |= drain_nodes(grid, drains, lo, step, n)
+        outlet |= drain_nodes(grid, drains, lo, step, n) & ~seed
+    n_t = source.spacing_rad / max(grid.texel_spacing_rad(tex), 1e-12)
+    sigma = float(smoothing_parent_texels) * n_t
+    e = smooth_land(e.reshape(n, n), wet.reshape(n, n), sigma).ravel()
 
     runoff = evaporation = None
     allowed = np.ones(n * n, dtype=bool)
@@ -238,13 +277,20 @@ def find_small_lakes(
     # Carry each surface a node onto its shore so texels between nodes see it
     # (not onto outlets: nothing stands on a drain).
     levels = np.where(np.isfinite(levels) | outlet.reshape(n, n), levels, _neighbour_min_2d(levels))
+    band = levels
+    for _ in range(max(int(np.ceil(n_t)), 1)):
+        band = np.where(np.isfinite(band) | outlet.reshape(n, n), band, _neighbour_min_2d(band))
 
     local = grid.texture_local(tex).reshape(-1, 2)
-    c = np.rint((local[:, 0] - lo) / step).astype(np.int64)
-    r = np.rint((local[:, 1] - lo) / step).astype(np.int64)
+    x, y = (local[:, 0] - lo) / step, (local[:, 1] - lo) / step
+    c, r = np.rint(x).astype(np.int64), np.rint(y).astype(np.int64)
     inside = (c >= 0) & (c < n) & (r >= 0) & (r < n)
     level = np.full(m * tex * tex, np.inf)
     level[inside] = levels[r[inside], c[inside]]
     level = level.reshape(m, tex, tex)
-    lake = np.isfinite(level) & (elevation < level) & ~water
-    return lake, np.where(lake, level, np.inf)
+    surface = np.full(m * tex * tex, np.inf)
+    surface[inside] = band[r[inside], c[inside]]
+    surface = np.where(water, np.inf, surface.reshape(m, tex, tex))
+    smoothed = ndimage.map_coordinates(e.reshape(n, n), [y, x], order=1, mode="nearest").reshape(m, tex, tex)
+    lake = np.isfinite(level) & ~water & (smoothed < level)
+    return lake, np.where(lake, level, surface), smoothed

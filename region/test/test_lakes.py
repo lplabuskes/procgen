@@ -5,8 +5,10 @@ import pytest
 from region.corridor import raster_frame, sample_raster
 from region.grid import RegionHexGrid
 from region.geometry import RegionGeometry
-from region.lakes import basin_lake_levels, budyko_runoff_ratio, drain_nodes, glacial_breach_scale
-from region.upsample import SMALL_LAKE_KEY, RegionUpsampleParams, build_region_fields, conservation_report
+from region.lakes import basin_lake_levels, budyko_runoff_ratio, drain_nodes, glacial_breach_scale, smooth_land
+from region.upsample import (
+    SMALL_LAKE_KEY, RegionUpsampleParams, build_region_fields, conservation_report, reshape_to_target,
+)
 
 REGION_ID = 51   # mostly land, and thaws (conftest's lake region 40 is ice cap: no small lakes)
 N = 21
@@ -60,6 +62,33 @@ def test_dry_basins_shrink_and_vetoed_ones_vanish():
     assert not (shrunk & ~full).any()
     assert dry[shrunk].max() < basin_lake_levels(elevation, outlet, N)[full].max()
     assert not np.isfinite(basin_lake_levels(elevation, outlet, N, allowed=np.zeros(N * N, dtype=bool))).any()
+
+
+def test_smoothing_averages_land_only():
+    rng = np.random.default_rng(0)
+    elevation = rng.normal(0.0, 0.01, (N, N))
+    water = np.zeros((N, N), dtype=bool)
+    water[:, :3] = True
+    elevation[water] = -1.0
+    out = smooth_land(elevation, water, 2.0)
+    assert np.array_equal(out[water], elevation[water])
+    # The sea floor doesn't drag the shore down; speckle is damped.
+    assert out[~water].min() > -0.05
+    assert out[~water].std() < 0.5 * elevation[~water].std()
+    assert np.array_equal(smooth_land(elevation, water, 0.0), elevation)
+
+
+def test_a_lake_covering_its_anchor_shallows_its_bed():
+    """Bed texels above the surface are pushed under; with nothing dry to raise,
+    the deeper ones rise towards the surface instead, keeping the mean."""
+    elevation = np.array([0.003, 0.002, -0.004, -0.008])     # one anchor; surface 0, mean −0.00175
+    anchors, weights = np.zeros(4, dtype=np.int64), np.ones(4)
+    target = np.full(4, -0.002)
+    one = reshape_to_target(elevation, target, anchors, weights, 1, level=0.0, min_offset=0.001)
+    assert np.array_equal(one, elevation)                    # one-sided: nothing to absorb it
+    two = reshape_to_target(elevation, target, anchors, weights, 1, level=0.0, min_offset=0.001, two_sided=True)
+    assert np.all(two < 0.0)
+    assert two.mean() == pytest.approx(elevation.mean())
 
 
 def test_budyko_runoff_falls_with_aridity():

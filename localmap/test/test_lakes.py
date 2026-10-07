@@ -3,6 +3,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from scipy import ndimage
 
 from localmap.upsample import build_local_fields, path_segments
 from localmap.test.conftest import local_params
@@ -61,8 +62,15 @@ def test_no_small_lake_on_a_region_river(globe, region):  # noqa: F811
     ponds = (region.textures[SMALL_LAKE_KEY][..., 0] > 0.5).any(axis=(1, 2))
     hex_index = int(np.argmax(np.where(ponds, crossed, -1)))
     local = build_local_fields(globe, region, hex_index, local_params(**OPEN), drains=segments)
-    inherited = build_local_fields(globe, region, hex_index, local_params(small_lakes=False))
-    new = (local.textures[SMALL_LAKE_KEY][..., 0] > 0.5) & ~(inherited.textures[SMALL_LAKE_KEY][..., 0] > 0.5)
+    # Inherited lakes are re-shored here, and a region river may run under one: leave out
+    # anything within a parent texel of where they'd be otherwise.
+    ratio = region.grid.texel_spacing_rad(region.tex_size) / local.grid.texel_spacing_rad(local.tex_size)
+    reach = int(np.ceil(ratio))
+    off = build_local_fields(globe, region, hex_index, local_params(small_lakes=False))
+    inherited = np.asarray(ndimage.binary_dilation(
+        off.textures[SMALL_LAKE_KEY][..., 0] > 0.5, structure=np.ones((1, 3, 3), dtype=bool), iterations=reach,
+    ), dtype=bool)
+    new = (local.textures[SMALL_LAKE_KEY][..., 0] > 0.5) & ~inherited & local.in_hex
     assert new.any()
     tex = local.tex_size
     step = 2.0 * local.grid.radius / tex

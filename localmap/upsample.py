@@ -56,9 +56,13 @@ class LocalUpsampleParams(RegionUpsampleParams):
     wetland_riparian_slope_m_per_km: float = _f(
         8.0, label="Riparian flatness slope scale (m/km)", min=0.1, max=50.0, step=0.1)
     # The region's refined slopes are steeper and local relief pits deeper; at the
-    # region's 6 local maps hold ~5× Earth's share of 0.1–40 km² lakes.
+    # region's 1 local maps flood ~20% of their land (seed 4's lake districts).
     lake_breach_parent_texels: float = _f(
-        10.0, label="Small lake breach length (parent texels)", min=0.0, max=30.0, step=0.5
+        7.0, label="Small lake breach length (parent texels)", min=0.0, max=30.0, step=0.5
+    )
+    # ~3 local texels (~1 km): rounds the conservation staircase's parent-texel pits off.
+    lake_smoothing_parent_texels: float = _f(
+        0.25, label="Small lake smoothing (parent texels)", min=0.0, max=3.0, step=0.05
     )
     # Local slopes over ~365 m texels are far steeper than the region's.
     slope_saturation: float = _f(

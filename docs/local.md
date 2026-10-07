@@ -96,9 +96,11 @@ to ~0.03% at `T=64` (tiers count rim texels slightly differently, ~1/T).
 ### `LocalUpsampleParams`
 
 `RegionUpsampleParams` with local defaults: `n_cols=16`, `slope_reference=0.03`,
-`slope_floor=0.03`, `max_relief_km=0.6`, `lake_breach_parent_texels=10` (at the
-region's 6, local relief pits held ~5× Earth's share of 0.1–40 km² lakes; seed 4,
-20 maps: tundra +4.3% of land, temperate +0.2%, tropical ~0), `water_spread_texels=12` (~one regional
+`slope_floor=0.03`, `max_relief_km=0.6`, `lake_smoothing_parent_texels=0.25` (~3 local
+texels, ~1 km: rounds the staircase's parent-texel pits off; 0.5 leaves no local lakes),
+`lake_breach_parent_texels=7` (at the region's 1, local maps flood ~20% of their land;
+seed 4, 24 maps in regions 48/51/16/45: 1.8% of land in small lakes, inherited
+included, vs 1.5–2.1% on raw relief, with 10 islands vs ~100), `water_spread_texels=12` (~one regional
 texel), `biome_smoothing=13` (~one regional texel, so biome edges follow the
 region), `slope_saturation=0.1`. Relief numbers are a first cut, untuned (seed 4
 region 34: ~50 m land relief std vs parent texel). Coast params keep region

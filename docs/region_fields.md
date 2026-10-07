@@ -142,8 +142,15 @@ up. Each refined tier finds its own in its refined relief, after the water masks
 and climate and before resources (`_add_small_lakes`; `small_lakes=False` →
 none). They join `lake_mask` / `filled_height` and are marked in
 `small_lake_mask`; resources, rural density and fishers then treat them as water
-(conservation unchanged — all totals still exact), and the tier below re-floods
-them like any lake. No noise of its own.
+(conservation unchanged — all totals still exact), and the tier below re-shores
+them with its own (below). No noise of its own.
+
+- **Smoothed relief.** Everything below runs on the raster's relief
+  Gaussian-smoothed over `lake_smoothing_parent_texels` (σ; water left out of
+  the average, `smooth_land`). On raw texels every few-metre detail bump is a
+  sill or an island (lacy shores, speckle islands), and a tier down the
+  conservation staircase (metre steps at parent-texel edges) makes pits that
+  fill whole parent texels (square lakes).
 
 - **Basins.** Priority-flood on a raster at the tier's texel spacing (one hex
   radius past the map; nearest-centre texel, uncovered nodes at the parent's
@@ -165,13 +172,31 @@ them like any lake. No noise of its own.
   length shrinks by `lake_glacial_factor` (annual mean ≤ 0 °C, fading out by
   10 °C): glacial lake country.
 - **Texels.** Each node's surface is carried a node onto its shore (not onto
-  outlets); a texel is lake below its nearest node's surface.
+  outlets); a texel is lake where its smoothed height (bilinear) is below its
+  nearest node's surface.
+- **Relief edit.** The raw elevation is then dragged to agree — under the
+  surface in the lake, above it on a band ~one parent texel onto the shore —
+  by `reshape_to_target` with `two_sided=True`: an anchor the lake covers
+  (nothing dry to raise) instead makes its lake bed shallower, never crossing
+  the surface. Each anchor's mean is kept, so conservation stays exact. A
+  texel no edit can move stays dry (seed 4 region 48: 7 of 1,436). The fields
+  after (biome, wetland, resources) read the edited relief.
+- **Inherited lakes.** The parent's small lakes (re-flooded at its surface by
+  `_refine_water_masks`) are re-flooded again on the smoothed relief from the
+  same seed, at the same surface and spread, and edited alike. They are water
+  to this tier's basin search (no lake grows into one), smoothed over as land,
+  and not drained by `drains` (the parent's river runs under them).
 
-Region defaults (`lake_breach_parent_texels` 6, `lake_glacial_factor` 0.3,
-`lake_min_depth_km` 0.002, `lake_min_texels` 2), seed 4's six most land-rich
-regions: 0.7% of land — taiga 11%, tundra 2.4%, temperate 0.7%, tropical 0.4%,
-desert ~0 (Earth: lakes 40–10,000 km² ~0.5–1% of land, concentrated in
-formerly glaciated country). ~0.2 s per region. `debug_region.py` prints the
+Region defaults (`lake_smoothing_parent_texels` 0.5, `lake_breach_parent_texels` 1,
+`lake_glacial_factor` 0.3, `lake_min_depth_km` 0.001, `lake_min_texels` 2).
+Smoothed basins are shallower, so the breach length and depth floor dropped
+from 6 / 0.002 on raw relief. Seed 4's five lake-richest regions (48/51/16/45/25):
+0.51% of land in 438 lakes with 1 island, vs 1.20% in 2,207 lakes with 33
+islands on raw relief. Most of the old share was texel-scale pits; restoring
+it (L 0.5) brings back ~800 speckle lakes. (Before smoothing, seed 4's six
+most land-rich regions held 0.7% of land — taiga 11%, tundra 2.4% — not
+re-measured since. Earth: lakes 40–10,000 km² ~0.5–1% of land, concentrated in
+formerly glaciated country.) ~0.2 s per region. `debug_region.py` prints the
 share.
 
 Rivers and streams flow through small lakes rather than end in them
