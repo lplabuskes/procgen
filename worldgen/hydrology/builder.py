@@ -6,7 +6,7 @@ import numpy as np
 
 from worldgen.climate.channels import PRECIPITATION, TEMPERATURE
 from worldgen.geology.channels import ELEVATION, OCEAN_MASK
-from worldgen.hydrology.channels import LAKE_MASK, RIVER_OBJECTS, RIVERS, STREAMS
+from worldgen.hydrology.channels import FILLED_HEIGHT, LAKE_MASK, RIVER_OBJECTS, RIVERS, STREAMS
 from worldgen.hydrology.rivers import River, RiverGenerator
 from worldgen.hydrology.types import StreamNetwork
 from core.display import DisplayRegistry
@@ -78,7 +78,7 @@ class HydrologyBuilder(Stage):
 
         filled_height = river_gen.get_filled_height_texture()  # (N, H, W, 1)
         lake_mask = river_gen.get_lake_mask_texture()          # (N, H, W, 1)
-        mesh.set_face_textures("filled_height", filled_height.astype(np.float16), n_channels=1)
+        FILLED_HEIGHT.write(mesh, filled_height.astype(np.float32))
         LAKE_MASK.write(mesh, lake_mask)
 
         if self.rivers:

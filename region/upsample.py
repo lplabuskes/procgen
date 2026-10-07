@@ -234,18 +234,18 @@ class RegionFields:
     geometry: RegionGeometry
     grid: RegionHexGrid
     tex_size: int
-    positions: np.ndarray                    # (M, T, T, 3) unit sphere
+    positions: np.ndarray                    # (M, T, T, 3) float32 unit sphere (~0.4 m)
     in_hex: np.ndarray                       # (M, T, T) bool — aggregation weight
-    anchors: np.ndarray                      # (M, T, T) global texel index
-    faces: np.ndarray                        # (M, T, T) owning global face
-    face_uv: np.ndarray                      # (M, T, T, 2) texture coords on that face
+    anchors: np.ndarray                      # (M, T, T) int32 global texel index
+    faces: np.ndarray                        # (M, T, T) int32 owning global face
+    face_uv: np.ndarray                      # (M, T, T, 2) float32 texture coords on that face
     textures: dict[str, np.ndarray]
     detail_octaves: int
     texel_area_km2: float
     # Local maps only: each texel's anchor on the region (``hex*T*T + row*T + col``),
     # the conservation target one tier up (``anchors``/``faces`` stay global), and
     # which texels lie inside the parent hexagon.
-    parent_anchors: Optional[np.ndarray] = None   # (M, T, T)
+    parent_anchors: Optional[np.ndarray] = None   # (M, T, T) int32
     in_map: Optional[np.ndarray] = None           # (M, T, T) bool
 
     @property
@@ -664,7 +664,7 @@ def _refine_water_masks(
             elevation, ocean_seed, np.full(shape, SEA_LEVEL_KM), spread, blocked=lake_seed
         )
     if water.has_ocean:
-        masks["ocean_mask"] = ocean[..., None].astype(np.float32)
+        masks["ocean_mask"] = ocean[..., None].astype(np.uint8)
 
     if water.has_lake:
         small_seed = water.small.reshape(shape)
@@ -683,8 +683,8 @@ def _refine_water_masks(
             small &= lake
         else:
             lake, level, small = lake_seed, water.surface.reshape(shape), small_seed
-        masks["lake_mask"] = lake[..., None].astype(np.float32)
-        masks[SMALL_LAKE_KEY] = small[..., None].astype(np.float32)
+        masks["lake_mask"] = lake[..., None].astype(np.uint8)
+        masks[SMALL_LAKE_KEY] = small[..., None].astype(np.uint8)
         if water.has_lake_levels:
             masks["filled_height"] = np.where(lake, level, elevation)[..., None].astype(np.float32)
 
@@ -911,8 +911,8 @@ def _add_small_lakes(
                                source.n_anchors)[:, 0].reshape(elevation.shape)
     new &= edited < surface
     textures["elevation"] = edited[..., None].astype(np.float32)
-    textures["lake_mask"] = (lake | new)[..., None].astype(np.float32)
-    textures[SMALL_LAKE_KEY] = new[..., None].astype(np.float32)
+    textures["lake_mask"] = (lake | new)[..., None].astype(np.uint8)
+    textures[SMALL_LAKE_KEY] = new[..., None].astype(np.uint8)
     filled = textures["filled_height"][..., 0]
     textures["filled_height"] = np.where(new, surface, np.where(lake, filled, edited))[..., None].astype(np.float32)
 
@@ -997,7 +997,7 @@ def refine_fields(
             params, blocked=lake,
         )
         elevation = e[:, None]
-        masks["ocean_mask"] = ocean.reshape(m, tex_size, tex_size, 1).astype(np.float32)
+        masks["ocean_mask"] = ocean.reshape(m, tex_size, tex_size, 1).astype(np.uint8)
         if "filled_height" in masks and lake is not None:
             masks["filled_height"] = np.where(lake, masks["filled_height"].reshape(-1), e).reshape(
                 m, tex_size, tex_size, 1).astype(np.float32)
@@ -1157,11 +1157,11 @@ def build_region_fields(
         geometry=geometry,
         grid=grid,
         tex_size=tex_size,
-        positions=positions,
+        positions=positions.astype(np.float32),
         in_hex=in_hex,
-        anchors=loc.anchors.reshape(m, tex_size, tex_size),
-        faces=faces.reshape(m, tex_size, tex_size),
-        face_uv=np.stack([u, v], axis=-1).reshape(m, tex_size, tex_size, 2),
+        anchors=loc.anchors.reshape(m, tex_size, tex_size).astype(np.int32),
+        faces=faces.reshape(m, tex_size, tex_size).astype(np.int32),
+        face_uv=np.stack([u, v], axis=-1).reshape(m, tex_size, tex_size, 2).astype(np.float32),
         textures=textures,
         detail_octaves=octaves,
         texel_area_km2=texel_area_km2,

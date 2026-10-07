@@ -22,7 +22,7 @@ Original design: `docs/plans/river_generation_spec.md`.
 
 **`HydrologyBuilder`** — after elevation **and** climate; reads `"precipitation"`,
 `"temperature"`, optionally `"ocean_mask"`. Adds textures:
-- `"filled_height"` (float16) — Priority-Flood DEM, rewritten over endorheic basins to the equilibrium lake surface / dry bed; region tier floods lakes to it
+- `"filled_height"` (float32; saved to 0.1 m as a difference from elevation) — Priority-Flood DEM, rewritten over endorheic basins to the equilibrium lake surface / dry bed; region tier floods lakes to it
 - `"lake_mask"` — 1.0 inside post-shrinking lake footprints
 
 The delta stage ([delta.md](delta.md)) extends rivers and streams in place, so

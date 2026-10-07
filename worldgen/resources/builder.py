@@ -16,7 +16,9 @@ from worldgen.climate.channels import BIOME, PRECIPITATION, TEMPERATURE
 from worldgen.delta.channels import DELTA
 from worldgen.geology.channels import ELEVATION, IS_OCEAN, OCEAN_MASK
 from worldgen.hydrology.channels import LAKE_MASK, RIVER_OBJECTS
-from worldgen.resources.channels import FERTILITY_MEAN, MINERAL_SITES, MINERALS, RARE_BIO
+from worldgen.resources.channels import (
+    FERTILITY, FERTILITY_MEAN, FOREST_DENSITY, MINERAL_SITES, MINERALS, RARE_BIO,
+)
 from worldgen.resources.crops import classify_crops
 from worldgen.resources.display import (
     DOMINANT_CROP_RECIPE,
@@ -310,8 +312,8 @@ class ResourcesBuilder(Stage):
             ocean_mask_tex=ocean_mask_tex,
         )                                                          # (N, H, W, 1) uint8
 
-        mesh.set_face_textures("fertility", fertility.astype(np.float16), n_channels=1)
-        mesh.set_face_textures("forest_density", forest.astype(np.float16), n_channels=1)
+        FERTILITY.write(mesh, fertility.astype(np.float16))
+        FOREST_DENSITY.write(mesh, forest.astype(np.float16))
         mesh.set_face_textures("dominant_crop", dominant_crop, n_channels=1)
 
         fertility_mean = fertility[..., 0].mean(axis=(1, 2)).astype(np.float32)

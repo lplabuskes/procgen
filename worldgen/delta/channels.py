@@ -4,11 +4,12 @@ from __future__ import annotations
 import numpy as np
 
 from core.channels import FeatureChannel, MetaChannel, TextureChannel
+from core.codec import TextureCodec
 
 # Per-texel delta plain, (N, H, W, 1): 1 on the deposited plain (built land and
 # flattened lowland alike).  Its marshes are the wetland stage's.  The region and
 # local tiers copy it down (bilinear, not conserved) and site distributaries on it.
-DELTA = TextureChannel("delta", n_channels=1)
+DELTA = TextureChannel("delta", n_channels=1, codec=TextureCodec(step=1e-3))
 
 # Per-face share of the face's texels on the delta plain.
 DELTA_FRACTION = MetaChannel("delta_fraction", dtype=np.float64)

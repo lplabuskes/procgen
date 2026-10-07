@@ -27,7 +27,7 @@ Typed descriptors instead of magic strings; each stage exports the channels it
 produces as module constants and downstream stages import them.
 
 - `MetaChannel(name, dtype, default)` — per-face scalar in `mesh.face_metadata`; `read(mesh) → (N,)`, `write`, `present`.
-- `TextureChannel(name, n_channels)` — `(N, H, W, C)` in `mesh.face_textures`; same API.
+- `TextureChannel(name, n_channels, codec=None)` — `(N, H, W, C)` in `mesh.face_textures`; same API. A `codec` (`core.codec.TextureCodec`) registers the texture's quantized save encoding by name.
 - `FeatureChannel(name)` — arbitrary object in the `World` feature registry; API on a `World`.
 
 `Channel = Union[MetaChannel, TextureChannel, FeatureChannel]`
@@ -59,8 +59,28 @@ memory only.
 ## `core/persistence.py` — Save / load
 
 `.npz` with `params_json`, mesh geometry (`mesh_vertices` / `mesh_face_sizes` /
-`mesh_face_data`), every face texture as `tex_<name>` except display-only
-`*_rgba`, `face_metadata_json`, plus each stage's `serialize()`.
+`mesh_face_data`), every face texture except display-only `*_rgba`, the face
+metadata, plus each stage's `serialize()`. ~23 MB for a physical world.
+
+- **Textures** with a registered codec are saved as `texq_<name>` with their codec
+  parameters in `tex_codecs_json` (so loading needs no registry); the rest verbatim
+  as `tex_<name>`. Loads return each texture in its original dtype.
+- **Face metadata** is columnar: a typed `meta_<key>` array per key every face holds
+  as a uniform scalar (bool, narrowest int, float32, or string codes into a vocab),
+  the rest (ragged, partial) as sparse JSON, all described by `face_metadata_header`.
+
+## `core/codec.py` — Save encodings
+
+`TextureCodec(step, log=False, log_offset=0.0, relative_to=None)`: values are
+quantized to multiples of `step` (error ≤ `step/2`) — in `log(value + log_offset)`
+space when `log` (a relative step), as a difference from the decoded
+`relative_to` texture when set — then differenced along each texel row and
+narrowed to the smallest int dtype, which zlib compresses far better than float
+bits. Non-finite textures fall back to verbatim. Encoding is idempotent
+(re-saving a loaded world reproduces it exactly). Current steps: elevation and
+filled height (relative to elevation) 0.1 m; temperature 0.05 °C; precipitation
+0.1% / humidity 0.25% (log); coast smoothness 1/255; delta, wetland, fertility,
+forest density 0.001.
 
 - `save_world(world, params, stages, path)`
 - `load_world(path, params_cls) → (params, world, data)` — caller then runs each stage's `load(data, ctx)`

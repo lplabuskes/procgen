@@ -4,6 +4,7 @@ from __future__ import annotations
 import numpy as np
 
 from core.channels import MetaChannel, TextureChannel
+from core.codec import TextureCodec
 
 # ── Per-face metadata ────────────────────────────────────────────────────────
 # Consumed by resources, cost, realmgen.
@@ -20,6 +21,7 @@ VOLCANIC_ACTIVITY = MetaChannel("volcanic_activity", dtype=np.float64)
 
 # ── Per-face textures ────────────────────────────────────────────────────────
 # Single-channel elevation in km, (N, H, W, 1).
-ELEVATION = TextureChannel("elevation", n_channels=1)
+# Saved to 0.1 m: region/local lake levels and drainage refine it.
+ELEVATION = TextureChannel("elevation", n_channels=1, codec=TextureCodec(step=1e-4))
 # Single-channel ocean fraction in [0, 1], (N, H, W, 1).
 OCEAN_MASK = TextureChannel("ocean_mask", n_channels=1)

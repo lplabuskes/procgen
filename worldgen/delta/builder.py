@@ -22,7 +22,7 @@ from worldgen.delta.channels import DELTA, DELTA_FANS, DELTA_FRACTION, DELTA_MOU
 from worldgen.delta.deposit import DeltaFan, build_deltas
 from worldgen.delta.shape import ARCUATE, BIRDFOOT, CUSPATE
 from worldgen.geology.channels import ELEVATION, ELEVATION_FACE, IS_OCEAN, OCEAN_MASK
-from worldgen.hydrology.channels import LAKE_MASK, RIVER_OBJECTS, RIVERS, STREAMS
+from worldgen.hydrology.channels import FILLED_HEIGHT, LAKE_MASK, RIVER_OBJECTS, RIVERS, STREAMS
 from worldgen.hydrology.rivers import River
 
 
@@ -118,7 +118,7 @@ class DeltaBuilder(Stage):
         if lake is not None:
             LAKE_MASK.write(mesh, lake)
         if filled is not None:
-            mesh.set_face_textures("filled_height", filled.astype(np.float16), n_channels=1)
+            FILLED_HEIGHT.write(mesh, filled.astype(np.float32))
         IS_OCEAN.write(mesh, ocean[..., 0].mean(axis=(1, 2)) > 0.5)
         from worldgen.geology.elevation import face_elevations_from_texture
         ELEVATION_FACE.write(mesh, face_elevations_from_texture(elevation))

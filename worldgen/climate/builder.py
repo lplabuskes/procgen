@@ -19,6 +19,7 @@ from worldgen.climate.classification import (
 from worldgen.climate.channels import (
     BIOME,
     DISTANCE_TO_COAST,
+    HUMIDITY,
     PRECIPITATION,
     PRECIPITATION_ANNUAL,
     TEMPERATURE,
@@ -355,7 +356,7 @@ class ClimateBuilder(Stage):
 
         TEMPERATURE.write(mesh, t_pixel.astype(np.float16))
         PRECIPITATION.write(mesh, p_pixel.astype(np.float16))
-        mesh.set_face_textures("humidity", h_pixel.astype(np.float16), n_channels=N_SEASONS)
+        HUMIDITY.write(mesh, h_pixel.astype(np.float16))
         mesh.set_face_textures("biome", biome_tex, n_channels=1)
 
         # p_face from pixel means so face and texture totals agree.
@@ -489,7 +490,7 @@ class ClimateBuilder(Stage):
             biome_tex = biome_tex.astype(np.uint8)
 
         PRECIPITATION.write(mesh, p_pixel.astype(np.float16))
-        mesh.set_face_textures("humidity", h_pixel.astype(np.float16), n_channels=N_SEASONS)
+        HUMIDITY.write(mesh, h_pixel.astype(np.float16))
         mesh.set_face_textures("biome", biome_tex, n_channels=1)
 
         p_face = p_pixel.mean(axis=(1, 2))                             # (N, K)

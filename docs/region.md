@@ -126,10 +126,11 @@ over-hang reads its neighbour), `slope`, `danger`, `has`, `n_anchors`,
 
 ## `RegionFields` (`region/upsample.py`)
 
-`region_id`, `geometry`, `grid`, `tex_size`, `positions (M,T,T,3)`,
-`in_hex (M,T,T)`, `anchors (M,T,T)` (global texel), `faces (M,T,T)` (owning
-global face), `face_uv (M,T,T,2)`, `textures {name: (M,T,T,C)}` (globe keys +
-`danger`), `detail_octaves`, `texel_area_km2` (cell area × texel's share of the
+`region_id`, `geometry`, `grid`, `tex_size`, `positions (M,T,T,3)` float32
+(~0.4 m), `in_hex (M,T,T)`, `anchors (M,T,T)` int32 (global texel), `faces
+(M,T,T)` int32 (owning global face), `face_uv (M,T,T,2)` float32, `textures
+{name: (M,T,T,C)}` (globe keys + `danger`; water masks uint8, conserved fields
+float32 — float16 would lift the conservation residuals off float32 noise), `detail_octaves`, `texel_area_km2` (cell area × texel's share of the
 equal-area local square — not cell area ÷ in-hex count, since hexes spill past
 the cell). Local maps only: `parent_anchors` (regional texel conserved) and
 `in_map` (inside the parent hexagon). Aggregation weight `domain` = `in_hex`

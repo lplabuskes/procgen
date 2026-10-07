@@ -11,9 +11,11 @@ Mesh channels operate on a ``PolygonMesh``; ``FeatureChannel`` on a ``World``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Union, TYPE_CHECKING
+from typing import Any, Optional, Union, TYPE_CHECKING
 
 import numpy as np
+
+from core.codec import TextureCodec, register_texture_codec
 
 if TYPE_CHECKING:
     from core.mesh import PolygonMesh
@@ -48,9 +50,17 @@ class MetaChannel:
 
 @dataclass(frozen=True)
 class TextureChannel:
-    """A named ``(N, H, W, C)`` per-face texture stored in ``mesh.face_textures``."""
+    """A named ``(N, H, W, C)`` per-face texture stored in ``mesh.face_textures``.
+
+    ``codec`` (optional) is its quantized save encoding, registered by name for ``core.persistence``.
+    """
     name: str
     n_channels: int = 1
+    codec: Optional[TextureCodec] = None
+
+    def __post_init__(self) -> None:
+        if self.codec is not None:
+            register_texture_codec(self.name, self.codec)
 
     def present(self, mesh: "PolygonMesh") -> bool:
         return self.name in mesh.face_textures

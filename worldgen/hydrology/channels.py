@@ -2,9 +2,14 @@
 from __future__ import annotations
 
 from core.channels import FeatureChannel, TextureChannel
+from core.codec import TextureCodec
 
 # 1.0 where a pixel is inside the post-shrinking lake footprint, else 0.0.
 LAKE_MASK = TextureChannel("lake_mask", n_channels=1)
+# Depression-filled surface (km): the lake level over lakes, elevation elsewhere.
+# Saved to 0.1 m as a difference from elevation (zero off the lakes).
+FILLED_HEIGHT = TextureChannel("filled_height", n_channels=1,
+                               codec=TextureCodec(step=1e-4, relative_to="elevation"))
 
 # ── Features ─────────────────────────────────────────────────────────────────
 # The rich ``List[River]`` objects consumed by resources and cost.
