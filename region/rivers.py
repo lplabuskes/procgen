@@ -466,7 +466,7 @@ def route_stream_paths(
     # it starts on / ends on (-1: none).
     done: list[tuple[int, np.ndarray, np.ndarray, np.ndarray, int, int]] = []
     for i, p in enumerate(paths):
-        sinks = occupied | raster.ocean | raster.lake
+        sinks = occupied | raster.sinks
         s, t = p.s, p.t
         if p.starts_on_path:
             s, t = _start_on_drawn(raster, on_path, s, t, 2.0 * radius_nodes)

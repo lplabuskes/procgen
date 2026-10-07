@@ -165,8 +165,8 @@ water to the nearest in-hex land texel within `max_dist` (roads, viewer).
 
 ## Not yet implemented
 
-Regional lakes as a hydrology product (refined lake mask is drawn; no
-lake-polygon overlay), minerals / rare resources and cost *layers* in a region
+A lake-polygon overlay (refined lake masks, small lakes included, are drawn as
+texels), minerals / rare resources and cost *layers* in a region
 (roads evaluate the cost model themselves), the rest of realmgen in a region,
 region serialization (fields/rivers/roads rebuilt per visit; only refined
 town/city positions saved). Non-refined layers are sampled per global texel, so

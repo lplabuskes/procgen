@@ -39,6 +39,7 @@ from scipy.sparse.csgraph import connected_components, dijkstra
 from core.params import param_field as _f, paramclass
 from region.geometry import N_REGIONS, RegionGeometry
 from region.grid import RegionHexGrid
+from region.lakes import find_small_lakes
 from region.resources import RefineContext, refine_resources, refined_slope
 from region.sampling import GlobalSampler, anchor_means
 from region.source import GlobalSource, Located, ParentSource
@@ -53,6 +54,13 @@ EARTH_RADIUS_KM = 6371.0
 
 # Hard-coded as the shore by worldgen.geology.elevation and worldgen.hydrology.builder.
 SEA_LEVEL_KM = 0.0
+
+# The part of ``lake_mask`` a refined tier found itself (region/lakes.py), too small
+# for the globe: rivers and streams flow through these rather than end in them.
+SMALL_LAKE_KEY = "small_lake_mask"
+
+# Ice cap: the warmest season stays below this (worldgen.climate.classification).
+ICECAP_WARMEST_C = 0.0
 
 _SEED_SALT_ELEVATION = 0x9E37
 _SEED_SALT_COAST = 0xC0A5
@@ -154,6 +162,20 @@ class RegionUpsampleParams:
     # Bounds on how far past the surface an edited texel is set (km).
     coast_edit_min_km: float = _f(0.001, label="Coast edit min depth/height (km)", min=0.0, max=0.05, step=0.001)
     coast_edit_max_km: float = _f(0.02, label="Coast edit max depth/height (km)", min=0.0, max=0.2, step=0.005)
+    # ── small lakes (region/lakes.py): basins in the refined relief, filled by
+    # their catchment's runoff against evaporation.  One shallower than the parent
+    # surface drops over the breach length (or than the min depth), or smaller
+    # than the min size, counts as breached by erosion the relief doesn't model.
+    small_lakes: bool = _f(True, label="Small lakes", min=0, max=1)
+    lake_breach_parent_texels: float = _f(
+        6.0, label="Small lake breach length (parent texels)", min=0.0, max=30.0, step=0.5
+    )
+    lake_min_depth_km: float = _f(0.002, label="Small lake min depth (km)", min=0.0, max=0.1, step=0.001)
+    # Breach length multiplier at an annual mean ≤ 0 °C (fading out by 10 °C): glacial lake country.
+    lake_glacial_factor: float = _f(0.3, label="Small lake glacial breach factor", min=0.05, max=1.0, step=0.05)
+    # Precipitation / PET below which a basin holds a playa, not a lake (0.2: UNEP "arid").
+    lake_min_aridity_index: float = _f(0.2, label="Small lake min aridity index", min=0.0, max=2.0, step=0.05)
+    lake_min_texels: int = _f(2, label="Small lake min size (texels)", min=1, max=200)
     # ── resources, population and danger (region/resources.py) ──
     # Refined slope (km/km) at which slope-driven terms saturate.
     slope_saturation: float = _f(
@@ -542,6 +564,7 @@ class _AnchorWater:
 
     ocean: np.ndarray
     lake: np.ndarray
+    small: np.ndarray        # the part of ``lake`` the parent found itself (region/lakes.py)
     surface: np.ndarray
     # Which parent textures exist: a child must not invent a mask.
     has_ocean: bool
@@ -564,6 +587,7 @@ def _anchor_water(source: ParentSource, loc: Located) -> _AnchorWater:
         return source.anchor_values(key, loc)[:, 0] > 0.5
 
     ocean, lake = _mask("ocean_mask"), _mask("lake_mask")
+    small = _mask(SMALL_LAKE_KEY) & lake
     surface = np.full(n, np.inf)
     surface[ocean] = SEA_LEVEL_KM
     has_levels = source.has("filled_height")
@@ -573,6 +597,7 @@ def _anchor_water(source: ParentSource, loc: Located) -> _AnchorWater:
     return _AnchorWater(
         ocean=ocean,
         lake=lake,
+        small=small,
         surface=surface,
         has_ocean=source.has("ocean_mask"),
         has_lake=source.has("lake_mask"),
@@ -609,14 +634,24 @@ def _refine_water_masks(
         masks["ocean_mask"] = ocean[..., None].astype(np.float32)
 
     if water.has_lake:
+        small_seed = water.small.reshape(shape)
         if refine and water.has_lake_levels:
+            # The parent's own lakes and its small ones flood apart, as sea and lake.
+            surface = water.surface.reshape(shape)
             lake, level = _flood(
-                elevation, lake_seed, water.surface.reshape(shape), spread, blocked=ocean_seed
+                elevation, lake_seed & ~small_seed, surface, spread, blocked=ocean_seed | small_seed
             )
-            lake &= ~ocean
+            small, small_level = _flood(
+                elevation, small_seed, surface, spread, blocked=ocean_seed | (lake_seed & ~small_seed)
+            )
+            small &= ~lake
+            level = np.where(small, small_level, level)
+            lake = (lake | small) & ~ocean
+            small &= lake
         else:
-            lake, level = lake_seed, water.surface.reshape(shape)
+            lake, level, small = lake_seed, water.surface.reshape(shape), small_seed
         masks["lake_mask"] = lake[..., None].astype(np.float32)
+        masks[SMALL_LAKE_KEY] = small[..., None].astype(np.float32)
         if water.has_lake_levels:
             masks["filled_height"] = np.where(lake, level, elevation)[..., None].astype(np.float32)
 
@@ -781,6 +816,36 @@ def _reshape_coasts(
                              source.n_anchors)
 
 
+def _add_small_lakes(
+    textures: dict[str, np.ndarray], source: ParentSource, grid: RegionHexGrid,
+    drains: Optional[np.ndarray], params: RegionUpsampleParams,
+) -> None:
+    """Add this tier's own lakes (:func:`region.lakes.find_small_lakes`) to the water textures, in place."""
+    elevation = textures["elevation"][..., 0]
+    lake = textures["lake_mask"][..., 0] > 0.5
+    water = lake.copy()
+    if "ocean_mask" in textures:
+        water |= textures["ocean_mask"][..., 0] > 0.5
+    temperature = precipitation = frozen = None
+    if "temperature" in textures and "precipitation" in textures:
+        temperature = textures["temperature"].mean(axis=-1)
+        precipitation = textures["precipitation"].sum(axis=-1)
+        frozen = textures["temperature"].max(axis=-1) < ICECAP_WARMEST_C
+    new, level = find_small_lakes(
+        source, grid, elevation, water, temperature=temperature, precipitation=precipitation, frozen=frozen,
+        drains=drains, min_depth_km=float(params.lake_min_depth_km),
+        breach_parent_texels=float(params.lake_breach_parent_texels), min_texels=int(params.lake_min_texels),
+        min_aridity_index=float(params.lake_min_aridity_index), glacial_factor=float(params.lake_glacial_factor),
+    )
+    if not new.any():
+        return
+    textures["lake_mask"] = (lake | new)[..., None].astype(np.float32)
+    small = textures[SMALL_LAKE_KEY][..., 0] > 0.5
+    textures[SMALL_LAKE_KEY] = (small | new)[..., None].astype(np.float32)
+    filled = textures["filled_height"][..., 0]
+    textures["filled_height"] = np.where(new, level, filled)[..., None].astype(np.float32)
+
+
 def refine_fields(
     source: ParentSource,
     positions: np.ndarray,
@@ -794,6 +859,8 @@ def refine_fields(
     fertility_exponent: float = 2.0,
     mine_points: Optional[np.ndarray] = None,
     neighbours: Optional[np.ndarray] = None,
+    grid: Optional[RegionHexGrid] = None,
+    drains: Optional[np.ndarray] = None,
 ) -> tuple[dict[str, np.ndarray], Located, int]:
     """Refine ``source``'s fields onto a child tier's ``(M, T, T, 3)`` texels.
 
@@ -802,6 +869,8 @@ def refine_fields(
     ``(M, T, T)`` aggregation mask, ``spacing_rad`` the child's texel spacing.
     ``mine_points`` are worked deposits (unit vectors) for the miners' density.
     ``neighbours`` (:meth:`RegionHexGrid.texel_neighbours`) enables :func:`connect_ocean`.
+    ``grid`` (the texels' hex grid) enables small lakes, drained by the
+    parent's channels ``drains`` (``(K, 2, 3)`` unit-vector segments).
     Returns ``(textures, located, detail_octaves)``.
     """
     m, tex_size = positions.shape[0], positions.shape[1]
@@ -905,6 +974,10 @@ def refine_fields(
             m, tex_size, tex_size, p_coarse.shape[1]
         ).astype(np.float32)
 
+    # ── small lakes: basins in the refined relief, below the parent's resolution
+    if grid is not None and params.small_lakes and "filled_height" in textures:
+        _add_small_lakes(textures, source, grid, drains, params)
+
     # ── biome: reclassify from the area-averaged refined climate ─────────────
     climate_avg = None
     if "temperature" in textures and "precipitation" in textures:
@@ -960,6 +1033,16 @@ def worked_mine_points(globe: "World") -> Optional[np.ndarray]:
     return pts if len(pts) else None
 
 
+def world_channel_segments(globe: "World") -> Optional[np.ndarray]:
+    """``(K, 2, 3)`` unit-vector segments of the world's channels (its ``"streams"`` network), or None."""
+    streams = globe.get_feature("streams")
+    if streams is None or len(streams) == 0:
+        return None
+    nodes = np.flatnonzero(np.asarray(streams.channel) & (np.asarray(streams.receiver) >= 0))
+    pos = np.asarray(streams.positions, dtype=np.float64)
+    return np.stack([pos[nodes], pos[np.asarray(streams.receiver)[nodes]]], axis=1)
+
+
 def build_region_fields(
     globe: "World",
     region_id: int,
@@ -993,6 +1076,7 @@ def build_region_fields(
         params, int(globe.seed or 0) ^ int(region_id),
         resources=resources, fertility_exponent=fertility_exponent,
         mine_points=worked_mine_points(globe), neighbours=grid.texel_neighbours(tex_size),
+        grid=grid, drains=world_channel_segments(globe),
     )
     faces, u, v = loc.data
     return RegionFields(

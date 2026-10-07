@@ -61,7 +61,8 @@ local maps over the region's rivers ([local.md](local.md)).
   coarse elevation, mean/σ over the corridor — finds the refined valley floor on
   plains and mountains alike, but can never change valley or basin.
 - Stems routed in descending flow. A path whose world mouth is on the raster
-  ends on the cheapest sink (its re-routed stem, a lake, or the refined sea) in
+  ends on the cheapest sink (its re-routed stem, a globe-sized lake, or the
+  refined sea — small lakes are flowed through) in
   a disc of two corridors around the mouth (the stem moved up to a corridor). A
   path ending on another path is recorded in `confluences`.
 - Flow = the network's tree accumulation (running max along the stem, so
@@ -155,7 +156,9 @@ local map re-routes the same network
 ([local.md](local.md#rivers-localmapriverspy)), so neighbours agree.
 
 - **Routing.** Priority-flood over refined elevation on the rivers' raster (all
-  nodes) from outlets: refined sea/lakes, nodes on re-routed rivers, raster edge.
+  nodes) from outlets: refined sea and the globe's lakes, nodes on re-routed
+  rivers, raster edge. Small lakes ([region_fields.md](region_fields.md#small-lakes-regionlakespy))
+  aren't outlets: streams run through them (`in_lake` there).
   Each node drains to the neighbour it was flooded from → depressions filled,
   every node reaches an outlet. numba with pure-Python fallback.
 - **Flow** = catchment × annual precip / world mean, in world flow units (one
@@ -266,7 +269,8 @@ coast on seed 4.
 
 - **Which, where.** As towns: once, by the region containing the site; dry
   in-hex texels of its own face within `refine_radius_global_texels`.
-- **Kind kept.** Harbour → refined coast (ocean, or lake for a lake port), then
+- **Kind kept.** Harbour → refined coast (ocean, or a globe lake — not a small
+  lake — for a lake port), then
   preferring a drawn river/confluence if it had one; river city → drawn
   river/confluence — whenever in reach.
 - **Score.** Refine-stage weights (`SITE_OCEAN` 3, `SITE_LAKE` 2,

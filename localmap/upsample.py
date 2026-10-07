@@ -12,13 +12,14 @@ maps of one region agree at their seam; regions, seeded per region, do not.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Sequence
 
 import numpy as np
 
 from core.params import param_field as _f, paramclass
 from localmap.geometry import LocalGeometry
 from localmap.grid import LocalHexGrid
+from region.rivers import RiverPath
 from region.sampling import GlobalSampler
 from region.source import RegionSource
 from region.upsample import RegionFields, RegionUpsampleParams, anchor_residuals, refine_fields, worked_mine_points
@@ -54,6 +55,11 @@ class LocalUpsampleParams(RegionUpsampleParams):
     wetland_riparian_width_km: float = _f(1.5, label="Riparian width at ref flow (km)", min=0.0, max=50.0, step=0.1)
     wetland_riparian_slope_m_per_km: float = _f(
         8.0, label="Riparian flatness slope scale (m/km)", min=0.1, max=50.0, step=0.1)
+    # The region's refined slopes are steeper and local relief pits deeper; at the
+    # region's 6 local maps hold ~5× Earth's share of 0.1–40 km² lakes.
+    lake_breach_parent_texels: float = _f(
+        10.0, label="Small lake breach length (parent texels)", min=0.0, max=30.0, step=0.5
+    )
     # Local slopes over ~365 m texels are far steeper than the region's.
     slope_saturation: float = _f(
         0.1, label="Slope saturation, resources (km/km)", min=0.002, max=0.5, step=0.002
@@ -68,8 +74,12 @@ def build_local_fields(
     *,
     resources: Optional["ResourcesParams"] = None,
     fertility_exponent: float = 2.0,
+    drains: Optional[np.ndarray] = None,
 ) -> RegionFields:
     """Refine regional hex ``hex_index`` of ``region`` onto its local map.
+
+    ``drains`` (``(K, 2, 3)`` unit-vector segments; :func:`path_segments` of the
+    region's rivers) drain any basin they cross, so no small lake forms on them.
 
     Returns a :class:`RegionFields` so region consumers read it unchanged:
     ``anchors`` / ``faces`` / ``face_uv`` stay global, ``parent_anchors`` holds
@@ -94,6 +104,7 @@ def build_local_fields(
         params, int(globe.seed or 0) ^ _SEED_SALT_LOCAL,
         resources=resources, fertility_exponent=fertility_exponent,
         mine_points=worked_mine_points(globe), neighbours=grid.texel_neighbours(tex_size, in_map),
+        grid=grid, drains=drains,
     )
     gh, gw = globe.mesh.face_textures["elevation"].shape[1:3]
     sampler = GlobalSampler(globe.mesh)
@@ -115,6 +126,16 @@ def build_local_fields(
         parent_anchors=loc.anchors.reshape(shape),
         in_map=in_map,
     )
+
+
+def path_segments(paths: Sequence[RiverPath]) -> np.ndarray:
+    """``(K, 2, 3)`` consecutive-vertex segments of ``(positions, flows, in_water)`` polylines."""
+    segs = []
+    for positions, _, _ in paths:
+        p = np.asarray(positions, dtype=np.float64)
+        if len(p) >= 2:
+            segs.append(np.stack([p[:-1], p[1:]], axis=1))
+    return np.concatenate(segs) if segs else np.zeros((0, 2, 3))
 
 
 def local_conservation_report(local: RegionFields, region: RegionFields) -> dict[str, dict[str, float]]:

@@ -16,6 +16,7 @@ import math
 from typing import Optional
 
 import numpy as np
+from scipy.spatial import KDTree
 
 from region.geometry import RegionGeometry
 
@@ -196,6 +197,26 @@ class RegionHexGrid:
             out[:, k] = nb.reshape(-1)
         out[~flat_drawn] = -2
         return out
+
+    def nearest_texels(
+        self, s: np.ndarray, t: np.ndarray, tex_size: int,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """``(hex, row, col, covered)`` of the nearest-centre hex's texel at each local point.
+
+        Unlike :meth:`texels_at` this reaches past the cell edge via the
+        over-hang; ``covered`` is False where no texture reaches.
+        """
+        s = np.asarray(s, dtype=np.float64)
+        t = np.asarray(t, dtype=np.float64)
+        _, hexes = KDTree(self.centers).query(np.column_stack([s, t]), k=1, workers=-1)
+        hexes = np.asarray(hexes, dtype=np.int64)
+        half = _TEXTURE_HALF_WIDTH * self.radius
+        ds = s - (self.centers[hexes, 0] - half)
+        dt = (self.centers[hexes, 1] + half) - t
+        covered = (ds >= 0.0) & (ds <= 2.0 * half) & (dt >= 0.0) & (dt <= 2.0 * half)
+        cols = np.clip((ds / (2.0 * half) * tex_size).astype(np.int64), 0, tex_size - 1)
+        rows = np.clip((dt / (2.0 * half) * tex_size).astype(np.int64), 0, tex_size - 1)
+        return hexes, rows, cols, covered
 
     def texel_spacing_rad(self, tex_size: int) -> float:
         """Mean angular spacing (radians) between neighbouring texels on the sphere (cached)."""

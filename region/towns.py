@@ -38,7 +38,7 @@ from region.geometry import ecef_to_cell
 from region.rivers import RegionRivers
 from region.roads import RegionRoads
 from region.sampling import GlobalSampler
-from region.upsample import RegionFields
+from region.upsample import SMALL_LAKE_KEY, RegionFields
 
 if TYPE_CHECKING:
     from core.world import World
@@ -125,6 +125,8 @@ def tier_sites(
     lake = fields.textures.get("lake_mask")
     ocean = ocean[..., 0] > 0.5 if ocean is not None else np.zeros(fields.in_hex.shape, dtype=bool)
     lake = lake[..., 0] > 0.5 if lake is not None else np.zeros_like(ocean)
+    small = fields.textures.get(SMALL_LAKE_KEY)
+    small = small[..., 0] > 0.5 if small is not None else np.zeros_like(ocean)
     water = ocean | lake
     dry = fields.in_hex & ~water
     pos = fields.positions[dry]
@@ -144,7 +146,8 @@ def tier_sites(
     snap = float(river_threshold_factor) * spacing
     conf = _near(_tree(rivers.confluences), pos, snap)
     coast_ocean = _neighbour_any(ocean)[dry]
-    coast_lake = _neighbour_any(lake)[dry]
+    # Harbours are on the sea and the globe's lakes, not on small lakes.
+    coast_lake = _neighbour_any(lake & ~small)[dry]
     no = np.zeros(len(pos), dtype=bool)
     return _Sites(
         positions=pos, face=face, rho=rho, fertility=fertility,

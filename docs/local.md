@@ -80,7 +80,10 @@ neighbouring local maps never double-count a texel.
   `anchors` / `faces` / `face_uv` stay **global**, so display, hover and corridor
   code treat local maps like regions.
 - **Slope** = region's refined slope; **lakes** from the region's
-  `filled_height`; **danger** = region's continuous danger, bilinear, conserved
+  `filled_height` (its small lakes re-flooded too) plus the map's own
+  [small lakes](region_fields.md#small-lakes-regionlakespy), drained along the
+  region's rivers (`build_local_map` passes `path_segments(region_rivers.paths)`
+  as `drains`); **danger** = region's continuous danger, bilinear, conserved
   per regional texel.
 - **Noise** seeded `world.seed XOR 0x10CA`, shared by all local maps of a world,
   so neighbours agree where they meet.
@@ -93,7 +96,9 @@ to ~0.03% at `T=64` (tiers count rim texels slightly differently, ~1/T).
 ### `LocalUpsampleParams`
 
 `RegionUpsampleParams` with local defaults: `n_cols=16`, `slope_reference=0.03`,
-`slope_floor=0.03`, `max_relief_km=0.6`, `water_spread_texels=12` (~one regional
+`slope_floor=0.03`, `max_relief_km=0.6`, `lake_breach_parent_texels=10` (at the
+region's 6, local relief pits held ~5× Earth's share of 0.1–40 km² lakes; seed 4,
+20 maps: tundra +4.3% of land, temperate +0.2%, tropical ~0), `water_spread_texels=12` (~one regional
 texel), `biome_smoothing=13` (~one regional texel, so biome edges follow the
 region), `slope_saturation=0.1`. Relief numbers are a first cut, untuned (seed 4
 region 34: ~50 m land relief std vs parent texel). Coast params keep region

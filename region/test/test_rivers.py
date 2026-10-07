@@ -141,7 +141,8 @@ def _bay_raster(n: int = 21) -> Raster:
     rows, cols = np.divmod(np.arange(n * n), n)
     ocean = (cols >= 12) & (rows >= 5) & (rows <= 15)
     return Raster(lo=0.0, step=1.0, n=n, sampled=np.ones(n * n, dtype=bool), positions=np.zeros((n * n, 3)),
-                  values={}, anomaly=-0.1 * cols, ocean=ocean, lake=np.zeros(n * n, dtype=bool))
+                  values={}, anomaly=-0.1 * cols, ocean=ocean, lake=np.zeros(n * n, dtype=bool),
+                  small_lake=np.zeros(n * n, dtype=bool))
 
 
 def test_a_reroute_keeps_to_land_where_its_parent_does():
@@ -181,7 +182,7 @@ def _valley_raster(n: int = 21) -> Raster:
     cols = np.arange(n * n) % n
     return Raster(lo=0.0, step=1.0, n=n, sampled=np.ones(n * n, dtype=bool), positions=np.zeros((n * n, 3)),
                   values={}, anomaly=0.1 * np.abs(cols - 10.0), ocean=np.zeros(n * n, dtype=bool),
-                  lake=np.zeros(n * n, dtype=bool))
+                  lake=np.zeros(n * n, dtype=bool), small_lake=np.zeros(n * n, dtype=bool))
 
 
 def test_a_later_path_keeps_off_an_earlier_one():
