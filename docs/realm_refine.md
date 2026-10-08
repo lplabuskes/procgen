@@ -98,9 +98,14 @@ seams need no reconciling.
 Labels: polity id (`≥ 0`), `UNCLAIMED` (-1), `WATER` (-2).
 
 - **Owner face** = nearest centroid.
-- **Weighted Voronoi.** Claimed-land owner: point split among the owner's polity
-  and its claimed-land neighbours by `argmin |x−c|² / control²` (authority), so
-  stronger polities bulge. Single-polity candidate sets skip the vote.
+- **Power diagram.** Claimed-land owner: point split among the owner's polity
+  and its claimed-land neighbours by `argmin |x−c|² − ½·L²·ln(control)` (authority;
+  L the mean neighbour centroid spacing), so stronger polities bulge and every
+  two-polity boundary is a straight line before the warp. The shift matches the old
+  multiplicative `|x−c|² / control²` near the bisector, but that curved boundaries
+  into arcs round the weaker centroids, which met in long thin cusps at three-polity
+  corners (seed 525099826 region 11 hex 151); ~0.5% of land changed owner.
+  Single-polity candidate sets skip the vote.
 - **Domain warp.** `x` is displaced by a coherent fBm-simplex field
   (`domain_warp`, `boundary_warp_*`), pure function of position — otherwise
   borders are straight bisectors hugging hexagon edges.
@@ -187,7 +192,7 @@ Decided once on the globe, as "border points
    to the second's, and a `JunctionSwap` replaces it with the river between them.
    Where it claims (polygon ∪ margin ∪ band, as above), P takes its neighbours' land
    on its bank and gives its own on the far bank to whoever would hold it without P
-   (`PolityLabelField.labels_without`: the warped weighted Voronoi over the 12 nearest
+   (`PolityLabelField.labels_without`: the warped power diagram over the 12 nearest
    other-polity claimed-land faces), so the junctions move onto the river. The two runs
    lose their eased lead-out into the gap. Unlike a run's, its claim covers all of its
    polygon, past the line's ends too (all of it is far bank; else strips of P stayed

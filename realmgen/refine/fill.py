@@ -5,7 +5,7 @@ never of which face's texture holds the point, so over-hanging textures agree
 across seams and ``borders.py`` contours the same partition.
 
 A point is labelled among its owner face (nearest centroid) and that face's
-claimed-land neighbours by an authority-weighted Voronoi over domain-warped
+claimed-land neighbours by an authority-weighted power diagram over domain-warped
 positions, so stronger polities bulge and boundaries wiggle off the bisectors.
 
 Big rivers: runs of border beside one are moved onto it (``RiverSwaps``,
@@ -124,7 +124,17 @@ class PolityLabelField:
         # Per excluded polity: the other claimed-land faces and their tree (``labels_without``).
         self._without: dict = {}
         control = np.maximum(np.asarray(authority, dtype=np.float64), control_floor)
-        self._inv_w2 = 1.0 / control ** 2
+        # Power diagram: a point goes to the candidate with the least |x − c|² − power.
+        # Every two-polity boundary is a straight line (before the warp); ``power`` =
+        # ½·L²·ln(control), L the mean neighbour spacing, shifts it toward the weaker
+        # face as |x − c| / control did near the bisector. (That multiplicative form
+        # curved the boundaries into arcs round the weaker centroids, which met in long
+        # thin cusps at three-polity corners.)
+        adj0 = mesh.face_adjacency
+        src = np.repeat(np.arange(len(adj0)), [len(a) for a in adj0])
+        dst = np.fromiter((j for a in adj0 for j in a), dtype=np.int64, count=len(src))
+        spacing2 = float(np.mean(np.sum((self.centroids[src] - self.centroids[dst]) ** 2, axis=1))) if len(src) else 0.0
+        self._power = 0.5 * spacing2 * np.log(control)
         self._warp_amplitude = float(warp_amplitude)
         self._warp_frequency = float(warp_frequency)
         self._warp_octaves = int(warp_octaves)
@@ -172,7 +182,7 @@ class PolityLabelField:
         return other
 
     def plain_land_labels(self, points: np.ndarray, owner: Optional[np.ndarray] = None) -> np.ndarray:
-        """``(P,)`` land labels before any river handling: the warped, weighted Voronoi."""
+        """``(P,)`` land labels before any river handling: the warped power diagram."""
         pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
         own = self.owner(pts) if owner is None else np.asarray(owner, dtype=np.int64)
         return self._plain_labels(pts, own)
@@ -180,7 +190,7 @@ class PolityLabelField:
     def labels_without(self, points: np.ndarray, polity: int) -> np.ndarray:
         """``(P,)`` the polity each point would go to were ``polity`` not there.
 
-        The warped, weighted Voronoi over the nearest claimed-land faces of other
+        The warped power diagram over the nearest claimed-land faces of other
         polities; a river swap that moves a junction gives ``polity``'s land across the
         river to these.
         """
@@ -197,7 +207,7 @@ class PolityLabelField:
         # vote among the same faces.
         _, nn = tree.query(warped, k=k, workers=-1)
         c = faces[np.asarray(nn).reshape(len(pts), k)]
-        score = ((warped[:, None, :] - self.centroids[c]) ** 2).sum(axis=-1) * self._inv_w2[c]
+        score = ((warped[:, None, :] - self.centroids[c]) ** 2).sum(axis=-1) - self._power[c]
         return self.pof[c[np.arange(len(pts)), np.argmin(score, axis=1)]]
 
     def is_water_at(self, points: np.ndarray) -> np.ndarray:
@@ -220,7 +230,7 @@ class PolityLabelField:
         return out
 
     def _plain_labels(self, pts: np.ndarray, own: np.ndarray) -> np.ndarray:
-        """Labels before the river swaps: the warped, weighted Voronoi over the 1-ring."""
+        """Labels before the river swaps: the warped power diagram over the 1-ring."""
         out = self._fixed[own].copy()
         idx = np.flatnonzero(self._vote[own])
         for s in range(0, idx.size, self._CHUNK):
@@ -229,7 +239,7 @@ class PolityLabelField:
             ok = cand >= 0
             c = np.maximum(cand, 0)
             d2 = ((self._warp(pts[sel])[:, None, :] - self.centroids[c]) ** 2).sum(axis=-1)
-            score = np.where(ok, d2 * self._inv_w2[c], np.inf)
+            score = np.where(ok, d2 - self._power[c], np.inf)
             winner = c[np.arange(sel.size), np.argmin(score, axis=1)]
             out[sel] = self.pof[winner]
         return out
