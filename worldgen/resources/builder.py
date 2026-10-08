@@ -154,10 +154,6 @@ class ResourcesParams:
     rare_bio: RareBioParams = field(
         default_factory=RareBioParams, metadata={"label": "Rare Resources"}
     )
-    seed: Optional[int] = field(
-        default=None,
-        metadata={"label": "Seed", "kind": "optional_int", "min": 0, "max": 2**31 - 1},
-    )
 
 
 def _face_modal_crop(crop_tex: np.ndarray, ocean_mask: np.ndarray) -> np.ndarray:
@@ -200,6 +196,8 @@ class ResourcesBuilder(Stage):
         _report = ctx.report
 
         p = self.params
+        # The world seed (0 when unseeded), salted per draw below.
+        seed = int(ctx.world.seed or 0)
         fp, gp = p.fertility, p.forest_density
         n = len(mesh.faces)
 
@@ -254,7 +252,7 @@ class ResourcesBuilder(Stage):
             riparian_hops=water_hops,
             pixel_positions=pixel_positions,
             params=gp,
-            seed=int(p.seed if p.seed is not None else 0),
+            seed=seed,
             mesh=mesh,
         )                                                          # (N, H, W, 1)
 
@@ -324,7 +322,7 @@ class ResourcesBuilder(Stage):
         mesh.apply_metadata_channel("dominant_crop", dominant_crop_face.tolist())
 
         _report("Placing mineral deposits…")
-        mineral_seed = int(p.seed if p.seed is not None else 0) + 99991
+        mineral_seed = seed + 99991
         self.minerals = place_mineral_deposits(
             mesh,
             params=p.minerals,
@@ -345,7 +343,7 @@ class ResourcesBuilder(Stage):
             )
 
         _report("Placing rare biological resources…")
-        rare_bio_seed = int(p.seed if p.seed is not None else 0) + 55557
+        rare_bio_seed = seed + 55557
         self.rare_bio = place_rare_bio_resources(
             mesh,
             params=p.rare_bio,

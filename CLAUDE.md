@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Ask for clarification rather than churning your wheels. If the task or approach is ambiguous, ask before attempting.
 - Assume visuals should be limited to debug mode, ask before adding to the main view.
 - Don't worry about backwards compatibility for saving and loading worlds
+- Be picky about which params are visible in basic mode (`BASIC_PARAMS` in `main.py`; everything else needs `--advanced`). New params default to advanced; only add a headline knob a casual user would actually change, prefer one master toggle over per-item settings, and ask before adding to the basic list.
 
 
 ## Running the Project
@@ -15,6 +16,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 source .venv/bin/activate
 pip install -e .                    # one-time: installs project packages into the venv
 python3 main.py                     # primary entrypoint — full procedural world viewer
+python3 main.py --advanced          # same, with every param in the Parameters dialog (default: main.BASIC_PARAMS)
 python3 -m viz.mapview.main         # 2-D map viewer (dev)
 ```
 

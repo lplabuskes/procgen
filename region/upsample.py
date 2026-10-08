@@ -30,7 +30,7 @@ finer than the globe gets no detail (``RegionFields.detail_octaves == 0``).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 import numpy as np
 from scipy.sparse import csr_matrix
@@ -69,6 +69,9 @@ _SEED_SALT_COAST = 0xC0A5
 @paramclass
 class RegionUpsampleParams:
     """Tuning for regional detail generation."""
+
+    # Copied from the climate's lapse rate by ``AppParams`` (not shown in the dialog).
+    DERIVED: ClassVar[frozenset[str]] = frozenset({"lapse_rate_c_per_km"})
 
     n_cols: int = _f(14, label="Hex columns per region", min=4, max=64)
     # 64 gives ~4 km texels vs the globe's ~15 km: two detail octaves.
@@ -118,11 +121,10 @@ class RegionUpsampleParams:
     wetland_threshold: float = _f(0.4, label="Wetland threshold", min=0.0, max=1.0, step=0.05)
     wetland_relief_gain: float = _f(0.1, label="Wetland relief swing", min=0.0, max=0.5, step=0.01)
     wetland_relief_scale_m: float = _f(10.0, label="Wetland relief scale (m)", min=0.5, max=200.0, step=0.5)
-    # Riparian: gain · (1 − distance / width) · flatness; width = width_km · (flow / ref) ** exponent,
+    # Riparian: gain · (1 − distance / width) · flatness; width = width_km · (flow / REFERENCE_FLOW) ** exponent,
     # at least min_width_texels (so the smallest streams still show).
     wetland_riparian_gain: float = _f(0.3, label="Riparian wetness", min=0.0, max=1.0, step=0.05)
     wetland_riparian_width_km: float = _f(5.0, label="Riparian width at ref flow (km)", min=0.0, max=50.0, step=0.5)
-    wetland_riparian_ref_flow: float = _f(1000.0, label="Riparian reference flow", min=1.0, max=100000.0)
     wetland_riparian_exponent: float = _f(0.3, label="Riparian width exponent", min=0.0, max=1.0, step=0.05)
     wetland_riparian_min_width_texels: float = _f(
         1.5, label="Riparian min width (texels)", min=0.0, max=10.0, step=0.25)

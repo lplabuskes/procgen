@@ -9,7 +9,8 @@ Usage::
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Optional
+from fnmatch import fnmatchcase
+from typing import Any, Optional, Sequence
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -90,8 +91,13 @@ class ParamsDialog(QDialog):
 
     Each dataclass-typed field becomes a collapsible section. Leaf fields are
     read from their `metadata` dict: `label`, `min`, `max`, optional `step`.
-    Setting `hidden=True` skips the field/section. `kind="optional_int"` adds
-    a "Fixed" checkbox so the value can be None.
+    Setting `hidden=True` skips the field/section, as does listing the field in its
+    class's `DERIVED` (params its owner computes from others). `kind="optional_int"`
+    adds a "Fixed" checkbox so the value can be None.
+
+    `basic`, when given, limits the dialog to the leaves whose dotted path (e.g.
+    ``"globe.hydrology.river_flow_threshold"``) matches one of these `fnmatch`
+    patterns; sections left empty are dropped. Unshown fields keep their values.
     """
 
     def __init__(
@@ -99,9 +105,11 @@ class ParamsDialog(QDialog):
         params: Any,
         *,
         title: str = "Parameters",
+        basic: Optional[Sequence[str]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
+        self._basic = None if basic is None else tuple(basic)
         self.setWindowTitle(title)
         self.setMinimumWidth(420)
         self.resize(420, 620)
@@ -119,9 +127,9 @@ class ParamsDialog(QDialog):
 
         # Top-level fields render inline, not under a root header.
         for f in dataclasses.fields(params):
-            if f.metadata.get("hidden"):
-                continue
             value = getattr(params, f.name)
+            if not self._shown(params, f, (f.name,)):
+                continue
             if dataclasses.is_dataclass(value):
                 section = _CollapsibleSection(f.metadata.get("label") or _humanize(f.name))
                 self._build_dataclass(value, (f.name,), section.content_layout())
@@ -153,10 +161,10 @@ class ParamsDialog(QDialog):
         """Recursively build UI for a dataclass instance into parent_layout."""
         form: Optional[QFormLayout] = None
         for f in dataclasses.fields(instance):
-            if f.metadata.get("hidden"):
-                continue
             value = getattr(instance, f.name)
             sub_path = path + (f.name,)
+            if not self._shown(instance, f, sub_path):
+                continue
             if dataclasses.is_dataclass(value):
                 form = None  # Break the current form group.
                 section = _CollapsibleSection(f.metadata.get("label") or _humanize(f.name))
@@ -170,6 +178,18 @@ class ParamsDialog(QDialog):
                     wrapper.setLayout(form)
                     parent_layout.addWidget(wrapper)
                 self._add_leaf(form, f, value, sub_path)
+
+    def _shown(self, owner: Any, f: dataclasses.Field, path: tuple[str, ...]) -> bool:
+        """Whether field `f` of `owner` gets a widget (a section: whether any leaf under it does)."""
+        if f.metadata.get("hidden") or f.name in getattr(type(owner), "DERIVED", ()):
+            return False
+        value = getattr(owner, f.name)
+        if dataclasses.is_dataclass(value):
+            return any(self._shown(value, sub, path + (sub.name,)) for sub in dataclasses.fields(value))
+        if self._basic is None:
+            return True
+        dotted = ".".join(path)
+        return any(fnmatchcase(dotted, pattern) for pattern in self._basic)
 
     def _add_leaf(
         self,

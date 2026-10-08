@@ -2,6 +2,7 @@ import dataclasses
 import random
 import sys
 from pathlib import Path
+from typing import Optional
 
 from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
 
@@ -13,12 +14,17 @@ from viz.mapview.projections import projection_by_name
 from viz.params_dialog import ParamsDialog
 from realmgen.builder import RealmParams, RealmPipeline
 from localmap.params import LocalParams
+from localmap.upsample import with_region_detail
 from region.params import RegionParams
 from worldgen import GlobePipeline, GlobeParams
 
 
 @dataclasses.dataclass
 class AppParams:
+    # World seed — drives mesh selection and every stage's draws. None → random each run.
+    seed: Optional[int] = dataclasses.field(
+        default=None, metadata={"label": "Seed", "kind": "optional_int", "min": 0, "max": 2**31 - 1}
+    )
     globe: GlobeParams = dataclasses.field(
         default_factory=GlobeParams, metadata={"label": "World"}
     )
@@ -33,6 +39,60 @@ class AppParams:
         default_factory=LocalParams, metadata={"label": "Local map"}
     )
 
+    def __post_init__(self) -> None:
+        # Coupled params live once in the dialog; copy them to where the stages read them
+        # (every replace() re-runs this, so they can't drift apart).
+        self.globe = dataclasses.replace(self.globe, seed=self.seed)
+        lapse = self.globe.climate.temperature.lapse_rate_c_per_km
+        self.region = dataclasses.replace(
+            self.region, upsample=dataclasses.replace(self.region.upsample, lapse_rate_c_per_km=lapse)
+        )
+        self.local = dataclasses.replace(
+            self.local, upsample=with_region_detail(self.local.upsample, self.region.upsample)
+        )
+
+
+# The params dialog's default view: `fnmatch` patterns over dotted field paths.
+# `--advanced` shows everything.
+BASIC_PARAMS: tuple[str, ...] = (
+    "seed",
+    "globe.elevation.plates.n_plates",
+    "globe.elevation.plates.oceanic_fraction",
+    "globe.climate.temperature.equator_annual_c",
+    "globe.climate.temperature.pole_annual_c",
+    "globe.climate.precipitation.precipitation_scale",
+    "globe.climate.currents.enabled",
+    "globe.hydrology.river_flow_threshold",
+    "globe.hydrology.stream_flow_threshold",
+    "globe.delta.min_flow",
+    "globe.coast.base_ruggedness",
+    "globe.wetland.threshold",
+    "globe.resources.minerals.deposit_threshold",
+    "globe.resources.rare_bio.base_threshold",
+    "globe.danger.enabled",
+    "realm.population.rural_density_max",
+    "realm.population.trade_food_weight",
+    "realm.population.city_min",
+    "realm.polity.projection.sea_range_factor",
+    "realm.polity.hierarchy.direct_threshold",
+    "realm.polity.hierarchy.vassal_floor",
+    "realm.polity.fragmentation.n_epochs",
+    "realm.polity.marches.weight",
+    "realm.polity.forts.enabled",
+    "realm.towns.town_fraction",
+    "region.upsample.n_cols",
+    "region.upsample.tex_size",
+    "region.upsample.relief_factor",
+    "region.upsample.refine_water_masks",
+    "region.upsample.reshape_coast",
+    "region.upsample.connect_ocean",
+    "region.upsample.small_lakes",
+    "region.rivers.distributaries.enabled",
+    "local.upsample.n_cols",
+    "local.upsample.tex_size",
+    "local.villages.village_fraction",
+)
+
 
 class AppPipeline(Pipeline):
     """Top-level nested pipeline: physical world then human geography."""
@@ -44,8 +104,8 @@ class AppPipeline(Pipeline):
 
 
 class AppParamsDialog(ParamsDialog):
-    def __init__(self, params: AppParams, parent: "QWidget | None" = None) -> None:
-        super().__init__(params, title="Parameters", parent=parent)
+    def __init__(self, params: AppParams, *, advanced: bool = False, parent: "QWidget | None" = None) -> None:
+        super().__init__(params, title="Parameters", basic=None if advanced else BASIC_PARAMS, parent=parent)
 
     def result_params(self, base: AppParams) -> AppParams:  # type: ignore[override]
         return super().result_params(base)
@@ -53,6 +113,8 @@ class AppParamsDialog(ParamsDialog):
 
 def main() -> None:
     debug = "--debug" in sys.argv
+    # --advanced shows every param in the dialog, not just BASIC_PARAMS.
+    advanced = "--advanced" in sys.argv
     file_arg = next((a for a in sys.argv[1:] if not a.startswith("-")), None)
     # --projection=NAME picks the world map's projection; Robinson when absent.
     proj_arg = next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--projection=")), None)
@@ -73,11 +135,9 @@ def main() -> None:
             window.set_status(msg)
             QApplication.processEvents()
 
+        if params.seed is None:
+            params = dataclasses.replace(params, seed=random.randint(0, 2**31 - 1))
         globe_params = params.globe
-        if globe_params.seed is None:
-            globe_params = dataclasses.replace(globe_params, seed=random.randint(0, 2**31 - 1))
-
-        params = dataclasses.replace(params, globe=globe_params)
         current_params[0] = params
         window.set_region_params(params.region)
         window.set_local_params(params.local)
@@ -122,11 +182,10 @@ def main() -> None:
 
     def _rerun() -> None:
         p = current_params[0]
-        fresh = dataclasses.replace(p, globe=dataclasses.replace(p.globe, seed=None))
-        _build_and_apply(fresh)
+        _build_and_apply(dataclasses.replace(p, seed=None))
 
     def _open_params() -> None:
-        dialog = AppParamsDialog(current_params[0], parent=window)
+        dialog = AppParamsDialog(current_params[0], advanced=advanced, parent=window)
         if dialog.exec() == AppParamsDialog.DialogCode.Accepted:
             new_params = dialog.result_params(current_params[0])
             if new_params == current_params[0]:

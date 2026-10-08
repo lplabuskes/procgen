@@ -15,7 +15,6 @@ least-squares gradients), `channels.py`, `display.py`.
 - `wind` — three-cell speeds, seasonal ITCZ shift, monsoon pressure-gradient scale (0 disables)
 - `precipitation` — global wetness, advection iterations, continental drying, orographic strength, hidden lake-feedback knobs
 - `currents` — enabled, β scale (western-boundary intensification), T/P feedback scales, inland decay
-- `seed` — unused (model is deterministic)
 
 **`ClimateBuilder.build(ctx)`**: insolation → coast distances (Dijkstra from
 ocean) → surface temperatures → zonal + pressure winds → SST-driven moisture

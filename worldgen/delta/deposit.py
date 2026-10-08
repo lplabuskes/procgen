@@ -32,15 +32,15 @@ from scipy.spatial import KDTree
 
 from worldgen.delta.sediment import downstream_order, mouth_node, sediment_load
 from worldgen.delta.shape import ARCUATE, DeltaShape, WaveField, finger_tips, make_shape, shape_metric, wave_dominance
-from worldgen.hydrology.types import River, RiverNode, RiverSegment, StreamNetwork, laplacian_smooth_sphere
+from worldgen.hydrology.types import (
+    REFERENCE_FLOW, River, RiverNode, RiverSegment, StreamNetwork, laplacian_smooth_sphere,
+)
 
 if TYPE_CHECKING:
     from core.mesh import PolygonMesh
     from worldgen.delta.builder import DeltaParams
 
 EARTH_RADIUS_KM = 6371.0
-# The flow the area law is anchored at (``area_km2`` is a delta's area at it).
-REFERENCE_FLOW = 1000.0
 # Texel neighbours lie within this many texel spacings (8-neighbours and the
 # shared-edge duplicates across a seam).
 _NEIGHBOUR_SPACINGS = 1.6

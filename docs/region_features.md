@@ -164,7 +164,8 @@ local map re-routes the same network
 - **Flow** = catchment × annual precip / world mean, in world flow units (one
   global texel at mean rain), so drawn at physical width. Capped at the world's
   stream threshold (anything more is a world stream routed elsewhere).
-- **Channels** = nodes with ≥ `min_catchment_km2`, cut into main stems with
+- **Channels** = nodes with ≥ `min_catchment_pct` % of the world's smallest
+  stream's catchment (the threshold flow × one global texel's area), cut into main stems with
   `main_stem_paths`. A stem ends on the river/lake/coast it drains into (only
   its last node may be on a river, so streams never cross one) or the raster
   edge.
@@ -175,7 +176,7 @@ for the world network; a dense-land local map gets ~30 streams (~1,800 km). Dry
 land gets few.
 
 ### `RegionStreamParams`
-Held in `LocalParams.streams` (**Local map** dialog). `min_catchment_km2` (300),
+Held in `LocalParams.streams` (**Local map** dialog). `min_catchment_pct` (1.35 % ≈ 300 km² at defaults),
 `min_nodes` (3), `raster_texels` (1.0), `margin` (0.08).
 
 ## Roads (`region/roads.py`)

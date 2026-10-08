@@ -17,7 +17,7 @@ class RegionParams:
     """
 
     upsample: RegionUpsampleParams = field(
-        default_factory=RegionUpsampleParams, metadata={"label": "Detail refinement"}
+        default_factory=RegionUpsampleParams, metadata={"label": "Detail refinement (region & local)"}
     )
     rivers: RegionRiverParams = field(
         default_factory=RegionRiverParams, metadata={"label": "Rivers"}

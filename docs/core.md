@@ -100,6 +100,7 @@ ties → farthest from any land centroid; no `is_ocean` → π. Stored as
 - `paramclass` — alias for `@dataclass`, marks params for the UI dialog.
 - `param_field(default, *, label, min, max, step?, hidden?)` — leaf field with dialog metadata; conventionally imported as `_f`.
 - `field` — re-exported `dataclasses.field` for nested sub-params (`metadata={"label": ...}`).
+- A paramclass may declare `DERIVED: ClassVar[frozenset[str]]`: fields its owner fills in from other params (the dialog skips them).
 
 ## `core/display.py` — DisplayRegistry
 

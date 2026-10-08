@@ -9,7 +9,7 @@ local maps want the brooks below it.  Once per region, on the rivers' raster:
 - Each node contributes catchment × precipitation / world mean, in world flow
   units (one global texel at mean rain).  Flow is capped at the world's stream
   threshold: anything larger the world routed elsewhere.
-- Nodes above ``min_catchment_km2`` are channels, cut into main stems with
+- Nodes above ``min_catchment_pct`` of the world's smallest stream are channels, cut into main stems with
   :func:`worldgen.hydrology.rivers.main_stem_paths`.
 
 Streams end on the region's rivers, so never cross one, and every local map of
@@ -37,8 +37,10 @@ if TYPE_CHECKING:
 class RegionStreamParams:
     """Tuning for the regional stream network the local maps draw."""
 
-    # Smallest channel catchment, km² (raster nodes are ~4.5 km apart).
-    min_catchment_km2: float = _f(300.0, label="Min catchment (km²)", min=20.0, max=5000.0, step=10.0)
+    # Smallest channel catchment, as a percentage of the world's smallest stream (its
+    # stream threshold, ~22,000 km² at defaults: 1.35% ≈ 300 km²; raster nodes are ~4.5 km apart).
+    min_catchment_pct: float = _f(1.35, label="Min catchment (% of world's smallest stream)",
+                                  min=0.1, max=50.0, step=0.05)
     # Stems shorter than this many raster nodes are dropped as stubs.
     min_nodes: int = _f(3, label="Min stream length (texels)", min=2, max=20)
     # Raster spacing in regional texels, and margin past the cell; as the rivers'.
@@ -104,7 +106,7 @@ def build_region_streams(
     weight = np.where(outlet, 0.0, raster.values["precipitation"] / mean_rain * node_km2)
     catchment = accumulate(parent, order, weight)        # km² at mean rain
 
-    channel = (catchment >= float(params.min_catchment_km2)) & ~outlet
+    channel = (catchment >= 0.01 * float(params.min_catchment_pct) * cap * unit) & ~outlet
     flow = np.minimum(catchment / unit, cap)
     out: list[RiverPath] = []
     for path in main_stem_paths(parent, catchment, channel, outlet, int(params.min_nodes)):

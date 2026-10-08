@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 from scipy.spatial import KDTree
 
+from worldgen.hydrology.types import REFERENCE_FLOW
+
 if TYPE_CHECKING:
     from worldgen.delta.builder import DeltaParams
 
@@ -119,7 +121,7 @@ def _ray_tangents(points: np.ndarray, origin: np.ndarray) -> np.ndarray:
 
 def wave_dominance(wave_power: float, flow: float, params: "DeltaParams") -> float:
     """0 (river-dominated) … 1 (wave-dominated)."""
-    river = float(params.river_weight) * (max(flow, 0.0) / 1000.0) ** float(params.river_exponent)
+    river = float(params.river_weight) * (max(flow, 0.0) / REFERENCE_FLOW) ** float(params.river_exponent)
     return float(wave_power / max(wave_power + river, 1e-12))
 
 
@@ -145,7 +147,7 @@ class DeltaShape:
 
 
 def finger_count(flow: float, params: "DeltaParams") -> int:
-    k = float(params.finger_base) + float(params.finger_per_decade) * np.log10(max(flow, 1.0) / 1000.0)
+    k = float(params.finger_base) + float(params.finger_per_decade) * np.log10(max(flow, 1.0) / REFERENCE_FLOW)
     return int(np.clip(round(k), 2, int(params.finger_max)))
 
 

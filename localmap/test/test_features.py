@@ -77,7 +77,7 @@ def test_no_region_rivers_no_local_rivers(local, region, globe):
 
 @pytest.fixture(scope="module")
 def region_streams(region, region_rivers, globe):
-    return build_region_streams(region, globe, region_rivers, RegionStreamParams(min_catchment_km2=2000.0))
+    return build_region_streams(region, globe, region_rivers, RegionStreamParams(min_catchment_pct=1.55))
 
 
 def test_the_regions_streams_are_drawn_after_the_rivers(local, region, region_rivers, region_streams, globe, rivers):

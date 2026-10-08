@@ -4,7 +4,10 @@
 
 **`GlobeParams`**: `mesh`, `elevation`, `climate`, `hydrology`, `delta`, `coast`,
 `resources`, `danger`, `cost`, `seed` (drives mesh selection and every stage's
-seeded draws; `None` → random). New stages = new fields.
+seeded draws; `None` → random; hidden in the dialog, set from `AppParams.seed`). New
+stages = new fields. Coupled params are passed between builders, not duplicated:
+wetlands get hydrology's PET, cost gets hydrology's `river_flow_threshold` (scaled by
+`navigable_flow_factor`).
 
 **`GlobePipeline`** (a `Pipeline`):
 ```
@@ -34,8 +37,12 @@ reg, debug=False)`, `serialize` / `load`. Scripts run a stage standalone as
 
 ## `main.py` — Primary entrypoint
 
-`AppParams` = `globe`, `realm`, `region`, `local` (last two view-side only, never
-rebuild the world). `AppPipeline` = `Pipeline([GlobePipeline, RealmPipeline])`.
+`AppParams` = `seed` (top of the dialog), `globe`, `realm`, `region`, `local` (last two
+view-side only, never rebuild the world). `__post_init__` copies coupled values down,
+so every `replace` re-syncs them: `seed` → `globe.seed`; the climate lapse rate →
+`region.upsample`; the region's shared detail fields (`localmap.upsample.SHARED_WITH_REGION`,
+all not redeclared by `LocalUpsampleParams`) → `local.upsample`. `BASIC_PARAMS` lists the
+dialog's default view. `AppPipeline` = `Pipeline([GlobePipeline, RealmPipeline])`.
 
 Each run: `World(globe_params.mesh, seed=...)` (random if `None`) →
 `AppPipeline.build(ctx)` → one `apply_display(window, debug=...)`; also
@@ -45,4 +52,4 @@ Each run: `World(globe_params.mesh, seed=...)` (random if `None`) →
 - **Re-run**: fresh random seed.
 - **Parameters**: `AppParamsDialog`; edits touching only `region` / `local` re-refine the views, anything else rebuilds.
 - **Save**: `.npz` via `core.persistence.save_world`; `python3 main.py path.npz` loads (`load_world` + each stage's `load`).
-- `--debug`: debug layers/overlays. `--projection=NAME`: `robinson` (default), `mollweide`, `mercator`, `equirectangular`.
+- `--debug`: debug layers/overlays. `--advanced`: every param in the dialog (default: `BASIC_PARAMS`). `--projection=NAME`: `robinson` (default), `mollweide`, `mercator`, `equirectangular`.

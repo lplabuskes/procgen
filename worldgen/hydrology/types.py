@@ -6,6 +6,10 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+# The flow every "at flow 1000" scaling law is anchored at (delta size and fingers,
+# flood height, riparian width, distributary mouths): a ~200,000 km² catchment at mean rain.
+REFERENCE_FLOW = 1000.0
+
 
 @dataclass
 class RiverNode:
