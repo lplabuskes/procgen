@@ -10,7 +10,7 @@ A polity is a **tree, not a flat partition** (`docs/plans/polity_generation_brie
 - Per-polity scalars (`cohesion`, `infrastructure`, `legitimacy`, `maritime_reach`), rolled per capital from `world.seed` + capital face, modulate the field; their cross-product is the main source of variety (Song ↔ Mongol ↔ HRE ↔ city-state belt).
 - **Marcher autonomy**: vassals holding a hot first-pass frontier are held more loosely, so they secede first.
 - **Stage 5 fragmentation epochs**: over-extended low-cohesion sovereigns shed peripheral seats as new sovereigns, re-resolved → successor states.
-- **Physical borders**: who claims a face is decided on a cost surface with a step at drainage divides and river crossings, so borders settle on ridges and rivers; seatless land pieces (across a lake, a strait, or cut off by a neighbour) go to the neighbour round them. The drawn line snaps onto big rivers in the refine stage ([realm_refine.md](realm_refine.md#river-snap-barrierspy)).
+- **Physical borders**: who claims a face is decided on a cost surface with a step at drainage divides and river crossings, so borders settle on ridges and rivers; seatless land pieces (across a lake, a strait, or cut off by a neighbour) go to the neighbour round them. The drawn line is moved onto big rivers run by run in the refine stage ([realm_refine.md](realm_refine.md#river-following-river_followpy)).
 
 ## Files
 
@@ -181,7 +181,7 @@ ridge steps each field there, so a crossing within reach slides onto the ridge.
   `river_weight ·` that. The old ford penalty (in the plain costs) only charged edges
   out of a river face against its flow, too weak to hold a border; this puts
   face-level borders beside rivers, and the label field draws them on the river
-  ([realm_refine.md](realm_refine.md#river-snap-barrierspy)).
+  ([realm_refine.md](realm_refine.md#river-following-river_followpy)).
 
 **Claim vs reach.** The ridge and river costs go only into the *claim graphs*
 (`_Ctx.claim_graphs`, fortified alike on regrowth): `ForestBuilder` claims faces

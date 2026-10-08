@@ -36,8 +36,15 @@ exactly* it runs.
 ## Rivers (`region/rivers.py`)
 
 `build_region_rivers(fields, globe, params) → RegionRivers` (`paths`,
-`confluences`, `mouths` + `mouth_flows`); each path a `(positions, flows,
-in_lake)` polyline in the world `"rivers"` form. Qt-free, deterministic; ~0.2 s
+`confluences`, `mouths` + `mouth_flows`, `path_rivers`); each path a `(positions, flows,
+in_lake)` polyline in the world `"rivers"` form. `path_rivers` holds, per path and
+vertex, the index of the world river (`"rivers"`) it re-routes, -1 for a
+sub-threshold headwater or a distributary: network nodes are tagged from
+`"river_texels"` (`stream_river_ids`; a path's last node, its confluence, keeps
+the path's id), each re-routed node takes its nearest source vertex's id
+(`_run_ids`), and junction cuts realign them (`_meet_ids`). Each path is at most
+one world river. Local maps carry the region's ids down the same way
+(`localmap/rivers.py`). `RegionRivers.river_ids()` gives all -1 when unknown. Qt-free, deterministic; ~0.2 s
 per region (0.05 s mostly-ocean).
 
 **Source: the world's stream network.** Hydrology saves its single-receiver

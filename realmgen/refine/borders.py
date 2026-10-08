@@ -243,27 +243,19 @@ def _bisect_crossings(verts: np.ndarray, edges: np.ndarray, la: np.ndarray,
     return pts / np.linalg.norm(pts, axis=1, keepdims=True)
 
 
-def trace_lattice_borders(verts: np.ndarray, tris: np.ndarray, edges: np.ndarray,
-                          tri_edges: np.ndarray, labels: np.ndarray, polities: List,
-                          *, iterations: int = 2, label_fn: Optional[Callable] = None,
-                          bisect_steps: int = 5) -> dict:
-    """Return ``{depth: (M, 6)}`` smoothed border segments contoured on a triangle lattice.
+def _lattice_links(verts: np.ndarray, tris: np.ndarray, edges: np.ndarray, tri_edges: np.ndarray,
+                   labels: np.ndarray, lut: np.ndarray, label_fn: Optional[Callable], bisect_steps: int):
+    """Marching-triangle links: ``(points, ids (K, 2), depth (K,), junctions, pair (P, 2))`` or None.
 
-    ``labels`` per vertex are polity id, ``UNCLAIMED`` or ``WATER``;
-    ``edges``/``tri_edges`` come from ``_unique_edges(tris)``. ``label_fn`` is the
-    land label field the labels came from, used to bisect crossings.
+    ``pair`` holds a crossing point's two labels (``-2`` for triangle-centre hubs).
     """
-    if not polities:
-        return {}
     labels = np.asarray(labels, dtype=np.int64)
-    lut, max_depth = _ancestor_lut(polities)
-
     la = labels[edges[:, 0]]
     lb = labels[edges[:, 1]]
     ebd = _edge_border_depth(la, lb, lut)                    # (E,) -1 = no crossing
     cross = np.flatnonzero(ebd >= 0)
     if cross.size == 0:
-        return {}
+        return None
     cross_pts = _bisect_crossings(verts, edges[cross], la[cross], lb[cross],
                                   label_fn, bisect_steps)
     point_id = np.full(len(edges), -1, dtype=np.int64)
@@ -296,8 +288,29 @@ def trace_lattice_borders(verts: np.ndarray, tris: np.ndarray, edges: np.ndarray
     junctions = frozenset(hub_id[n_cross[hub] == 3].tolist())
 
     points = np.vstack([cross_pts, centres])
-    all_ids = np.concatenate([ids2, ids_h])
-    all_depth = np.concatenate([depth2, depth_h])
+    pair = np.full((len(points), 2), -2, dtype=np.int64)
+    pair[:cross.size, 0] = la[cross]
+    pair[:cross.size, 1] = lb[cross]
+    return (points, np.concatenate([ids2, ids_h]), np.concatenate([depth2, depth_h]), junctions, pair)
+
+
+def trace_lattice_borders(verts: np.ndarray, tris: np.ndarray, edges: np.ndarray,
+                          tri_edges: np.ndarray, labels: np.ndarray, polities: List,
+                          *, iterations: int = 2, label_fn: Optional[Callable] = None,
+                          bisect_steps: int = 5) -> dict:
+    """Return ``{depth: (M, 6)}`` smoothed border segments contoured on a triangle lattice.
+
+    ``labels`` per vertex are polity id, ``UNCLAIMED`` or ``WATER``;
+    ``edges``/``tri_edges`` come from ``_unique_edges(tris)``. ``label_fn`` is the
+    land label field the labels came from, used to bisect crossings.
+    """
+    if not polities:
+        return {}
+    lut, max_depth = _ancestor_lut(polities)
+    links = _lattice_links(verts, tris, edges, tri_edges, labels, lut, label_fn, bisect_steps)
+    if links is None:
+        return {}
+    points, all_ids, all_depth, junctions, _ = links
 
     out: dict[int, np.ndarray] = {}
     for depth in range(max_depth + 1):
@@ -308,6 +321,60 @@ def trace_lattice_borders(verts: np.ndarray, tris: np.ndarray, edges: np.ndarray
         if len(segs):
             out[depth] = segs
     return out
+
+
+def trace_lattice_chains(verts: np.ndarray, tris: np.ndarray, edges: np.ndarray,
+                         tri_edges: np.ndarray, labels: np.ndarray, polities: List,
+                         *, label_fn: Optional[Callable] = None, bisect_steps: int = 5) -> list:
+    """Unsmoothed border chains ``[(points (K, 3), (a, b), depth)]`` between junctions / coasts.
+
+    ``(a, b)`` is the chain's commonest label pair on its crossings (``a < b``).
+    """
+    if not polities:
+        return []
+    lut, max_depth = _ancestor_lut(polities)
+    links = _lattice_links(verts, tris, edges, tri_edges, labels, lut, label_fn, bisect_steps)
+    if links is None:
+        return []
+    points, all_ids, all_depth, junctions, pair = links
+    out: list = []
+    for depth in range(max_depth + 1):
+        sel = all_ids[all_depth == depth]
+        if len(sel) == 0:
+            continue
+        edges_d = {(int(a), int(b)) if a < b else (int(b), int(a)) for a, b in sel}
+        for chain in _chain_edges(edges_d, stops=junctions):
+            if len(chain) < 3:
+                continue
+            ids = np.asarray(chain, dtype=np.int64)
+            pr = pair[ids]
+            pr = pr[pr[:, 0] != -2]
+            if len(pr) == 0:
+                continue
+            pr = np.sort(pr, axis=1)
+            uniq, count = np.unique(pr, axis=0, return_counts=True)
+            a, b = uniq[np.argmax(count)]
+            out.append((points[ids], (int(a), int(b)), depth))
+    return out
+
+
+def _lattice_labels(mesh, field: PolityLabelField, ocean_tex: np.ndarray, lake_tex: Optional[np.ndarray],
+                    lattice_depth: Optional[int], lattice_offset: int, plain: bool = False):
+    """``(verts, tris, edges, tri_edges, labels)`` of the global lattice, water from the masks."""
+    from region.sampling import GlobalSampler
+
+    if lattice_depth is None:
+        lattice_depth = max(0, lattice_depth_for(len(mesh.faces), int(ocean_tex.shape[2])) + lattice_offset)
+    verts, tris, edges, tri_edges = _icosphere_lattice(int(lattice_depth))
+
+    sampler = GlobalSampler(mesh)
+    faces, u, v = sampler.locate(verts)
+    labels = (field.plain_land_labels if plain else field.land_labels)(verts, owner=faces)
+    water = sampler.sample(ocean_tex, faces, u, v)[:, 0] > 0.5
+    if lake_tex is not None:
+        water |= sampler.sample(lake_tex, faces, u, v)[:, 0] > 0.5
+    labels[water] = WATER
+    return verts, tris, edges, tri_edges, labels
 
 
 def _smooth_chains(ids: np.ndarray, points: np.ndarray, junctions: frozenset,
@@ -343,20 +410,21 @@ def smooth_polity_borders(mesh, polities: List, field: PolityLabelField,
     """
     if not polities:
         return {}
-    from region.sampling import GlobalSampler
-
-    if lattice_depth is None:
-        lattice_depth = max(0, lattice_depth_for(len(mesh.faces), int(ocean_tex.shape[2])) + lattice_offset)
-    verts, tris, edges, tri_edges = _icosphere_lattice(int(lattice_depth))
-
-    sampler = GlobalSampler(mesh)
-    faces, u, v = sampler.locate(verts)
-    labels = field.land_labels(verts, owner=faces)
-    water = sampler.sample(ocean_tex, faces, u, v)[:, 0] > 0.5
-    if lake_tex is not None:
-        water |= sampler.sample(lake_tex, faces, u, v)[:, 0] > 0.5
-    labels[water] = WATER
-
+    verts, tris, edges, tri_edges, labels = _lattice_labels(mesh, field, ocean_tex, lake_tex,
+                                                            lattice_depth, lattice_offset)
     return trace_lattice_borders(verts, tris, edges, tri_edges, labels, polities,
                                  iterations=iterations, label_fn=field.land_labels,
                                  bisect_steps=bisect_steps)
+
+
+def plain_border_chains(mesh, polities: List, field: PolityLabelField,
+                        ocean_tex: np.ndarray, lake_tex: Optional[np.ndarray],
+                        *, lattice_depth: Optional[int] = None, lattice_offset: int = 0,
+                        bisect_steps: int = 5) -> list:
+    """Border chains of the field before any river following (``trace_lattice_chains``)."""
+    if not polities:
+        return []
+    verts, tris, edges, tri_edges, labels = _lattice_labels(mesh, field, ocean_tex, lake_tex,
+                                                            lattice_depth, lattice_offset, plain=True)
+    return trace_lattice_chains(verts, tris, edges, tri_edges, labels, polities,
+                                label_fn=field.plain_land_labels, bisect_steps=bisect_steps)

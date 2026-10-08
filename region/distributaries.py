@@ -406,6 +406,7 @@ def add_distributaries(
     return RegionRivers(
         region_id=rivers.region_id,
         paths=list(rivers.paths) + branches,
+        path_rivers=list(rivers.river_ids()) + [np.full(len(b[0]), -1, dtype=np.int64) for b in branches],
         confluences=rivers.confluences,
         mouths=np.concatenate([np.asarray(rivers.mouths, dtype=np.float64).reshape(-1, 3), ends]),
         mouth_flows=np.concatenate([np.asarray(rivers.mouth_flows, dtype=np.float64),

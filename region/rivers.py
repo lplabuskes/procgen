@@ -100,6 +100,15 @@ class RegionRivers:
     # Local maps only: the region's own streams (region.streams), re-routed; used
     # by villages but not among confluences or mouths.
     streams: list[RiverPath] = field(default_factory=list)
+    # Per path, per vertex: the index of the world river (``"rivers"``) it is part of, -1 none
+    # (a sub-threshold headwater, a distributary). Empty when unknown.
+    path_rivers: list[np.ndarray] = field(default_factory=list)
+
+    def river_ids(self) -> list[np.ndarray]:
+        """``path_rivers``, or all -1 when it isn't aligned with ``paths``."""
+        if len(self.path_rivers) == len(self.paths):
+            return self.path_rivers
+        return [np.full(len(p[0]), -1, dtype=np.int64) for p in self.paths]
 
 
 # ── re-routing ───────────────────────────────────────────────────────────────
@@ -146,6 +155,30 @@ def _route_run(
     )
 
 
+def _run_ids(raster: Raster, nodes: np.ndarray, s: np.ndarray, t: np.ndarray,
+             ids: Optional[np.ndarray]) -> np.ndarray:
+    """Per node of a re-routed path, the world river id of the nearest source vertex (-1 without ids)."""
+    if ids is None:
+        return np.full(len(nodes), -1, dtype=np.int64)
+    x = (s - raster.lo) / raster.step
+    y = (t - raster.lo) / raster.step
+    rows, cols = np.divmod(nodes, raster.n)
+    nearest = np.argmin((cols[:, None] - x[None, :]) ** 2 + (rows[:, None] - y[None, :]) ** 2, axis=1)
+    return np.asarray(ids, dtype=np.int64)[nearest]
+
+
+def _meet_ids(ids: np.ndarray, new_len: int, at_end: bool) -> np.ndarray:
+    """``ids`` re-aligned to a path ``meet_line`` cut to ``new_len`` vertices (the cut point
+    takes the id of the segment it lies on)."""
+    old_len = len(ids)
+    if new_len == old_len:
+        return ids
+    if at_end:
+        return np.concatenate([ids[:new_len - 1], ids[new_len - 2:new_len - 1]])
+    seg = old_len - new_len
+    return np.concatenate([ids[seg + 1:seg + 2], ids[seg + 1:]])
+
+
 def _run_flows(
     raster: Raster, nodes: np.ndarray, s: np.ndarray, t: np.ndarray, flows: np.ndarray
 ) -> np.ndarray:
@@ -173,10 +206,36 @@ class StreamPath:
     hidden_edges: Optional[np.ndarray] = None
     # Starts on another path (a delta distributary): starts on that path's re-route.
     starts_on_path: bool = False
+    # (len,) world river index per vertex (RegionRivers.path_rivers); None: none.
+    river_ids: Optional[np.ndarray] = None
+
+
+def stream_river_ids(streams: StreamNetwork, river_texels: Optional[list]) -> np.ndarray:
+    """``(K,)`` the world river (index into ``"rivers"``) each stream node is part of, -1 none.
+
+    ``river_texels`` is the ``"river_texels"`` feature. A tributary's last texel is
+    its confluence on the stem, so a texel inside one river wins over a river's end.
+    """
+    out = np.full(len(streams), -1, dtype=np.int64)
+    if not river_texels:
+        return out
+    order = np.argsort(streams.nodes, kind="stable")
+    sorted_nodes = streams.nodes[order]
+    for interior in (False, True):
+        for r, tex in enumerate(river_texels):
+            tex = np.asarray(tex, dtype=np.int64)
+            tex = tex[:-1] if interior else tex[-1:]
+            if tex.size == 0:
+                continue
+            at = np.clip(np.searchsorted(sorted_nodes, tex), 0, len(sorted_nodes) - 1)
+            hit = sorted_nodes[at] == tex
+            out[order[at[hit]]] = r
+    return out
 
 
 def _stream_paths(
     streams: StreamNetwork, fields: RegionFields, lo: float, step: float, n: int, min_nodes: int,
+    river_ids: Optional[np.ndarray] = None,
 ) -> list[StreamPath]:
     """The network's main stems inside the raster, largest flow first."""
     s, t, valid = fields.geometry.ecef_to_local(np.asarray(streams.positions, dtype=np.float64))
@@ -196,9 +255,15 @@ def _stream_paths(
     for path in main_stem_paths(receiver, flow, streams.channel[idx], streams.stop[idx], min_nodes):
         nodes = np.asarray(path, dtype=np.int64)
         running = np.maximum.accumulate(flow[nodes])
+        ids = None
+        if river_ids is not None:
+            ids = river_ids[idx][nodes].copy()
+            # The last node is where it joins its stem (that river's texel): it is still this path.
+            ids[-1] = ids[-2]
         out.append(StreamPath(
             s=s[idx][nodes], t=t[idx][nodes], edge_flows=running[:-1],
             ends_here=not (receiver[nodes[-1]] < 0 and leaves_raster[nodes[-1]]),
+            river_ids=ids,
         ))
     out.sort(key=lambda p: -float(p.edge_flows.max()))
     return out
@@ -432,7 +497,8 @@ def build_region_rivers(
     global_spacing = float(np.sqrt(np.mean(mesh.face_areas))) / max(gw - 1, 1)
     radius_nodes = max(float(params.corridor_global_texels) * global_spacing / node_spacing_rad(fields, step), 1.5)
 
-    paths = _stream_paths(streams, fields, lo, step, n, int(params.min_global_nodes))
+    ids = stream_river_ids(streams, globe.get_feature("river_texels"))
+    paths = _stream_paths(streams, fields, lo, step, n, int(params.min_global_nodes), ids)
     rivers = route_stream_paths(fields, globe, paths, lo, step, n, radius_nodes, params)
     return add_distributaries(fields, globe, rivers, params)
 
@@ -465,6 +531,7 @@ def route_stream_paths(
     # Per routed path: its index in ``paths``, nodes, flows, hidden, and the paths
     # it starts on / ends on (-1: none).
     done: list[tuple[int, np.ndarray, np.ndarray, np.ndarray, int, int]] = []
+    node_ids: dict[int, np.ndarray] = {}
     for i, p in enumerate(paths):
         sinks = occupied | raster.sinks
         s, t = p.s, p.t
@@ -485,6 +552,7 @@ def route_stream_paths(
                 nodes = _join_at_first_touch(n, nodes, owner)
         hidden = _hidden_nodes(raster, nodes)
         flows = _run_flows(raster, nodes, s, t, p.edge_flows)
+        node_ids[i] = _run_ids(raster, nodes, s, t, p.river_ids)
         parent = int(owner[nodes[0]]) if p.starts_on_path else -1
         stem = int(owner[nodes[-1]]) if p.ends_here and not hidden[-1] else -1
         done.append((i, nodes, flows, hidden, parent, stem))
@@ -499,13 +567,18 @@ def route_stream_paths(
     # poke through it: put it on that line as drawn (stems before their tributaries).
     lines: dict[int, np.ndarray] = {}
     drawn: dict[int, RiverPath] = {}
+    drawn_ids: dict[int, np.ndarray] = {}
     for i, nodes, flows, hidden, parent, stem in done:
         path = _to_path(raster, nodes, flows, hidden, params)
+        ids = node_ids[i]
         if parent in lines:
             path = meet_line(path, lines[parent], at_end=False)
+            ids = _meet_ids(ids, len(path[0]), at_end=False)
         if stem in lines:
             path = meet_line(path, lines[stem], at_end=True)
+            ids = _meet_ids(ids, len(path[0]), at_end=True)
         drawn[i] = path
+        drawn_ids[i] = ids
         lines[i] = np.asarray(path[0], dtype=np.float64)
 
     major = [(i, nodes) for i, nodes, *_ in done if not paths[i].minor]
@@ -520,6 +593,7 @@ def route_stream_paths(
         mouths=np.array([drawn[i][0][-1] for i in at_sea], dtype=np.float64).reshape(-1, 3),
         mouth_flows=np.array([float(drawn[i][1][-1]) for i in at_sea], dtype=np.float64),
         streams=[drawn[i] for i, *_ in done if paths[i].minor],
+        path_rivers=[drawn_ids[i] for i, _ in major],
     )
 
 

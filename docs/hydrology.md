@@ -32,8 +32,16 @@ Attributes: `rivers` (`List[River]`; flattened tuples after `load`),
 `lake_polygons`, `streams` (`StreamNetwork`).
 
 Features: `"rivers"` (flattened `(positions, flows, in_lake)` polylines),
-`"river_objects"` (rich `River`s for Resources/Cost; build only, not restored on
-load), `"streams"`, `"lakes"`. Display: **Rivers** overlay.
+`"river_texels"` (per `"rivers"` entry, the flat texel ids of the tree nodes it
+runs through — `River.texels`, extended by the delta stage; saved), `"river_objects"`
+(rich `River`s for Resources/Cost; build only, not restored on load), `"streams"`,
+`"lakes"`. Display: **Rivers** overlay. `flatten_rivers` (`types.py`) makes both
+flattened features.
+
+**World river ↔ stream network.** `StreamNetwork.nodes` are those same texel ids,
+so `region.rivers.stream_river_ids` tags each network node with the world river
+it is part of (a tributary's last texel is its confluence on the stem: the stem
+wins). Region and local rivers carry that id per vertex (`RegionRivers.path_rivers`).
 
 **`StreamNetwork`** (`types.py`, `RiverGenerator.stream_network(threshold)`): the
 single-receiver tree down to `stream_flow_threshold` — channel texels plus the

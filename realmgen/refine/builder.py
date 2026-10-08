@@ -15,8 +15,9 @@ from core.params import param_field as _f, paramclass
 from core.pipeline import BuildContext, Stage
 from realmgen.channels import AUTHORITY, POLITY_ID
 from realmgen.persistence import pack_borders, pack_routes, unpack_borders, unpack_routes
-from realmgen.refine.borders import smooth_polity_borders
+from realmgen.refine.borders import plain_border_chains, smooth_polity_borders
 from realmgen.refine.fill import PolityLabelField, colorize_labels
+from realmgen.refine.river_follow import RiverFollowParams, build_river_swaps
 from realmgen.refine.settlements import refine_settlement_positions, remap_routes
 from realmgen.refine.sites import SiteField
 from worldgen.cost.surfaces import EARTH_RADIUS_KM
@@ -66,6 +67,12 @@ class RefineParams:
     )
     border_river_full_flow: float = _f(
         4000.0, label="Border river snap: flow at full strength", min=1.0, max=100000.0, step=500.0
+    )
+    border_river_follow: bool = _f(
+        True, label="Border river: follow run by run (else per-point snap)", min=0, max=1
+    )
+    border_river_min_run_km: float = _f(
+        40.0, label="Border river: shortest followed stretch (km)", min=5.0, max=300.0, step=5.0
     )
 
 
@@ -147,14 +154,33 @@ class RefineStage(Stage):
             warp_octaves=int(p.boundary_warp_octaves),
             warp_seed=int(world.seed or 0),
             rivers=world.get_feature("rivers"),
-            river_reach_km=float(p.border_river_reach_km),
+            river_reach_km=0.0 if p.border_river_follow else float(p.border_river_reach_km),
             river_min_flow=float(p.border_river_min_flow),
             river_full_flow=float(p.border_river_full_flow),
             river_snap_fraction=float(p.border_river_snap_fraction),
-            river_cross_weight=float(p.border_river_cross_weight),
+            river_cross_weight=0.0 if p.border_river_follow else float(p.border_river_cross_weight),
         )
+        if p.border_river_follow and p.border_river_reach_km > 0.0 and OCEAN_MASK.present(mesh):
+            field = field.with_swaps(self._river_swaps(world, field, polities))
         world.add_feature("polity_label_field", field)
         return field
+
+    def _river_swaps(self, world, field: PolityLabelField, polities):
+        """Border runs moved onto big rivers (``river_follow``), from the field's plain borders."""
+        mesh, p = world.mesh, self.params
+        ocean_tex = OCEAN_MASK.read(mesh)
+        lake_tex = LAKE_MASK.read(mesh) if LAKE_MASK.present(mesh) else None
+        chains = plain_border_chains(mesh, polities, field, ocean_tex, lake_tex,
+                                     lattice_offset=int(p.border_lattice_offset))
+        settlements = world.get_feature("settlements") or []
+        positions = (np.array([np.asarray(s.site_position, dtype=np.float64) for s in settlements])
+                     if settlements else np.zeros((0, 3)))
+        follow = RiverFollowParams(reach_km=float(p.border_river_reach_km),
+                                   min_flow=float(p.border_river_min_flow),
+                                   full_flow=float(p.border_river_full_flow),
+                                   min_run_km=float(p.border_river_min_run_km))
+        return build_river_swaps(chains, world.get_feature("rivers"), field.plain_land_labels,
+                                 field.is_water_at, positions, field.centroids, follow)
 
     # ── Persistence ───────────────────────────────────────────────────────────
     # Owns the route/border round-trip; polity_fill persists via mesh textures.

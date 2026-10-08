@@ -10,7 +10,7 @@ adds the ``delta`` texture, ``delta_fraction``, and the ``"delta_fans"`` and
 """
 from __future__ import annotations
 
-from typing import List, Mapping, Optional
+from typing import List, Mapping
 
 import numpy as np
 
@@ -22,8 +22,9 @@ from worldgen.delta.channels import DELTA, DELTA_FANS, DELTA_FRACTION, DELTA_MOU
 from worldgen.delta.deposit import DeltaFan, build_deltas
 from worldgen.delta.shape import ARCUATE, BIRDFOOT, CUSPATE
 from worldgen.geology.channels import ELEVATION, ELEVATION_FACE, IS_OCEAN, OCEAN_MASK
-from worldgen.hydrology.channels import FILLED_HEIGHT, LAKE_MASK, RIVER_OBJECTS, RIVERS, STREAMS
+from worldgen.hydrology.channels import FILLED_HEIGHT, LAKE_MASK, RIVER_OBJECTS, RIVER_TEXELS, RIVERS, STREAMS
 from worldgen.hydrology.rivers import River
+from worldgen.hydrology.types import flatten_rivers
 
 
 @paramclass
@@ -127,7 +128,9 @@ class DeltaBuilder(Stage):
         DELTA_FRACTION.write(mesh, result.plain_fraction)
 
         # The rivers were extended in place; refresh their flattened polylines.
-        RIVERS.write(world, _flatten(rivers))
+        paths, texels = flatten_rivers(rivers)
+        RIVERS.write(world, paths)
+        RIVER_TEXELS.write(world, texels)
         self._publish(world)
 
     def _publish(self, world: World) -> None:
@@ -209,18 +212,3 @@ class DeltaBuilder(Stage):
                                           shape=_SHAPES[int(sh)], fingers=np.asarray(fg), lake=bool(lk),
                                           sediment=float(sd)))
         self._publish(ctx.world)
-
-
-def _flatten(rivers: Optional[List[River]]) -> list:
-    """``(positions, flows, in_lake)`` polyline tuples, as the hydrology stage registers them."""
-    paths = []
-    for river in rivers or []:
-        polyline = river.as_polyline()
-        if len(polyline) < 2:
-            continue
-        paths.append((
-            np.stack(polyline).astype(np.float32),
-            np.asarray(river.flow_rates(), dtype=np.float32),
-            np.array([s.in_lake for s in river.segments], dtype=bool),
-        ))
-    return paths

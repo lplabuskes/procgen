@@ -15,7 +15,7 @@ river they draw.
 """
 from __future__ import annotations
 
-from typing import Iterable, Optional, Tuple
+from typing import Iterable, Optional, Sequence, Tuple
 
 import numpy as np
 from scipy.spatial import KDTree
@@ -57,19 +57,25 @@ def _coarsen(a: np.ndarray, b: np.ndarray, strength: np.ndarray, step: float):
     return np.asarray(ca), np.asarray(cb), np.asarray(cs)
 
 
-def pack_river_segments(rivers: Optional[Iterable], *, min_flow: float = 0.0) -> np.ndarray:
+def pack_river_segments(rivers: Optional[Iterable], *, min_flow: float = 0.0,
+                        river_ids: Optional[Sequence[np.ndarray]] = None) -> np.ndarray:
     """``(M, 7)`` ``[a, b, flow]`` rows of the land segments of ``rivers`` above ``min_flow``.
 
     ``rivers`` is the ``(positions, flows, in_lake)`` polyline form (world
-    ``"rivers"``, region / local paths); in-lake segments are dropped.
+    ``"rivers"``, region / local paths); in-lake segments are dropped. With
+    ``river_ids`` (per path, per vertex: ``RegionRivers.river_ids()``) a column 7
+    holds each segment's world river index (-1 none).
     """
-    a, b, flow = _river_segments(rivers, min_flow=min_flow)
-    return np.concatenate([a, b, flow[:, None]], axis=1)
+    a, b, flow, rid = _river_segments(rivers, min_flow=min_flow, river_ids=river_ids)
+    cols = [a, b, flow[:, None]] + ([rid[:, None].astype(np.float64)] if river_ids is not None else [])
+    return np.concatenate(cols, axis=1)
 
 
-def _river_segments(rivers: Optional[Iterable], *, min_flow: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    a_parts, b_parts, f_parts = [], [], []
-    for path in rivers or []:
+def _river_segments(rivers: Optional[Iterable], *, min_flow: float,
+                    river_ids: Optional[Sequence[np.ndarray]] = None,
+                    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    a_parts, b_parts, f_parts, r_parts = [], [], [], []
+    for k, path in enumerate(rivers or []):
         pos = np.asarray(path[0], dtype=np.float64)
         flow = np.asarray(path[1], dtype=np.float64)
         in_lake = np.asarray(path[2], dtype=bool) if len(path) > 2 else np.zeros(flow.size, dtype=bool)
@@ -81,14 +87,20 @@ def _river_segments(rivers: Optional[Iterable], *, min_flow: float) -> Tuple[np.
             a_parts.append(pos[:m][keep])
             b_parts.append(pos[1:m + 1][keep])
             f_parts.append(flow[:m][keep])
+            if river_ids is not None:
+                ids = np.asarray(river_ids[k], dtype=np.int64)
+                # A segment where a headwater joins its world river takes the river's id.
+                r_parts.append(np.where(ids[:m] >= 0, ids[:m], ids[1:m + 1])[keep])
+            else:
+                r_parts.append(np.full(int(keep.sum()), -1, dtype=np.int64))
     if not a_parts:
         empty = np.zeros((0, 3), dtype=np.float64)
-        return empty, empty.copy(), np.zeros(0, dtype=np.float64)
+        return empty, empty.copy(), np.zeros(0, dtype=np.float64), np.zeros(0, dtype=np.int64)
     a = np.concatenate(a_parts)
     b = np.concatenate(b_parts)
     a /= np.linalg.norm(a, axis=1, keepdims=True)
     b /= np.linalg.norm(b, axis=1, keepdims=True)
-    return a, b, np.concatenate(f_parts)
+    return a, b, np.concatenate(f_parts), np.concatenate(r_parts)
 
 
 def flow_ramp(flow: np.ndarray, *, min_flow: float, full_flow: float) -> np.ndarray:

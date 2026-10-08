@@ -160,3 +160,11 @@ def test_river_cuts_a_cell_off_from_its_own_centroid(dual):
     assert int(cut.owner(across[None])[0]) == f
     assert uncut.land_labels(across[None])[0] == 0
     assert cut.land_labels(across[None])[0] == 1
+
+
+def test_pack_carries_world_river_ids():
+    pos = _equator(n=4)
+    river = (pos, np.array([2000.0, 2000.0, 2000.0]), np.array([False, True, False]))
+    seg = pack_river_segments([river], river_ids=[np.array([-1, 5, 5, 5])])
+    assert seg.shape == (2, 8)
+    assert seg[:, 7].tolist() == [5.0, 5.0]       # a headwater segment joining river 5 takes its id

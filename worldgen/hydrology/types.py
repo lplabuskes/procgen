@@ -73,6 +73,10 @@ class River:
     segments: List[RiverSegment] = field(default_factory=list)
     source: Optional[RiverNode] = None
     mouth: Optional[RiverNode] = None
+    # Flat texel ids (``face·H·W + row·W + col``) of the accumulation-tree nodes it
+    # runs through — the ``StreamNetwork`` node ids, so region / local rivers re-cut
+    # from that network know which world river they are. A set, not per vertex.
+    texels: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
 
     def as_polyline(self) -> List[np.ndarray]:
         if not self.segments:
@@ -84,6 +88,23 @@ class River:
     def flow_rates(self) -> List[float]:
         """Returns one flow value per segment (parallel to as_polyline edges)."""
         return [s.flow_rate for s in self.segments]
+
+
+def flatten_rivers(rivers: Optional[List["River"]]) -> tuple[list, list]:
+    """``(paths, texels)``: ``(positions, flows, in_lake)`` polyline tuples (the ``"rivers"``
+    feature) and each one's ``River.texels`` (``"river_texels"``), rivers under two points dropped."""
+    paths, texels = [], []
+    for river in rivers or []:
+        polyline = river.as_polyline()
+        if len(polyline) < 2:
+            continue
+        paths.append((
+            np.stack(polyline).astype(np.float32),
+            np.asarray(river.flow_rates(), dtype=np.float32),
+            np.array([s.in_lake for s in river.segments], dtype=bool),
+        ))
+        texels.append(np.asarray(river.texels, dtype=np.int64))
+    return paths, texels
 
 
 def laplacian_smooth_sphere(

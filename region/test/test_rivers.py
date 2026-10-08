@@ -4,9 +4,12 @@ import pytest
 
 from region.corridor import Raster, diagonal_corners
 from region.rivers import (
-    RegionRiverParams, StreamPath, _avoid_factor, _hide_reentries, _join_at_first_touch, _route_run,
+    RegionRiverParams, StreamPath, _avoid_factor, _hide_reentries, _join_at_first_touch, _meet_ids, _route_run,
     _segment_crossings, _start_on_drawn, _trim_crossed_head, _water_factor, build_region_rivers, meet_line,
+    stream_river_ids,
 )
+from worldgen.hydrology.rivers import main_stem_paths
+from worldgen.hydrology.types import StreamNetwork
 from region.upsample import RegionUpsampleParams, build_region_fields
 
 REGION_ID = 40   # coast, a lake and a peak (see conftest)
@@ -244,3 +247,51 @@ def test_a_junction_poking_through_its_line_is_cut_on_it():
     # One stopping short is snapped onto the line's nearest vertex.
     short = (_sphere([(0.0, 0.004), (0.0004, 0.001)]), np.ones(1, dtype=np.float32), np.zeros(1, dtype=bool))
     assert np.allclose(meet_line(short, line, at_end=True)[0][-1], line[5])
+
+
+# ── link to the world rivers ─────────────────────────────────────────────────
+
+
+def test_stream_river_ids_give_a_confluence_to_the_stem():
+    nodes = np.array([10, 11, 12, 20, 21])
+    streams = StreamNetwork(nodes=nodes, positions=np.zeros((5, 3), np.float32),
+                            receiver=np.array([1, 2, -1, 4, 1]), flow=np.ones(5, np.float32),
+                            channel=np.ones(5, bool), stop=np.zeros(5, bool), resolution=4)
+    # River 1 (20 → 21) ends on river 0's node 11.
+    ids = stream_river_ids(streams, [np.array([10, 11, 12]), np.array([20, 21, 11])])
+    assert ids.tolist() == [0, 0, 0, 1, 1]
+    assert stream_river_ids(streams, None).tolist() == [-1] * 5
+
+
+def test_meet_ids_follow_a_cut_path():
+    ids = np.arange(6)
+    assert _meet_ids(ids, 6, at_end=True).tolist() == ids.tolist()
+    assert _meet_ids(ids, 4, at_end=True).tolist() == [0, 1, 2, 2]         # cut on segment 2
+    assert _meet_ids(ids, 4, at_end=False).tolist() == [3, 3, 4, 5]        # cut on segment 2
+
+
+def test_region_paths_carry_their_world_river(fields, synthetic_globe, monkeypatch):
+    """World rivers as the hydrology stage makes them (main stems above a higher
+    threshold): each regional path is one of them below its headwater, and the ids
+    stay aligned with the paths."""
+    streams = synthetic_globe.get_feature("streams")
+    threshold = 4.0 * float(streams.flow[streams.channel].min())
+    big = streams.channel & (streams.flow >= threshold)
+    texels = [streams.nodes[np.asarray(p)] for p in
+              main_stem_paths(streams.receiver, streams.flow.astype(np.float64), big, streams.stop)]
+    real = synthetic_globe.get_feature
+    monkeypatch.setattr(synthetic_globe, "get_feature",
+                        lambda name, *a: texels if name == "river_texels" else real(name, *a))
+    rivers = build_region_rivers(fields, synthetic_globe)
+    ids = rivers.river_ids()
+    assert len(rivers.path_rivers) == len(rivers.paths)
+    tagged = 0
+    for (positions, flows, _), rid in zip(rivers.paths, ids):
+        assert len(rid) == len(positions)
+        known = rid[rid >= 0]
+        assert len(np.unique(known)) <= 1                       # one world river per path
+        if known.size:
+            first = int(np.argmax(rid >= 0))
+            assert np.all(rid[first:] >= 0)                     # a headwater, then the river
+            tagged += 1
+    assert tagged >= 3

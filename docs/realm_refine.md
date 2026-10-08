@@ -21,7 +21,8 @@ and city jitter seeded from `World.seed`.
 - `realmgen/refine/sites.py` — `SiteField`: per-texel site features (coast, river, confluence, local fertility, face ownership), shared with the town stage
 - `realmgen/refine/settlements.py` — city siting (`refine_settlement_positions`, `city_site_scores`, `SITE_*` weights reused by region/local tiers) + `remap_routes`
 - `realmgen/refine/fill.py` — `PolityLabelField` (polity at any sphere point, incl. domain warp), texel labels, fill texture, `polity_fill_recipe`
-- `realmgen/refine/barriers.py` — river snap of the label field (`RiverBarriers`, `pack_river_segments`)
+- `realmgen/refine/river_follow.py` — borders moved onto rivers run by run (`RiverSwaps`, `build_river_swaps`); the default
+- `realmgen/refine/barriers.py` — the older per-point river snap and cell cut (`RiverBarriers`), `pack_river_segments`, `flow_ramp`
 - `realmgen/refine/borders.py` — border polylines contoured from the same field on a seamless icosphere lattice (marching triangles + bisection + Chaikin)
 
 ## `RefineParams`
@@ -34,7 +35,9 @@ and city jitter seeded from `World.seed`.
 - `boundary_warp_amplitude` (0.012, unit-sphere ≈ ⅓ face) — fBm domain warp on positions fed to the polity Voronoi; `0` → bare centroid bisectors (polygonal staircase).
 - `boundary_warp_frequency` (45) — warp base frequency; too high aliases against the texel grid.
 - `boundary_warp_octaves` (hidden, 3).
-- `border_river_reach_km` (70) — how far from a big river a border is pulled onto it ([River snap](#river-snap-barrierspy)); 0 = off.
+- `border_river_follow` (on) — move borders onto rivers run by run ([River following](#river-following-river_followpy)); off → the per-point [River snap](#river-snap-barrierspy) and cell cut.
+- `border_river_min_run_km` (40) — shortest river stretch a run is moved onto (river following).
+- `border_river_reach_km` (70) — how far from a big river a border is pulled onto it; 0 = off.
 - `border_river_min_flow` (300) / `border_river_full_flow` (4000) — river flow at which the reach and cell split start / are full (log ramp; world rivers start at 500, median ~1200, p90 ~7600 — 1000/8000 left the mid-size rivers that border most realms almost inert).
 - `border_river_cross_weight` (3) — cell split: `exp(weight · strength)` on a candidate across a river ([River snap](#river-snap-barrierspy)); 0 = off.
 - `border_river_snap_fraction` (hidden, 0.6) — share of the reach that snaps fully; beyond it borders are stretched onto the band.
@@ -128,7 +131,72 @@ palette, unclaimed grey, ocean/lake blues), stored as face texture `polity_fill`
 evaluates fill at its own texels with refined shoreline
 ([region.md](region.md#display-regiondisplaypy)).
 
+## River following (`river_follow.py`)
+
+Default (`border_river_follow`). Decided once on the globe, as "border points
+13–20 become river points 1–5":
+
+1. **Plain chains.** The field without any river handling (`plain_land_labels`)
+   is traced on the global lattice into chains between junctions / coasts, each
+   with its leaf label pair (`borders.plain_border_chains` → `trace_lattice_chains`).
+2. **Runs.** Per chain, each world river (land segments, reach = `reach_km` × the
+   flow ramp) gives runs of chain points within reach (gaps of ≤ 2 points bridged).
+   A run's **core** spans its first to last point within `0.6 × reach`; it is kept
+   if the core's river stretch is ≥ `min_run_km` and ≥ half the straight distance
+   between the core's ends (else it's a crossing; measuring against the border's
+   *length* rejected borders that wander between two rivers — exactly the case to fix).
+3. **One river per run.** Runs are taken longest river stretch first; a run
+   overlapping a taken one is dropped, so a border never alternates between two
+   parallel rivers.
+4. **New line.** The core is replaced by the river between the feet of its end
+   points; outside the core each point is pulled toward its foot by
+   `w = (reach − d) / (0.4 · reach)`, held non-decreasing toward the core, so the
+   line eases onto and off the river along the border's own course (straight 45°
+   connectors flipped large wedges).
+5. **Claim by side.** The run claims the polygon of border run + new line
+   (even–odd, so a river crossing the plain border gives alternating lobes), a
+   margin of `edge_km` (8) round the old border and a band of `clean_km` (20)
+   either side of the new line. There a point of either of the run's polities
+   takes the one on its side of the new line — the polity that was left of the
+   border run (probed 2 km either side, majority) is left of the line. Third
+   polities are untouched; the first run claiming a point wins. Trading the two
+   labels inside the polygon instead cut the field's enclaves beside the river in
+   two and left specks wherever the traced border cut a corner the lattice can't
+   resolve (a tongue tip under a lattice edge); the margin is about a lattice edge
+   for that reason. Side at a line vertex uses the averaged normal; past the
+   line's ends nothing is claimed. The border edge is still densified to 1 km and
+   bisected onto the plain boundary.
+6. **Checks.** A run is dropped if > 5% of its polygon's land holds a third
+   polity, and split 25 km either side of any settlement of either polity it would
+   hand over.
+
+`PolityLabelField.land_labels` = plain labels, then the swaps. The region and
+local views swap in their own drawing of the very river each run follows
+(`RiverSwaps.with_rivers`): the view packs its rivers with their world river ids
+(`pack_river_segments(..., river_ids=RegionRivers.river_ids())`, column 7; see
+[region_features.md](region_features.md#rivers-regionriverspy)). For each swap,
+that river's drawn path alongside the core (segments within `view_reach_km` (30)
+of it) is cut at its nearest points to the core's two ends; an end the drawing
+doesn't reach (off the view) keeps the world line from the path's end on. Blend
+feet move onto that river within the same reach. Before the link, a stand-in was
+guessed by flow and distance: feet hopped onto tributaries (spurs that broke the
+side test — fans of the wrong polity) and rivers re-routed far off their world
+line weren't found. The plain border is the same at every tier, so only the
+river edge moves. Old saved worlds lack `"river_texels"`: views then keep the
+world line (`--rebuild-cache`).
+
+Seeds 4 / 31 / 35: 105 / 71 / 47 swaps; near-river share (as below) 36 / 38 / 38%
+vs ~34% for the per-point snap without its cell cut (37.0% mean after the side
+rule). Refine stage +2.2 s (seed 4; a second lattice trace), also paid on load
+(the field is rebuilt); region / local Polities fill ~0.85 / 0.95 s (vs ~0.15 s
+without swaps) — big batches go through a corner-classified grid over the query
+points (`_SideGrid`, identical to the exact test), the rest are exact. Known gaps:
+a run whose river ends (its source) inside it leaves a thin wedge; where no drawn
+river stands in, the line follows the coarse world river.
+
 ## River snap (`barriers.py`)
+
+The older mechanism, used when `border_river_follow` is off.
 
 The **cell cut** (above) decides which bank's candidates a point may use; its
 crossing tests run on the rivers coarsened to ~10 km segments, best candidate

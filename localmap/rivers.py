@@ -71,6 +71,7 @@ def _starts_on_path(rivers: list[RiverPath]) -> np.ndarray:
 
 def _region_paths(
     local: RegionFields, rivers: list[RiverPath], lo: float, hi: float, minor: bool = False,
+    river_ids: Optional[list[np.ndarray]] = None,
 ) -> list[StreamPath]:
     """The region's river paths inside the local raster, largest flow first.
 
@@ -97,6 +98,7 @@ def _region_paths(
                 ends_here=j == len(pts) - 1, minor=minor,
                 hidden_edges=np.asarray(in_water, dtype=bool)[i:j],
                 starts_on_path=i == 0 and bool(starts[k]),
+                river_ids=None if river_ids is None else np.asarray(river_ids[k])[i:j + 1],
             ))
     out.sort(key=lambda p: -float(p.edge_flows.max()))
     return out
@@ -119,7 +121,7 @@ def build_local_rivers(
     radius_nodes = max(
         float(params.corridor_parent_texels) * parent_spacing / node_spacing_rad(local, step), 1.5
     )
-    paths = (_region_paths(local, region_rivers.paths, lo, hi)
+    paths = (_region_paths(local, region_rivers.paths, lo, hi, river_ids=region_rivers.river_ids())
              + _region_paths(local, region_streams or [], lo, hi, minor=True))
     if not paths:
         return RegionRivers(region_id=local.region_id, paths=[])

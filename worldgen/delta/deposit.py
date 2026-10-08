@@ -458,6 +458,7 @@ def _extend_river(river: River, pts: np.ndarray, nodes: np.ndarray, fp: _Footpri
         return
     flow = float(river.segments[-1].flow_rate)
     prev = river.segments[-1].end
+    river.texels = np.concatenate([river.texels, fp.cand[np.asarray(nodes[1:], dtype=np.int64)].astype(np.int64)])
     for p, k in zip(pts[1:], nodes[1:]):
         flat = int(fp.cand[k])
         face, u, v = idx.face_uv(flat)

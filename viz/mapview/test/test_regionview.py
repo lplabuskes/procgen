@@ -309,7 +309,7 @@ def test_region_borders_are_its_own_and_cached(app, synthetic_globe):  # noqa: F
         assert isinstance(borders, dict)
         assert view._refined_features()["polity_borders"] is borders  # cached
         segments = view._river_segments()
-        assert segments is not None and segments.shape[1] == 7
+        assert segments is not None and segments.shape[1] == 8          # [a, b, flow, world river id]
         _painted(view)
     finally:
         synthetic_globe.remove_feature("polity_label_field")

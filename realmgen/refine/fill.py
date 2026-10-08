@@ -26,6 +26,7 @@ from scipy.spatial import KDTree
 
 from core.display import POSITIONS_KEY, RIVER_SEGMENTS_KEY, TextureRecipe
 from realmgen.refine.barriers import RiverBarriers, build_river_barriers, pack_river_segments
+from realmgen.refine.river_follow import RiverSwaps
 from realmgen.polity.display import make_polity_tree_color
 from realmgen.polity.types import UNCLAIMED_COLOR
 from utils.simplex import fbm_sum, make_perm
@@ -123,6 +124,7 @@ class PolityLabelField:
         self._tree = KDTree(self.centroids)
         self.pof = np.asarray(polity_of_face, dtype=np.int64)
         water = np.asarray(is_water, dtype=bool)
+        self._water = water
         claimed_land = (~water) & (self.pof >= 0)
         control = np.maximum(np.asarray(authority, dtype=np.float64), control_floor)
         self._inv_w2 = 1.0 / control ** 2
@@ -172,6 +174,8 @@ class PolityLabelField:
         self._river_params = dict(reach_km=float(river_reach_km), min_flow=float(river_min_flow),
                                   full_flow=float(river_full_flow), snap_fraction=float(river_snap_fraction))
         self._set_barriers(build_river_barriers(pack_river_segments(rivers), **self._river_params))
+        # Borders moved onto rivers run by run (``river_follow``); set by ``with_swaps``.
+        self.swaps: Optional[RiverSwaps] = None
 
     def _set_barriers(self, barriers: Optional[RiverBarriers]) -> None:
         self.barriers = barriers
@@ -191,7 +195,25 @@ class PolityLabelField:
         """
         other = copy.copy(self)
         other._set_barriers(build_river_barriers(segments, **self._river_params))
+        if self.swaps is not None:
+            other.swaps = self.swaps.with_rivers(segments)
         return other
+
+    def with_swaps(self, swaps: Optional[RiverSwaps]) -> "PolityLabelField":
+        """This field with ``swaps`` (borders moved onto rivers) applied after the plain labels."""
+        other = copy.copy(self)
+        other.swaps = swaps if swaps is not None and len(swaps) else None
+        return other
+
+    def plain_land_labels(self, points: np.ndarray, owner: Optional[np.ndarray] = None) -> np.ndarray:
+        """``(P,)`` land labels before any river handling: the warped, weighted Voronoi."""
+        pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+        own = self.owner(pts) if owner is None else np.asarray(owner, dtype=np.int64)
+        return self._plain_labels(pts, own)
+
+    def is_water_at(self, points: np.ndarray) -> np.ndarray:
+        """``(P,)`` whether each point's owner face is water (face level)."""
+        return self._water[self.owner(np.asarray(points, dtype=np.float64).reshape(-1, 3))]
 
     def owner(self, points: np.ndarray) -> np.ndarray:
         """Nearest-centroid face of each ``(P, 3)`` point."""
@@ -208,6 +230,8 @@ class PolityLabelField:
             idx, target = self.barriers.snap_targets(pts)
             if idx.size:
                 out[idx] = self._plain_labels(target, self.owner(target))
+        if self.swaps is not None:
+            out = self.swaps.apply(pts, own, out)
         return out
 
     def _plain_labels(self, pts: np.ndarray, own: np.ndarray) -> np.ndarray:

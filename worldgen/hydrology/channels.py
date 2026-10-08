@@ -16,6 +16,9 @@ FILLED_HEIGHT = TextureChannel("filled_height", n_channels=1,
 RIVER_OBJECTS = FeatureChannel("river_objects")
 # Flattened ``(positions, flows, in_lake)`` polyline tuples (realmgen, rendering).
 RIVERS = FeatureChannel("rivers")
+# Per ``"rivers"`` entry, the flat texel ids of the tree nodes it runs through
+# (``River.texels``): the link from ``StreamNetwork`` nodes to world rivers.
+RIVER_TEXELS = FeatureChannel("river_texels")
 # The ``StreamNetwork``: the rivers' accumulation tree cut at the (much lower)
 # stream threshold — town siting and the region tier's tributaries.
 STREAMS = FeatureChannel("streams")

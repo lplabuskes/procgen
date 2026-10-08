@@ -421,6 +421,20 @@ class TestStreamNetwork:
         gen, _, streams = gen_with_streams
         np.testing.assert_allclose(streams.positions, gen.positions[streams.nodes], atol=1e-6)
 
+    def test_rivers_own_their_network_texels(self, gen_with_streams):
+        """``River.texels`` are network nodes, and a river's interior texels are its alone."""
+        from region.rivers import stream_river_ids
+        from worldgen.hydrology.types import flatten_rivers
+        _, rivers, streams = gen_with_streams
+        paths, texels = flatten_rivers(rivers)
+        assert len(paths) == len(texels) > 0
+        for tex in texels:
+            assert np.all(np.isin(tex, streams.nodes))
+        ids = stream_river_ids(streams, texels)
+        for r, tex in enumerate(texels):
+            at = np.searchsorted(streams.nodes, tex[:-1])
+            assert np.all(ids[at] == r)
+
     def test_pack_round_trip(self, gen_with_streams):
         from worldgen.hydrology.types import StreamNetwork
         _, _, streams = gen_with_streams

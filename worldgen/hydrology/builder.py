@@ -6,9 +6,9 @@ import numpy as np
 
 from worldgen.climate.channels import PRECIPITATION, TEMPERATURE
 from worldgen.geology.channels import ELEVATION, OCEAN_MASK
-from worldgen.hydrology.channels import FILLED_HEIGHT, LAKE_MASK, RIVER_OBJECTS, RIVERS, STREAMS
+from worldgen.hydrology.channels import FILLED_HEIGHT, LAKE_MASK, RIVER_OBJECTS, RIVER_TEXELS, RIVERS, STREAMS
 from worldgen.hydrology.rivers import River, RiverGenerator
-from worldgen.hydrology.types import StreamNetwork
+from worldgen.hydrology.types import StreamNetwork, flatten_rivers
 from core.display import DisplayRegistry
 from core.params import param_field as _f, paramclass
 from core.pipeline import BuildContext, Stage
@@ -45,8 +45,9 @@ class HydrologyBuilder(Stage):
         self.rivers: Optional[List[River]] = None
         self.lake_polygons: Optional[List[np.ndarray]] = None
         self.streams: Optional[StreamNetwork] = None
-        # The "rivers" feature tuples; cached since ``serialize`` has no world access.
+        # The "rivers" feature tuples and "river_texels"; cached since ``serialize`` has no world access.
         self._river_feature: Optional[list] = None
+        self._river_texels: Optional[list] = None
 
     def build(self, ctx: BuildContext) -> None:
         """Run the hydrology pipeline, attach results to the mesh, register features."""
@@ -83,27 +84,13 @@ class HydrologyBuilder(Stage):
 
         if self.rivers:
             RIVER_OBJECTS.write(ctx.world, self.rivers)
-            paths_with_flow = self._flatten_rivers()
+            paths_with_flow, texels = flatten_rivers(self.rivers)
             if paths_with_flow:
-                self._river_feature = paths_with_flow
+                self._river_feature, self._river_texels = paths_with_flow, texels
                 RIVERS.write(ctx.world, paths_with_flow)
+                RIVER_TEXELS.write(ctx.world, texels)
         if self.lake_polygons:
             ctx.world.add_feature("lakes", self.lake_polygons)
-
-    def _flatten_rivers(self) -> list:
-        """Flatten ``self.rivers`` into ``(positions, flows, in_lake)`` polyline tuples."""
-        if self.rivers is None:
-            return []
-        paths = []
-        for river in self.rivers:
-            polyline = river.as_polyline()
-            if len(polyline) < 2:
-                continue
-            positions = np.stack(polyline).astype(np.float32)
-            flows = river.flow_rates()
-            in_lake = np.array([s.in_lake for s in river.segments], dtype=bool)
-            paths.append((positions, flows, in_lake))
-        return paths
 
     # ── Display ──────────────────────────────────────────────────────────────
 
@@ -119,7 +106,7 @@ class HydrologyBuilder(Stage):
         arrays: dict = {}
         # Re-flatten built rivers: the delta stage extends them after build.
         if self.rivers and isinstance(self.rivers[0], River):
-            self._river_feature = self._flatten_rivers()
+            self._river_feature, self._river_texels = flatten_rivers(self.rivers)
         if self._river_feature:
             all_pos, all_flows, all_in_lake = [], [], []
             pos_offsets, flow_offsets = [0], [0]
@@ -134,6 +121,10 @@ class HydrologyBuilder(Stage):
             arrays["river_in_lake_flat"] = np.concatenate(all_in_lake).astype(np.bool_)
             arrays["river_pos_offsets"] = np.array(pos_offsets, dtype=np.int64)
             arrays["river_flow_offsets"] = np.array(flow_offsets, dtype=np.int64)
+        if self._river_texels:
+            arrays["river_texels_flat"] = np.concatenate(self._river_texels).astype(np.int64)
+            arrays["river_texel_offsets"] = np.concatenate(
+                [[0], np.cumsum([len(t) for t in self._river_texels])]).astype(np.int64)
         if self.lake_polygons:
             all_verts, lake_offsets = [], [0]
             for poly in self.lake_polygons:
@@ -164,6 +155,11 @@ class HydrologyBuilder(Stage):
             self.rivers = paths_with_flow  # type: ignore[assignment]
             self._river_feature = paths_with_flow
             RIVERS.write(ctx.world, paths_with_flow)
+        if "river_texel_offsets" in arrays:
+            flat, offs = arrays["river_texels_flat"], arrays["river_texel_offsets"]
+            self._river_texels = [np.asarray(flat[offs[i]:offs[i + 1]], dtype=np.int64)
+                                  for i in range(len(offs) - 1)]
+            RIVER_TEXELS.write(ctx.world, self._river_texels)
         if "lake_poly_offsets" in arrays:
             poly_flat = arrays["lake_polys_flat"]
             poly_offs = arrays["lake_poly_offsets"]

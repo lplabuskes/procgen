@@ -411,7 +411,7 @@ class RiverGenerator:
             )
 
         mouth_face = path[-1] // self._r2
-        river = River(source=_node_rec(0), mouth=_node_rec(len(path) - 1))
+        river = River(source=_node_rec(0), mouth=_node_rec(len(path) - 1), texels=nodes.copy())
         for k in range(1, len(path)):
             river.segments.append(RiverSegment(
                 start=RiverNode(position=smooth[k - 1].astype(np.float32),

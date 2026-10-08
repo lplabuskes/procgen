@@ -583,7 +583,8 @@ class RegionView(QWidget):
             return None
         c = self._polity_cache
         if c is None or c[0] is not self._rivers or c[1] is not self._fields:
-            c = (self._rivers, self._fields, pack_river_segments(self._rivers.paths), None)
+            c = (self._rivers, self._fields,
+                 pack_river_segments(self._rivers.paths, river_ids=self._rivers.river_ids()), None)
             self._polity_cache = c
         return c
 
