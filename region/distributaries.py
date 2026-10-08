@@ -37,6 +37,7 @@ from region.corridor import (
 )
 from region.upsample import EARTH_RADIUS_KM, RegionFields
 from worldgen.delta.shape import BIRDFOOT, CUSPATE
+from worldgen.hydrology.types import REFERENCE_FLOW
 
 if TYPE_CHECKING:
     from core.world import World
@@ -93,7 +94,7 @@ class _Channel:
 
 
 def mouth_count(flow: float, params: DistributaryParams) -> int:
-    k = float(params.base_count) + float(params.per_decade) * np.log10(max(flow, 1.0) / 1000.0)
+    k = float(params.base_count) + float(params.per_decade) * np.log10(max(flow, 1.0) / REFERENCE_FLOW)
     return int(np.clip(round(k), 1, int(params.max_count)))
 
 

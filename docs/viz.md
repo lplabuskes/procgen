@@ -171,9 +171,12 @@ else `mesh.render_colors`. `MainWindow` hosts it; `set_mesh(mesh)` swaps it.
 `ParamsDialog` (`QDialog`) for any `@paramclass` tree: reflects field `metadata`
 into spinboxes (float/int), checkboxes (bool), "Fixed" checkbox + spinbox for
 `kind: "optional_int"` (seeds), with labels/ranges/steps. `hidden` fields/sections
-skipped; nested params → collapsible sections; wrapped in a `QScrollArea`.
-`result_params(base) → T` returns an updated copy. `main.py` uses
-`AppParamsDialog(AppParams)`.
+skipped, as are names in the class's `DERIVED` ClassVar (copied from another param by
+their owner); nested params → collapsible sections; wrapped in a `QScrollArea`.
+`basic=` (fnmatch patterns over dotted paths, e.g. `"globe.danger.*.enabled"`) limits
+the dialog to matching leaves and drops sections left empty; unshown fields keep their
+values. `result_params(base) → T` returns an updated copy. `main.py` uses
+`AppParamsDialog(AppParams, advanced=...)`: `main.BASIC_PARAMS` unless `--advanced`.
 
 ---
 

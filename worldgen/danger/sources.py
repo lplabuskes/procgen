@@ -84,6 +84,8 @@ MAX_WATER_HOPS: int = max(CURSED_FOREST_ISOLATION_MIN, BARROW_ISOLATION_MIN) + 1
 
 @paramclass
 class DangerParams:
+    # Master switch: off, no source is seeded (each source's own ``enabled`` still applies when on).
+    enabled: bool = field(default=True, metadata={"label": "Enable danger"})
     # Volcanic / Tectonic
     dragon_lairs: DangerSourceParams = field(
         default_factory=lambda: DangerSourceParams(count=4, hop_radius=1, intensity=0.8, decay_per_hop=0.3),

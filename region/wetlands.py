@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 from scipy.spatial import KDTree
 
+from worldgen.hydrology.types import REFERENCE_FLOW
 from worldgen.wetland.builder import stamp_wetland
 
 if TYPE_CHECKING:
@@ -92,7 +93,7 @@ def add_riparian_wetland(fields: "RegionFields", rivers: "RegionRivers", params:
     from region.resources import refined_slope
 
     shape = fields.positions.shape[:3]
-    q = np.maximum(flow, 1e-9) / max(float(params.wetland_riparian_ref_flow), 1e-9)
+    q = np.maximum(flow, 1e-9) / REFERENCE_FLOW
     width_km = np.maximum(float(params.wetland_riparian_width_km) * q ** float(params.wetland_riparian_exponent),
                           float(params.wetland_riparian_min_width_texels) * texel_km)
     reach_km = float(width_km.max())

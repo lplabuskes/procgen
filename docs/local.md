@@ -95,7 +95,8 @@ to ~0.03% at `T=64` (tiers count rim texels slightly differently, ~1/T).
 
 ### `LocalUpsampleParams`
 
-`RegionUpsampleParams` with local defaults: `n_cols=16`, `slope_reference=0.03`,
+`RegionUpsampleParams` with local defaults (only these are the local tier's own; the
+other fields are the region's, copied by `with_region_detail` / `AppParams`): `n_cols=16`, `slope_reference=0.03`,
 `slope_floor=0.03`, `max_relief_km=0.6`, `lake_smoothing_parent_texels=0.25` (~3 local
 texels, ~1 km: rounds the staircase's parent-texel pits off; 0.5 leaves no local lakes),
 `lake_max_parent_texels=1` (only lakes below the region's resolution, ~20 km²; uncapped,

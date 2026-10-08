@@ -10,8 +10,8 @@ from region.upsample import RegionUpsampleParams, build_region_fields
 
 REGION_ID = 40   # coast, a lake and a peak (see conftest)
 # The synthetic region's raster nodes are ~1,000 km² each; thresholds of a few
-# nodes give it a network to test.
-PARAMS = RegionStreamParams(min_catchment_km2=2000.0)
+# nodes give it a network to test.  Its smallest world stream is ~129,000 km², so ~2,000 km².
+PARAMS = RegionStreamParams(min_catchment_pct=1.55)
 
 
 @pytest.fixture(scope="module")
@@ -82,7 +82,7 @@ def test_streams_never_run_along_a_river(streams, fields, region_rivers):
 
 def test_a_higher_threshold_gives_fewer_streams(fields, synthetic_globe, region_rivers, streams):
     coarser = build_region_streams(
-        fields, synthetic_globe, region_rivers, RegionStreamParams(min_catchment_km2=4000.0))
+        fields, synthetic_globe, region_rivers, RegionStreamParams(min_catchment_pct=3.1))
     assert len(coarser) < len(streams)
 
 

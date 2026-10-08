@@ -124,7 +124,7 @@ class DangerBuilder(Stage):
         _seed_records: list[tuple[int, int]] = []
 
         for kind, source in enumerate(sources):
-            if source.params.enabled:
+            if self.params.enabled and source.params.enabled:
                 contrib, seeds = source_contribution(mesh, rng, source.mask(terrain), source.params)
                 danger += contrib
                 for s in seeds:

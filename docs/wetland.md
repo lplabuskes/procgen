@@ -36,7 +36,7 @@ final relief, water and streams (deltas included). Shares hydrology's PET params
   the depression-filled surface (hydrology's `priority_flood`, seeded at all water)
   to the first stream-network channel or water texel (`drainage_targets`, pointer
   doubling). That drainage floods to its ground + `flood_height_m · (flow /
-  flood_ref_flow) ** flood_exponent` (4 m, 1000, 0.45 → ~4 m at flow 1k, ~23 m at
+  REFERENCE_FLOW) ** flood_exponent` (4 m, 1000, 0.45 → ~4 m at flow 1k, ~23 m at
   50k), or for a lake / the sea its surface + `shore_flood_height_m` (3 m).
   `flood = ramp(−bank_m, full_depth_m, flood level − ground)` (3 m, 3 m). Flat
   ground draining to a big river sits barely above it and floods wide; valley sides

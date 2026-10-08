@@ -331,7 +331,7 @@ refined/coarse elevation and slope, land masks.
 | `relief_factor`, `slope_reference`, `slope_floor`, `max_relief_km` | 1.0, 0.005, 0.10, 1.0 | detail amplitude |
 | `octaves`, `lacunarity`, `persistence`, `nyquist_safety` | 4, 2.0, 0.5, 0.5 | detail band |
 | `orographic_gain` | 0.5 /km | precipitation |
-| `lapse_rate_c_per_km` | 6.5 | temperature |
+| `lapse_rate_c_per_km` | 6.5 | temperature (`DERIVED`: the app copies the climate's) |
 | `water_relief_depth_km`, `refine_water_masks`, `water_spread_texels` | 0.1, True, 4 | water |
 | `biome_smoothing` | 5 | biome / crop / danger-score box average |
 | `coast_band` | 0.25 | coast band (parent water fraction) |
@@ -341,4 +341,5 @@ refined/coarse elevation and slope, land masks.
 | `slope_saturation`, `fertility_valley_gain`, `fertility_slope_penalty`, `danger_terrain_gain` | 0.02, 2.0, 0.5, 1.0 | resources and danger |
 
 `LocalUpsampleParams` subclasses it with local defaults
-([local.md](local.md#localupsampleparams)).
+([local.md](local.md#localupsampleparams)); fields it doesn't redeclare are shared
+(`SHARED_WITH_REGION`), set once in the region's section and copied down by `AppParams`.

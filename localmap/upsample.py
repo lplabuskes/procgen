@@ -12,6 +12,7 @@ maps of one region agree at their seam; regions, seeded per region, do not.
 """
 from __future__ import annotations
 
+import dataclasses
 from typing import TYPE_CHECKING, Optional, Sequence
 
 import numpy as np
@@ -33,7 +34,11 @@ _SEED_SALT_LOCAL = 0x10CA
 
 @paramclass
 class LocalUpsampleParams(RegionUpsampleParams):
-    """:class:`RegionUpsampleParams` with the local tier's defaults (relief not yet tuned)."""
+    """:class:`RegionUpsampleParams` with the local tier's defaults (relief not yet tuned).
+
+    Only the fields redeclared here are the local tier's own; the rest are the
+    region's (:data:`SHARED_WITH_REGION`, copied down by :func:`with_region_detail`).
+    """
 
     n_cols: int = _f(16, label="Hex columns per local map", min=4, max=64)
     tex_size: int = _f(64, label="Hex texture size", min=4, max=128)
@@ -72,6 +77,18 @@ class LocalUpsampleParams(RegionUpsampleParams):
     slope_saturation: float = _f(
         0.1, label="Slope saturation, resources (km/km)", min=0.002, max=0.5, step=0.002
     )
+
+
+# The detail fields the local tier takes from the region: those it doesn't redeclare.
+SHARED_WITH_REGION: frozenset[str] = frozenset(
+    f.name for f in dataclasses.fields(RegionUpsampleParams)
+) - frozenset(vars(LocalUpsampleParams).get("__annotations__", {}))
+LocalUpsampleParams.DERIVED = RegionUpsampleParams.DERIVED | SHARED_WITH_REGION
+
+
+def with_region_detail(local: LocalUpsampleParams, region: RegionUpsampleParams) -> LocalUpsampleParams:
+    """``local`` with the region's values for the shared detail fields."""
+    return dataclasses.replace(local, **{name: getattr(region, name) for name in SHARED_WITH_REGION})
 
 
 def build_local_fields(

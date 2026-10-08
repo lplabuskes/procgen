@@ -42,7 +42,8 @@ can give a different danger field per run.
 
 ## Sources (`sources.py`)
 
-`DangerParams`: one `DangerSourceParams` per source (`count`, `hop_radius`,
+`DangerParams`: a master `enabled` (off → no source is seeded, danger is zero),
+then one `DangerSourceParams` per source (`count`, `hop_radius`,
 `intensity`, `decay_per_hop`, `enabled`). Masks use module threshold constants
 (`HARPY_ELEV_MIN`, `KRAKEN_DEPTH_MIN`, …).
 

@@ -40,9 +40,8 @@ class GlobeParams:
     danger: DangerParams = field(default_factory=DangerParams, metadata={"label": "Danger"})
     cost: CostParams = field(default_factory=CostParams, metadata={"label": "Cost"})
     # World seed — drives mesh selection and every stage's draws. None → random each run.
-    seed: Optional[int] = field(
-        default=None, metadata={"label": "Seed", "kind": "optional_int", "min": 0, "max": 2**31 - 1}
-    )
+    # The app sets it from ``AppParams.seed`` (top of the dialog), so it isn't shown here.
+    seed: Optional[int] = field(default=None, metadata={"label": "Seed", "hidden": True})
 
 
 class GlobePipeline(Pipeline):
@@ -59,7 +58,9 @@ class GlobePipeline(Pipeline):
         self.wetland_builder: WetlandBuilder = WetlandBuilder(self.params.wetland, pet=self.params.hydrology)
         self.resources_builder: ResourcesBuilder = ResourcesBuilder(self.params.resources)
         self.danger_builder: DangerBuilder = DangerBuilder(self.params.danger)
-        self.cost_builder: CostBuilder = CostBuilder(self.params.cost)
+        self.cost_builder: CostBuilder = CostBuilder(
+            self.params.cost, river_flow_threshold=self.params.hydrology.river_flow_threshold
+        )
 
         # Lake feedback runs after the deltas so the land they build gets its own climate;
         # wetlands after it, as it reclassifies the biomes they are stamped onto.

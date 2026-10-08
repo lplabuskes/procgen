@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
+from worldgen.hydrology.types import REFERENCE_FLOW
+
 if TYPE_CHECKING:
     from worldgen.wetland.builder import WetlandParams
 
@@ -36,8 +38,8 @@ def smoothstep(lo: float, hi: float, x: np.ndarray) -> np.ndarray:
 
 
 def flood_height_m(flow: np.ndarray, params: "WetlandParams") -> np.ndarray:
-    """Water above a channel texel's ground (m): ``flood_height · (flow / flood_ref_flow) ** flood_exponent``."""
-    q = np.maximum(np.asarray(flow, dtype=np.float64), 0.0) / max(float(params.flood_ref_flow), 1e-9)
+    """Water above a channel texel's ground (m): ``flood_height · (flow / REFERENCE_FLOW) ** flood_exponent``."""
+    q = np.maximum(np.asarray(flow, dtype=np.float64), 0.0) / REFERENCE_FLOW
     return float(params.flood_height_m) * q ** float(params.flood_exponent)
 
 

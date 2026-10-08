@@ -132,10 +132,6 @@ class ClimateParams:
     currents: CurrentsParams = field(
         default_factory=CurrentsParams, metadata={"label": "Currents"}
     )
-    seed: Optional[int] = field(
-        default=None,
-        metadata={"label": "Seed", "kind": "optional_int", "min": 0, "max": 2**31 - 1},
-    )
 
 
 def _distance_to_coast_km(mesh: PolygonMesh, face_elev_km: np.ndarray,

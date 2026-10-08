@@ -55,8 +55,9 @@ class SeaCostParams:
     open_ocean_cost: float = _f(2.0, label="Open ocean cost", min=0.1, max=10.0)
     open_ocean_distance_km: float = _f(2000.0, label="Open ocean distance (km)", min=100.0, max=10000.0)
     strait_discount: float = _f(0.5, label="Strait discount", min=0.05, max=1.0)
-    navigable_flow_min: float = _f(
-        500.0, label="Navigable river flow min", min=1.0, max=20000.0
+    # Rivers are navigable from this multiple of hydrology's river threshold.
+    navigable_flow_factor: float = _f(
+        1.0, label="Navigable river flow (× river threshold)", min=1.0, max=40.0, step=0.1
     )
     ice_penalty_strength: float = _f(5.0, label="Ice penalty strength", min=0.0, max=20.0)
     ice_freeze_threshold: float = _f(0.0, label="Ice freeze threshold (°C)", min=-10.0, max=10.0)
@@ -105,8 +106,10 @@ class CostBuilder(Stage):
 
     name = "cost"
 
-    def __init__(self, params: CostParams | None = None) -> None:
+    def __init__(self, params: CostParams | None = None, *, river_flow_threshold: float = 500.0) -> None:
         self.params: CostParams = params or CostParams()
+        # Hydrology's river threshold, which ``navigable_flow_factor`` scales.
+        self.river_flow_threshold = float(river_flow_threshold)
         self.surfaces: Optional[CostSurfaces] = None
 
     def build(self, ctx: BuildContext) -> None:
@@ -157,7 +160,7 @@ class CostBuilder(Stage):
             river_flow_mag,
             river_navigability,
             is_water,
-            navigable_flow_min=p.sea.navigable_flow_min,
+            navigable_flow_min=p.sea.navigable_flow_factor * self.river_flow_threshold,
         )
 
         is_sailable = is_water | river_navigable

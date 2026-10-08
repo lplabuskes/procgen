@@ -41,9 +41,8 @@ class WetlandParams:
     # hydrology's baseline in the cold, so boreal ratios run high: these sit well above 1.
     rain_low: float = _f(4.0, label="Rain-fed onset (P/PET)", min=0.0, max=20.0, step=0.1)
     rain_high: float = _f(12.0, label="Rain-fed full (P/PET)", min=0.0, max=40.0, step=0.1)
-    # Water held above a channel texel: height · (flow / reference flow) ** exponent.
+    # Water held above a channel texel: height · (flow / REFERENCE_FLOW) ** exponent.
     flood_height_m: float = _f(4.0, label="Flood height at reference flow (m)", min=0.0, max=30.0, step=0.5)
-    flood_ref_flow: float = _f(1000.0, label="Flood reference flow", min=1.0, max=100000.0)
     flood_exponent: float = _f(0.45, label="Flood height exponent", min=0.0, max=1.0, step=0.05)
     # Water held above a lake's or the sea's surface along its shore.
     shore_flood_height_m: float = _f(3.0, label="Shore flood height (m)", min=0.0, max=20.0, step=0.5)

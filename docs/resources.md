@@ -10,9 +10,9 @@ helpers), `fertility.py`, `forest.py`, `crops.py`, `minerals.py`, `rare_bio.py`,
 
 ## `builder.py`
 
-**`ResourcesParams`**: `fertility`, `forest_density`, `minerals`, `rare_bio`,
-optional `seed` (forest noise, minerals, rare resources; 0 when unset — **not**
-the world seed). Biome LUTs (`BIOME_FERTILITY_MULT`, `BIOME_FOREST_BASELINE`,
+**`ResourcesParams`**: `fertility`, `forest_density`, `minerals`, `rare_bio`.
+Forest noise, minerals and rare resources draw from the world seed (`ctx.world.seed`,
+0 when unset), salted per draw. Biome LUTs (`BIOME_FERTILITY_MULT`, `BIOME_FOREST_BASELINE`,
 `BIOME_PRECIP_REFERENCE_MM`) are module constants in `fertility.py` / `forest.py`
 — they define the model, not tune it.
 
