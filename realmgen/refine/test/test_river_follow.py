@@ -182,9 +182,10 @@ def test_walk_follows_a_polity_boundary_through_a_junction():
     run_b = _Run(0, 1, 2, 1, 2, 1.0)
     walk = _walk(chains, ends, 0, 0, True, 1, 1, run_b, 1)
     assert walk is not None
-    path, met = walk
+    path, met, spans = walk
     assert np.allclose(path, _unit(np.vstack([a[1:], b[1:2]])))
     assert met == {0, 1, 2}
+    assert spans == [(0, 1, 2), (1, 0, 1)]
     assert _walk(chains, ends, 2, 0, True, 1, 1, run_b, 1) is None     # polity 2 isn't on chain 0's end
 
 
@@ -210,3 +211,28 @@ def test_junction_swap_keeps_a_bridgehead_round_a_settlement():
                           [1.0, 0.1, 0.03]]))    # further along the river: handed over
     new, _ = sw.relabel(pts, np.array([0, 0, 0]))
     assert new.tolist() == [0, 0, 1]
+
+
+def test_walk_to_river_finds_where_the_boundary_returns_to_the_river():
+    from realmgen.refine.river_follow import _Rivers, _end_key, _walk_to_river
+    # River along y = 0 (x from -0.3 to 0.3); polity 0's border leaves it at a junction
+    # (chain a ends at x = 0, y = 0.05) and its border with polity 2 comes back down to it.
+    xs = np.linspace(-0.3, 0.3, 121)
+    river = (_unit(np.column_stack([np.ones(xs.size), xs, np.zeros(xs.size)])), np.full(xs.size - 1, 10000.0))
+    riv = _Rivers([river], RiverFollowParams(reach_km=0.1 * EARTH_RADIUS_KM, min_flow=1000.0, full_flow=8000.0))
+    a = _unit(np.array([[1.0, -0.2, 0.01], [1.0, -0.1, 0.02], [1.0, 0.0, 0.05]]))          # 0 | 1
+    b = _unit(np.array([[1.0, 0.0, 0.05], [1.0, 0.05, 0.08], [1.0, 0.1, 0.03], [1.0, 0.15, 0.002]]))  # 0 | 2
+    c = _unit(np.array([[1.0, 0.0, 0.05], [1.0, 0.0, 0.2]]))                               # 1 | 2
+    chains = [(a, (0, 1), 0), (b, (0, 2), 0), (c, (1, 2), 0)]
+    ends: dict = {}
+    for k, (pts, _, _) in enumerate(chains):
+        ends.setdefault(_end_key(pts[0]), []).append((k, 0))
+        ends.setdefault(_end_key(pts[-1]), []).append((k, 1))
+    s_from = 0.2                                     # arc of the river point beside a's core end
+    walk = _walk_to_river(chains, ends, 0, 0, True, 1, riv, 0, s_from, 1.0, 0.01)
+    assert walk is not None
+    path, met, spans, s_end = walk
+    assert np.allclose(path[-1], b[-1]) and met == {0, 1, 2}
+    assert spans[-1] == (1, 0, 3)
+    assert s_end == pytest.approx(0.45, abs=0.01)    # x = 0.15 along a river starting at x = -0.3
+    assert _walk_to_river(chains, ends, 1, 0, True, 1, riv, 0, s_from, 1.0, 0.01) is None   # 1's border leaves

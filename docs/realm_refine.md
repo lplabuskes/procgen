@@ -135,6 +135,12 @@ Decided once on the globe, as "border points
    with its leaf label pair (`borders.plain_border_chains` → `trace_lattice_chains`).
 2. **Runs.** Per chain, each world river (land segments, reach = `reach_km` × the
    flow ramp) gives runs of chain points within reach (gaps of ≤ 2 points bridged).
+   In-lake segments count (a border reaching a lake follows the river's course across
+   it; only land is labelled). Every segment within the largest reach is tested
+   against its own: a fixed k-nearest search missed a big river's lower course looping
+   back past its own headwaters, whose small segments crowded the nearest, so runs
+   began deep inside reach and jumped onto the river on a straight edge (70 km at
+   seed 1583294000 region 51 hex 63).
    Consecutive runs of a chain along one river are joined when the river runs on the
    same way from the first's core to the second's, so the border follows the river past
    a bulge beyond reach in between (judged run by run, the return stretch was often too
@@ -163,11 +169,16 @@ Decided once on the globe, as "border points
    labels inside the polygon instead cut the field's enclaves beside the river in
    two and left specks wherever the traced border cut a corner the lattice can't
    resolve (a tongue tip under a lattice edge); the margin is about a lattice edge
-   for that reason. Side at a line vertex uses the averaged normal; past the
-   line's ends nothing is claimed. The border edge is still densified to 1 km and
+   for that reason. Side at a line vertex uses the averaged normal. Past the
+   line's ends nothing is claimed, except inside the polygon past an end cut short at a
+   junction swap (where the border bulges past the line's end), on the side of the end
+   segment extended; elsewhere that side rule gave wrong-bank islands where a border
+   criss-crosses its river. The border edge is still densified to 1 km and
    bisected onto the plain boundary.
 6. **Checks.** A run is dropped if > 5% of its polygon's land holds a third
-   polity, and split 25 km either side of any settlement of either polity it would
+   polity (not counting land within `clean_km` of the run's two ends: a run starting
+   at a junction takes in a corner of the third polity there, which is never
+   relabelled; counting it dropped e.g. a 91 km run on seed 525099826 region 11 hex 151), and split 25 km either side of any settlement of either polity it would
    hand over.
 7. **Junctions.** Two accepted runs of *different* chains, consecutive along one
    river, with a polity P on the same bank in both (e.g. 7 | 29 then 29 | 82, 29 south
@@ -181,13 +192,22 @@ Decided once on the globe, as "border points
    lose their eased lead-out into the gap. Unlike a run's, its claim covers all of its
    polygon, past the line's ends too (all of it is far bank; else strips of P stayed
    where its boundary leaves the river beyond the stretch).
+   **Run ends at a junction.** A run whose chain ends at a junction while still
+   beside the river (its end jumping ≥ `edge_km` onto the river) moves that junction
+   too: from the run's core end, either of its polities' boundary is walked through up
+   to 4 junctions (`_walk_to_river`) until it comes back within `clean_km` of the same
+   river further along, and that stretch becomes a junction swap as above. Coast ends
+   (no other chain there) are left: most long jumps are there, where the river reaches
+   the water some way along the shore from the border, and no river point lies closer.
+   Seeds 4 / 31 / 1583294000: 7 / 3 / 2 run ends moved.
    **Bridgeheads.** A settlement within 25 km (`settlement_clear_km`) of the river that
    it would hand over keeps its polity's land on its bank within its distance from
    the river + 25 km of its nearest river point (a half-disc, its radius roughened ±35% by fBm noise of position; the bank by owner: P's
    city on the far bank, a neighbour's on P's), measured against the drawn line on
    region / local maps. A river city holding both banks, as on the 29 | 7/81/82
-   junction of seed 1926295024 region 16. A settlement further from the river, or a
-   walk that fails (a coast, a boundary that runs elsewhere), or > 5% of the polygon's
+   junction of seed 1926295024 region 16. A settlement further from the river, a walk
+   through border points another run already holds (on a parallel river their claims
+   alternated, leaving islands), a walk that fails (a coast, a boundary that runs elsewhere), or > 5% of the polygon's
    land held by a polity not on the walk, drops the swap (a radius from a city deep in
    the lump drew a disc hundreds of km across). Seeds 4 / 31 / 35: 8 / 5 / 0 junctions
    moved (walks failing 4 / 4 / 3, far settlement 0 / 0 / 1); 1926295024: 7, 3 with a
@@ -224,8 +244,8 @@ a run whose river ends (its source) inside it leaves a thin wedge; where no draw
 river stands in, the line follows the coarse world river.
 
 The region and local views pass the rivers they draw to the "Polities" recipe under
-`RIVER_SEGMENTS_KEY` (`pack_river_segments` → `(M, 8)` `[a, b, flow, river id]`;
-in-lake segments dropped) and contour their own lines from that field
+`RIVER_SEGMENTS_KEY` (`pack_river_segments` → `(M, 8)` `[a, b, flow, river id]`,
+in-lake segments included) and contour their own lines from that field
 (`region/borders.py`, [viz_regionview.md](viz_regionview.md)).
 `scripts/debug_borders.py --pick-river K` shows one.
 

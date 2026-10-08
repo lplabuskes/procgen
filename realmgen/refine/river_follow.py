@@ -290,6 +290,9 @@ class RiverSwap:
     ib: int
     river: np.ndarray         # (m, 3) the core's river stretch, from foot[ia] to foot[ib]
     river_id: int             # index of that river in the world ``"rivers"``
+    # Ends cut short at a junction swap: past them the polygon is still claimed.
+    open_start: bool = False
+    open_end: bool = False
 
     def __post_init__(self) -> None:
         w = self.weight[:, None]
@@ -325,7 +328,19 @@ class RiverSwap:
         assert self._border_tree is not None
         d_line, side, interior = _polyline_side(x, self.line, self._line_tree)
         d_border = _polyline_distance(x, self.border, self._border_tree)
-        claim = interior & ((d_line < self.band) | (d_border < self.edge) | self.inside(x))
+        inside = self.inside(x)
+        claim = interior & ((d_line < self.band) | (d_border < self.edge) | inside)
+        if self.open_start or self.open_end:
+            # Past an open end, inside the polygon (where a border cut short at a junction
+            # swap bulges past the line's end): the side of the end segment, extended.
+            near_start = np.linalg.norm(x - self.line[0], axis=1) < np.linalg.norm(x - self.line[-1], axis=1)
+            beyond = inside & ~interior & np.where(near_start, self.open_start, self.open_end)
+            if beyond.any():
+                xb = x[beyond]
+                n0 = np.cross(self.line[0], self.line[1])
+                n1 = np.cross(self.line[-2], self.line[-1])
+                side[beyond] = np.where(near_start[beyond], xb @ n0, xb @ n1)
+                claim |= beyond
         return claim, side > 0.0, {"line": d_line, "border": d_border, "interior": interior}
 
     def relabel(self, points: np.ndarray, labels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -371,9 +386,9 @@ class JunctionSwap(RiverSwap):
     gives its own land on the far side to ``without(points, polity)``: the neighbour
     that would hold it were ``polity`` not there. So the junctions move onto the river.
 
-    Unlike a run, it claims all of its polygon, past the line's ends too: the polygon
-    lies between ``polity``'s old boundary and the river, so all of it is far bank (else
-    strips of ``polity`` stay where the boundary leaves the river beyond the stretch).
+    Its polygon lies between ``polity``'s old boundary and the river, so all of it is
+    far bank, past the line's ends too (else strips of ``polity`` stay where the
+    boundary leaves the river beyond the stretch).
 
     A settlement within ``keep_radius`` of the river that it would hand over keeps a
     **bridgehead** instead (``keep_pos`` / ``keep_lab``): its polity's land on its bank
@@ -412,9 +427,8 @@ class JunctionSwap(RiverSwap):
 
     def _classify(self, x: np.ndarray) -> tuple[np.ndarray, np.ndarray, dict]:
         claim, left, d = super()._classify(x)
-        beyond = ~d["interior"] & self.inside(x)
-        claim = claim | beyond
-        left = np.where(beyond, self.left != self.polity, left)    # far bank
+        beyond = claim & ~d["interior"]                            # inside, past an end: far bank
+        left = np.where(beyond, self.left != self.polity, left)
         return claim, left, d
 
     def _held(self, x: np.ndarray, labels: np.ndarray) -> np.ndarray:
@@ -551,8 +565,22 @@ def _drawn_core(core: np.ndarray, a: np.ndarray, b: np.ndarray, chain: np.ndarra
     if beside.size == 0:
         return None
     ids, counts = np.unique(chain[beside], return_counts=True)
-    on = beside[chain[beside] == ids[np.argmax(counts)]]
-    segs = np.arange(on.min(), on.max() + 1)
+    cid = ids[np.argmax(counts)]
+    on = beside[chain[beside] == cid]
+    # Carry on along the drawing up to ``reach`` past the segments beside the core, so
+    # the cut is the nearest point on the river itself: two swaps meeting at one
+    # world point (a run and a junction swap) cut the drawing at the same point.
+    members = np.flatnonzero(chain == cid)
+    length = np.linalg.norm(b - a, axis=1)
+    lo, hi = int(on.min()), int(on.max())
+    reach_lo = reach_hi = 0.0
+    while lo > members[0] and reach_lo < reach:
+        lo -= 1
+        reach_lo += float(length[lo])
+    while hi < members[-1] and reach_hi < reach:
+        hi += 1
+        reach_hi += float(length[hi])
+    segs = np.arange(lo, hi + 1)
     path = np.vstack([a[segs], b[segs[-1]][None]])
     u_ends, _, _ = _param_on(core, arc, tree, path[[0, -1]])
     if u_ends[0] > u_ends[1]:
@@ -619,7 +647,6 @@ class _Rivers:
         for fi, path in enumerate(rivers or []):
             pos = _unit(np.asarray(path[0], dtype=np.float64))
             flow = np.asarray(path[1], dtype=np.float64)
-            in_lake = np.asarray(path[2], dtype=bool) if len(path) > 2 else np.zeros(flow.size, dtype=bool)
             m = min(flow.size, len(pos) - 1)
             if m <= 0:
                 continue
@@ -629,7 +656,10 @@ class _Rivers:
             self.arc.append(_arc_lengths(pos[:m + 1]))
             ramp = flow_ramp(flow[:m], min_flow=p.min_flow, full_flow=p.full_flow)
             reach = p.reach_km / EARTH_RADIUS_KM * ramp
-            idx = np.flatnonzero((reach > 0.0) & ~in_lake[:m])
+            # Through lakes too: a run reaching a lake shore carries on along the river's
+            # course across it (only land is labelled), instead of stopping at the outlet
+            # with the border still beside the river and jumping onto it on a straight edge.
+            idx = np.flatnonzero(reach > 0.0)
             a_parts.append(pos[idx])
             b_parts.append(pos[idx + 1])
             rid_parts.append(np.full(idx.size, r))
@@ -650,35 +680,52 @@ class _Rivers:
         self.max_reach = float(self.reach.max(initial=0.0))
 
     def near(self, x: np.ndarray) -> dict:
-        """``{river: _Near}`` for the rivers within reach of any of the points ``x``."""
-        if self.tree is None:
+        """``{river: _Near}`` for the rivers within reach of any of the points ``x``.
+
+        Every segment within the largest reach is tested against its own reach (a
+        fixed number of nearest segments missed a big river's lower course looping
+        back past its own small headwaters, which crowded the nearest ones).
+        """
+        if self.tree is None or len(x) == 0:
             return {}
-        k = min(_K_NEAREST, len(self.a))
-        _, nn = self.tree.query(x, k=k, distance_upper_bound=self.max_reach + self.half)
-        nn = np.asarray(nn).reshape(len(x), k)
-        valid = nn < len(self.a)
-        s = np.where(valid, nn, 0)
-        a, b = self.a[s], self.b[s]
+        hits = self.tree.query_ball_point(x, self.max_reach + self.half)
+        lens = np.fromiter((len(h) for h in hits), dtype=np.int64, count=len(x))
+        if lens.sum() == 0:
+            return {}
+        pt = np.repeat(np.arange(len(x)), lens)
+        sg = np.fromiter((k for h in hits for k in h), dtype=np.int64, count=int(lens.sum()))
+        a, b = self.a[sg], self.b[sg]
         ab = b - a
-        t = np.clip(((x[:, None, :] - a) * ab).sum(-1) / np.maximum((ab * ab).sum(-1), 1e-30), 0.0, 1.0)
-        foot = a + t[..., None] * ab
-        dist = np.linalg.norm(x[:, None, :] - foot, axis=-1)
-        holds = valid & (dist < self.reach[s])
+        t = np.clip(((x[pt] - a) * ab).sum(-1) / np.maximum((ab * ab).sum(-1), 1e-30), 0.0, 1.0)
+        foot = a + t[:, None] * ab
+        dist = np.linalg.norm(x[pt] - foot, axis=-1)
+        hold = dist < self.reach[sg]
+        pt, sg, t, foot, dist = pt[hold], sg[hold], t[hold], foot[hold], dist[hold]
+        rid = self.rid[sg]
+        # Per (point, river), the nearest segment holding the point.
+        order = np.lexsort((dist, rid, pt))
+        pt, sg, t, foot, dist, rid = pt[order], sg[order], t[order], foot[order], dist[order], rid[order]
+        first = np.ones(len(pt), dtype=bool)
+        first[1:] = (pt[1:] != pt[:-1]) | (rid[1:] != rid[:-1])
+        pt, sg, t, foot, dist, rid = pt[first], sg[first], t[first], foot[first], dist[first], rid[first]
         out: dict = {}
-        rid = self.rid[s]
-        rows = np.arange(len(x))
-        for r in np.unique(rid[holds]):
-            d = np.where(holds & (rid == r), dist, np.inf)
-            j = np.argmin(d, axis=1)
-            dd = d[rows, j]
-            inside = np.isfinite(dd)
-            seg = s[rows, j]
+        n = len(x)
+        for r in np.unique(rid):
+            m = rid == r
+            rows = pt[m]
             arc = self.arc[int(r)]
-            sid = np.where(inside, self.sid[seg], 0)    # rows out of reach: unused
-            out[int(r)] = _Near(
-                mask=inside, s=arc[sid] + t[rows, j] * (arc[sid + 1] - arc[sid]), d=dd,
-                reach=np.where(inside, self.reach[seg], 0.0), foot=_unit(foot[rows, j]),
-            )
+            sid = self.sid[sg[m]]
+            mask = np.zeros(n, dtype=bool)
+            mask[rows] = True
+            s_ = np.zeros(n)
+            s_[rows] = arc[sid] + t[m] * (arc[sid + 1] - arc[sid])
+            d = np.full(n, np.inf)
+            d[rows] = dist[m]
+            reach = np.zeros(n)
+            reach[rows] = self.reach[sg[m]]
+            f = np.zeros((n, 3))
+            f[rows] = _unit(foot[m])
+            out[int(r)] = _Near(mask=mask, s=s_, d=d, reach=reach, foot=f)
         return out
 
     def stretch(self, r: int, s0: float, s1: float) -> np.ndarray:
@@ -907,21 +954,29 @@ def _settle(c: _Run, pts: np.ndarray, nr: _Near, la: int, lb: int, depth: int, c
                 if run is not None:
                     out.extend(_settle(run, pts, sub, la, lb, depth, ctx, _depth + 1))
             return out
-    # A third polity inside drops the run.
-    inside = _polygon_land_labels(sw, p, plain_labels, is_water_at)
-    if inside is None:
+    # A third polity inside drops the run, bar the corner where the run starts or ends at
+    # a junction with it (a third polity's land is never relabelled; the check is for a
+    # polygon wrapping round one).
+    sampled = _polygon_land(sw, p, plain_labels, is_water_at)
+    if sampled is None:
         _bump(st, "too_big")
         return []
-    if inside.size and np.mean(~np.isin(inside, (la, lb))) > p.max_third_share:
-        _bump(st, "third_polity")
-        return []
+    q, inside = sampled
+    if inside.size:
+        corner = p.clean_km / EARTH_RADIUS_KM
+        off_ends = ((np.linalg.norm(q - sw.border[0], axis=1) > corner)
+                    & (np.linalg.norm(q - sw.border[-1], axis=1) > corner))
+        if np.mean(~np.isin(inside, (la, lb)) & off_ends) > p.max_third_share:
+            _bump(st, "third_polity")
+            return []
     _bump(st, "accepted")
     return [(_on_boundary(sw, plain_labels, p.border_step_km / EARTH_RADIUS_KM), c)]
 
 
-def _polygon_land_labels(sw: RiverSwap, p: RiverFollowParams, plain_labels: Callable,
-                         is_water_at: Callable) -> Optional[np.ndarray]:
-    """Plain labels of land sampled every ``sample_km`` inside ``sw``'s polygon; None if it's too big."""
+def _polygon_land(sw: RiverSwap, p: RiverFollowParams, plain_labels: Callable,
+                  is_water_at: Callable) -> Optional[tuple[np.ndarray, np.ndarray]]:
+    """``(points, plain labels)`` of land sampled every ``sample_km`` inside ``sw``'s polygon;
+    None if it's too big."""
     lo, hi = sw.ring2d.min(axis=0), sw.ring2d.max(axis=0)
     step = p.sample_km / EARTH_RADIUS_KM
     gx = np.arange(lo[0], hi[0] + step, step)
@@ -931,11 +986,9 @@ def _polygon_land_labels(sw: RiverSwap, p: RiverFollowParams, plain_labels: Call
     xx, yy = np.meshgrid(gx, gy)
     flat = np.column_stack([xx.ravel(), yy.ravel()])
     flat = flat[_even_odd(flat, sw.ring2d)]
-    if len(flat) == 0:
-        return np.zeros(0, dtype=np.int64)
     q = _unit(sw.centre[None, :] + flat[:, :1] * sw.e1[None, :] + flat[:, 1:2] * sw.e2[None, :])
-    land = ~is_water_at(q)
-    return plain_labels(q[land]) if land.any() else np.zeros(0, dtype=np.int64)
+    q = q[~is_water_at(q)] if len(q) else np.zeros((0, 3))
+    return q, (plain_labels(q) if len(q) else np.zeros(0, dtype=np.int64))
 
 
 # ── junctions ────────────────────────────────────────────────────────────────
@@ -946,15 +999,17 @@ def _end_key(x: np.ndarray) -> tuple:
 
 
 def _walk(chains: Sequence[tuple], ends: dict, polity: int, k_a: int, from_end: bool, start: int,
-          k_b: int, b_run: "_Run", b_gap: int) -> Optional[tuple[np.ndarray, set]]:
+          k_b: int, b_run: "_Run", b_gap: int) -> Optional[tuple[np.ndarray, set, list]]:
     """``polity``'s boundary from point ``start`` of chain ``k_a`` (walking to its end if
     ``from_end`` else to its start) through junctions to point ``b_gap`` of chain ``k_b``.
 
-    ``(path, polities met)``, or None when the walk doesn't arrive within
-    ``_JUNCTION_HOPS`` junctions (a coast, or the boundary running elsewhere).
+    ``(path, polities met, [(chain, first, last) point ranges walked])``, or None when
+    the walk doesn't arrive within ``_JUNCTION_HOPS`` junctions (a coast, or the
+    boundary running elsewhere).
     """
     pts = np.asarray(chains[k_a][0], dtype=np.float64)
     path = [pts[start:] if from_end else pts[start::-1]]
+    spans = [(k_a, start, len(pts) - 1) if from_end else (k_a, 0, start)]
     met = set(chains[k_a][1])
     cur, cur_end = k_a, 1 if from_end else 0
     for _ in range(_JUNCTION_HOPS):
@@ -973,10 +1028,91 @@ def _walk(chains: Sequence[tuple], ends: dict, polity: int, k_a: int, from_end: 
                 return None
             j = b_gap if e == 0 else len(q) - 1 - b_gap
             path.append(q[1:j + 1])
-            return _unit(np.vstack(path)), met
+            spans.append((k, 0, b_gap) if e == 0 else (k, b_gap, len(q) - 1))
+            return _unit(np.vstack(path)), met, spans
         path.append(q[1:])
+        spans.append((k, 0, len(q) - 1))
         cur, cur_end = k, 1 - e
     return None
+
+
+def _walk_to_river(chains: Sequence[tuple], ends: dict, polity: int, k_a: int, from_end: bool, start: int,
+                   riv: "_Rivers", r: int, s_from: float, onward: float,
+                   near_km: float) -> Optional[tuple[np.ndarray, set, list, float]]:
+    """``polity``'s boundary from point ``start`` of chain ``k_a`` (whose end is a junction)
+    through junctions until it comes within ``near_km`` (radians) of river ``r`` again,
+    further along it (arc beyond ``s_from`` in the sign of ``onward``).
+
+    ``(path, polities met, point ranges walked, arc where it returns)``; None when it
+    doesn't within ``_JUNCTION_HOPS`` junctions.
+    """
+    pts = np.asarray(chains[k_a][0], dtype=np.float64)
+    path = [pts[start:] if from_end else pts[start::-1]]
+    spans = [(k_a, start, len(pts) - 1) if from_end else (k_a, 0, start)]
+    met = set(chains[k_a][1])
+    cur, cur_end = k_a, 1 if from_end else 0
+    for _ in range(_JUNCTION_HOPS):
+        at = np.asarray(chains[cur][0])[-1 if cur_end else 0]
+        nxt = [(k, e) for k, e in ends.get(_end_key(at), ())
+               if (k, e) != (cur, cur_end) and polity in chains[k][1]]
+        if len(nxt) != 1:
+            return None
+        k, e = nxt[0]
+        q = np.asarray(chains[k][0], dtype=np.float64)
+        q = q if e == 0 else q[::-1]
+        met |= set(chains[k][1])
+        nr = riv.near(q).get(r)
+        if nr is not None:
+            back = np.flatnonzero(nr.mask & (nr.d <= near_km) & ((nr.s - s_from) * onward > 0.0))
+            back = back[back > 0]
+            if back.size:
+                j = int(back[0])
+                path.append(q[1:j + 1])
+                spans.append((k, 0, j) if e == 0 else (k, len(q) - 1 - j, len(q) - 1))
+                return _unit(np.vstack(path)), met, spans, float(nr.s[j])
+        path.append(q[1:])
+        spans.append((k, 0, len(q) - 1))
+        cur, cur_end = k, 1 - e
+    return None
+
+
+def _checked_junction(pol: int, pol_left: bool, path: np.ndarray, met: set, r: int, s0: float, s1: float,
+                      depth: int, labels_without: Callable, ctx: tuple) -> Optional[RiverSwap]:
+    """The ``JunctionSwap`` of ``pol``'s boundary ``path`` onto river ``r`` from arc ``s0``
+    to ``s1`` (``pol`` left of that line if ``pol_left``), or None when it fails the
+    checks: a third polity in it, or a settlement it would hand over that isn't a
+    river city (those keep a bridgehead)."""
+    riv, p, min_run, plain_labels, is_water_at, settle, settle_lab, settle_tree, clear, st = ctx
+    others = tuple(sorted(met - {pol}))
+    left, right = (pol, OTHER) if pol_left else (OTHER, pol)
+    n = len(path)
+    sw = JunctionSwap(left, right, p.clean_km / EARTH_RADIUS_KM, p.edge_km / EARTH_RADIUS_KM, depth, path,
+                      np.ones(n), path.copy(), 0, n - 1, riv.stretch(r, s0, s1), riv.feature_index[r],
+                      open_start=True, open_end=True, polity=pol, others=others, without=labels_without)
+    sampled = _polygon_land(sw, p, plain_labels, is_water_at)
+    if sampled is None:
+        _bump(st, "junction_too_big")
+        return None
+    inside = sampled[1]
+    if inside.size and np.mean(~np.isin(inside, (pol,) + others)) > p.max_third_share:
+        _bump(st, "junction_third_polity")
+        return None
+    if settle_tree is not None:
+        # A settlement it would hand over keeps a bridgehead round it.
+        idx = np.asarray(settle_tree.query_ball_point(sw.centre, sw.reach), dtype=np.int64)
+        if idx.size:
+            flip = idx[sw.relabel(settle[idx], settle_lab[idx])[0] != settle_lab[idx]]
+            line_tree = KDTree(0.5 * (sw.line[:-1] + sw.line[1:]))
+            if flip.size and np.any(_polyline_distance(settle[flip], sw.line, line_tree) > clear):
+                _bump(st, "junction_settlement")      # only a river city keeps a bridgehead
+                return None
+            if flip.size:
+                sw = replace(sw, keep_pos=settle[flip], keep_lab=settle_lab[flip], keep_radius=clear)
+                if np.any(sw.relabel(settle[idx], settle_lab[idx])[0] != settle_lab[idx]):
+                    _bump(st, "junction_settlement")
+                    return None
+                _bump(st, "junction_bridgehead")
+    return _on_boundary(sw, plain_labels, p.border_step_km / EARTH_RADIUS_KM)
 
 
 def _junction_swaps(accepted: List[tuple], chains: Sequence[tuple], per_chain: List[tuple],
@@ -990,6 +1126,13 @@ def _junction_swaps(accepted: List[tuple], chains: Sequence[tuple], per_chain: L
         if len(pts) >= 2:
             ends.setdefault(_end_key(pts[0]), []).append((k, 0))
             ends.setdefault(_end_key(pts[-1]), []).append((k, 1))
+    # Which accepted run holds each chain point: a junction swap may not walk through
+    # another run's border (its line would fight that run's, e.g. on a parallel river).
+    owner: dict = {}
+    for n, (_, _, _, _, ci, c) in enumerate(accepted):
+        k = per_chain[ci][6]
+        own = owner.setdefault(k, np.full(len(chains[k][0]), -1, dtype=np.int64))
+        own[c.i0:c.i1 + 1] = n
     by_river: dict = {}
     for n, (_, _, _, _, ci, c) in enumerate(accepted):
         nr = per_chain[ci][1][c.river]
@@ -1022,41 +1165,64 @@ def _junction_swaps(accepted: List[tuple], chains: Sequence[tuple], per_chain: L
                 if walk is None:
                     _bump(st, "junction_walk")
                     continue
-                path, met = walk
-                others = tuple(sorted(met - {pol}))
-                left, right = (pol, OTHER) if left_a else (OTHER, pol)
-                n = len(path)
-                sw = JunctionSwap(left, right, p.clean_km / EARTH_RADIUS_KM, p.edge_km / EARTH_RADIUS_KM,
-                                  min(depth_a, depth_b), path, np.ones(n), path.copy(), 0, n - 1,
-                                  riv.stretch(r, float(nr_a.s[ga]), float(nr_b.s[gb])), riv.feature_index[r],
-                                  polity=pol, others=others, without=labels_without)
-                inside = _polygon_land_labels(sw, p, plain_labels, is_water_at)
-                if inside is None:
-                    _bump(st, "junction_too_big")
+                path, met, spans = walk
+                if any(np.any(~np.isin(owner[k][i:j + 1], (-1, na, nb))) for k, i, j in spans if k in owner):
+                    _bump(st, "junction_overlap")
                     continue
-                if inside.size and np.mean(~np.isin(inside, (pol,) + others)) > p.max_third_share:
-                    _bump(st, "junction_third_polity")
+                sw = _checked_junction(pol, left_a, path, met, r, float(nr_a.s[ga]), float(nr_b.s[gb]),
+                                       min(depth_a, depth_b), labels_without, ctx)
+                if sw is None:
                     continue
-                if settle_tree is not None:
-                    # A settlement it would hand over keeps a bridgehead round it.
-                    idx = np.asarray(settle_tree.query_ball_point(sw.centre, sw.reach), dtype=np.int64)
-                    if idx.size:
-                        flip = idx[sw.relabel(settle[idx], settle_lab[idx])[0] != settle_lab[idx]]
-                        line_tree = KDTree(0.5 * (sw.line[:-1] + sw.line[1:]))
-                        if flip.size and np.any(_polyline_distance(settle[flip], sw.line, line_tree) > clear):
-                            _bump(st, "junction_settlement")      # only a river city keeps a bridgehead
-                            continue
-                        if flip.size:
-                            sw = replace(sw, keep_pos=settle[flip], keep_lab=settle_lab[flip], keep_radius=clear)
-                            if np.any(sw.relabel(settle[idx], settle_lab[idx])[0] != settle_lab[idx]):
-                                _bump(st, "junction_settlement")
-                                continue
-                            _bump(st, "junction_bridgehead")
                 _bump(st, "junction")
                 trunc.setdefault(na, [ca.i0, ca.i1])[1 if up_a else 0] = ga
                 trunc.setdefault(nb, [cb.i0, cb.i1])[0 if up_b else 1] = gb
-                out.append((min(depth_a, depth_b), -abs(lo_b - hi_a), len(out),
-                            _on_boundary(sw, plain_labels, p.border_step_km / EARTH_RADIUS_KM), -1, None))
+                out.append((min(depth_a, depth_b), -abs(lo_b - hi_a), len(out), sw, -1, None))
+                break
+    # A run ending at a junction (its chain's end) while still beside the river: the
+    # junction moves onto the river too, along the boundary of the run's polity that
+    # carries on round it back to the river.
+    for na, (depth_a, _, _, sw_a, ci_a, ca) in enumerate(accepted):
+        pc_a = per_chain[ci_a]
+        pts_a, k_a, r = pc_a[0], pc_a[6], ca.river
+        nr_a = pc_a[1][r]
+        up_a = nr_a.s[ca.ib] > nr_a.s[ca.ia]
+        for hi in (False, True):
+            done = trunc.get(na)
+            if done is not None and done[1 if hi else 0] != (ca.i1 if hi else ca.i0):
+                continue                                  # carried on by a junction swap already
+            if (ca.i1 != len(pts_a) - 1) if hi else (ca.i0 != 0):
+                continue
+            jump = np.linalg.norm(sw_a.border[-1 if hi else 0] - sw_a.line[-1 if hi else 0])
+            if jump * EARTH_RADIUS_KM < p.edge_km:
+                continue
+            g = ca.ib if hi else ca.ia
+            s_g = float(nr_a.s[g])
+            onward = (1.0 if up_a else -1.0) * (1.0 if hi else -1.0)     # the river's way on past this end
+            if len(ends.get(_end_key(pts_a[-1 if hi else 0]), ())) == 1:
+                continue                                  # a coast end: no junction to move
+            for pol in (pc_a[2], pc_a[3]):
+                walk = _walk_to_river(chains, ends, pol, k_a, hi, g, riv, r, s_g, onward,
+                                      p.clean_km / EARTH_RADIUS_KM)
+                if walk is None:
+                    _bump(st, "junction_end_walk")
+                    continue
+                path, met, spans, s_end = walk
+                if any(np.any(~np.isin(owner[k][i:j + 1], (-1, na))) for k, i, j in spans if k in owner):
+                    _bump(st, "junction_overlap")
+                    continue
+                lo, hi_s = sorted((s_g, s_end))
+                if any(lo < t_hi and t_lo < hi_s for t_lo, t_hi, m in by_river.get(r, ()) if m != na):
+                    _bump(st, "junction_river_taken")
+                    continue
+                # ``pol`` left of the river walking up its arc, so of the line if it runs up.
+                left_up = (sw_a.left == pol) == up_a
+                sw = _checked_junction(pol, left_up == (s_end > s_g), path, met, r, s_g, s_end, depth_a,
+                                       labels_without, ctx)
+                if sw is None:
+                    continue
+                _bump(st, "junction_end")
+                trunc.setdefault(na, [ca.i0, ca.i1])[1 if hi else 0] = g
+                out.append((depth_a, -abs(s_end - s_g), len(out), sw, -1, None))
                 break
     # Runs ending at a junction swap end on the river: no lead-out into the gap.
     for n, (i0, i1) in trunc.items():
@@ -1064,6 +1230,7 @@ def _junction_swaps(accepted: List[tuple], chains: Sequence[tuple], per_chain: L
         pts, near, la, lb = per_chain[ci][:4]
         run = _Run(c.river, i0, i1, c.ia, c.ib, c.span)
         sw = _make_swap(riv, run, pts, near[c.river], la, lb, depth, p, plain_labels)
+        sw = replace(sw, open_start=i0 != c.i0, open_end=i1 != c.i1)
         out[n] = (depth, span, order, _on_boundary(sw, plain_labels, p.border_step_km / EARTH_RADIUS_KM), ci, run)
     return out
 

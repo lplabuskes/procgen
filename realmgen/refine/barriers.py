@@ -14,10 +14,11 @@ import numpy as np
 
 def pack_river_segments(rivers: Optional[Iterable], *, min_flow: float = 0.0,
                         river_ids: Optional[Sequence[np.ndarray]] = None) -> np.ndarray:
-    """``(M, 7)`` ``[a, b, flow]`` rows of the land segments of ``rivers`` above ``min_flow``.
+    """``(M, 7)`` ``[a, b, flow]`` rows of the segments of ``rivers`` above ``min_flow``.
 
     ``rivers`` is the ``(positions, flows, in_lake)`` polyline form (world
-    ``"rivers"``, region / local paths); in-lake segments are dropped. With
+    ``"rivers"``, region / local paths); in-lake segments are kept, so a border
+    following a river follows it through a lake (only land is labelled). With
     ``river_ids`` (per path, per vertex: ``RegionRivers.river_ids()``) a column 7
     holds each segment's world river index (-1 none).
     """
@@ -33,11 +34,10 @@ def _river_segments(rivers: Optional[Iterable], *, min_flow: float,
     for k, path in enumerate(rivers or []):
         pos = np.asarray(path[0], dtype=np.float64)
         flow = np.asarray(path[1], dtype=np.float64)
-        in_lake = np.asarray(path[2], dtype=bool) if len(path) > 2 else np.zeros(flow.size, dtype=bool)
         m = min(flow.size, pos.shape[0] - 1)
         if m <= 0:
             continue
-        keep = (flow[:m] > float(min_flow)) & ~in_lake[:m]
+        keep = flow[:m] > float(min_flow)
         if keep.any():
             a_parts.append(pos[:m][keep])
             b_parts.append(pos[1:m + 1][keep])

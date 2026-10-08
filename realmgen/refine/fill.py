@@ -192,9 +192,12 @@ class PolityLabelField:
         if tree is None or len(pts) == 0:
             return np.full(len(pts), UNCLAIMED, dtype=np.int64)
         k = min(_WITHOUT_K, faces.size)
-        _, nn = tree.query(pts, k=k, workers=-1)
+        warped = self._warp(pts)
+        # Candidates nearest the warped point (the one scored), so neighbouring points
+        # vote among the same faces.
+        _, nn = tree.query(warped, k=k, workers=-1)
         c = faces[np.asarray(nn).reshape(len(pts), k)]
-        score = ((self._warp(pts)[:, None, :] - self.centroids[c]) ** 2).sum(axis=-1) * self._inv_w2[c]
+        score = ((warped[:, None, :] - self.centroids[c]) ** 2).sum(axis=-1) * self._inv_w2[c]
         return self.pof[c[np.arange(len(pts)), np.argmin(score, axis=1)]]
 
     def is_water_at(self, points: np.ndarray) -> np.ndarray:
