@@ -38,10 +38,9 @@ from realmgen.polity import display as disp
 from realmgen.polity.authority import land_edges
 from realmgen.polity.barriers import (
     BarrierParams,
-    add_barrier_costs,
+    add_ridge_costs,
     divide_relief,
     face_elevation,
-    river_crossing_strength,
 )
 from realmgen.polity.epochs import FragmentationEvent, FragmentationParams, run_fragmentation_epochs
 from realmgen.polity.forest import (
@@ -203,7 +202,7 @@ class PolityStage(Stage):
             mesh, world, is_water, danger, danger_scale,
         )
         land_graph = build_cost_graph(mesh.face_adjacency, land_edge_costs)
-        claim_costs = self._claim_costs(mesh, world, land_edge_costs, is_water)
+        claim_costs = self._claim_costs(mesh, land_edge_costs, is_water)
 
         # Only settlement faces are ever read; the rest stay 1.0.
         defensibility = np.ones(n, dtype=np.float64)
@@ -342,20 +341,14 @@ class PolityStage(Stage):
         land_base_cost = np.where(is_water, 1.5, 1.5 + danger_scale * danger).astype(np.float64)
         return land_base_cost, land_edge_costs, None
 
-    def _claim_costs(self, mesh, world, land_edge_costs, is_water):
-        """Claim costs: drainage divides and river crossings as extra edge costs; None when both off."""
+    def _claim_costs(self, mesh, land_edge_costs, is_water):
+        """Claim costs: drainage divides as extra edge costs; None when off."""
         bp = self.params.barriers
-        relief = river = None
-        if bp.ridge_weight > 0.0:
-            relief = divide_relief(mesh.face_adjacency, face_elevation(mesh), is_water,
-                                   min_detour=bp.ridge_min_detour, floor_hops=bp.ridge_floor_hops)
-        rivers = world.get_feature("rivers")
-        if bp.river_weight > 0.0 and rivers:
-            river = river_crossing_strength(mesh.face_adjacency, mesh.face_centroids, rivers,
-                                            min_flow=bp.river_min_flow, full_flow=bp.river_full_flow)
-        if relief is None and river is None:
+        if bp.ridge_weight <= 0.0:
             return None
-        return add_barrier_costs(land_edge_costs, relief, river, bp)
+        relief = divide_relief(mesh.face_adjacency, face_elevation(mesh), is_water,
+                               min_detour=bp.ridge_min_detour, floor_hops=bp.ridge_floor_hops)
+        return add_ridge_costs(land_edge_costs, relief, bp)
 
     def _claim_graphs(self, mesh, world, is_water, claim_costs):
         """``(land, hybrid)`` graphs over ``claim_costs``; None to claim on the plain graphs."""

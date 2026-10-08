@@ -5,7 +5,10 @@ into chains between junctions. Along each chain, a run of border points that
 stays within reach of one big river is replaced by that river's stretch: "border
 points 13–20 become river points 1–5". The river is picked per run — the
 longest stretch of the chain a single river shadows wins, the rest of the chain
-is free for another — so a border never flips between two parallel rivers.
+is free for another — so a border never flips between two parallel rivers. Runs
+are taken across all chains, sovereign borders first, and a river stretch carries
+one border only: both borders of a strip a river runs down may be within reach
+of it, and the longer run gets it.
 
 Within a run, a border point within ``snap_fraction × reach`` of the river is on
 it (the **core**: between the first and last such point the new line is the
@@ -57,7 +60,7 @@ _SIDE_PROBE_KM = 2.0
 
 @dataclass
 class RiverFollowParams:
-    reach_km: float = 70.0          # a border point this close to a full-strength river may follow it
+    reach_km: float = 120.0         # a border point this close to a full-strength river may follow it
     min_flow: float = 300.0         # reach ramps (log) from 0 at min_flow …
     full_flow: float = 4000.0       # … to reach_km at full_flow
     snap_fraction: float = 0.6      # within this share of the reach a point is on the river
@@ -655,7 +658,9 @@ def build_river_swaps(
     clear = p.settlement_clear_km / EARTH_RADIUS_KM
     ctx = (riv, p, min_run, plain_labels, is_water_at, settle, settle_lab, settle_tree, clear, st)
 
-    accepted: List[tuple] = []
+    # Candidates from every chain, taken sovereign first, then longest river stretch.
+    cands: List[tuple] = []
+    per_chain: List[tuple] = []
     for pts, (la, lb), depth in chains:
         pts = np.asarray(pts, dtype=np.float64)
         if la < 0 or lb < 0 or len(pts) < 3:
@@ -663,22 +668,33 @@ def build_river_swaps(
         near = riv.near(pts)
         if not near:
             continue
-        runs: List[_Run] = []
+        ci = len(per_chain)
+        per_chain.append((pts, near, la, lb, depth, np.zeros(len(pts), dtype=bool)))
         for r, nr in near.items():
             for i0, i1 in _runs(nr.mask, p.max_gap):
                 run = _candidate(r, nr, i0, i1, pts, p, min_run, st)
                 if run is not None:
-                    runs.append(run)
-        runs.sort(key=lambda c: -c.span)
-        taken = np.zeros(len(pts), dtype=bool)
-        for c in runs:
-            if taken[c.i0:c.i1 + 1].any():
-                _bump(st, "overlap")
-                continue
-            _bump(st, "candidates")
-            for sw, i0, i1 in _settle(c, pts, near[c.river], la, lb, depth, ctx):
-                taken[i0:i1 + 1] = True
-                accepted.append((depth, -c.span, len(accepted), sw))
+                    cands.append((depth, -run.span, len(cands), ci, run))
+    cands.sort(key=lambda t: t[:3])
+    # Per river, the arc intervals already carrying a border: a stretch carries one
+    # (two borders of a strip both within reach of its river would fight over it).
+    river_taken: dict = {}
+    accepted: List[tuple] = []
+    for depth, _, _, ci, c in cands:
+        pts, near, la, lb, _, taken = per_chain[ci]
+        if taken[c.i0:c.i1 + 1].any():
+            _bump(st, "overlap")
+            continue
+        nr = near[c.river]
+        lo, hi = sorted((float(nr.s[c.ia]), float(nr.s[c.ib])))
+        if any(lo < t_hi and t_lo < hi for t_lo, t_hi in river_taken.get(c.river, ())):
+            _bump(st, "river_taken")
+            continue
+        _bump(st, "candidates")
+        for sw, i0, i1 in _settle(c, pts, nr, la, lb, depth, ctx):
+            taken[i0:i1 + 1] = True
+            river_taken.setdefault(c.river, []).append((lo, hi))
+            accepted.append((depth, -c.span, len(accepted), sw))
     accepted.sort(key=lambda t: t[:3])
     return RiverSwaps([t[3] for t in accepted], centroids, p)
 

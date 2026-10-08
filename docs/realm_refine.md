@@ -35,14 +35,12 @@ and city jitter seeded from `World.seed`.
 - `boundary_warp_amplitude` (0.012, unit-sphere ≈ ⅓ face) — fBm domain warp on positions fed to the polity Voronoi; `0` → bare centroid bisectors (polygonal staircase).
 - `boundary_warp_frequency` (45) — warp base frequency; too high aliases against the texel grid.
 - `boundary_warp_octaves` (hidden, 3).
-- `border_river_reach_km` (70) — how far from a big river a border is moved onto it ([River following](#river-following-river_followpy)); 0 = off.
+- `border_river_reach_km` (120) — how far from a big river a border is moved onto it ([River following](#river-following-river_followpy)); 0 = off. Face-level borders run along cell edges up to ~half a face (~100 km) off a river; 70 left many of those (region-scale borders 100–200 km beside a river).
+- `border_river_min_flow` (300) / `border_river_full_flow` (4000) — river flow at which the reach starts / is full (log ramp; world rivers start at 500, median ~1200, p90 ~7600 — 1000/8000 left the mid-size rivers that border most realms almost inert).
 - `border_river_min_run_km` (40) — shortest river stretch a run is moved onto.
 
-River flow range (log ramp of the reach) is the polity stage's `barriers.river_min_flow` (300) /
-`river_full_flow` (4000) ([realm_polity.md](realm_polity.md)), so the face-level river step and the
-drawn line agree on which rivers count; `RealmPipeline` passes `BarrierParams` to `RefineStage`.
-(World rivers start at 500, median ~1200, p90 ~7600 — 1000/8000 left the mid-size rivers that
-border most realms almost inert.)
+Rivers play no part in claiming (the polity stage's cost surface has no river step), so
+this is the only river handling of borders.
 
 ## Site features (`sites.py`)
 
@@ -141,9 +139,11 @@ Decided once on the globe, as "border points
    if the core's river stretch is ≥ `min_run_km` and ≥ half the straight distance
    between the core's ends (else it's a crossing; measuring against the border's
    *length* rejected borders that wander between two rivers — exactly the case to fix).
-3. **One river per run.** Runs are taken longest river stretch first; a run
-   overlapping a taken one is dropped, so a border never alternates between two
-   parallel rivers.
+3. **One river per run, one border per river.** Runs from all chains are taken
+   sovereign first, then longest river stretch; a run overlapping a taken one on its
+   chain is dropped, so a border never alternates between two parallel rivers, and so
+   is one whose river stretch already carries a border (both borders of a strip a
+   river runs down can be within reach of it; their claims fought).
 4. **New line.** The core is replaced by the river between the feet of its end
    points; outside the core each point is pulled toward its foot by
    `w = (reach − d) / (0.4 · reach)`, held non-decreasing toward the core, so the
@@ -181,9 +181,10 @@ line weren't found. The plain border is the same at every tier, so only the
 river edge moves. Old saved worlds lack `"river_texels"`: views then keep the
 world line (`--rebuild-cache`).
 
-Seeds 4 / 31 / 35: 105 / 71 / 47 swaps; of sovereign border length within 60 km
-of a river at flow ≥ 2000, the share within 8 km of it 36 / 38 / 38% (~10% with no
-river handling). This replaced a per-point snap (each point near a river read its
+Of sovereign border length within 60 km of a river at flow ≥ 2000, the share
+within 8 km of it, seeds 4 / 31 / 35 / 369893336: 31 / 55 / 41 / 50% (mean 44%;
+~12% with no river handling); 1.2% of all sovereign border length lies on a river.
+Reach 70 gave ~31% here. This replaced a per-point snap (each point near a river read its
 label from further out on its own bank, plus a 2-ring vote penalising candidates
 across a river): it reached ~64% but alternated between parallel rivers, left
 fans at bends and slivers along cell edges. Refine stage +2.2 s (seed 4; a second lattice trace), also paid on load

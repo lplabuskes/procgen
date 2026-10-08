@@ -46,7 +46,7 @@ class ProjectionParams:
     range_floor: float = _f(
         0.5, label="Projection range floor (+ infrastructure)", min=0.0, max=2.0
     )
-    sea_range_factor: float = _f(1.1, label="Sea projection range factor (× land)", min=1.0, max=10.0)
+    sea_range_factor: float = _f(1.2, label="Sea projection range factor (× land)", min=1.0, max=10.0)
     sea_weight: float = _f(1.0, label="Sea channel magnitude weight (vs land)", min=0.0, max=1.0)
     legitimacy_spread: float = _f(0.3, label="Legitimacy spread (±)", min=0.0, max=1.0)
     maritime_scale: float = _f(1.5, label="Maritime reach scale (× trade)", min=0.0, max=5.0)

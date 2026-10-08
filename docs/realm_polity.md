@@ -10,7 +10,7 @@ A polity is a **tree, not a flat partition** (`docs/plans/polity_generation_brie
 - Per-polity scalars (`cohesion`, `infrastructure`, `legitimacy`, `maritime_reach`), rolled per capital from `world.seed` + capital face, modulate the field; their cross-product is the main source of variety (Song ↔ Mongol ↔ HRE ↔ city-state belt).
 - **Marcher autonomy**: vassals holding a hot first-pass frontier are held more loosely, so they secede first.
 - **Stage 5 fragmentation epochs**: over-extended low-cohesion sovereigns shed peripheral seats as new sovereigns, re-resolved → successor states.
-- **Physical borders**: who claims a face is decided on a cost surface with a step at drainage divides and river crossings, so borders settle on ridges and rivers; seatless land pieces (across a lake, a strait, or cut off by a neighbour) go to the neighbour round them. The drawn line is moved onto big rivers run by run in the refine stage ([realm_refine.md](realm_refine.md#river-following-river_followpy)).
+- **Physical borders**: who claims a face is decided on a cost surface with a step at drainage divides, so borders settle on ridges; seatless land pieces (across a lake, a strait, or cut off by a neighbour) go to the neighbour round them. Rivers are not a claim cost: the drawn line is moved onto big rivers run by run in the refine stage ([realm_refine.md](realm_refine.md#river-following-river_followpy)).
 
 ## Files
 
@@ -31,14 +31,14 @@ A polity is a **tree, not a flat partition** (`docs/plans/polity_generation_brie
 
 - **`seeding`** (`CapitalSeedingParams`) — `min_separation` (land cost-distance between capitals), `min_pop_fraction` (of largest city), `trade_weight`.
 - **`defensibility`** (`DefensibilityParams`; consumed by `PopulationStage` via `compute_settlement_defensibility`) — terrain/river weights and wall probability/strength knobs; see [realm_population.md](realm_population.md#defensibility).
-- **`projection`** (`ProjectionParams`) — `base_range` (master consolidation knob; land range = `base_range · (range_floor + infrastructure)`), `range_floor`, `sea_range_factor` (× land range for the sea channel; 1.1; 1.5 → 1.4 when trade was restricted to settlement ports, which concentrates `maritime_reach` at port capitals, → 1.3 in the 2026-10-06 retune, → 1.2 with the ridge step and → 1.1 with the river step, which dear land claims but not the sea channel's), `sea_weight`, `legitimacy_spread` (± magnitude jitter), `maritime_scale` (`maritime_reach ← scale × trade_norm`), `cohesion_min`, `infrastructure_min`, `infrastructure_emergent` (weight of pop+trade in the infrastructure roll).
+- **`projection`** (`ProjectionParams`) — `base_range` (master consolidation knob; land range = `base_range · (range_floor + infrastructure)`), `range_floor`, `sea_range_factor` (× land range for the sea channel; 1.2; 1.5 → 1.4 when trade was restricted to settlement ports, which concentrates `maritime_reach` at port capitals, → 1.3 in the 2026-10-06 retune, → 1.2 with the ridge step, which makes land claims dearer but not the sea channel's; a river claim step took it to 1.1 and was removed), `sea_weight`, `legitimacy_spread` (± magnitude jitter), `maritime_scale` (`maritime_reach ← scale × trade_norm`), `cohesion_min`, `infrastructure_min`, `infrastructure_emergent` (weight of pop+trade in the infrastructure roll).
 - **`claiming`** (`ClaimingParams`) — `hysteresis` (incumbent bonus), `max_iters` (claim loop), `outer_max_iters` (independence-relaxation loop; promotes independents to sovereigns until none remain — **no cap on sovereign count**), `exclave_max_faces` (40; seatless land pieces up to this size are merged into a neighbour, [Exclaves](#exclaves); 0 = off).
 - **`hierarchy`** (`HierarchyParams`) — `direct_threshold` (0.8; the infra-correlation knob: lower → more negative `corr(infrastructure, vassal_frac)`), `vassal_floor` (0.2; vassal ratio floor — the sovereign-count knob), `power_exponent` (0.5; sqrt of raw population dampens size), `cohesion_gain_floor` / `_span`, `max_recursion_depth` (2), `vassal_cluster_distance` (15; candidates within this land cost-distance merge, largest becomes the seat; 0 = off).
 - **`loyalty`** (`LoyaltyParams`, Stage 4; both **off (0.0) by default**) — `economic_grip` (secession resistance ∝ intra-polity trade fraction), `peripheral_wealth_ratio` (non-capital ≥ this × its capital's trade wealth breaks away), `peripheral_external_floor` (min external trade fraction). Monotonic: more grip → fewer, bigger domains; more aggressive peripheral thresholds → more sovereigns.
 - **`marches`** (`MarchParams`, Stage 4; **on by default**) — `weight` (0.5; 0 = off), `reach` (6; land cost-distance e-fold from the border, ~2 faces at the median edge cost ~2.9), `tension_quantile` (0.9; border-face tension quantile that counts as full exposure). See [Marches](#marches-politymarchespy).
 - **`fragmentation`** (`FragmentationParams`) — `n_epochs` (0 = off), `shock_scale` (max cohesion drop per epoch), `size_reference` (domain face count demanding full cohesion).
 - **`tension`** (`BorderTensionParams`) — `barrier_scale`, `flow_ref`, `artery_weight`.
-- **`barriers`** (`BarrierParams`) — `ridge_weight` (8; extra claim cost on an edge crossing a full-relief divide; 0 = off), `ridge_relief_ref` (0.5 km; relief for the full step), hidden `ridge_min_detour` (6 hops) / `ridge_floor_hops` (2); `river_weight` (8; extra claim cost on an edge whose centroid chord crosses a river at full flow; 0 = off), `river_min_flow` (300) / `river_full_flow` (4000) (log ramp; also the range of rivers refine moves drawn borders onto). See [Ridges](#ridges-politybarrierspy).
+- **`barriers`** (`BarrierParams`) — `ridge_weight` (8; extra claim cost on an edge crossing a full-relief divide; 0 = off), `ridge_relief_ref` (0.5 km; relief for the full step), hidden `ridge_min_detour` (6 hops) / `ridge_floor_hops` (2). See [Ridges](#ridges-politybarrierspy).
 - **`forts`** (`FortParams`) — `enabled`, per-kind score floors (`border_min_score` 0.12, `strait_min_score` 0.2, `frontier_min_score` 0.2), `rugged_weight`, `strait_max_radius` (2; passage cut radius, ~2r + 1 faces across), `strait_uncontested_weight` (0.5), `spacing_hops` (2), `resistance` (4; extra edge cost at fortified crossings), per-kind garrisons (300 / 250 / 120 people).
 
 ## Types (`polity/types.py`)
@@ -176,14 +176,12 @@ ridge steps each field there, so a crossing within reach slides onto the ridge.
   within a hop or two. Relief `min(e_i, e_j) − max(floor_i, floor_j)`, the floors
   `ridge_floor_hops` down each path (sea level for water). Median 0.24 km, p95 1.1 km.
 - `add_ridge_costs`: `+ ridge_weight · min(relief / ridge_relief_ref, 1)`.
-- `river_crossing_strength`: per edge, the flow ramp of the biggest world river whose
-  polyline the centroid-to-centroid chord crosses; `add_barrier_costs` adds
-  `river_weight ·` that. The old ford penalty (in the plain costs) only charged edges
-  out of a river face against its flow, too weak to hold a border; this puts
-  face-level borders beside rivers, and the refine stage moves the drawn line onto the river
-  ([realm_refine.md](realm_refine.md#river-following-river_followpy)).
+- No river step: one (a flow-ramped cost on edges whose centroid chord crosses a
+  river) was tried; it roughly doubled sovereign border length on rivers together with
+  refine's river following, but changed who claims what. Rivers are left to the drawn
+  line ([realm_refine.md](realm_refine.md#river-following-river_followpy)).
 
-**Claim vs reach.** The ridge and river costs go only into the *claim graphs*
+**Claim vs reach.** The ridge costs go only into the *claim graphs*
 (`_Ctx.claim_graphs`, fortified alike on regrowth): `ForestBuilder` claims faces
 (sovereign and subtree) on a field projected over them, but classifies settlements,
 measures autonomy and writes `AUTHORITY` from the plain field. Ridges move lines
@@ -210,10 +208,10 @@ along a continent. Seeds 4 / 31 / 35, sovereign exclaves 28 / 21 / 14 → 9 / 8 
 (the rest overseas or large); larger caps merge more but add sovereigns (cap 1000:
 75 vs 53 on seed 4).
 
-With ridges, rivers, merging and `sea_range_factor` 1.1, seeds 1 2 3 4 31 35:
-largest domain 15.2 / 34.9 / 33.9 / 9.9 / 30.6 / 28.6% (mean 25.5 vs 24.4 before),
-sovereigns 62 / 38 / 30 / 48 / 39 / 52 (mean 44.8 vs 38.8), `corr(infra,
-vassal_frac)` mean −0.11 (−0.32 before). Sea 1.0: mean 18.6%, 51.7 sovereigns. Validation: `scripts/measure_borders.py`.
+With ridges, merging and `sea_range_factor` 1.2, seeds 1 2 3 4 31 35:
+largest domain 17.9 / 35.1 / 26.6 / 10.3 / 28.8 / 30.9% (mean 24.9 vs 24.4 before),
+sovereigns 61 / 37 / 33 / 48 / 33 / 45 (mean 42.8 vs 38.8), `corr(infra,
+vassal_frac)` mean −0.14 (−0.32 before). Validation: `scripts/measure_borders.py`.
 
 ## PolityStage
 

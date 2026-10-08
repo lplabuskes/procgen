@@ -1,4 +1,4 @@
-"""Physical barriers that polity borders snap to: drainage divides (ridges) and rivers.
+"""Physical barriers that polity borders snap to: drainage divides (ridges).
 
 Authority decays with land cost-distance, so a border sits where two capitals'
 fields cross. An extra cost on the edges that cross a ridge puts a step in each
@@ -10,19 +10,15 @@ Two faces on the same slope merge a step or two down, so only true divides count
 the step is scaled by the divide's relief over the ground ``floor_hops`` down
 either side, so a flat watershed on a plain barely registers.
 
-A **river crossing** is an edge whose centroid-to-centroid chord crosses a river
-polyline; its step ramps with the river's flow (log, ``river_min_flow`` →
-``river_full_flow``). That puts face-level borders beside rivers; the refine stage
-(:mod:`realmgen.refine.river_follow`) then moves the line onto the river itself,
-over the same flow range.
+Rivers are not a claim cost: the refine stage moves drawn borders onto them
+(:mod:`realmgen.refine.river_follow`).
 """
 from __future__ import annotations
 
 import heapq
-from typing import Iterable, List, Optional, Sequence
+from typing import List, Sequence
 
 import numpy as np
-from scipy.spatial import KDTree
 
 from core.params import param_field as _f, paramclass
 from worldgen.geology.channels import ELEVATION
@@ -31,7 +27,7 @@ from worldgen.hydrology.channels import FILLED_HEIGHT
 
 @paramclass
 class BarrierParams:
-    """Ridge and river steps in the polity cost surface (river flows shared with refine's river following)."""
+    """Ridge step in the polity cost surface."""
     ridge_weight: float = _f(
         8.0, label="Ridge crossing cost (at full relief)", min=0.0, max=40.0, step=0.5
     )
@@ -43,15 +39,6 @@ class BarrierParams:
     )
     ridge_floor_hops: int = _f(
         2, label="Ridge: hops down to the relief floor", min=1, max=6, step=1, hidden=True
-    )
-    river_weight: float = _f(
-        8.0, label="River crossing cost (at full flow)", min=0.0, max=40.0, step=0.5
-    )
-    river_min_flow: float = _f(
-        300.0, label="River crossing: min flow", min=0.0, max=50000.0, step=100.0
-    )
-    river_full_flow: float = _f(
-        4000.0, label="River crossing: flow at full cost", min=1.0, max=100000.0, step=500.0
     )
 
 
@@ -131,49 +118,6 @@ def divide_relief(face_adjacency: Sequence[Sequence[int]], elevation: np.ndarray
     flat = np.where(divide, np.maximum(relief, 0.0), 0.0)
     indptr = np.concatenate([[0], np.cumsum(deg)])
     return [flat[indptr[i]:indptr[i + 1]] for i in range(n)]
-
-
-def river_crossing_strength(face_adjacency: Sequence[Sequence[int]], centroids: np.ndarray,
-                            rivers: Optional[Iterable], *, min_flow: float,
-                            full_flow: float) -> List[np.ndarray]:
-    """Per-edge flow ramp (0–1, ``face_adjacency``-aligned) of the biggest river the
-    centroid chord crosses; 0 where none does."""
-    from realmgen.refine.barriers import flow_ramp, pack_river_segments
-    n = len(face_adjacency)
-    deg = np.array([len(a) for a in face_adjacency], dtype=np.int64)
-    indptr = np.concatenate([[0], np.cumsum(deg)])
-    out = np.zeros(int(deg.sum()))
-    seg = pack_river_segments(rivers, min_flow=min_flow)
-    if seg.shape[0] and out.size:
-        c = np.asarray(centroids, dtype=np.float64)
-        c = c / np.linalg.norm(c, axis=1, keepdims=True)
-        src = np.repeat(np.arange(n), deg)
-        dst = np.fromiter((j for a in face_adjacency for j in a), dtype=np.int64, count=out.size)
-        p, q = c[src], c[dst]
-        a, b, strength = seg[:, :3], seg[:, 3:6], flow_ramp(seg[:, 6], min_flow=min_flow, full_flow=full_flow)
-        tree = KDTree(0.5 * (a + b))
-        radius = 0.5 * float(np.linalg.norm(q - p, axis=1).max()) + 0.5 * float(np.linalg.norm(b - a, axis=1).max())
-        n_pq, n_ab = np.cross(p, q), np.cross(a, b)
-        for e, hits in enumerate(tree.query_ball_point(0.5 * (p + q), radius)):
-            if not hits:
-                continue
-            h = np.asarray(hits)
-            cut = (((a[h] @ n_pq[e]) * (b[h] @ n_pq[e])) < 0.0) \
-                & (((n_ab[h] @ p[e]) * (n_ab[h] @ q[e])) < 0.0)
-            if cut.any():
-                out[e] = float(strength[h[cut]].max())
-    return [out[indptr[i]:indptr[i + 1]] for i in range(n)]
-
-
-def add_barrier_costs(land_edge_costs: Sequence[np.ndarray], relief: Optional[Sequence[np.ndarray]],
-                      river: Optional[Sequence[np.ndarray]], params: BarrierParams) -> List[np.ndarray]:
-    """``land_edge_costs`` plus the ridge step (``add_ridge_costs``) and ``river_weight · river``."""
-    out = [np.asarray(c, dtype=np.float64) for c in land_edge_costs]
-    if relief is not None:
-        out = add_ridge_costs(out, relief, params)
-    if river is not None and params.river_weight > 0.0:
-        out = [c + float(params.river_weight) * np.asarray(r) for c, r in zip(out, river)]
-    return out
 
 
 def add_ridge_costs(land_edge_costs: Sequence[np.ndarray], relief: Sequence[np.ndarray],

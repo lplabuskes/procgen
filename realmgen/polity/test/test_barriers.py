@@ -121,34 +121,3 @@ def test_merge_exclaves_respects_size_cap_and_eligibility():
     eligible[[4, 6]] = False                           # the rim claimant is outside the territory
     out = merge_exclaves(assign, caps, field, edges, max_faces=10, eligible_mask=eligible)
     assert out[5] == 0
-
-
-# ── river crossings ─────────────────────────────────────────────────────────
-
-
-def test_river_crossing_strength_marks_edges_whose_chord_crosses():
-    from core.mesh import Mesh
-    from realmgen.polity.barriers import river_crossing_strength
-    dual = Mesh.icosphere(2).mesh_dual()
-    adj = dual.face_adjacency
-    c = np.asarray(dual.face_centroids, dtype=np.float64)
-    c /= np.linalg.norm(c, axis=1, keepdims=True)
-    # A big river along the equator (z = 0), and a stream below the threshold along z = 0.5.
-    lon = np.linspace(-np.pi, np.pi, 400)
-    big = (np.column_stack([np.cos(lon), np.sin(lon), np.zeros(lon.size)]), np.full(lon.size - 1, 5000.0))
-    ring = np.column_stack([np.cos(lon), np.sin(lon), np.full(lon.size, 1.0)])
-    small = (ring / np.linalg.norm(ring, axis=1, keepdims=True), np.full(lon.size - 1, 100.0))
-    out = river_crossing_strength(adj, c, [big, small], min_flow=300.0, full_flow=4000.0)
-    for i, nb in enumerate(adj):
-        for k, j in enumerate(nb):
-            crosses = c[i, 2] * c[j, 2] < 0.0
-            assert (out[i][k] == 1.0) == crosses
-            assert out[i][k] == out[j][list(adj[j]).index(i)]
-
-
-def test_add_barrier_costs_combines_ridge_and_river():
-    from realmgen.polity.barriers import add_barrier_costs
-    costs = [np.array([1.0, 1.0])]
-    out = add_barrier_costs(costs, [np.array([0.5, 0.0])], [np.array([0.0, 0.5])],
-                            BarrierParams(ridge_weight=8.0, ridge_relief_ref=0.5, river_weight=6.0))
-    assert out[0].tolist() == pytest.approx([9.0, 4.0])

@@ -14,7 +14,6 @@ import numpy as np
 from core.params import param_field as _f, paramclass
 from core.pipeline import BuildContext, Stage
 from realmgen.channels import AUTHORITY, POLITY_ID
-from realmgen.polity.barriers import BarrierParams
 from realmgen.persistence import pack_borders, pack_routes, unpack_borders, unpack_routes
 from realmgen.refine.borders import plain_border_chains, smooth_polity_borders
 from realmgen.refine.fill import PolityLabelField, colorize_labels
@@ -55,7 +54,13 @@ class RefineParams:
         3, label="Boundary erosion octaves", min=1, max=5, step=1, hidden=True
     )
     border_river_reach_km: float = _f(
-        70.0, label="Border river follow reach (km, 0=off)", min=0.0, max=150.0, step=5.0
+        120.0, label="Border river follow reach (km, 0=off)", min=0.0, max=300.0, step=10.0
+    )
+    border_river_min_flow: float = _f(
+        300.0, label="Border river: min flow", min=0.0, max=50000.0, step=100.0
+    )
+    border_river_full_flow: float = _f(
+        4000.0, label="Border river: flow at full reach", min=1.0, max=100000.0, step=500.0
     )
     border_river_min_run_km: float = _f(
         40.0, label="Border river: shortest followed stretch (km)", min=5.0, max=300.0, step=5.0
@@ -68,10 +73,8 @@ class RefineStage(Stage):
     name = "refine"
     requires = (IS_WATER, OCEAN_MASK, FERTILITY_MEAN)
 
-    def __init__(self, params: RefineParams | None = None, barriers: BarrierParams | None = None) -> None:
+    def __init__(self, params: RefineParams | None = None) -> None:
         self.params = params or RefineParams()
-        # River flow thresholds shared with the polity stage's river crossings.
-        self.barriers = barriers or BarrierParams()
         # Final routes/borders, cached for serialization.
         self._routes: list | None = None
         self._borders: dict | None = None
@@ -158,8 +161,8 @@ class RefineStage(Stage):
         positions = (np.array([np.asarray(s.site_position, dtype=np.float64) for s in settlements])
                      if settlements else np.zeros((0, 3)))
         follow = RiverFollowParams(reach_km=float(p.border_river_reach_km),
-                                   min_flow=float(self.barriers.river_min_flow),
-                                   full_flow=float(self.barriers.river_full_flow),
+                                   min_flow=float(p.border_river_min_flow),
+                                   full_flow=float(p.border_river_full_flow),
                                    min_run_km=float(p.border_river_min_run_km))
         return build_river_swaps(chains, world.get_feature("rivers"), field.plain_land_labels,
                                  field.is_water_at, positions, field.centroids, follow)
