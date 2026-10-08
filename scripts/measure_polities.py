@@ -31,15 +31,15 @@ import argparse
 import numpy as np
 
 from core.pipeline import BuildContext
-from realmgen.builder import RealmParams, RealmPipeline
-from _common import get_physical_world, add_seed_args, resolve_seeds
+from realmgen.builder import RealmPipeline
+from _common import add_seed_args, add_set_arg, get_physical_world, realm_params, resolve_seeds
 
 DEFAULT_SEEDS = [4, 31, 35]
 
 
-def measure_seed(seed: int, rebuild: bool, detail: bool) -> None:
+def measure_seed(seed: int, rebuild: bool, detail: bool, overrides: list | None = None) -> None:
     world = get_physical_world(seed, rebuild)
-    realm = RealmPipeline(RealmParams())
+    realm = RealmPipeline(realm_params(overrides or []))
     realm.build(BuildContext(world=world, seed=seed))
     ps = realm.polity_stage
     pols = ps.polities or []
@@ -93,12 +93,13 @@ def main() -> None:
     add_seed_args(ap)
     ap.add_argument("--detail", action="store_true", help="per-sovereign dump")
     ap.add_argument("--rebuild-cache", action="store_true", help="force rebuild worlds")
+    add_set_arg(ap)
     args = ap.parse_args()
 
     seeds = resolve_seeds(args, DEFAULT_SEEDS)
 
     for seed in seeds:
-        measure_seed(seed, args.rebuild_cache, args.detail)
+        measure_seed(seed, args.rebuild_cache, args.detail, args.set)
 
 
 if __name__ == "__main__":

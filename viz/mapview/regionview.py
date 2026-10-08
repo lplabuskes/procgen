@@ -17,7 +17,9 @@ from localmap.geometry import PARENT_CENTER, PARENT_RADIUS
 from localmap.params import LocalParams
 from localmap.farmland import farmland_rgba
 from localmap.villages import VILLAGE_KIND_NAMES
+from region.borders import view_polity_borders
 from region.display import build_layer_texture, snap_to_land
+from realmgen.refine.barriers import pack_river_segments
 from viz.mapview.legend import draw_legend, legend_size
 from viz.mapview.overlays import city_floor_radius, draw_overlays, fort_markers, settlement_markers, town_markers
 from region.geometry import RegionGeometry
@@ -86,6 +88,9 @@ class RegionView(QWidget):
         self._streams: Optional[tuple[RegionStreamParams, list[RiverPath]]] = None
         # World deltas moved onto the re-routed rivers' mouths.
         self._deltas: Optional[np.ndarray] = None
+        # (rivers, fields, packed segments, borders) — the drawn rivers' segments, which the
+        # Polities fill and border lines snap to, and those lines (None until first drawn).
+        self._polity_cache: Optional[tuple] = None
         self._globe: Optional["World"] = None
         self._layer: Optional[str] = None
         self._spec: Optional[SchemeSpec] = None
@@ -311,6 +316,7 @@ class RegionView(QWidget):
             self._zoom, self._pan = zoom, pan
         else:
             self._refine_features()
+            self._rebuild_images()   # the rivers moved: layers that snap to them follow
         self.update()
 
     def set_realm_params(self, params: Optional["RealmParams"]) -> None:
@@ -417,6 +423,7 @@ class RegionView(QWidget):
             return
         rgba = build_layer_texture(                                 # (M, T, T, 4)
             self._fields, self._spec, self._globe.mesh if self._globe is not None else None,
+            river_segments=self._river_segments(),
         )
         data = np.ascontiguousarray((rgba * 255.0).clip(0, 255).astype(np.uint8))
         m, h, w, _ = data.shape
@@ -551,6 +558,10 @@ class RegionView(QWidget):
                 out["cities"] = (self._local.city_index, self._local.city_positions, self._local.city_footprints)
         if self._rivers is not None:
             out["rivers"] = [*self._rivers.paths, *self._rivers.streams]
+        if self._overlay_visible.get("polity_borders"):
+            borders = self._polity_borders()
+            if borders is not None:
+                out["polity_borders"] = borders
         if self._roads is not None:
             out["trade_routes"] = self._roads.segments
         if self._deltas is not None:
@@ -565,6 +576,33 @@ class RegionView(QWidget):
                 np.asarray(minerals[2], dtype=np.float64)[deposit] * share,
             )
         return out
+
+    def _polity_entry(self) -> Optional[tuple]:
+        """The polity cache for the rivers and fields on screen (rebuilt when either changes)."""
+        if self._rivers is None or self._fields is None:
+            return None
+        c = self._polity_cache
+        if c is None or c[0] is not self._rivers or c[1] is not self._fields:
+            c = (self._rivers, self._fields, pack_river_segments(self._rivers.paths), None)
+            self._polity_cache = c
+        return c
+
+    def _river_segments(self) -> Optional[np.ndarray]:
+        """Packed segments of the rivers drawn here, for layers that snap to them."""
+        c = self._polity_entry()
+        return c[2] if c is not None else None
+
+    def _polity_borders(self) -> Optional[dict]:
+        """Border lines contoured from this view's Polities fill (its rivers), cached."""
+        c = self._polity_entry()
+        globe, fields = self._globe, self._fields
+        field = globe.get_feature("polity_label_field") if globe is not None else None
+        if c is None or field is None or globe is None or fields is None:
+            return None
+        if c[3] is None:
+            borders = view_polity_borders(fields, field, globe.get_feature("polities") or [], c[2])
+            c = self._polity_cache = (c[0], c[1], c[2], borders)
+        return c[3]
 
     def _overlay_projector(self) -> "_RegionProjector":
         """The projector overlays are drawn with, for the cell as last laid out."""

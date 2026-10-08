@@ -7,7 +7,7 @@ then recurse each into its directly-held core plus vassal sub-territories.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from scipy.sparse import csr_matrix
@@ -19,6 +19,7 @@ from realmgen.polity.authority import (
     claim_faces,
     classify_settlements,
     compute_authority_fields,
+    merge_exclaves,
 )
 from realmgen.polity.loyalty import (
     compute_internal_trade_fraction,
@@ -45,7 +46,7 @@ class ProjectionParams:
     range_floor: float = _f(
         0.5, label="Projection range floor (+ infrastructure)", min=0.0, max=2.0
     )
-    sea_range_factor: float = _f(1.3, label="Sea projection range factor (× land)", min=1.0, max=10.0)
+    sea_range_factor: float = _f(1.1, label="Sea projection range factor (× land)", min=1.0, max=10.0)
     sea_weight: float = _f(1.0, label="Sea channel magnitude weight (vs land)", min=0.0, max=1.0)
     legitimacy_spread: float = _f(0.3, label="Legitimacy spread (±)", min=0.0, max=1.0)
     maritime_scale: float = _f(1.5, label="Maritime reach scale (× trade)", min=0.0, max=5.0)
@@ -62,6 +63,9 @@ class ClaimingParams:
     hysteresis: float = _f(0.15, label="Claim hysteresis (incumbent bonus)", min=0.0, max=1.0)
     max_iters: int = _f(8, label="Claim max iterations", min=1, max=50)
     outer_max_iters: int = _f(6, label="Independence relaxation iterations", min=1, max=20)
+    exclave_max_faces: int = _f(
+        40, label="Merge seatless land pieces up to (faces, 0=off)", min=0, max=500, step=1
+    )
 
 
 @paramclass
@@ -98,10 +102,20 @@ class _Ctx:
     p: "PolityParams"
     face_to_settlement: Dict[int, int]
     frontier: Optional[np.ndarray] = None  # (N,) march exposure from a previous pass; None = off
+    # Graphs deciding *who claims* a face (land, hybrid): the plain ones plus barrier
+    # steps (ridges), so borders snap to them while reach and classification don't
+    # change. None => claim on the plain graphs.
+    claim_graphs: Optional[Tuple[csr_matrix, Optional[csr_matrix]]] = None
+    # Directed land–land adjacency (authority.land_edges); empty => no exclave merging.
+    land_edges: Tuple[np.ndarray, np.ndarray] = field(
+        default_factory=lambda: (np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)))
     distances: ProjectionDistances = field(init=False)
+    claim_distances: ProjectionDistances = field(init=False)
 
     def __post_init__(self) -> None:
         self.distances = ProjectionDistances(self.land_graph, self.hybrid_graph, self.n)
+        self.claim_distances = (ProjectionDistances(*self.claim_graphs, self.n)
+                                if self.claim_graphs is not None else self.distances)
 
 
 class ForestBuilder:
@@ -180,10 +194,12 @@ class ForestBuilder:
             capital_faces = [int(s.settlement_faces[i]) for i in capital_sidx]
             scalars = self._roll(capital_sidx, capital_faces)
             fields = self._project(capital_faces, scalars)
+            claim_fields = self._project(capital_faces, scalars, claim=True)
             partition, n_iters = claim_faces(
-                fields, capital_faces, land_mask,
+                claim_fields, capital_faces, land_mask,
                 hysteresis=p.claiming.hysteresis, max_iters=p.claiming.max_iters, prev=prev,
             )
+            partition = self._merge_exclaves(partition, capital_faces, claim_fields)
             prev = partition
 
             # Capital's raw power, not the domain sum (which would let a big empire hold everything).
@@ -220,6 +236,13 @@ class ForestBuilder:
 
         return partition, fields, scalars
 
+    def _merge_exclaves(self, assign, capital_faces, fields, eligible=None) -> np.ndarray:
+        max_faces = int(self.s.p.claiming.exclave_max_faces)
+        if max_faces <= 0 or self.s.land_edges[0].size == 0:
+            return assign
+        return merge_exclaves(assign, capital_faces, fields, self.s.land_edges,
+                              max_faces=max_faces, eligible_mask=eligible)
+
     # ── Stage-4 loyalty levers ─────────────────────────────────────────────────
 
     def _loyalty_modifiers(self, partition: np.ndarray, capital_sidx: List[int]):
@@ -249,14 +272,15 @@ class ForestBuilder:
 
     # ── projection / scalar helpers ───────────────────────────────────────────
 
-    def _project(self, capital_faces: Sequence[int], sc: Scalars) -> np.ndarray:
+    def _project(self, capital_faces: Sequence[int], sc: Scalars, *, claim: bool = False) -> np.ndarray:
+        """Authority fields ``(C, N)``; ``claim`` over the barrier graphs (who holds a face)."""
         p = self.s.p
         return compute_authority_fields(
             self.s.n, capital_faces, sc.legitimacy, sc.infrastructure, sc.maritime_reach,
             self.s.land_graph, self.s.hybrid_graph,
             base_range=p.projection.base_range, range_floor=p.projection.range_floor,
             sea_range_factor=p.projection.sea_range_factor, sea_weight=p.projection.sea_weight,
-            distances=self.s.distances,
+            distances=self.s.claim_distances if claim else self.s.distances,
         )
 
     def _roll(self, capital_sidx, capital_faces) -> Scalars:
@@ -358,10 +382,12 @@ class ForestBuilder:
                 arr[0] = float(parent_val[0])
             terr_mask = np.zeros(s.n, dtype=bool)
             terr_mask[territory] = True
+            sub_field = self._project(sub_caps, sub, claim=True)
             sub_assign, _ = claim_faces(
-                self._project(sub_caps, sub), sub_caps, terr_mask,
+                sub_field, sub_caps, terr_mask,
                 hysteresis=p.claiming.hysteresis, max_iters=p.claiming.max_iters,
             )
+            sub_assign = self._merge_exclaves(sub_assign, sub_caps, sub_field, terr_mask)
             own_faces = np.flatnonzero(sub_assign == 0)
             for j, vm in enumerate(vassal_members, start=1):
                 v_terr = np.flatnonzero(sub_assign == j)

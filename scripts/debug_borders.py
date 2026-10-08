@@ -15,6 +15,9 @@ Usage:
     python3 scripts/debug_borders.py --show-overhang      # reveal invisible over-hang texels
     python3 scripts/debug_borders.py --depth 0            # only sovereign borders (default: all)
     python3 scripts/debug_borders.py --seams --vertices   # overlay hexagon seams + border vertices
+    python3 scripts/debug_borders.py --rivers             # overlay big rivers (flow >= --river-flow)
+    python3 scripts/debug_borders.py --pick-river         # auto-centre on a border beside a big river
+    python3 scripts/debug_borders.py --set refine.border_river_weight=0   # RealmParams override
     python3 scripts/debug_borders.py --rebuild-cache --out /tmp/borders.png
 """
 from __future__ import annotations
@@ -31,24 +34,24 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.collections import LineCollection, PolyCollection  # noqa: E402
 
 from core.pipeline import BuildContext  # noqa: E402
-from realmgen.builder import RealmParams, RealmPipeline  # noqa: E402
+from realmgen.builder import RealmPipeline  # noqa: E402
 from realmgen.refine.fill import WATER, UNCLAIMED, _polity_color_map  # noqa: E402
 from realmgen.polity.types import UNCLAIMED_COLOR  # noqa: E402
 from worldgen.geology.channels import OCEAN_MASK  # noqa: E402
 from worldgen.geology.display import OCEAN_COLOR  # noqa: E402
 from worldgen.hydrology.channels import LAKE_MASK  # noqa: E402
 
-from _common import get_physical_world, add_seed_args, resolve_seeds  # noqa: E402
+from _common import add_seed_args, add_set_arg, get_physical_world, realm_params, resolve_seeds  # noqa: E402
 
 DEFAULT_SEEDS = [4]
 DEPTH_COLORS = ["black", "#d62728", "#1f77b4", "#2ca02c", "#9467bd", "#8c564b"]
 
 
-def build_realm(seed: int, rebuild: bool, lattice_offset: int | None = None):
+def build_realm(seed: int, rebuild: bool, lattice_offset: int | None = None, overrides: list | None = None):
     """Build the cached physical world + realm pipeline; return the texel labels
     and borders it produced (so they come from the current fill/border code)."""
     world = get_physical_world(seed, rebuild)
-    params = RealmParams()
+    params = realm_params(overrides or [])
     if lattice_offset is not None:
         params.refine.border_lattice_offset = lattice_offset
     realm = RealmPipeline(params)
@@ -108,6 +111,29 @@ def pick_center_face(mesh, labels, in_poly) -> int:
     return int(np.argmax(diversity))
 
 
+def pick_river_face(world, river_lines, min_flow: float, k: int) -> int:
+    """A face on a sovereign border whose river (flow >= ``min_flow``) runs near it; k-th by flow."""
+    from realmgen.channels import SOVEREIGN_ID
+    mesh = world.mesh
+    sof = np.asarray(SOVEREIGN_ID.read(mesh))
+    adj = mesh.face_adjacency
+    border = np.array([sof[f] >= 0 and any(sof[g] >= 0 and sof[g] != sof[f] for g in adj[f])
+                       for f in range(len(adj))])
+    c = np.asarray(mesh.face_centroids, dtype=np.float64)
+    c = c / np.linalg.norm(c, axis=1, keepdims=True)
+    best = np.zeros(len(adj))
+    for pos, flow in river_lines:
+        for p, fl in zip(pos[:-1], flow):
+            if fl >= min_flow:
+                f = int(np.argmax(c @ p))
+                best[f] = max(best[f], fl)
+    cand = np.flatnonzero(border & (best > 0))
+    if cand.size == 0:
+        raise SystemExit("no sovereign border beside a big river")
+    order = cand[np.argsort(-best[cand])]
+    return int(order[min(k, order.size - 1)])
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -128,10 +154,19 @@ def main() -> None:
     ap.add_argument("--lattice-offset", type=int, default=None,
                     help="border lattice depth offset (default: RefineParams.border_lattice_offset)")
     ap.add_argument("--out", default=None, help="output PNG (default scripts/results/borders_<seed>.png)")
+    ap.add_argument("--rivers", action="store_true", help="overlay rivers with flow >= --river-flow")
+    ap.add_argument("--river-flow", type=float, default=1000.0, help="min river flow drawn / picked")
+    ap.add_argument("--pick-river", type=int, nargs="?", const=0, default=None, metavar="K",
+                    help="centre on the K-th busiest sovereign-border-beside-a-big-river face (implies --rivers)")
+    add_set_arg(ap)
     args = ap.parse_args()
+    if args.pick_river is not None:
+        args.rivers = True
 
     seed = resolve_seeds(args, DEFAULT_SEEDS)[0]
-    world, mesh, polities, labels, borders = build_realm(seed, args.rebuild_cache, args.lattice_offset)
+    world, mesh, polities, labels, borders = build_realm(seed, args.rebuild_cache, args.lattice_offset, args.set)
+    river_lines = [(np.asarray(p, dtype=np.float64), np.asarray(f, dtype=np.float64))
+                   for p, f, *_ in (world.get_feature("rivers") or [])]
     N, H, W = labels.shape
     in_poly = np.asarray(mesh.face_texture_in_polygon(H, W))
     positions = np.asarray(mesh.face_texture_positions(H, W), dtype=np.float64)
@@ -144,6 +179,9 @@ def main() -> None:
         center = np.array([np.cos(lat) * np.cos(lon),
                            np.cos(lat) * np.sin(lon), np.sin(lat)])
         center_face = int(np.argmax(centroids @ center))
+    elif args.pick_river is not None:
+        center_face = pick_river_face(world, river_lines, args.river_flow, args.pick_river)
+        center = centroids[center_face]
     else:
         center_face = args.face if args.face is not None else pick_center_face(mesh, labels, in_poly)
         center = centroids[center_face]
@@ -222,6 +260,18 @@ def main() -> None:
         if seam_segs:
             ax.add_collection(LineCollection(seam_segs, colors="0.5",
                                              linewidths=0.5, linestyles=":"))
+
+    # ── rivers ──────────────────────────────────────────────────────────────
+    if args.rivers:
+        segs, widths = [], []
+        for pos, flow in river_lines:
+            for k in range(min(len(flow), len(pos) - 1)):
+                if flow[k] < args.river_flow or (pos[k] @ center < cull and pos[k + 1] @ center < cull):
+                    continue
+                segs.append([to_2d(pos[k][None])[0], to_2d(pos[k + 1][None])[0]])
+                widths.append(0.6 + 1.6 * min(np.log(flow[k] / args.river_flow) / np.log(10.0), 1.0))
+        if segs:
+            ax.add_collection(LineCollection(segs, colors="#1f6fd1", linewidths=widths, zorder=4))
 
     # ── border polylines ────────────────────────────────────────────────────
     depths = sorted(borders) if args.depth is None else [args.depth]

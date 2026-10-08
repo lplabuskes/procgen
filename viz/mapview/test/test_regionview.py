@@ -283,3 +283,34 @@ def test_region_draws_each_deposit_as_its_workings(app, synthetic_globe):  # noq
     finally:
         synthetic_globe.remove_feature("minerals")
         synthetic_globe.remove_feature("mineral_sites")
+
+
+def test_region_borders_are_its_own_and_cached(app, synthetic_globe):  # noqa: F811
+    """With Polity Borders on, the region draws lines contoured from its own fill (over
+    the rivers it routed), rebuilt only when its rivers change."""
+    from realmgen.polity.types import Polity
+    from realmgen.refine.fill import PolityLabelField
+    mesh = synthetic_globe.mesh
+    c = np.asarray(mesh.face_centroids, dtype=np.float64)
+    pof = np.where(c[:, 0] > 0.0, 0, 1)
+    n = len(pof)
+    field = PolityLabelField(mesh, pof, np.zeros(n, bool), np.ones(n), river_reach_km=80.0)
+    pols = [Polity(polity_id=p, capital_face=p, capital_position=c[p], power=1.0, n_faces=1,
+                   member_settlement_faces=[p]) for p in (0, 1)]
+    synthetic_globe.add_feature("polity_label_field", field)
+    synthetic_globe.add_feature("polities", pols)
+    try:
+        view = RegionView()
+        view.resize(600, 400)
+        view.set_region(RegionGeometry(40, synthetic_globe.antimeridian), synthetic_globe)
+        assert "polity_borders" not in view._refined_features()     # overlay off: not traced
+        view.set_overlay_visible("polity_borders", True)
+        borders = view._refined_features()["polity_borders"]
+        assert isinstance(borders, dict)
+        assert view._refined_features()["polity_borders"] is borders  # cached
+        segments = view._river_segments()
+        assert segments is not None and segments.shape[1] == 7
+        _painted(view)
+    finally:
+        synthetic_globe.remove_feature("polity_label_field")
+        synthetic_globe.remove_feature("polities")

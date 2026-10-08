@@ -52,6 +52,21 @@ class RefineParams:
     boundary_warp_octaves: int = _f(
         3, label="Boundary erosion octaves", min=1, max=5, step=1, hidden=True
     )
+    border_river_reach_km: float = _f(
+        70.0, label="Border river snap reach (km, 0=off)", min=0.0, max=150.0, step=5.0
+    )
+    border_river_cross_weight: float = _f(
+        3.0, label="Border river: cell split strength (0=off)", min=0.0, max=10.0, step=0.25
+    )
+    border_river_snap_fraction: float = _f(
+        0.6, label="Border river: full-snap share of reach", min=0.0, max=1.0, step=0.05, hidden=True
+    )
+    border_river_min_flow: float = _f(
+        300.0, label="Border river snap: min flow", min=0.0, max=50000.0, step=100.0
+    )
+    border_river_full_flow: float = _f(
+        4000.0, label="Border river snap: flow at full strength", min=1.0, max=100000.0, step=500.0
+    )
 
 
 class RefineStage(Stage):
@@ -131,6 +146,12 @@ class RefineStage(Stage):
             warp_frequency=float(p.boundary_warp_frequency),
             warp_octaves=int(p.boundary_warp_octaves),
             warp_seed=int(world.seed or 0),
+            rivers=world.get_feature("rivers"),
+            river_reach_km=float(p.border_river_reach_km),
+            river_min_flow=float(p.border_river_min_flow),
+            river_full_flow=float(p.border_river_full_flow),
+            river_snap_fraction=float(p.border_river_snap_fraction),
+            river_cross_weight=float(p.border_river_cross_weight),
         )
         world.add_feature("polity_label_field", field)
         return field

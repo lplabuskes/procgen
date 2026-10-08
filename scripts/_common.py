@@ -68,6 +68,25 @@ def get_realm_world(seed: int, rebuild: bool, cache_dir: Path = CACHE_DIR) -> Wo
     return world
 
 
+def realm_params(overrides: list[str]):  # type: ignore[no-untyped-def]
+    """``RealmParams`` with ``a.b.c=value`` overrides (value parsed as the field's type)."""
+    from realmgen.builder import RealmParams
+    params = RealmParams()
+    for item in overrides:
+        path, value = item.split("=", 1)
+        *parents, leaf = path.split(".")
+        obj = params
+        for name in parents:
+            obj = getattr(obj, name)
+        setattr(obj, leaf, type(getattr(obj, leaf))(value))
+    return params
+
+
+def add_set_arg(parser) -> None:  # type: ignore[no-untyped-def]
+    parser.add_argument("--set", action="append", default=[], metavar="PATH=VALUE",
+                        help="Override a RealmParams field, e.g. polity.barriers.ridge_weight=0")
+
+
 def avg(rows: list[dict], key: str) -> float:
     vals = [r[key] for r in rows if isinstance(r.get(key), (int, float)) and r[key] == r[key]]
     return sum(vals) / len(vals) if vals else float("nan")

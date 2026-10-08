@@ -112,6 +112,18 @@ global paths), except these, passed as `draw_overlays(..., refined={...})`:
 | `towns` | — (refined positions live in the world feature) | `Towns` at drawn positions |
 | `villages` | — | `LocalMap.villages` |
 | `cities` | — | `(city_index, positions, CityFootprints)` |
+| `polity_borders` | lines contoured from the region's own fill | same, local |
+
+**Polities and borders.** The view's drawn rivers (`paths`, packed by
+`pack_river_segments`) go to every layer build (`build_layer_texture(...,
+river_segments=)`), so the Polities fill snaps to them, not to the world
+centreline up to a corridor away. With **Polity Borders** on, `view_polity_borders`
+(`region/borders.py`) contours that same field — `polity_label_field.with_rivers` —
+on a lattice over the view's `(s, t)` frame (1.5 texels; water and off-cell from the
+refined masks; the world's tracer), so lines bound the fill drawn. Segments and
+lines are cached in `_polity_cache` against the rivers and fields objects (lines
+traced on first draw, ~0.4 s a region); new river params re-route and rebuild the
+images.
 
 Widths and thresholds come from the *world* feature (route width vs world max
 flow, world median cut), so a re-routed road is drawn as heavily as on the world

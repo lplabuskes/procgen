@@ -21,6 +21,7 @@ and city jitter seeded from `World.seed`.
 - `realmgen/refine/sites.py` — `SiteField`: per-texel site features (coast, river, confluence, local fertility, face ownership), shared with the town stage
 - `realmgen/refine/settlements.py` — city siting (`refine_settlement_positions`, `city_site_scores`, `SITE_*` weights reused by region/local tiers) + `remap_routes`
 - `realmgen/refine/fill.py` — `PolityLabelField` (polity at any sphere point, incl. domain warp), texel labels, fill texture, `polity_fill_recipe`
+- `realmgen/refine/barriers.py` — river snap of the label field (`RiverBarriers`, `pack_river_segments`)
 - `realmgen/refine/borders.py` — border polylines contoured from the same field on a seamless icosphere lattice (marching triangles + bisection + Chaikin)
 
 ## `RefineParams`
@@ -33,6 +34,10 @@ and city jitter seeded from `World.seed`.
 - `boundary_warp_amplitude` (0.012, unit-sphere ≈ ⅓ face) — fBm domain warp on positions fed to the polity Voronoi; `0` → bare centroid bisectors (polygonal staircase).
 - `boundary_warp_frequency` (45) — warp base frequency; too high aliases against the texel grid.
 - `boundary_warp_octaves` (hidden, 3).
+- `border_river_reach_km` (70) — how far from a big river a border is pulled onto it ([River snap](#river-snap-barrierspy)); 0 = off.
+- `border_river_min_flow` (300) / `border_river_full_flow` (4000) — river flow at which the reach and cell split start / are full (log ramp; world rivers start at 500, median ~1200, p90 ~7600 — 1000/8000 left the mid-size rivers that border most realms almost inert).
+- `border_river_cross_weight` (3) — cell split: `exp(weight · strength)` on a candidate across a river ([River snap](#river-snap-barrierspy)); 0 = off.
+- `border_river_snap_fraction` (hidden, 0.6) — share of the reach that snaps fully; beyond it borders are stretched onto the band.
 
 ## Site features (`sites.py`)
 
@@ -103,6 +108,15 @@ Labels: polity id (`≥ 0`), `UNCLAIMED` (-1), `WATER` (-2).
   neighbour.
 - **Water**: `land_labels` ignores it; `texel_labels` overlays per-texel
   `ocean_mask`/`lake_mask` so the fill runs to the texel coastline.
+- **Rivers cut cells.** An owner whose 2-ring holds more than one polity and has
+  a river in reach votes over the 2-ring, a candidate whose chord from the point
+  crosses rivers paying `exp(border_river_cross_weight · Σ strength)`, so a river
+  through a cell gives its far bank to the polity beyond (a face-level border
+  can't split a 200 km face). The 2-ring keeps the winner in every nearby cell's
+  set (on the 1-ring the cut left straight slivers along cell edges).
+- **River snap.** Then, near a river, a point takes the label read a little way out
+  on its own bank ([River snap](#river-snap-barrierspy)); `with_rivers(segments)`
+  swaps the world rivers for a view's own.
 
 Kept on the world as feature `polity_label_field`; not serialized
 (`RefineStage.load` rebuilds it from persisted polity channels).
@@ -113,6 +127,42 @@ palette, unclaimed grey, ocean/lake blues), stored as face texture `polity_fill`
 `polity_fill_recipe`, which colours any texel positions — so the region view
 evaluates fill at its own texels with refined shoreline
 ([region.md](region.md#display-regiondisplaypy)).
+
+## River snap (`barriers.py`)
+
+The **cell cut** (above) decides which bank's candidates a point may use; its
+crossing tests run on the rivers coarsened to ~10 km segments, best candidate
+first (most points stop there). The **snap** below then places the line exactly.
+
+Within `reach` of a river (`border_river_reach_km` × the flow ramp) a point at
+distance `d` takes the *plain* label (Voronoi + warp) of the point
+`g·reach + (1 − g)·d` straight away from the river, `g = border_river_snap_fraction`:
+- a border within `g·reach` of the river lies on it — face-level borders are
+  often a bisector a few tens of km off a river through a face;
+- one between there and `reach` is stretched onto the band, so it leaves the river
+  along its own course (with `g = 1` it would leave at a right angle, leaving
+  rectangular notches);
+- one crossing the river keeps its crossing; outside the band nothing moves.
+
+Details: "away" is the segment normal beside a segment and fans out round its ends,
+so bends don't fold the band (a fold speckled the fill); the deciding segment is the
+nearest one whose band holds the point, so a border on a tributary snaps to it
+(letting the biggest band win instead cut the snapped share ~40%); 32 nearest
+segment midpoints are examined (short region segments crowd a confluence). Vassal borders snap the same way. Pure function of
+position and the river polylines, so seams agree.
+
+The region and local views pass the rivers they draw (re-routed off the world
+centreline) to the "Polities" recipe under `RIVER_SEGMENTS_KEY`
+(`pack_river_segments` → `(M, 7)` `[a, b, flow]`; in-lake segments dropped), and
+contour their own lines from that field (`region/borders.py`,
+[viz_regionview.md](viz_regionview.md)).
+
+Seeds 4 / 31 / 35: of sovereign border length within 60 km of a river at flow ≥ 2000,
+the share within 8 km of it ~10% unsnapped → 63 / 68 / 64% with the claim step,
+cell cut and snap (snap alone ~24%); ~3% of all border length (big rivers are
+sparse: ~3% of land within 60 km). Cost: realm stage ~+3 s (seed 4, mostly the
+cell cut on the global lattice and fill), region Polities fill + lines ~1.8 s vs ~0.9 s.
+`scripts/debug_borders.py --pick-river K` shows one.
 
 ## Border refinement (`borders.py`)
 

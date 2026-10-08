@@ -134,7 +134,7 @@ def draw_overlays(
         else:
             _draw_settlements(painter, globe, proj)
     if on("polity_borders"):
-        _draw_polity_borders(painter, globe, proj)
+        _draw_polity_borders(painter, globe, proj, refined.get("polity_borders"))
     if on("forts"):
         _draw_forts(painter, globe.get_feature("forts"), proj)
 
@@ -725,8 +725,10 @@ def _draw_trade_routes(
             _line(painter, x0, y0, x1, y1)
 
 
-def _draw_polity_borders(painter: QPainter, globe: "World", proj: OverlayProjector) -> None:
-    borders_by_depth = globe.get_feature("polity_borders")
+def _draw_polity_borders(painter: QPainter, globe: "World", proj: OverlayProjector,
+                         borders: Optional[dict] = None) -> None:
+    """Border polylines by depth: the world's, or a region view's own (``borders``)."""
+    borders_by_depth = borders if borders is not None else globe.get_feature("polity_borders")
     if not borders_by_depth:
         return
     painter.setBrush(Qt.BrushStyle.NoBrush)

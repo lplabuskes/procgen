@@ -35,6 +35,14 @@ from realmgen.channels import (
 )
 from realmgen.placement.seeder import build_cost_graph
 from realmgen.polity import display as disp
+from realmgen.polity.authority import land_edges
+from realmgen.polity.barriers import (
+    BarrierParams,
+    add_barrier_costs,
+    divide_relief,
+    face_elevation,
+    river_crossing_strength,
+)
 from realmgen.polity.epochs import FragmentationEvent, FragmentationParams, run_fragmentation_epochs
 from realmgen.polity.forest import (
     ClaimingParams,
@@ -136,6 +144,9 @@ class PolityParams:
     forts: FortParams = field(
         default_factory=FortParams, metadata={"label": "Forts"}
     )
+    barriers: BarrierParams = field(
+        default_factory=BarrierParams, metadata={"label": "Physical barriers"}
+    )
 
 
 class PolityStage(Stage):
@@ -192,6 +203,7 @@ class PolityStage(Stage):
             mesh, world, is_water, danger, danger_scale,
         )
         land_graph = build_cost_graph(mesh.face_adjacency, land_edge_costs)
+        claim_costs = self._claim_costs(mesh, world, land_edge_costs, is_water)
 
         # Only settlement faces are ever read; the rest stay 1.0.
         defensibility = np.ones(n, dtype=np.float64)
@@ -221,6 +233,8 @@ class PolityStage(Stage):
             defensibility=defensibility, land_graph=land_graph, hybrid_graph=hybrid_graph,
             base_seed=int(world.seed) if world.seed is not None else 0, p=p,
             face_to_settlement={int(f): k for k, f in enumerate(settlement_faces.tolist())},
+            land_edges=land_edges(mesh.face_adjacency, land_mask),
+            claim_graphs=self._claim_graphs(mesh, world, is_water, claim_costs),
         )
 
         # Stages 1-3 — grow the forest; Stage 5 — fragmentation epochs on top.
@@ -247,6 +261,16 @@ class PolityStage(Stage):
                     hybrid = fortify_landings(
                         hybrid, [s.face for s in sites if s.kind == FORT_STRAIT], n, fp.resistance)
                 regrow.update(land_graph=build_cost_graph(mesh.face_adjacency, fort_costs), hybrid_graph=hybrid)
+                if claim_costs is not None:
+                    fort_claim = fortify_land_costs(
+                        mesh.face_adjacency, claim_costs, forest.sovereign_of_face,
+                        [s.face for s in sites if s.kind == FORT_BORDER], fp.resistance,
+                    )
+                    claim_hybrid = self._hybrid_graph(mesh, world, is_water, fort_claim)
+                    if claim_hybrid is not None:
+                        claim_hybrid = fortify_landings(
+                            claim_hybrid, [s.face for s in sites if s.kind == FORT_STRAIT], n, fp.resistance)
+                    regrow["claim_graphs"] = (build_cost_graph(mesh.face_adjacency, fort_claim), claim_hybrid)
         if p.marches.weight > 0.0:
             _, first_tension = self._compute_tension(
                 mesh, land_edge_costs, trade_flow, forest.sovereign_of_face, forest.polities)
@@ -317,6 +341,28 @@ class PolityStage(Stage):
         ]
         land_base_cost = np.where(is_water, 1.5, 1.5 + danger_scale * danger).astype(np.float64)
         return land_base_cost, land_edge_costs, None
+
+    def _claim_costs(self, mesh, world, land_edge_costs, is_water):
+        """Claim costs: drainage divides and river crossings as extra edge costs; None when both off."""
+        bp = self.params.barriers
+        relief = river = None
+        if bp.ridge_weight > 0.0:
+            relief = divide_relief(mesh.face_adjacency, face_elevation(mesh), is_water,
+                                   min_detour=bp.ridge_min_detour, floor_hops=bp.ridge_floor_hops)
+        rivers = world.get_feature("rivers")
+        if bp.river_weight > 0.0 and rivers:
+            river = river_crossing_strength(mesh.face_adjacency, mesh.face_centroids, rivers,
+                                            min_flow=bp.river_min_flow, full_flow=bp.river_full_flow)
+        if relief is None and river is None:
+            return None
+        return add_barrier_costs(land_edge_costs, relief, river, bp)
+
+    def _claim_graphs(self, mesh, world, is_water, claim_costs):
+        """``(land, hybrid)`` graphs over ``claim_costs``; None to claim on the plain graphs."""
+        if claim_costs is None:
+            return None
+        return (build_cost_graph(mesh.face_adjacency, claim_costs),
+                self._hybrid_graph(mesh, world, is_water, claim_costs))
 
     def _hybrid_graph(self, mesh, world, is_water, land_edge_costs):
         """The land/sea graph over ``land_edge_costs``; None without cost surfaces."""

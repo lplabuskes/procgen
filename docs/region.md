@@ -20,6 +20,7 @@ tier:
 - `region/upsample.py`, `region/resources.py`, `region/smooth.py` — field refinement ([region_fields.md](region_fields.md))
 - `region/corridor.py`, `rivers.py`, `distributaries.py`, `streams.py`, `roads.py`, `towns.py`, `cities.py` — features ([region_features.md](region_features.md))
 - `region/display.py` — RGBA layer textures (runs the world map's recipes), hover text, hillshade, `snap_to_land`
+- `region/borders.py` — `view_polity_borders`: polity border lines contoured from a region / local view's own fill ([viz_regionview.md](viz_regionview.md))
 - `region/params.py` — `RegionParams`, the **Region** params-dialog section
 - `viz/mapview/regionview.py` — `RegionView` ([viz_regionview.md](viz_regionview.md))
 
@@ -152,6 +153,10 @@ and order. `build_layer_texture(fields, spec, mesh)` → `(M, T, T, 4)` RGBA for
   (`recipe_inputs`). Polities does: `realmgen.refine.fill.PolityLabelField` is a
   function of position, so fill matches the border overlay and refined shoreline
   instead of stepping per global texel.
+- `build_layer_texture(..., river_segments=)` adds the view's drawn rivers under
+  `core.display.RIVER_SEGMENTS_KEY` (`(M, 7)` `[a, b, flow]`). Polities swaps them in
+  for the world rivers, so borders snap to the re-routed rivers on screen
+  ([realm_refine.md](realm_refine.md#river-snap-barrierspy)).
 - `relief=True` recipes (Elevation, Biome, Fertility, Forest Density, Dominant
   Crop) are `hillshade(...)`d on land from refined elevation (light NW); water
   flat. Needed — a 100 m bump is invisible on ~4.5 km texels.

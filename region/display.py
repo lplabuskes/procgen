@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Callable, Sequence
 
 import numpy as np
 
-from core.display import POSITIONS_KEY, SchemeSpec
+from core.display import POSITIONS_KEY, RIVER_SEGMENTS_KEY, SchemeSpec
 from region.sampling import GlobalSampler
 from region.upsample import RegionFields
 
@@ -19,9 +19,13 @@ if TYPE_CHECKING:
     from core.mesh import PolygonMesh
 
 
-def recipe_inputs(fields: RegionFields) -> dict[str, np.ndarray]:
-    """What a recipe may read here: the refined textures plus texel positions (for e.g. the polity fill)."""
-    return {**fields.textures, POSITIONS_KEY: fields.positions}
+def recipe_inputs(fields: RegionFields, river_segments: np.ndarray | None = None) -> dict[str, np.ndarray]:
+    """What a recipe may read here: the refined textures plus texel positions (for e.g. the polity
+    fill) and, when given, the packed segments of the rivers drawn here."""
+    out = {**fields.textures, POSITIONS_KEY: fields.positions}
+    if river_segments is not None:
+        out[RIVER_SEGMENTS_KEY] = river_segments
+    return out
 
 
 def has_refined_layer(fields: RegionFields, spec: SchemeSpec) -> bool:
@@ -30,16 +34,18 @@ def has_refined_layer(fields: RegionFields, spec: SchemeSpec) -> bool:
 
 
 def build_layer_texture(
-    fields: RegionFields, spec: SchemeSpec, mesh: "PolygonMesh | None" = None
+    fields: RegionFields, spec: SchemeSpec, mesh: "PolygonMesh | None" = None,
+    river_segments: np.ndarray | None = None,
 ) -> np.ndarray:
     """(M, T, T, 4) float32 RGBA for one world-map layer over a refined region.
 
     Rebuilt from refined fields when the recipe allows (hillshaded if it asks),
-    else sampled from the global ``mesh``.
+    else sampled from the global ``mesh``. ``river_segments`` are the rivers drawn
+    here (``recipe_inputs``).
     """
     if has_refined_layer(fields, spec):
         assert spec.recipe is not None
-        rgba = np.ascontiguousarray(spec.recipe(recipe_inputs(fields)), dtype=np.float32)
+        rgba = np.ascontiguousarray(spec.recipe(recipe_inputs(fields, river_segments)), dtype=np.float32)
         if spec.recipe.relief and "elevation" in fields.textures:
             rgba = hillshade(
                 rgba, fields.textures["elevation"], math.sqrt(max(fields.texel_area_km2, 1e-6)),

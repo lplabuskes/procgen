@@ -27,6 +27,9 @@ Legend = Tuple[str, list]
 # Reserved recipe source: ``(N, H, W, 3)`` unit-sphere texel positions, for layers
 # that are a function of position; a region view supplies its own.
 POSITIONS_KEY = "positions"
+# Reserved optional recipe input: ``(M, 7)`` ``[a, b, flow]`` river segments a view
+# draws (``realmgen.refine.barriers.pack_river_segments``), for layers that follow them.
+RIVER_SEGMENTS_KEY = "river_segments"
 
 
 @dataclass(frozen=True)

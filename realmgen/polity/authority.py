@@ -10,7 +10,7 @@ from typing import Dict, Optional, Sequence, Tuple
 
 import numpy as np
 from scipy.sparse import csr_matrix
-from scipy.sparse.csgraph import dijkstra as sp_dijkstra
+from scipy.sparse.csgraph import connected_components, dijkstra as sp_dijkstra
 
 from realmgen.polity.types import ControlClass
 
@@ -147,6 +147,69 @@ def claim_faces(
             break
 
     return cur, n_iters
+
+
+def land_edges(face_adjacency: Sequence[Sequence[int]], land_mask: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """``(src, dst)`` of every directed land–land adjacency (both directions)."""
+    land = np.asarray(land_mask, dtype=bool)
+    deg = np.array([len(a) for a in face_adjacency], dtype=np.int64)
+    src = np.repeat(np.arange(len(face_adjacency)), deg)
+    dst = np.fromiter((j for a in face_adjacency for j in a), dtype=np.int64, count=int(deg.sum()))
+    keep = land[src] & land[dst]
+    return src[keep], dst[keep]
+
+
+def merge_exclaves(
+    assign: np.ndarray,
+    capital_faces: Sequence[int],
+    field: np.ndarray,
+    edges: Tuple[np.ndarray, np.ndarray],
+    *,
+    max_faces: int,
+    eligible_mask: Optional[np.ndarray] = None,
+    max_rounds: int = 8,
+) -> np.ndarray:
+    """Hand each claim's seatless land pieces of ``<= max_faces`` to a neighbour.
+
+    A piece is a land-connected run (over ``edges``) of one claimant's faces that
+    doesn't hold its seat — across a lake, a strait, or cut off by another realm.
+    It goes to whichever claimant on its land rim (within ``eligible_mask``)
+    projects the most authority over it; a piece with no claimed land rim (an
+    island, or ringed by unclaimed land) stays. Repeated, as a merge can join or
+    strand others. ``max_faces <= 0`` disables.
+    """
+    out = np.asarray(assign, dtype=np.int32).copy()
+    if max_faces <= 0 or field.shape[0] == 0:
+        return out
+    src, dst = edges
+    n = out.size
+    caps = np.asarray(capital_faces, dtype=np.int64)
+    ok = np.ones(n, dtype=bool) if eligible_mask is None else np.asarray(eligible_mask, dtype=bool)
+    for _ in range(max(1, int(max_rounds))):
+        same = (out[src] == out[dst]) & (out[src] >= 0)
+        g = csr_matrix((np.ones(int(same.sum())), (src[same], dst[same])), shape=(n, n))
+        _, comp = connected_components(g, directed=False)
+        comp = np.where(out >= 0, comp, -1)
+        seat_comp = np.zeros(comp.max() + 2, dtype=bool)
+        seat_comp[comp[caps]] = True
+        size = np.bincount(comp[comp >= 0], minlength=seat_comp.size)
+        loose = (comp >= 0) & ~seat_comp[comp] & (size[np.maximum(comp, 0)] <= max_faces)
+        rim = loose[src] & (comp[src] != comp[dst]) & (out[dst] >= 0) & ok[dst]
+        if not rim.any():
+            break
+        # Rim claimants per piece, scored by their authority summed over the piece.
+        piece_of = comp[src[rim]]
+        cand = out[dst[rim]]
+        pairs = np.unique(np.stack([piece_of, cand], axis=1), axis=0)
+        best: Dict[int, Tuple[float, int]] = {}
+        for piece, k in pairs.tolist():
+            faces = np.flatnonzero(comp == piece)
+            score = float(field[k, faces].sum())
+            if piece not in best or score > best[piece][0]:
+                best[piece] = (score, k)
+        for piece, (_, k) in best.items():
+            out[comp == piece] = k
+    return out
 
 
 def classify_settlements(

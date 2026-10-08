@@ -8,18 +8,24 @@ A point is labelled among its owner face (nearest centroid) and that face's
 claimed-land neighbours by an authority-weighted Voronoi over domain-warped
 positions, so stronger polities bulge and boundaries wiggle off the bisectors.
 
+Big rivers are barriers (:mod:`realmgen.refine.barriers`): near one, a point
+takes the label from a little way out on its own bank, so a border within reach
+lies on the river.
+
 Labels: polity id (``>= 0``), ``UNCLAIMED`` (-1), ``WATER`` (-2, from the texel
 masks). Land texels of a face-level water face (orphan land) go to its
 claimed-land neighbours.
 """
 from __future__ import annotations
 
+import copy
 from typing import List, Optional
 
 import numpy as np
 from scipy.spatial import KDTree
 
-from core.display import POSITIONS_KEY, TextureRecipe
+from core.display import POSITIONS_KEY, RIVER_SEGMENTS_KEY, TextureRecipe
+from realmgen.refine.barriers import RiverBarriers, build_river_barriers, pack_river_segments
 from realmgen.polity.display import make_polity_tree_color
 from realmgen.polity.types import UNCLAIMED_COLOR
 from utils.simplex import fbm_sum, make_perm
@@ -105,6 +111,12 @@ class PolityLabelField:
         warp_frequency: float = 40.0,
         warp_octaves: int = 3,
         warp_seed: int = 0,
+        rivers=None,
+        river_reach_km: float = 0.0,
+        river_min_flow: float = 1000.0,
+        river_full_flow: float = 8000.0,
+        river_snap_fraction: float = 0.6,
+        river_cross_weight: float = 3.0,
     ) -> None:
         centroids = np.asarray(mesh.face_centroids, dtype=np.float64)
         self.centroids = centroids / np.linalg.norm(centroids, axis=1, keepdims=True)
@@ -139,6 +151,48 @@ class PolityLabelField:
         self._fixed = np.where(valid.any(axis=1), first, UNCLAIMED)   # label when uniform
         self._vote = ~uniform
 
+        # Near a river the vote widens to the 2-ring (a candidate across the river is
+        # penalised, so the winner may be further off; every nearby cell must see it).
+        ring2 = [sorted({f, *adj[f], *(g for h in adj[f] for g in adj[h])}) for f in range(n)]
+        k2 = max((len(r) for r in ring2), default=1)
+        cand2 = np.full((n, k2), -1, dtype=np.int64)
+        for f, r in enumerate(ring2):
+            cand2[f, :len(r)] = r
+        valid2 = (cand2 >= 0) & claimed_land[np.maximum(cand2, 0)]
+        valid2[(~water) & (self.pof < 0)] = False
+        self._cand2 = np.where(valid2, cand2, -1)
+        pid2 = np.where(valid2, self.pof[np.maximum(cand2, 0)], -1)
+        first2 = pid2.max(axis=1)
+        self._vote2 = valid2.any(axis=1) & ~np.all(~valid2 | (pid2 == first2[:, None]), axis=1)
+        c2 = self.centroids[np.maximum(cand2, 0)]
+        self._ring2_radius = np.where(cand2 >= 0, np.linalg.norm(c2 - self.centroids[:, None, :], axis=-1),
+                                      0.0).max(axis=1)
+        self._cross_weight = float(river_cross_weight)
+
+        self._river_params = dict(reach_km=float(river_reach_km), min_flow=float(river_min_flow),
+                                  full_flow=float(river_full_flow), snap_fraction=float(river_snap_fraction))
+        self._set_barriers(build_river_barriers(pack_river_segments(rivers), **self._river_params))
+
+    def _set_barriers(self, barriers: Optional[RiverBarriers]) -> None:
+        self.barriers = barriers
+        # Per owner face, the segments its 2-ring chords can cross (vote-2 owners only).
+        self._river_segs: list = [None] * len(self.pof)
+        if barriers is not None and self._cross_weight > 0.0:
+            faces = np.flatnonzero(self._vote2)
+            near = barriers.segments_near(self.centroids[faces], self._ring2_radius[faces])
+            for f, segs in zip(faces.tolist(), near):
+                self._river_segs[f] = segs
+
+    def with_rivers(self, segments: Optional[np.ndarray]) -> "PolityLabelField":
+        """This field with packed ``(M, 7)`` river ``segments`` (``pack_river_segments``) as its barriers.
+
+        The region / local tiers pass the rivers they draw (re-routed off the world
+        centreline), so borders sit on those.
+        """
+        other = copy.copy(self)
+        other._set_barriers(build_river_barriers(segments, **self._river_params))
+        return other
+
     def owner(self, points: np.ndarray) -> np.ndarray:
         """Nearest-centroid face of each ``(P, 3)`` point."""
         pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
@@ -149,20 +203,81 @@ class PolityLabelField:
         """``(P,)`` land label of each ``(P, 3)`` unit-sphere point (water ignored)."""
         pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
         own = self.owner(pts) if owner is None else np.asarray(owner, dtype=np.int64)
+        out = self._plain_labels(pts, own)
+        if self.barriers is not None:
+            idx, target = self.barriers.snap_targets(pts)
+            if idx.size:
+                out[idx] = self._plain_labels(target, self.owner(target))
+        return out
+
+    def _plain_labels(self, pts: np.ndarray, own: np.ndarray) -> np.ndarray:
+        """Labels before the river snap: the warped, weighted Voronoi, rivers cutting cells.
+
+        Owners with a river in their 2-ring vote over the 2-ring with crossings
+        penalised (``_river_vote``); the rest over the 1-ring.
+        """
+        river = np.zeros(own.size, dtype=bool)
+        if self.barriers is not None and self._cross_weight > 0.0:
+            river = np.array([s is not None for s in self._river_segs], dtype=bool)[own]
         out = self._fixed[own].copy()
-        idx = np.flatnonzero(self._vote[own])
+        idx = np.flatnonzero(self._vote[own] & ~river)
         for s in range(0, idx.size, self._CHUNK):
             sel = idx[s:s + self._CHUNK]
-            warped = domain_warp(pts[sel], amplitude=self._warp_amplitude,
-                                 base_frequency=self._warp_frequency,
-                                 octaves=self._warp_octaves, seed=self._warp_seed)  # (p, 3)
             cand = self._cand[own[sel]]                                       # (p, k)
             ok = cand >= 0
             c = np.maximum(cand, 0)
-            d2 = ((warped[:, None, :] - self.centroids[c]) ** 2).sum(axis=-1)
+            d2 = ((self._warp(pts[sel])[:, None, :] - self.centroids[c]) ** 2).sum(axis=-1)
             score = np.where(ok, d2 * self._inv_w2[c], np.inf)
             winner = c[np.arange(sel.size), np.argmin(score, axis=1)]
             out[sel] = self.pof[winner]
+        rows = np.flatnonzero(river)
+        if rows.size:
+            out[rows] = self._river_vote(pts[rows], self._warp(pts[rows]), own[rows])
+        return out
+
+    def _warp(self, pts: np.ndarray) -> np.ndarray:
+        return domain_warp(pts, amplitude=self._warp_amplitude, base_frequency=self._warp_frequency,
+                           octaves=self._warp_octaves, seed=self._warp_seed)
+
+    def _river_vote(self, pts: np.ndarray, warped: np.ndarray, own: np.ndarray) -> np.ndarray:
+        """2-ring vote with ``exp(cross_weight · strength)`` per river a candidate's chord crosses."""
+        barriers = self.barriers
+        assert barriers is not None
+        out = np.empty(own.size, dtype=np.int64)
+        order = np.argsort(own, kind="stable")
+        bounds = np.flatnonzero(np.diff(own[order])) + 1
+        for grp in np.split(order, bounds):     # one owner: shared candidates and segments
+            f = int(own[grp[0]])
+            cand = self._cand2[f]
+            cand = cand[cand >= 0]
+            d2 = ((warped[grp][:, None, :] - self.centroids[cand]) ** 2).sum(axis=-1)
+            score = d2 * self._inv_w2[cand]
+            segs = self._river_segs[f]
+            first = np.argmin(score, axis=1)
+            winner = cand[first]
+            # Crossings only raise a score: a nearest candidate on the point's own bank
+            # wins outright; the rest walk candidates best-first, stopping once no
+            # unpenalised score can beat the best penalised one.
+            crossed = np.flatnonzero(barriers.crossings(segs, pts[grp], self.centroids[winner]) > 0.0)
+            if crossed.size:
+                sub = score[crossed]
+                rank = np.argsort(sub, axis=1)
+                rows = np.arange(crossed.size)
+                best = np.full(crossed.size, np.inf)
+                win = winner[crossed]
+                for r in range(cand.size):
+                    k = rank[:, r]
+                    base = sub[rows, k]
+                    live = np.flatnonzero(base < best)
+                    if live.size == 0:
+                        break
+                    cross = barriers.crossings(segs, pts[grp[crossed[live]]], self.centroids[cand[k[live]]])
+                    pen = base[live] * np.exp(self._cross_weight * cross)
+                    better = pen < best[live]
+                    best[live[better]] = pen[better]
+                    win[live[better]] = cand[k[live[better]]]
+                winner[crossed] = win
+            out[grp] = self.pof[winner]
         return out
 
     def texel_labels(self, positions: np.ndarray, ocean_tex: np.ndarray,
@@ -261,11 +376,13 @@ def polity_fill_recipe(field: PolityLabelField, polities: List) -> TextureRecipe
     """The "Polities" fill as a recipe over texel positions and water masks.
 
     Lets a region view colour its own finer texels (and refined shoreline)
-    instead of magnifying the global texture.
+    instead of magnifying the global texture, snapping to the rivers it draws
+    when it passes them under ``RIVER_SEGMENTS_KEY``.
     """
     def fn(textures) -> np.ndarray:
-        labels = field.texel_labels(textures[POSITIONS_KEY], textures["ocean_mask"],
-                                    textures.get("lake_mask"))
+        rivers = textures.get(RIVER_SEGMENTS_KEY)
+        f = field if rivers is None else field.with_rivers(rivers)
+        labels = f.texel_labels(textures[POSITIONS_KEY], textures["ocean_mask"], textures.get("lake_mask"))
         return colorize_labels(labels, polities, textures["ocean_mask"], textures.get("lake_mask"))
 
     return TextureRecipe(fn, sources=(POSITIONS_KEY, "ocean_mask"))
