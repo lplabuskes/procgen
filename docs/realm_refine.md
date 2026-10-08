@@ -135,6 +135,10 @@ Decided once on the globe, as "border points
    with its leaf label pair (`borders.plain_border_chains` → `trace_lattice_chains`).
 2. **Runs.** Per chain, each world river (land segments, reach = `reach_km` × the
    flow ramp) gives runs of chain points within reach (gaps of ≤ 2 points bridged).
+   Consecutive runs of a chain along one river are joined when the river runs on the
+   same way from the first's core to the second's, so the border follows the river past
+   a bulge beyond reach in between (judged run by run, the return stretch was often too
+   short and the bulge stayed).
    A run's **core** spans its first to last point within `0.6 × reach`; it is kept
    if the core's river stretch is ≥ `min_run_km` and ≥ half the straight distance
    between the core's ends (else it's a crossing; measuring against the border's
@@ -165,6 +169,29 @@ Decided once on the globe, as "border points
 6. **Checks.** A run is dropped if > 5% of its polygon's land holds a third
    polity, and split 25 km either side of any settlement of either polity it would
    hand over.
+7. **Junctions.** Two accepted runs of *different* chains, consecutive along one
+   river, with a polity P on the same bank in both (e.g. 7 | 29 then 29 | 82, 29 south
+   of the river) become one line: P's boundary from the first run's core end is
+   walked through up to 4 junctions (`_walk`: at each, the one other chain holding P)
+   to the second's, and a `JunctionSwap` replaces it with the river between them.
+   Where it claims (polygon ∪ margin ∪ band, as above), P takes its neighbours' land
+   on its bank and gives its own on the far bank to whoever would hold it without P
+   (`PolityLabelField.labels_without`: the warped weighted Voronoi over the 12 nearest
+   other-polity claimed-land faces), so the junctions move onto the river. The two runs
+   lose their eased lead-out into the gap. Unlike a run's, its claim covers all of its
+   polygon, past the line's ends too (all of it is far bank; else strips of P stayed
+   where its boundary leaves the river beyond the stretch).
+   **Bridgeheads.** A settlement within 25 km (`settlement_clear_km`) of the river that
+   it would hand over keeps its polity's land on its bank within its distance from
+   the river + 25 km of its nearest river point (a half-disc, its radius roughened ±35% by fBm noise of position; the bank by owner: P's
+   city on the far bank, a neighbour's on P's), measured against the drawn line on
+   region / local maps. A river city holding both banks, as on the 29 | 7/81/82
+   junction of seed 1926295024 region 16. A settlement further from the river, or a
+   walk that fails (a coast, a boundary that runs elsewhere), or > 5% of the polygon's
+   land held by a polity not on the walk, drops the swap (a radius from a city deep in
+   the lump drew a disc hundreds of km across). Seeds 4 / 31 / 35: 8 / 5 / 0 junctions
+   moved (walks failing 4 / 4 / 3, far settlement 0 / 0 / 1); 1926295024: 7, 3 with a
+   bridgehead.
 
 `PolityLabelField.land_labels` = plain labels, then the swaps. The region and
 local views swap in their own drawing of the very river each run follows
@@ -182,8 +209,10 @@ river edge moves. Old saved worlds lack `"river_texels"`: views then keep the
 world line (`--rebuild-cache`).
 
 Of sovereign border length within 60 km of a river at flow ≥ 2000, the share
-within 8 km of it, seeds 4 / 31 / 35 / 369893336: 31 / 55 / 41 / 50% (mean 44%;
-~12% with no river handling); 1.2% of all sovereign border length lies on a river.
+within 8 km of it, seeds 4 / 31 / 35 / 369893336 / 1926295024: 32 / 60 / 61 / 52 / 67%
+(mean 54%; ~12% with no river handling); 1.4% of all sovereign border length lies on a
+river. Joining runs across a bulge raised the first four from a mean of 44% to 51%;
+moving junctions takes the five to 38 / 64 / 61 / 53 / 69% (mean 57%).
 Reach 70 gave ~31% here. This replaced a per-point snap (each point near a river read its
 label from further out on its own bank, plus a 2-ring vote penalising candidates
 across a river): it reached ~64% but alternated between parallel rivers, left

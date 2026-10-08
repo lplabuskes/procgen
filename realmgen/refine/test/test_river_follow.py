@@ -142,3 +142,71 @@ def test_partly_drawn_river_keeps_the_world_line_beyond_the_view(split):
     (on_world,), _ = _flips_along_x(view, y=np.cos(0.3), z=np.sin(0.3))
     assert on_drawn == pytest.approx(0.06 / np.sqrt(1 + 0.06 ** 2), abs=4e-3)
     assert on_world == pytest.approx(0.05 / np.sqrt(1 + 0.05 ** 2), abs=4e-3)
+
+
+# ── junctions ───────────────────────────────────────────────────────────────
+
+
+def test_junction_swap_moves_the_junction_onto_the_river():
+    """Polity 0 takes its neighbours' land on its bank and gives its own across the river away."""
+    from realmgen.refine.river_follow import OTHER, JunctionSwap
+    # River along y = 0 (x from -0.2 to 0.2), polity 0's old boundary bulging north to y = 0.1.
+    xs = np.linspace(-0.2, 0.2, 81)
+    river = _unit(np.column_stack([np.ones(xs.size), xs, np.zeros(xs.size)]))
+    bulge = 0.1 * np.cos(np.pi * xs / 0.4) ** 2
+    border = _unit(np.column_stack([np.ones(xs.size), xs, bulge]))
+    sw = JunctionSwap(OTHER, 0, 0.01, 0.005, 0, border, np.ones(xs.size), border.copy(), 0, xs.size - 1,
+                      river, 0, polity=0, others=(1, 2),
+                      without=lambda pts, pol: np.where(pts[:, 1] < 0.0, 1, 2))
+    pts = _unit(np.array([[1.0, -0.05, 0.05],     # polity 0 north of the river, west half → 1
+                          [1.0, 0.05, 0.05],      # … east half → 2
+                          [1.0, 0.0, -0.005],     # polity 1 just south of the river (in the band) → 0
+                          [1.0, 0.0, 0.05],       # polity 3, a stranger: untouched
+                          [1.0, 0.0, -0.3]]))     # polity 0 far south, outside: untouched
+    labels = np.array([0, 0, 1, 3, 0])
+    new, claimed = sw.relabel(pts, labels)
+    assert new.tolist() == [1, 2, 0, 3, 0]
+    assert claimed.tolist() == [True, True, True, False, False]
+
+
+def test_walk_follows_a_polity_boundary_through_a_junction():
+    from realmgen.refine.river_follow import _Run, _end_key, _walk
+    a = np.array([[0.0, 0.0, 1.0], [0.0, 0.1, 1.0], [0.0, 0.2, 1.0]])          # 0 | 1, ending at the junction
+    b = np.array([[0.0, 0.2, 1.0], [0.1, 0.3, 1.0], [0.2, 0.4, 1.0]])          # 0 | 2, from the junction
+    c = np.array([[0.0, 0.2, 1.0], [-0.1, 0.3, 1.0]])                          # 1 | 2, from the junction
+    chains = [(a, (0, 1), 0), (b, (0, 2), 0), (c, (1, 2), 0)]
+    ends: dict = {}
+    for k, (pts, _, _) in enumerate(chains):
+        ends.setdefault(_end_key(pts[0]), []).append((k, 0))
+        ends.setdefault(_end_key(pts[-1]), []).append((k, 1))
+    run_b = _Run(0, 1, 2, 1, 2, 1.0)
+    walk = _walk(chains, ends, 0, 0, True, 1, 1, run_b, 1)
+    assert walk is not None
+    path, met = walk
+    assert np.allclose(path, _unit(np.vstack([a[1:], b[1:2]])))
+    assert met == {0, 1, 2}
+    assert _walk(chains, ends, 2, 0, True, 1, 1, run_b, 1) is None     # polity 2 isn't on chain 0's end
+
+
+def test_labels_without_hands_a_polity_to_its_neighbours(split):
+    field, _ = split
+    pts = _unit(np.array([[0.3, 0.6, 0.5], [-0.3, 0.6, 0.5]]))
+    assert field.plain_land_labels(pts).tolist() == [0, 1]
+    assert field.labels_without(pts, 0).tolist() == [1, 1]
+    assert field.labels_without(pts, 1).tolist() == [0, 0]
+
+
+def test_junction_swap_keeps_a_bridgehead_round_a_settlement():
+    from realmgen.refine.river_follow import OTHER, JunctionSwap
+    xs = np.linspace(-0.2, 0.2, 81)
+    river = _unit(np.column_stack([np.ones(xs.size), xs, np.zeros(xs.size)]))
+    border = _unit(np.column_stack([np.ones(xs.size), xs, 0.1 * np.cos(np.pi * xs / 0.4) ** 2]))
+    city = _unit(np.array([[1.0, 0.0, 0.002]]))                # polity 0's city on the north bank
+    sw = JunctionSwap(OTHER, 0, 0.01, 0.005, 0, border, np.ones(xs.size), border.copy(), 0, xs.size - 1,
+                      river, 0, polity=0, others=(1,), without=lambda pts, pol: np.ones(len(pts), dtype=np.int64),
+                      keep_pos=city, keep_lab=np.array([0]), keep_radius=0.02)
+    pts = _unit(np.array([[1.0, 0.0, 0.002],     # the city
+                          [1.0, 0.01, 0.015],    # beside it, within its pocket
+                          [1.0, 0.1, 0.03]]))    # further along the river: handed over
+    new, _ = sw.relabel(pts, np.array([0, 0, 0]))
+    assert new.tolist() == [0, 0, 1]

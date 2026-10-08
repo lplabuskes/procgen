@@ -32,6 +32,8 @@ from worldgen.geology.display import OCEAN_COLOR
 
 WATER = -2
 UNCLAIMED = -1
+# Nearest other-polity faces voting in ``labels_without``.
+_WITHOUT_K = 12
 
 
 def domain_warp(
@@ -118,6 +120,9 @@ class PolityLabelField:
         water = np.asarray(is_water, dtype=bool)
         self._water = water
         claimed_land = (~water) & (self.pof >= 0)
+        self._claimed_land = claimed_land
+        # Per excluded polity: the other claimed-land faces and their tree (``labels_without``).
+        self._without: dict = {}
         control = np.maximum(np.asarray(authority, dtype=np.float64), control_floor)
         self._inv_w2 = 1.0 / control ** 2
         self._warp_amplitude = float(warp_amplitude)
@@ -171,6 +176,26 @@ class PolityLabelField:
         pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
         own = self.owner(pts) if owner is None else np.asarray(owner, dtype=np.int64)
         return self._plain_labels(pts, own)
+
+    def labels_without(self, points: np.ndarray, polity: int) -> np.ndarray:
+        """``(P,)`` the polity each point would go to were ``polity`` not there.
+
+        The warped, weighted Voronoi over the nearest claimed-land faces of other
+        polities; a river swap that moves a junction gives ``polity``'s land across the
+        river to these.
+        """
+        pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+        if polity not in self._without:
+            faces = np.flatnonzero(self._claimed_land & (self.pof != polity))
+            self._without[polity] = (faces, KDTree(self.centroids[faces]) if faces.size else None)
+        faces, tree = self._without[polity]
+        if tree is None or len(pts) == 0:
+            return np.full(len(pts), UNCLAIMED, dtype=np.int64)
+        k = min(_WITHOUT_K, faces.size)
+        _, nn = tree.query(pts, k=k, workers=-1)
+        c = faces[np.asarray(nn).reshape(len(pts), k)]
+        score = ((self._warp(pts)[:, None, :] - self.centroids[c]) ** 2).sum(axis=-1) * self._inv_w2[c]
+        return self.pof[c[np.arange(len(pts)), np.argmin(score, axis=1)]]
 
     def is_water_at(self, points: np.ndarray) -> np.ndarray:
         """``(P,)`` whether each point's owner face is water (face level)."""

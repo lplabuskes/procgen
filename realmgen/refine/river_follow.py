@@ -5,7 +5,9 @@ into chains between junctions. Along each chain, a run of border points that
 stays within reach of one big river is replaced by that river's stretch: "border
 points 13–20 become river points 1–5". The river is picked per run — the
 longest stretch of the chain a single river shadows wins, the rest of the chain
-is free for another — so a border never flips between two parallel rivers. Runs
+is free for another — so a border never flips between two parallel rivers. Two
+runs of a chain along one river, the river running on the same way from one to the
+other, are one: the border follows the river past a bulge it makes in between. Runs
 are taken across all chains, sovereign borders first, and a river stretch carries
 one border only: both borders of a strip a river runs down may be within reach
 of it, and the longer run gets it.
@@ -38,7 +40,7 @@ any settlement it would hand to the neighbour.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import Callable, Iterable, List, Optional, Sequence
 
 import numpy as np
@@ -46,6 +48,7 @@ from matplotlib.path import Path as MplPath
 from scipy.spatial import KDTree
 
 from realmgen.refine.barriers import flow_ramp
+from utils.simplex import fbm_sum, make_perm
 from worldgen.cost.surfaces import EARTH_RADIUS_KM
 
 # Nearest river segments examined per point.
@@ -56,6 +59,16 @@ _GRID = 128
 _GRID_MIN_POINTS = 20_000
 # How far either side of the border run its two polities are probed (which is left).
 _SIDE_PROBE_KM = 2.0
+# The far side of a ``JunctionSwap``: whoever holds the land there without its polity.
+OTHER = -3
+# Junctions a ``JunctionSwap`` walks through at most.
+_JUNCTION_HOPS = 4
+# Bridgehead edge: radius × (1 + roughness · fBm(position)), octaves at these frequencies
+# (unit sphere; ~40 / 20 / 10 km wavelengths) and weights.
+_BRIDGEHEAD_ROUGHNESS = 0.35
+_BRIDGEHEAD_FREQS = np.array([160.0, 320.0, 640.0])
+_BRIDGEHEAD_AMPS = np.array([1.0, 0.5, 0.25]) / 1.75
+_BRIDGEHEAD_PERM = make_perm(7919)
 
 
 @dataclass
@@ -324,24 +337,109 @@ class RiverSwap:
                              & ((out == self.left) | (out == self.right)))
         if idx.size == 0:
             return out, claimed
-        x = pts[idx]
-        claim = np.zeros(idx.size, dtype=bool)
-        left = np.zeros(idx.size, dtype=bool)
-        exact = np.ones(idx.size, dtype=bool)
-        if idx.size > _GRID_MIN_POINTS:
-            uv = _gnomonic(x, self.centre, self.e1, self.e2)
-            exact, claim, left = _SideGrid(self, uv.min(axis=0), uv.max(axis=0)).lookup(uv)
-        if exact.any():
-            c, lf, _ = self._classify(x[exact])
-            claim[exact], left[exact] = c, lf
+        claim, left = self._claim_left(pts[idx])
         rows = idx[claim]
         out[rows] = np.where(left[claim], self.left, self.right)
         claimed[rows] = True
         return out, claimed
 
+    def _claim_left(self, x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """``(claim, left)`` per point ``x``: claimed by this swap, and left of the new line."""
+        claim = np.zeros(len(x), dtype=bool)
+        left = np.zeros(len(x), dtype=bool)
+        exact = np.ones(len(x), dtype=bool)
+        if len(x) > _GRID_MIN_POINTS:
+            uv = _gnomonic(x, self.centre, self.e1, self.e2)
+            exact, claim, left = _SideGrid(self, uv.min(axis=0), uv.max(axis=0)).lookup(uv)
+        if exact.any():
+            c, lf, _ = self._classify(x[exact])
+            claim[exact], left[exact] = c, lf
+        return claim, left
+
     def moved(self, river: np.ndarray, foot: np.ndarray) -> "RiverSwap":
-        return RiverSwap(self.left, self.right, self.band, self.edge, self.depth, self.border, self.weight, foot,
-                         self.ia, self.ib, river, self.river_id)
+        return replace(self, river=river, foot=foot)
+
+
+@dataclass
+class JunctionSwap(RiverSwap):
+    """A river stretch between two runs of different borders, through the junctions between them.
+
+    ``border`` is ``polity``'s boundary from one run's core end to the other's
+    (across the junctions where its neighbours meet), the new line the river between
+    them; ``left``/``right`` is ``polity`` on its side and ``OTHER`` on the far side.
+    Where it claims a point, ``polity`` takes the land of ``others`` on its side and
+    gives its own land on the far side to ``without(points, polity)``: the neighbour
+    that would hold it were ``polity`` not there. So the junctions move onto the river.
+
+    Unlike a run, it claims all of its polygon, past the line's ends too: the polygon
+    lies between ``polity``'s old boundary and the river, so all of it is far bank (else
+    strips of ``polity`` stay where the boundary leaves the river beyond the stretch).
+
+    A settlement within ``keep_radius`` of the river that it would hand over keeps a
+    **bridgehead** instead (``keep_pos`` / ``keep_lab``): its polity's land on its bank
+    within its distance from the river + ``keep_radius`` of its nearest point on the
+    river (a half-disc on the bank, its edge roughened by noise) stays. One further
+    from the river drops the swap.
+    Measured against the current line, so the pocket follows a tier's drawn river.
+    """
+
+    polity: int = -1
+    others: tuple = ()
+    without: Optional[Callable[[np.ndarray, int], np.ndarray]] = None
+    keep_pos: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))
+    keep_lab: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
+    keep_radius: float = 0.0
+
+    def relabel(self, points: np.ndarray, labels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        pts = np.asarray(points, dtype=np.float64)
+        out = np.asarray(labels).copy()
+        claimed = np.zeros(len(pts), dtype=bool)
+        mine = out == self.polity
+        idx = np.flatnonzero((np.linalg.norm(pts - self.centre, axis=1) <= self.reach)
+                             & (mine | np.isin(out, self.others)))
+        if idx.size == 0:
+            return out, claimed
+        claim, left = self._claim_left(pts[idx])
+        claimed[idx[claim]] = True
+        claim &= ~self._held(pts[idx], out[idx])
+        mine_side = left if self.left == self.polity else ~left
+        take = idx[claim & mine_side]
+        give = idx[claim & ~mine_side & mine[idx]]
+        out[take] = self.polity
+        if give.size and self.without is not None:
+            out[give] = self.without(pts[give], self.polity)
+        return out, claimed
+
+    def _classify(self, x: np.ndarray) -> tuple[np.ndarray, np.ndarray, dict]:
+        claim, left, d = super()._classify(x)
+        beyond = ~d["interior"] & self.inside(x)
+        claim = claim | beyond
+        left = np.where(beyond, self.left != self.polity, left)    # far bank
+        return claim, left, d
+
+    def _held(self, x: np.ndarray, labels: np.ndarray) -> np.ndarray:
+        """Points of a kept settlement's polity in its bridgehead (see the class doc)."""
+        held = np.zeros(len(x), dtype=bool)
+        if len(self.keep_pos) == 0 or len(x) == 0:
+            return held
+        if self._line_tree is None:
+            self._classify(x[:1])                      # builds the line tree
+        tree = self._line_tree
+        assert tree is not None
+        line = self.line
+        _, side, _ = _polyline_side(x, line, tree)
+        seg, t, sd = _polyline_query(self.keep_pos, line, tree)
+        foot = _unit(line[seg] + t[:, None] * (line[seg + 1] - line[seg]))
+        mine_left = self.left == self.polity
+        # A ragged edge, not a drawn circle: a pure function of position, so tiers agree.
+        rough = 1.0 + _BRIDGEHEAD_ROUGHNESS * fbm_sum(x, _BRIDGEHEAD_PERM, _BRIDGEHEAD_FREQS, _BRIDGEHEAD_AMPS)
+        for k in range(len(self.keep_pos)):
+            # The pocket's bank by owner (a city on the river has no side): ``polity``'s
+            # city on the far bank, a neighbour's on ``polity``'s.
+            pocket_left = mine_left != (self.keep_lab[k] == self.polity)
+            held |= ((labels == self.keep_lab[k]) & ((side > 0.0) == pocket_left)
+                     & (np.linalg.norm(x - foot[k], axis=1) <= (sd[k] + self.keep_radius) * rough))
+        return held
 
 
 class RiverSwaps:
@@ -609,6 +707,30 @@ def _runs(mask: np.ndarray, max_gap: int) -> List[tuple[int, int]]:
     return out
 
 
+def _bridged_runs(nr: "_Near", p: RiverFollowParams) -> List[tuple[int, int]]:
+    """``_runs`` of ``nr.mask``, consecutive ones joined when the river carries on between them.
+
+    Two runs along one river, the river running the same way through both and on
+    from the first's core to the second's, are one run: the border leaving the river
+    between them (round a bulge, beyond reach) follows it there too.
+    """
+    out: List[tuple[int, int]] = []
+    prev_core: Optional[tuple[int, int]] = None
+    for i0, i1 in _runs(nr.mask, p.max_gap):
+        core = _core(nr, i0, i1, p.snap_fraction)
+        if out and prev_core is not None and core is not None:
+            a0, a1 = prev_core
+            dirs = np.sign([nr.s[a1] - nr.s[a0], nr.s[core[0]] - nr.s[a1], nr.s[core[1]] - nr.s[core[0]]])
+            dirs = dirs[dirs != 0]
+            if dirs.size and np.all(dirs == dirs[0]):
+                out[-1] = (out[-1][0], i1)
+                prev_core = (a0, core[1])
+                continue
+        out.append((i0, i1))
+        prev_core = core
+    return out
+
+
 def _bump(st: dict, key: str) -> None:
     st[key] = st.get(key, 0) + 1
 
@@ -641,12 +763,15 @@ def build_river_swaps(
     centroids: np.ndarray,
     params: Optional[RiverFollowParams] = None,
     stats: Optional[dict] = None,
+    labels_without: Optional[Callable[[np.ndarray, int], np.ndarray]] = None,
 ) -> RiverSwaps:
     """Swaps for the plain border ``chains`` (``trace_lattice_chains``) onto ``rivers``.
 
     ``plain_labels``/``is_water_at`` label sphere points; ``settlements`` is
     ``(S, 3)`` positions no swap may hand to the neighbour. ``stats`` (if given)
-    counts candidates and why they were dropped.
+    counts candidates and why they were dropped. With ``labels_without``
+    (``PolityLabelField.labels_without``) runs of different borders along one river
+    are joined through the junctions between them (``JunctionSwap``).
     """
     p = params or RiverFollowParams()
     st = stats if stats is not None else {}
@@ -661,7 +786,7 @@ def build_river_swaps(
     # Candidates from every chain, taken sovereign first, then longest river stretch.
     cands: List[tuple] = []
     per_chain: List[tuple] = []
-    for pts, (la, lb), depth in chains:
+    for k, (pts, (la, lb), depth) in enumerate(chains):
         pts = np.asarray(pts, dtype=np.float64)
         if la < 0 or lb < 0 or len(pts) < 3:
             continue
@@ -669,9 +794,9 @@ def build_river_swaps(
         if not near:
             continue
         ci = len(per_chain)
-        per_chain.append((pts, near, la, lb, depth, np.zeros(len(pts), dtype=bool)))
+        per_chain.append((pts, near, la, lb, depth, np.zeros(len(pts), dtype=bool), k))
         for r, nr in near.items():
-            for i0, i1 in _runs(nr.mask, p.max_gap):
+            for i0, i1 in _bridged_runs(nr, p):
                 run = _candidate(r, nr, i0, i1, pts, p, min_run, st)
                 if run is not None:
                     cands.append((depth, -run.span, len(cands), ci, run))
@@ -681,7 +806,7 @@ def build_river_swaps(
     river_taken: dict = {}
     accepted: List[tuple] = []
     for depth, _, _, ci, c in cands:
-        pts, near, la, lb, _, taken = per_chain[ci]
+        pts, near, la, lb, _, taken, _ = per_chain[ci]
         if taken[c.i0:c.i1 + 1].any():
             _bump(st, "overlap")
             continue
@@ -691,10 +816,12 @@ def build_river_swaps(
             _bump(st, "river_taken")
             continue
         _bump(st, "candidates")
-        for sw, i0, i1 in _settle(c, pts, nr, la, lb, depth, ctx):
-            taken[i0:i1 + 1] = True
+        for sw, piece in _settle(c, pts, nr, la, lb, depth, ctx):
+            taken[piece.i0:piece.i1 + 1] = True
             river_taken.setdefault(c.river, []).append((lo, hi))
-            accepted.append((depth, -c.span, len(accepted), sw))
+            accepted.append((depth, -c.span, len(accepted), sw, ci, piece))
+    if labels_without is not None:
+        accepted = _junction_swaps(accepted, chains, per_chain, labels_without, ctx)
     accepted.sort(key=lambda t: t[:3])
     return RiverSwaps([t[3] for t in accepted], centroids, p)
 
@@ -781,26 +908,164 @@ def _settle(c: _Run, pts: np.ndarray, nr: _Near, la: int, lb: int, depth: int, c
                     out.extend(_settle(run, pts, sub, la, lb, depth, ctx, _depth + 1))
             return out
     # A third polity inside drops the run.
+    inside = _polygon_land_labels(sw, p, plain_labels, is_water_at)
+    if inside is None:
+        _bump(st, "too_big")
+        return []
+    if inside.size and np.mean(~np.isin(inside, (la, lb))) > p.max_third_share:
+        _bump(st, "third_polity")
+        return []
+    _bump(st, "accepted")
+    return [(_on_boundary(sw, plain_labels, p.border_step_km / EARTH_RADIUS_KM), c)]
+
+
+def _polygon_land_labels(sw: RiverSwap, p: RiverFollowParams, plain_labels: Callable,
+                         is_water_at: Callable) -> Optional[np.ndarray]:
+    """Plain labels of land sampled every ``sample_km`` inside ``sw``'s polygon; None if it's too big."""
     lo, hi = sw.ring2d.min(axis=0), sw.ring2d.max(axis=0)
     step = p.sample_km / EARTH_RADIUS_KM
     gx = np.arange(lo[0], hi[0] + step, step)
     gy = np.arange(lo[1], hi[1] + step, step)
     if gx.size * gy.size > 200_000:
-        _bump(st, "too_big")
-        return []
+        return None
     xx, yy = np.meshgrid(gx, gy)
     flat = np.column_stack([xx.ravel(), yy.ravel()])
     flat = flat[_even_odd(flat, sw.ring2d)]
-    if len(flat):
-        q = _unit(sw.centre[None, :] + flat[:, :1] * sw.e1[None, :] + flat[:, 1:2] * sw.e2[None, :])
-        land = ~is_water_at(q)
-        if land.any():
-            third = ~np.isin(plain_labels(q[land]), (la, lb))
-            if third.mean() > p.max_third_share:
-                _bump(st, "third_polity")
-                return []
-    _bump(st, "accepted")
-    return [(_on_boundary(sw, plain_labels, p.border_step_km / EARTH_RADIUS_KM), c.i0, c.i1)]
+    if len(flat) == 0:
+        return np.zeros(0, dtype=np.int64)
+    q = _unit(sw.centre[None, :] + flat[:, :1] * sw.e1[None, :] + flat[:, 1:2] * sw.e2[None, :])
+    land = ~is_water_at(q)
+    return plain_labels(q[land]) if land.any() else np.zeros(0, dtype=np.int64)
+
+
+# ── junctions ────────────────────────────────────────────────────────────────
+
+
+def _end_key(x: np.ndarray) -> tuple:
+    return tuple(np.round(np.asarray(x, dtype=np.float64) * 1e9).astype(np.int64).tolist())
+
+
+def _walk(chains: Sequence[tuple], ends: dict, polity: int, k_a: int, from_end: bool, start: int,
+          k_b: int, b_run: "_Run", b_gap: int) -> Optional[tuple[np.ndarray, set]]:
+    """``polity``'s boundary from point ``start`` of chain ``k_a`` (walking to its end if
+    ``from_end`` else to its start) through junctions to point ``b_gap`` of chain ``k_b``.
+
+    ``(path, polities met)``, or None when the walk doesn't arrive within
+    ``_JUNCTION_HOPS`` junctions (a coast, or the boundary running elsewhere).
+    """
+    pts = np.asarray(chains[k_a][0], dtype=np.float64)
+    path = [pts[start:] if from_end else pts[start::-1]]
+    met = set(chains[k_a][1])
+    cur, cur_end = k_a, 1 if from_end else 0
+    for _ in range(_JUNCTION_HOPS):
+        at = np.asarray(chains[cur][0])[-1 if cur_end else 0]
+        nxt = [(k, e) for k, e in ends.get(_end_key(at), ())
+               if (k, e) != (cur, cur_end) and polity in chains[k][1]]
+        if len(nxt) != 1:
+            return None
+        k, e = nxt[0]
+        q = np.asarray(chains[k][0], dtype=np.float64)
+        q = q if e == 0 else q[::-1]
+        met |= set(chains[k][1])
+        if k == k_b:
+            # Entering B's chain, its gap-side core end must come first.
+            if b_gap != (b_run.ia if e == 0 else b_run.ib):
+                return None
+            j = b_gap if e == 0 else len(q) - 1 - b_gap
+            path.append(q[1:j + 1])
+            return _unit(np.vstack(path)), met
+        path.append(q[1:])
+        cur, cur_end = k, 1 - e
+    return None
+
+
+def _junction_swaps(accepted: List[tuple], chains: Sequence[tuple], per_chain: List[tuple],
+                    labels_without: Callable, ctx: tuple) -> List[tuple]:
+    """``accepted`` plus a ``JunctionSwap`` between each two runs of different borders
+    that follow one river with a polity on the same bank, the runs' lead-outs into
+    the gap dropped."""
+    riv, p, min_run, plain_labels, is_water_at, settle, settle_lab, settle_tree, clear, st = ctx
+    ends: dict = {}
+    for k, (pts, _, _) in enumerate(chains):
+        if len(pts) >= 2:
+            ends.setdefault(_end_key(pts[0]), []).append((k, 0))
+            ends.setdefault(_end_key(pts[-1]), []).append((k, 1))
+    by_river: dict = {}
+    for n, (_, _, _, _, ci, c) in enumerate(accepted):
+        nr = per_chain[ci][1][c.river]
+        s_a, s_b = float(nr.s[c.ia]), float(nr.s[c.ib])
+        by_river.setdefault(c.river, []).append((min(s_a, s_b), max(s_a, s_b), n))
+    trunc: dict = {}
+    out = list(accepted)
+    for r, items in by_river.items():
+        items.sort()
+        for (_, hi_a, na), (lo_b, _, nb) in zip(items, items[1:]):
+            if hi_a >= lo_b:
+                continue
+            depth_a, _, _, sw_a, ci_a, ca = accepted[na]
+            depth_b, _, _, sw_b, ci_b, cb = accepted[nb]
+            pc_a, pc_b = per_chain[ci_a], per_chain[ci_b]
+            if pc_a[6] == pc_b[6]:
+                continue
+            nr_a, nr_b = pc_a[1][r], pc_b[1][r]
+            up_a = nr_a.s[ca.ib] > nr_a.s[ca.ia]          # the river runs with the chain along A
+            up_b = nr_b.s[cb.ib] > nr_b.s[cb.ia]
+            ga = ca.ib if up_a else ca.ia                 # A's core end at hi_a, B's at lo_b
+            gb = cb.ia if up_b else cb.ib
+            for pol in sorted({pc_a[2], pc_a[3]} & {pc_b[2], pc_b[3]}):
+                # The polity left of the river (downstream of arc) on both runs, or right on both.
+                left_a = (sw_a.left == pol) == up_a
+                left_b = (sw_b.left == pol) == up_b
+                if left_a != left_b:
+                    continue
+                walk = _walk(chains, ends, pol, pc_a[6], ga == ca.ib, ga, pc_b[6], cb, gb)
+                if walk is None:
+                    _bump(st, "junction_walk")
+                    continue
+                path, met = walk
+                others = tuple(sorted(met - {pol}))
+                left, right = (pol, OTHER) if left_a else (OTHER, pol)
+                n = len(path)
+                sw = JunctionSwap(left, right, p.clean_km / EARTH_RADIUS_KM, p.edge_km / EARTH_RADIUS_KM,
+                                  min(depth_a, depth_b), path, np.ones(n), path.copy(), 0, n - 1,
+                                  riv.stretch(r, float(nr_a.s[ga]), float(nr_b.s[gb])), riv.feature_index[r],
+                                  polity=pol, others=others, without=labels_without)
+                inside = _polygon_land_labels(sw, p, plain_labels, is_water_at)
+                if inside is None:
+                    _bump(st, "junction_too_big")
+                    continue
+                if inside.size and np.mean(~np.isin(inside, (pol,) + others)) > p.max_third_share:
+                    _bump(st, "junction_third_polity")
+                    continue
+                if settle_tree is not None:
+                    # A settlement it would hand over keeps a bridgehead round it.
+                    idx = np.asarray(settle_tree.query_ball_point(sw.centre, sw.reach), dtype=np.int64)
+                    if idx.size:
+                        flip = idx[sw.relabel(settle[idx], settle_lab[idx])[0] != settle_lab[idx]]
+                        line_tree = KDTree(0.5 * (sw.line[:-1] + sw.line[1:]))
+                        if flip.size and np.any(_polyline_distance(settle[flip], sw.line, line_tree) > clear):
+                            _bump(st, "junction_settlement")      # only a river city keeps a bridgehead
+                            continue
+                        if flip.size:
+                            sw = replace(sw, keep_pos=settle[flip], keep_lab=settle_lab[flip], keep_radius=clear)
+                            if np.any(sw.relabel(settle[idx], settle_lab[idx])[0] != settle_lab[idx]):
+                                _bump(st, "junction_settlement")
+                                continue
+                            _bump(st, "junction_bridgehead")
+                _bump(st, "junction")
+                trunc.setdefault(na, [ca.i0, ca.i1])[1 if up_a else 0] = ga
+                trunc.setdefault(nb, [cb.i0, cb.i1])[0 if up_b else 1] = gb
+                out.append((min(depth_a, depth_b), -abs(lo_b - hi_a), len(out),
+                            _on_boundary(sw, plain_labels, p.border_step_km / EARTH_RADIUS_KM), -1, None))
+                break
+    # Runs ending at a junction swap end on the river: no lead-out into the gap.
+    for n, (i0, i1) in trunc.items():
+        depth, span, order, _, ci, c = out[n]
+        pts, near, la, lb = per_chain[ci][:4]
+        run = _Run(c.river, i0, i1, c.ia, c.ib, c.span)
+        sw = _make_swap(riv, run, pts, near[c.river], la, lb, depth, p, plain_labels)
+        out[n] = (depth, span, order, _on_boundary(sw, plain_labels, p.border_step_km / EARTH_RADIUS_KM), ci, run)
+    return out
 
 
 def _on_boundary(sw: RiverSwap, plain_labels: Callable, step: float, bisect_steps: int = 14) -> RiverSwap:
@@ -834,15 +1099,21 @@ def _on_boundary(sw: RiverSwap, plain_labels: Callable, step: float, bisect_step
     h = 2.0 * step
     p0 = _unit(pts - h * normal)
     p1 = _unit(pts + h * normal)
-    l0, l1 = plain_labels(p0), plain_labels(p1)
-    ok = np.flatnonzero(((l0 == sw.left) & (l1 == sw.right)) | ((l0 == sw.right) & (l1 == sw.left)))
+    if isinstance(sw, JunctionSwap):
+        def key(x: np.ndarray) -> np.ndarray:      # its polity | anyone else
+            return (plain_labels(x) == sw.polity).astype(np.int64)
+        k0, k1 = key(p0), key(p1)
+        ok = np.flatnonzero(k0 != k1)
+    else:
+        key = plain_labels
+        k0, k1 = key(p0), key(p1)
+        ok = np.flatnonzero(((k0 == sw.left) & (k1 == sw.right)) | ((k0 == sw.right) & (k1 == sw.left)))
     if ok.size:
-        lo_p, hi_p, l_lo = p0[ok], p1[ok], l0[ok]
+        lo_p, hi_p, l_lo = p0[ok], p1[ok], k0[ok]
         for _ in range(bisect_steps):
             mid = _unit(lo_p + hi_p)
-            same = plain_labels(mid) == l_lo
+            same = key(mid) == l_lo
             lo_p = np.where(same[:, None], mid, lo_p)
             hi_p = np.where(same[:, None], hi_p, mid)
         pts[ok] = _unit(lo_p + hi_p)
-    return RiverSwap(sw.left, sw.right, sw.band, sw.edge, sw.depth, pts, weight, foot, ia, ib, sw.river,
-                     sw.river_id)
+    return replace(sw, border=pts, weight=weight, foot=foot, ia=ia, ib=ib)

@@ -165,7 +165,8 @@ class RefineStage(Stage):
                                    full_flow=float(p.border_river_full_flow),
                                    min_run_km=float(p.border_river_min_run_km))
         return build_river_swaps(chains, world.get_feature("rivers"), field.plain_land_labels,
-                                 field.is_water_at, positions, field.centroids, follow)
+                                 field.is_water_at, positions, field.centroids, follow,
+                                 labels_without=field.labels_without)
 
     # ── Persistence ───────────────────────────────────────────────────────────
     # Owns the route/border round-trip; polity_fill persists via mesh textures.
