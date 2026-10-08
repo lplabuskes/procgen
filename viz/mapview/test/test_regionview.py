@@ -294,7 +294,7 @@ def test_region_borders_are_its_own_and_cached(app, synthetic_globe):  # noqa: F
     c = np.asarray(mesh.face_centroids, dtype=np.float64)
     pof = np.where(c[:, 0] > 0.0, 0, 1)
     n = len(pof)
-    field = PolityLabelField(mesh, pof, np.zeros(n, bool), np.ones(n), river_reach_km=80.0)
+    field = PolityLabelField(mesh, pof, np.zeros(n, bool), np.ones(n))
     pols = [Polity(polity_id=p, capital_face=p, capital_position=c[p], power=1.0, n_faces=1,
                    member_settlement_faces=[p]) for p in (0, 1)]
     synthetic_globe.add_feature("polity_label_field", field)

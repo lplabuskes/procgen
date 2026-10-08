@@ -1821,5 +1821,31 @@
         "ridge_base": 0.14641032535627857
       }
     ]
+  },
+  {
+    "date": "2026-10-08T10:53:54",
+    "label": "",
+    "overrides": [],
+    "rows": [
+      {
+        "seed": 4,
+        "sovereigns": 48,
+        "polities": 166,
+        "sov_exclaves": 10,
+        "sov_exclave_faces": 443,
+        "sov_lake": 0,
+        "sov_overseas": 3,
+        "sov_landcut": 7,
+        "dir_exclaves": 7,
+        "dir_exclave_faces": 218,
+        "dir_lake": 0,
+        "dir_overseas": 2,
+        "dir_landcut": 5,
+        "river_share": 0.015716209133783677,
+        "river_share_near": 0.35935091958553156,
+        "ridge_share": 0.3582222222222222,
+        "ridge_base": 0.2347399664472835
+      }
+    ]
   }
 ]

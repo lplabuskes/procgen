@@ -12,8 +12,9 @@ either side, so a flat watershed on a plain barely registers.
 
 A **river crossing** is an edge whose centroid-to-centroid chord crosses a river
 polyline; its step ramps with the river's flow (log, ``river_min_flow`` →
-``river_full_flow``). That puts face-level borders beside rivers; the label field
-(:mod:`realmgen.refine.barriers`) then draws the line on the river itself.
+``river_full_flow``). That puts face-level borders beside rivers; the refine stage
+(:mod:`realmgen.refine.river_follow`) then moves the line onto the river itself,
+over the same flow range.
 """
 from __future__ import annotations
 
@@ -30,7 +31,7 @@ from worldgen.hydrology.channels import FILLED_HEIGHT
 
 @paramclass
 class BarrierParams:
-    """Ridge step in the polity cost surface (the label field holds the river snap)."""
+    """Ridge and river steps in the polity cost surface (river flows shared with refine's river following)."""
     ridge_weight: float = _f(
         8.0, label="Ridge crossing cost (at full relief)", min=0.0, max=40.0, step=0.5
     )

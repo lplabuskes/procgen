@@ -1,8 +1,8 @@
 """Polity border lines for a region or local map, contoured from the refined fill.
 
 The world's border polylines follow the world rivers; a region re-routes its
-rivers within a corridor, and the Polities fill there snaps to the drawn ones
-(``RIVER_SEGMENTS_KEY``). These lines are traced from that same field — the
+rivers within a corridor, and the Polities fill there moves its river borders onto
+the drawn ones (``RIVER_SEGMENTS_KEY``). These lines are traced from that same field — the
 world ``PolityLabelField`` with the view's rivers swapped in — on a triangle
 lattice over the view's own ``(s, t)`` frame, with water from the refined masks,
 so they bound the fill the view draws. Same tracer as the world
@@ -34,7 +34,7 @@ def _square_lattice(n: int) -> tuple[np.ndarray, np.ndarray]:
 def view_polity_borders(fields: RegionFields, field: PolityLabelField, polities: List,
                         river_segments: Optional[np.ndarray], *, iterations: int = 2,
                         lattice_texels: float = 1.5, bisect_steps: int = 5) -> dict:
-    """``{depth: (M, 6)}`` border segments over this view, snapped to ``river_segments``.
+    """``{depth: (M, 6)}`` border segments over this view, following ``river_segments``.
 
     The lattice spacing is ``lattice_texels`` refined texels; points off the cell
     count as water (lines end there); past a local map's hexagon the view clips.

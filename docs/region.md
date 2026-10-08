@@ -154,9 +154,9 @@ and order. `build_layer_texture(fields, spec, mesh)` → `(M, T, T, 4)` RGBA for
   function of position, so fill matches the border overlay and refined shoreline
   instead of stepping per global texel.
 - `build_layer_texture(..., river_segments=)` adds the view's drawn rivers under
-  `core.display.RIVER_SEGMENTS_KEY` (`(M, 7)` `[a, b, flow]`). Polities swaps them in
-  for the world rivers, so borders snap to the re-routed rivers on screen
-  ([realm_refine.md](realm_refine.md#river-snap-barrierspy)).
+  `core.display.RIVER_SEGMENTS_KEY` (`(M, 8)` `[a, b, flow, world river id]`). Polities
+  moves its river-following borders onto them, so borders follow the re-routed rivers on
+  screen ([realm_refine.md](realm_refine.md#river-following-river_followpy)).
 - `relief=True` recipes (Elevation, Biome, Fertility, Forest Density, Dominant
   Crop) are `hillshade(...)`d on land from refined elevation (light NW); water
   flat. Needed — a 100 m bump is invisible on ~4.5 km texels.

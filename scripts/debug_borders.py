@@ -17,7 +17,7 @@ Usage:
     python3 scripts/debug_borders.py --seams --vertices   # overlay hexagon seams + border vertices
     python3 scripts/debug_borders.py --rivers             # overlay big rivers (flow >= --river-flow)
     python3 scripts/debug_borders.py --pick-river         # auto-centre on a border beside a big river
-    python3 scripts/debug_borders.py --set refine.border_river_weight=0   # RealmParams override
+    python3 scripts/debug_borders.py --set polity.barriers.river_weight=0   # RealmParams override
     python3 scripts/debug_borders.py --rebuild-cache --out /tmp/borders.png
 """
 from __future__ import annotations

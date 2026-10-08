@@ -38,7 +38,7 @@ A polity is a **tree, not a flat partition** (`docs/plans/polity_generation_brie
 - **`marches`** (`MarchParams`, Stage 4; **on by default**) — `weight` (0.5; 0 = off), `reach` (6; land cost-distance e-fold from the border, ~2 faces at the median edge cost ~2.9), `tension_quantile` (0.9; border-face tension quantile that counts as full exposure). See [Marches](#marches-politymarchespy).
 - **`fragmentation`** (`FragmentationParams`) — `n_epochs` (0 = off), `shock_scale` (max cohesion drop per epoch), `size_reference` (domain face count demanding full cohesion).
 - **`tension`** (`BorderTensionParams`) — `barrier_scale`, `flow_ref`, `artery_weight`.
-- **`barriers`** (`BarrierParams`) — `ridge_weight` (8; extra claim cost on an edge crossing a full-relief divide; 0 = off), `ridge_relief_ref` (0.5 km; relief for the full step), hidden `ridge_min_detour` (6 hops) / `ridge_floor_hops` (2); `river_weight` (8; extra claim cost on an edge whose centroid chord crosses a river at full flow; 0 = off), `river_min_flow` (300) / `river_full_flow` (4000) (log ramp). See [Ridges](#ridges-politybarrierspy).
+- **`barriers`** (`BarrierParams`) — `ridge_weight` (8; extra claim cost on an edge crossing a full-relief divide; 0 = off), `ridge_relief_ref` (0.5 km; relief for the full step), hidden `ridge_min_detour` (6 hops) / `ridge_floor_hops` (2); `river_weight` (8; extra claim cost on an edge whose centroid chord crosses a river at full flow; 0 = off), `river_min_flow` (300) / `river_full_flow` (4000) (log ramp; also the range of rivers refine moves drawn borders onto). See [Ridges](#ridges-politybarrierspy).
 - **`forts`** (`FortParams`) — `enabled`, per-kind score floors (`border_min_score` 0.12, `strait_min_score` 0.2, `frontier_min_score` 0.2), `rugged_weight`, `strait_max_radius` (2; passage cut radius, ~2r + 1 faces across), `strait_uncontested_weight` (0.5), `spacing_hops` (2), `resistance` (4; extra edge cost at fortified crossings), per-kind garrisons (300 / 250 / 120 people).
 
 ## Types (`polity/types.py`)
@@ -180,7 +180,7 @@ ridge steps each field there, so a crossing within reach slides onto the ridge.
   polyline the centroid-to-centroid chord crosses; `add_barrier_costs` adds
   `river_weight ·` that. The old ford penalty (in the plain costs) only charged edges
   out of a river face against its flow, too weak to hold a border; this puts
-  face-level borders beside rivers, and the label field draws them on the river
+  face-level borders beside rivers, and the refine stage moves the drawn line onto the river
   ([realm_refine.md](realm_refine.md#river-following-river_followpy)).
 
 **Claim vs reach.** The ridge and river costs go only into the *claim graphs*

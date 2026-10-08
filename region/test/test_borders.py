@@ -1,4 +1,4 @@
-"""Region / local border lines: contoured from the view's own fill, snapped to the rivers it draws."""
+"""Region / local border lines: contoured from the view's own fill, following the rivers it draws."""
 from __future__ import annotations
 
 import numpy as np
@@ -6,7 +6,9 @@ import pytest
 
 from realmgen.polity.types import Polity
 from realmgen.refine.barriers import pack_river_segments
+from realmgen.refine.borders import _icosphere_lattice, trace_lattice_chains
 from realmgen.refine.fill import PolityLabelField
+from realmgen.refine.river_follow import RiverFollowParams, build_river_swaps
 from region.borders import _square_lattice, view_polity_borders
 from region.upsample import RegionUpsampleParams, build_region_fields
 from worldgen.cost.surfaces import EARTH_RADIUS_KM
@@ -35,9 +37,7 @@ def split(synthetic_globe, fields):
     c = np.asarray(mesh.face_centroids, dtype=np.float64)
     pof = np.where(c @ axis > 0.0, 0, 1)
     n = len(pof)
-    # Snapping on but no world rivers: plain until a view swaps its rivers in.
-    field = PolityLabelField(mesh, pof, np.zeros(n, bool), np.ones(n),
-                             river_reach_km=0.25 * EARTH_RADIUS_KM, river_snap_fraction=1.0)
+    field = PolityLabelField(mesh, pof, np.zeros(n, bool), np.ones(n))
     return field, axis, centre
 
 
@@ -72,18 +72,32 @@ def test_lines_bound_the_fill(fields, split):
 
 
 def test_lines_follow_the_rivers_the_view_draws(fields, split):
+    """A border moved onto a world river follows the view's re-routed drawing of it."""
     field, axis, centre = split
     tol = 2.0 * fields.grid.texel_spacing_rad(fields.tex_size)
 
-    def share_on_river(segs):
+    def share_on(segs, offset):
         segs = segs.astype(np.float64)
         mid = segs[:, :3] + segs[:, 3:]
         mid /= np.linalg.norm(mid, axis=1, keepdims=True)
         length = np.linalg.norm(segs[:, 3:] - segs[:, :3], axis=1)
-        return length[np.abs(mid @ axis - 0.03) < tol].sum() / length.sum()
+        return length[np.abs(mid @ axis - offset) < tol].sum() / length.sum()
 
-    river = _river(axis, centre, 0.03)
-    snapped = view_polity_borders(fields, field, [_pol(0), _pol(1)], pack_river_segments([river]))
-    plain = view_polity_borders(fields, field, [_pol(0), _pol(1)], None)
-    assert share_on_river(snapped[0]) > 0.9
-    assert share_on_river(plain[0]) < 0.5
+    pols = [_pol(0), _pol(1)]
+    verts, tris, edges, tri_edges = _icosphere_lattice(5)
+    chains = trace_lattice_chains(verts, tris, edges, tri_edges, field.plain_land_labels(verts), pols,
+                                  label_fn=field.plain_land_labels)
+    # Coarse world (faces ~1000 km): reach and sampling scaled up to match.
+    params = RiverFollowParams(reach_km=0.15 * EARTH_RADIUS_KM, min_flow=1000.0, full_flow=8000.0,
+                               min_run_km=200.0, sample_km=20.0, border_step_km=10.0,
+                               view_reach_km=0.08 * EARTH_RADIUS_KM)
+    swaps = build_river_swaps(chains, [_river(axis, centre, 0.03)], field.plain_land_labels, field.is_water_at,
+                              np.zeros((0, 3)), field.centroids, params)
+    moved = field.with_swaps(swaps)
+    drawn = _river(axis, centre, 0.07)                       # the view's drawing of world river 0
+    ids = [np.zeros(len(drawn[0]), dtype=np.int64)]
+    on_drawn = view_polity_borders(fields, moved, pols, pack_river_segments([drawn], river_ids=ids))
+    on_world = view_polity_borders(fields, moved, pols, None)
+    assert share_on(on_drawn[0], 0.07) > 0.9
+    assert share_on(on_world[0], 0.03) > 0.9
+    assert share_on(on_world[0], 0.07) < 0.5

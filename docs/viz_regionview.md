@@ -116,7 +116,7 @@ global paths), except these, passed as `draw_overlays(..., refined={...})`:
 
 **Polities and borders.** The view's drawn rivers (`paths`, packed by
 `pack_river_segments`) go to every layer build (`build_layer_texture(...,
-river_segments=)`), so the Polities fill snaps to them, not to the world
+river_segments=)`), so the Polities fill's river borders follow them, not the world
 centreline up to a corridor away. With **Polity Borders** on, `view_polity_borders`
 (`region/borders.py`) contours that same field — `polity_label_field.with_rivers` —
 on a lattice over the view's `(s, t)` frame (1.5 texels; water and off-cell from the

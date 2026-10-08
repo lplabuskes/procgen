@@ -14,6 +14,7 @@ import numpy as np
 from core.params import param_field as _f, paramclass
 from core.pipeline import BuildContext, Stage
 from realmgen.channels import AUTHORITY, POLITY_ID
+from realmgen.polity.barriers import BarrierParams
 from realmgen.persistence import pack_borders, pack_routes, unpack_borders, unpack_routes
 from realmgen.refine.borders import plain_border_chains, smooth_polity_borders
 from realmgen.refine.fill import PolityLabelField, colorize_labels
@@ -54,22 +55,7 @@ class RefineParams:
         3, label="Boundary erosion octaves", min=1, max=5, step=1, hidden=True
     )
     border_river_reach_km: float = _f(
-        70.0, label="Border river snap reach (km, 0=off)", min=0.0, max=150.0, step=5.0
-    )
-    border_river_cross_weight: float = _f(
-        3.0, label="Border river: cell split strength (0=off)", min=0.0, max=10.0, step=0.25
-    )
-    border_river_snap_fraction: float = _f(
-        0.6, label="Border river: full-snap share of reach", min=0.0, max=1.0, step=0.05, hidden=True
-    )
-    border_river_min_flow: float = _f(
-        300.0, label="Border river snap: min flow", min=0.0, max=50000.0, step=100.0
-    )
-    border_river_full_flow: float = _f(
-        4000.0, label="Border river snap: flow at full strength", min=1.0, max=100000.0, step=500.0
-    )
-    border_river_follow: bool = _f(
-        True, label="Border river: follow run by run (else per-point snap)", min=0, max=1
+        70.0, label="Border river follow reach (km, 0=off)", min=0.0, max=150.0, step=5.0
     )
     border_river_min_run_km: float = _f(
         40.0, label="Border river: shortest followed stretch (km)", min=5.0, max=300.0, step=5.0
@@ -82,8 +68,10 @@ class RefineStage(Stage):
     name = "refine"
     requires = (IS_WATER, OCEAN_MASK, FERTILITY_MEAN)
 
-    def __init__(self, params: RefineParams | None = None) -> None:
+    def __init__(self, params: RefineParams | None = None, barriers: BarrierParams | None = None) -> None:
         self.params = params or RefineParams()
+        # River flow thresholds shared with the polity stage's river crossings.
+        self.barriers = barriers or BarrierParams()
         # Final routes/borders, cached for serialization.
         self._routes: list | None = None
         self._borders: dict | None = None
@@ -153,14 +141,8 @@ class RefineStage(Stage):
             warp_frequency=float(p.boundary_warp_frequency),
             warp_octaves=int(p.boundary_warp_octaves),
             warp_seed=int(world.seed or 0),
-            rivers=world.get_feature("rivers"),
-            river_reach_km=0.0 if p.border_river_follow else float(p.border_river_reach_km),
-            river_min_flow=float(p.border_river_min_flow),
-            river_full_flow=float(p.border_river_full_flow),
-            river_snap_fraction=float(p.border_river_snap_fraction),
-            river_cross_weight=0.0 if p.border_river_follow else float(p.border_river_cross_weight),
         )
-        if p.border_river_follow and p.border_river_reach_km > 0.0 and OCEAN_MASK.present(mesh):
+        if p.border_river_reach_km > 0.0 and OCEAN_MASK.present(mesh):
             field = field.with_swaps(self._river_swaps(world, field, polities))
         world.add_feature("polity_label_field", field)
         return field
@@ -176,8 +158,8 @@ class RefineStage(Stage):
         positions = (np.array([np.asarray(s.site_position, dtype=np.float64) for s in settlements])
                      if settlements else np.zeros((0, 3)))
         follow = RiverFollowParams(reach_km=float(p.border_river_reach_km),
-                                   min_flow=float(p.border_river_min_flow),
-                                   full_flow=float(p.border_river_full_flow),
+                                   min_flow=float(self.barriers.river_min_flow),
+                                   full_flow=float(self.barriers.river_full_flow),
                                    min_run_km=float(p.border_river_min_run_km))
         return build_river_swaps(chains, world.get_feature("rivers"), field.plain_land_labels,
                                  field.is_water_at, positions, field.centroids, follow)

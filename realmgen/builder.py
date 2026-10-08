@@ -93,7 +93,7 @@ class RealmPipeline(Pipeline):
         self.placement_stage = PlacementStage(p.seeder, p.danger)
         self.population_stage = PopulationStage(p.trade, p.population, p.seeder, p.danger, p.polity.defensibility)
         self.polity_stage = PolityStage(p.polity, p.danger)
-        self.refine_stage = RefineStage(p.refine)
+        self.refine_stage = RefineStage(p.refine, p.polity.barriers)
         self.town_stage = TownStage(p.towns, p.population, p.refine)
         super().__init__([
             self.scoring_stage,
