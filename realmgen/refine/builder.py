@@ -24,6 +24,7 @@ from worldgen.cost.surfaces import EARTH_RADIUS_KM
 from worldgen.cost.channels import IS_WATER
 from worldgen.geology.channels import OCEAN_MASK
 from worldgen.hydrology.channels import LAKE_MASK
+from worldgen.hydrology.rivers import stream_stems
 from worldgen.resources.channels import FERTILITY_MEAN
 
 
@@ -57,7 +58,7 @@ class RefineParams:
         120.0, label="Border river follow reach (km, 0=off)", min=0.0, max=300.0, step=10.0
     )
     border_river_min_flow: float = _f(
-        300.0, label="Border river: min flow", min=0.0, max=50000.0, step=100.0
+        200.0, label="Border river: min flow", min=0.0, max=50000.0, step=100.0
     )
     border_river_full_flow: float = _f(
         4000.0, label="Border river: flow at full reach", min=1.0, max=100000.0, step=500.0
@@ -164,7 +165,13 @@ class RefineStage(Stage):
                                    min_flow=float(p.border_river_min_flow),
                                    full_flow=float(p.border_river_full_flow),
                                    min_run_km=float(p.border_river_min_run_km))
-        return build_river_swaps(chains, world.get_feature("rivers"), field.plain_land_labels,
+        # The world rivers, then the streams below them (as stems, numbered on: the
+        # region / local tiers' path ids), so a border can follow a drawn stream too.
+        rivers = list(world.get_feature("rivers") or [])
+        streams, texels = world.get_feature("streams"), world.get_feature("river_texels")
+        if streams is not None and (texels is not None or not rivers):
+            rivers += stream_stems(streams, texels)[0]
+        return build_river_swaps(chains, rivers, field.plain_land_labels,
                                  field.is_water_at, positions, field.centroids, follow,
                                  labels_without=field.labels_without)
 

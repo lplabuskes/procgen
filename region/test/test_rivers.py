@@ -6,9 +6,8 @@ from region.corridor import Raster, diagonal_corners
 from region.rivers import (
     RegionRiverParams, StreamPath, _avoid_factor, _hide_reentries, _join_at_first_touch, _meet_ids, _route_run,
     _segment_crossings, _start_on_drawn, _trim_crossed_head, _water_factor, build_region_rivers, meet_line,
-    stream_river_ids,
 )
-from worldgen.hydrology.rivers import main_stem_paths
+from worldgen.hydrology.rivers import main_stem_paths, stream_river_ids
 from worldgen.hydrology.types import StreamNetwork
 from region.upsample import RegionUpsampleParams, build_region_fields
 
@@ -272,8 +271,8 @@ def test_meet_ids_follow_a_cut_path():
 
 def test_region_paths_carry_their_world_river(fields, synthetic_globe, monkeypatch):
     """World rivers as the hydrology stage makes them (main stems above a higher
-    threshold): each regional path is one of them below its headwater, and the ids
-    stay aligned with the paths."""
+    threshold): each regional path is one of them below its headwater, its headwater
+    a stream stem (ids past the rivers'), and the ids stay aligned with the paths."""
     streams = synthetic_globe.get_feature("streams")
     threshold = 4.0 * float(streams.flow[streams.channel].min())
     big = streams.channel & (streams.flow >= threshold)
@@ -288,10 +287,11 @@ def test_region_paths_carry_their_world_river(fields, synthetic_globe, monkeypat
     tagged = 0
     for (positions, flows, _), rid in zip(rivers.paths, ids):
         assert len(rid) == len(positions)
-        known = rid[rid >= 0]
-        assert len(np.unique(known)) <= 1                       # one world river per path
-        if known.size:
-            first = int(np.argmax(rid >= 0))
-            assert np.all(rid[first:] >= 0)                     # a headwater, then the river
+        on_river = (rid >= 0) & (rid < len(texels))
+        assert len(np.unique(rid[on_river])) <= 1               # one world river per path
+        if on_river.any():
+            first = int(np.argmax(on_river))
+            assert np.all(on_river[first:])                     # a headwater, then the river
+            assert np.all(rid[:first] >= len(texels))           # the headwater a stream stem
             tagged += 1
     assert tagged >= 3

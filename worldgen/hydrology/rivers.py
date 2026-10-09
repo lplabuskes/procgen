@@ -5,7 +5,7 @@ single-receiver accumulation tree, decomposed into main stems and tributaries (H
 """
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -547,3 +547,55 @@ def main_stem_paths(
         if len(path) >= min_nodes:
             paths.append(path)
     return paths
+
+
+def stream_river_ids(streams: StreamNetwork, river_texels: Optional[list]) -> np.ndarray:
+    """``(K,)`` the world river (index into ``"rivers"``) each stream node is part of, -1 none.
+
+    ``river_texels`` is the ``"river_texels"`` feature. A tributary's last texel is
+    its confluence on the stem, so a texel inside one river wins over a river's end.
+    """
+    out = np.full(len(streams), -1, dtype=np.int64)
+    if not river_texels:
+        return out
+    order = np.argsort(streams.nodes, kind="stable")
+    sorted_nodes = streams.nodes[order]
+    for interior in (False, True):
+        for r, tex in enumerate(river_texels):
+            tex = np.asarray(tex, dtype=np.int64)
+            tex = tex[:-1] if interior else tex[-1:]
+            if tex.size == 0:
+                continue
+            at = np.clip(np.searchsorted(sorted_nodes, tex), 0, len(sorted_nodes) - 1)
+            hit = sorted_nodes[at] == tex
+            out[order[at[hit]]] = r
+    return out
+
+
+def stream_stems(streams: StreamNetwork, river_texels: Optional[list]) -> tuple[list, np.ndarray]:
+    """The network's channels below the rivers, cut into main stems.
+
+    Returns ``(paths, ids)``: per stem a ``(positions, flows)`` polyline (smoothed as a
+    river's, one flow per segment), headwater to where it joins a river, another stem
+    or a sink; and ``(K,)`` the river or stem each node is part of, -1 none. Stem ``k``
+    is numbered on from the rivers, ``len(river_texels) + k``, so one id space covers
+    both (a stem's last node is its confluence: the stem it joins keeps it).
+    """
+    ids = stream_river_ids(streams, river_texels)
+    base = len(river_texels or [])
+    channel = streams.channel & (ids < 0)
+    if not channel.any():
+        return [], ids
+    stems = main_stem_paths(streams.receiver, streams.flow.astype(np.float64), channel, streams.stop, min_nodes=2)
+    paths = []
+    for k, path in enumerate(stems):
+        nodes = np.asarray(path, dtype=np.int64)
+        ids[nodes[:-1]] = base + k
+        smooth = laplacian_smooth_sphere(list(streams.positions[nodes]), iterations=8, alpha=0.5)
+        flows = np.maximum.accumulate(streams.flow[nodes[:-1]].astype(np.float64))
+        paths.append((np.stack(smooth).astype(np.float32), flows.astype(np.float32)))
+    # A stem's end on a sink is its own.
+    for k, path in enumerate(stems):
+        if ids[path[-1]] < 0:
+            ids[path[-1]] = base + k
+    return paths, ids

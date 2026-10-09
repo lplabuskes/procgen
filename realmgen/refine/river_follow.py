@@ -74,7 +74,7 @@ _BRIDGEHEAD_PERM = make_perm(7919)
 @dataclass
 class RiverFollowParams:
     reach_km: float = 120.0         # a border point this close to a full-strength river may follow it
-    min_flow: float = 300.0         # reach ramps (log) from 0 at min_flow …
+    min_flow: float = 200.0         # reach ramps (log) from 0 at min_flow …
     full_flow: float = 4000.0       # … to reach_km at full_flow
     snap_fraction: float = 0.6      # within this share of the reach a point is on the river
     min_run_km: float = 40.0        # shortest river stretch (core) a border is moved onto
@@ -289,7 +289,7 @@ class RiverSwap:
     ia: int
     ib: int
     river: np.ndarray         # (m, 3) the core's river stretch, from foot[ia] to foot[ib]
-    river_id: int             # index of that river in the world ``"rivers"``
+    river_id: int             # that river's index: world ``"rivers"``, then stream stems (``stream_stems``)
     # Ends cut short at a junction swap: past them the polygon is still claimed.
     open_start: bool = False
     open_end: bool = False

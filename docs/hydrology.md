@@ -39,9 +39,14 @@ runs through — `River.texels`, extended by the delta stage; saved), `"river_ob
 flattened features.
 
 **World river ↔ stream network.** `StreamNetwork.nodes` are those same texel ids,
-so `region.rivers.stream_river_ids` tags each network node with the world river
+so `rivers.stream_river_ids` tags each network node with the world river
 it is part of (a tributary's last texel is its confluence on the stem: the stem
-wins). Region and local rivers carry that id per vertex (`RegionRivers.path_rivers`).
+wins). `rivers.stream_stems` cuts the channels off the rivers into main stems and
+numbers them on from the rivers (stem `k` is id `len(rivers) + k`; a stem's last node,
+its confluence, keeps the stem it joins), so one id space covers both, returning each
+stem as a `(positions, flows)` polyline (smoothed as a river's) — the refine stage's
+border following takes them as rivers too. Region and local rivers carry that id per
+vertex (`RegionRivers.path_rivers`). ~0.07 s per call.
 
 **`StreamNetwork`** (`types.py`, `RiverGenerator.stream_network(threshold)`): the
 single-receiver tree down to `stream_flow_threshold` — channel texels plus the

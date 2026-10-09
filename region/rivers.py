@@ -41,7 +41,7 @@ from region.corridor import (
 )
 from region.distributaries import WATER_COST, DistributaryParams, add_distributaries
 from region.upsample import EARTH_RADIUS_KM, RegionFields
-from worldgen.hydrology.rivers import main_stem_paths
+from worldgen.hydrology.rivers import main_stem_paths, stream_stems
 from worldgen.hydrology.types import StreamNetwork, laplacian_smooth_sphere
 
 if TYPE_CHECKING:
@@ -100,8 +100,8 @@ class RegionRivers:
     # Local maps only: the region's own streams (region.streams), re-routed; used
     # by villages but not among confluences or mouths.
     streams: list[RiverPath] = field(default_factory=list)
-    # Per path, per vertex: the index of the world river (``"rivers"``) it is part of, -1 none
-    # (a sub-threshold headwater, a distributary). Empty when unknown.
+    # Per path, per vertex: the world river (``"rivers"``) or stream stem it is part of, in
+    # :func:`worldgen.hydrology.rivers.stream_stems`' id space; -1 none (a distributary). Empty when unknown.
     path_rivers: list[np.ndarray] = field(default_factory=list)
 
     def river_ids(self) -> list[np.ndarray]:
@@ -206,31 +206,8 @@ class StreamPath:
     hidden_edges: Optional[np.ndarray] = None
     # Starts on another path (a delta distributary): starts on that path's re-route.
     starts_on_path: bool = False
-    # (len,) world river index per vertex (RegionRivers.path_rivers); None: none.
+    # (len,) world river / stream stem index per vertex (RegionRivers.path_rivers); None: none.
     river_ids: Optional[np.ndarray] = None
-
-
-def stream_river_ids(streams: StreamNetwork, river_texels: Optional[list]) -> np.ndarray:
-    """``(K,)`` the world river (index into ``"rivers"``) each stream node is part of, -1 none.
-
-    ``river_texels`` is the ``"river_texels"`` feature. A tributary's last texel is
-    its confluence on the stem, so a texel inside one river wins over a river's end.
-    """
-    out = np.full(len(streams), -1, dtype=np.int64)
-    if not river_texels:
-        return out
-    order = np.argsort(streams.nodes, kind="stable")
-    sorted_nodes = streams.nodes[order]
-    for interior in (False, True):
-        for r, tex in enumerate(river_texels):
-            tex = np.asarray(tex, dtype=np.int64)
-            tex = tex[:-1] if interior else tex[-1:]
-            if tex.size == 0:
-                continue
-            at = np.clip(np.searchsorted(sorted_nodes, tex), 0, len(sorted_nodes) - 1)
-            hit = sorted_nodes[at] == tex
-            out[order[at[hit]]] = r
-    return out
 
 
 def _stream_paths(
@@ -497,7 +474,7 @@ def build_region_rivers(
     global_spacing = float(np.sqrt(np.mean(mesh.face_areas))) / max(gw - 1, 1)
     radius_nodes = max(float(params.corridor_global_texels) * global_spacing / node_spacing_rad(fields, step), 1.5)
 
-    ids = stream_river_ids(streams, globe.get_feature("river_texels"))
+    ids = stream_stems(streams, globe.get_feature("river_texels"))[1]
     paths = _stream_paths(streams, fields, lo, step, n, int(params.min_global_nodes), ids)
     rivers = route_stream_paths(fields, globe, paths, lo, step, n, radius_nodes, params)
     return add_distributaries(fields, globe, rivers, params)

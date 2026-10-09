@@ -36,7 +36,7 @@ and city jitter seeded from `World.seed`.
 - `boundary_warp_frequency` (45) — warp base frequency; too high aliases against the texel grid.
 - `boundary_warp_octaves` (hidden, 3).
 - `border_river_reach_km` (120) — how far from a big river a border is moved onto it ([River following](#river-following-river_followpy)); 0 = off. Face-level borders run along cell edges up to ~half a face (~100 km) off a river; 70 left many of those (region-scale borders 100–200 km beside a river).
-- `border_river_min_flow` (300) / `border_river_full_flow` (4000) — river flow at which the reach starts / is full (log ramp; world rivers start at 500, median ~1200, p90 ~7600 — 1000/8000 left the mid-size rivers that border most realms almost inert).
+- `border_river_min_flow` (200) / `border_river_full_flow` (4000) — river flow at which the reach starts / is full (log ramp; world rivers start at 500, median ~1200, p90 ~7600 — 1000/8000 left the mid-size rivers that border most realms almost inert). Below 500 it reaches the stream stems: 300 → 200 let streams carry borders (reach ≤ ~37 km at 500).
 - `border_river_min_run_km` (40) — shortest river stretch a run is moved onto.
 
 Rivers play no part in claiming (the polity stage's cost surface has no river step), so
@@ -140,6 +140,13 @@ Decided once on the globe, as "border points
    with its leaf label pair (`borders.plain_border_chains` → `trace_lattice_chains`).
 2. **Runs.** Per chain, each world river (land segments, reach = `reach_km` × the
    flow ramp) gives runs of chain points within reach (gaps of ≤ 2 points bridged).
+   "Rivers" are the world `"rivers"` then the stream network's channels below them as
+   main stems (`hydrology.rivers.stream_stems`, ids numbered on from the rivers) — the
+   region tier draws those too, so a border may follow a stream; the flow ramp keeps
+   the smallest out (streams run 100–500; at `min_flow` 200 those over 200, reach
+   ≤ ~37 km). Seeds 4 / 31 / 35: swaps 88 / 55 / 63 without stems (min_flow 300) →
+   147 / 91 / 107, 7533 / 4581 / 6195 km of border on stems, river stretches about
+   the same; min_flow 300 gave 114 / 66 / 78, 100 gave 228 / 138 / 163.
    In-lake segments count (a border reaching a lake follows the river's course across
    it; only land is labelled). Every segment within the largest reach is tested
    against its own: a fixed k-nearest search missed a big river's lower course looping
@@ -220,7 +227,7 @@ Decided once on the globe, as "border points
 
 `PolityLabelField.land_labels` = plain labels, then the swaps. The region and
 local views swap in their own drawing of the very river each run follows
-(`RiverSwaps.with_rivers`): the view packs its rivers with their world river ids
+(`RiverSwaps.with_rivers`): the view packs its rivers with their world river / stem ids
 (`pack_river_segments(..., river_ids=RegionRivers.river_ids())`, column 7; see
 [region_features.md](region_features.md#rivers-regionriverspy)). For each swap,
 that river's drawn path alongside the core (segments within `view_reach_km` (30)
