@@ -263,3 +263,26 @@ def test_low_ridge_holds_no_border(split):
     swaps = build_river_swaps(chains, [], field.plain_land_labels, field.is_water_at, np.zeros((0, 3)),
                               field.centroids, params, ridges=[(pos, np.full(len(pos) - 1, 0.1))])
     assert len(swaps) == 0
+
+
+def test_connector_wavers_between_its_ends():
+    from realmgen.refine.river_follow import _connector
+    p, q = _unit(np.array([1.0, 0.0, 0.0])), _unit(np.array([1.0, 0.01, 0.0]))     # ~64 km apart
+    c = _connector(p, q)
+    gap = np.linalg.norm(q - p)
+    assert np.allclose(c[0], p) and len(c) >= 30
+    straight = _unit(np.outer(1.0 - np.arange(len(c)) / len(c), p) + np.outer(np.arange(len(c)) / len(c), q))
+    off = np.linalg.norm(c - straight, axis=1)
+    assert off.max() <= 0.25 * gap * 1.01 and off.max() > 0.01 * gap      # sways, within bounds
+    assert np.array_equal(c, _connector(p, q))                             # deterministic
+
+
+def test_run_starting_deep_in_reach_joins_the_old_border_end(split):
+    """A swap whose blend starts at full weight runs its line from the old border's end."""
+    field, chains = split
+    _, swaps = _swapped(field, chains, [_river_at(0.05)])
+    for sw in swaps.swaps:
+        for end, joined in ((0, sw.join_start), (-1, sw.join_end)):
+            if joined and not (sw.open_start if end == 0 else sw.open_end):
+                assert np.allclose(sw.line[end], sw.border[end])
+        assert all(j >= 0.0 for j in sw.jumps)

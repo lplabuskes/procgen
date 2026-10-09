@@ -41,6 +41,7 @@ and city jitter seeded from `World.seed`.
 - `border_river_min_run_km` (40) — shortest river (or ridge) stretch a run is moved onto.
 - `border_ridge_reach_km` (120) — as `border_river_reach_km`, for a full-relief ridge line ([Ridges](#ridges-ridgespy)); 0 = off (no ridge lines extracted).
 - `border_ridge_min_relief_km` (0.2) / `border_ridge_full_relief_km` (1.0) — ridge relief at which the reach starts / is full (linear ramp; ridge relief median ~0.05 km, p90 ~0.34, p99 ~1.0 on seed 4).
+- `border_max_speck_verts` (10) — largest enclave (lattice points, ~165 km² each) handed to its surroundings ([Specks](#specks)); 0 = off.
 
 Rivers and ridges play no part in claiming (the polity stage's cost surface has no
 river or ridge step), so this is the only river and ridge handling of borders.
@@ -220,6 +221,18 @@ Decided once on the globe, as "border points
    `w = (reach − d) / (0.4 · reach)`, held non-decreasing toward the core, so the
    line eases onto and off the river along the border's own course (straight 45°
    connectors flipped large wedges).
+   **Run-end connectors.** A run starting deep in reach — at its chain's end (a
+   junction or the coast), or a settlement split — has its first blend point well off
+   the old border's end, and the polygon closed that gap with a straight edge (15–26
+   ends per world over 30 km, up to ~70 km). Where the end weight is over 0.05
+   (`join_start` / `join_end`), the line instead starts from the old border's end on a
+   connector (`_connector`): points every 2 km swung sideways by up to 0.25 × its length
+   (fBm at the bridgehead octaves, eased to 0 at both ends), so it wavers like a plain
+   border. Built in `__post_init__`, so each tier's swap (`with_rivers`) gets its own;
+   not at open ends (those meet a junction swap). The junction-end search measures the
+   jump without it (`RiverSwap.jumps`). Seeds 4 / 31 / 35: ends > 30 km off the line
+   26 / 15 / 15 → 6 / 2 / 5 (the rest open ends); a ridge junction (seed 4 region 9)
+   lost the enclave its straight edge cut off.
 5. **Claim by side.** The run claims the polygon of border run + new line
    (even–odd, so a river crossing the plain border gives alternating lobes), a
    margin of `edge_km` (8) round the old border and a band of `clean_km` (20)
@@ -310,6 +323,22 @@ in-lake segments included) and contour their own lines from that field
 (`region/borders.py`, [viz_regionview.md](viz_regionview.md)).
 `scripts/debug_borders.py --pick-river K` shows one.
 
+## Specks
+
+The warped power diagram folds where the domain warp is steep, leaving tiny islands
+of one polity inside another (seeds 4 / 35: ~390 land pieces of ≤ 10 lattice points).
+After the swaps, `RefineStage._specks` labels the border lattice (`_lattice_labels`)
+and `fill.find_specks` takes each land piece of ≤ `border_max_speck_verts` points and
+hands it to its commonest land neighbour, unless it has none (an island) or a
+settlement lies within a lattice spacing of it. The result (`fill.Specks`) is an
+override on the field (`with_specks`, applied after the swaps): a point whose nearest
+lattice vertex — among the specks' and the ring round them — is a speck's, and which
+still carries that speck's label, takes the replacement, so every tier relabels the
+same places. Seeds 4 / 35: pieces ≤ 10 points 397 / 389 → 55 / 77 (islands,
+settlements). Specks under a lattice cell, seen only on region / local maps, stay.
+The build reuses the speck pass's lattice labels for the border tracing (no extra
+time); a load, which doesn't trace, pays ~2 s.
+
 ## Border refinement (`borders.py`)
 
 Replaces `PolityStage`'s soup of hexagon edges with continuous polylines
@@ -356,3 +385,10 @@ lattice tracing (loops, bisection, coastlines ignored, coast endings, junctions,
 vassal lines ending on sovereign lines), label field (unclaimed, orphan land,
 interiors, authority bulge, face-independence), domain warp, end-to-end tracer on
 a real dual mesh, fill recipe and fill texture behaviour.
+
+`scripts/measure_borders.py`: seeds 4 / 31 / 35 with connectors and speck removal,
+sovereign border within 8 km of a big river (flow ≥ 2000), of the length within 60 km
+of one, 52.9 / 63.4 / 58.2%; of a ≥ 0.5 km ridge 43.7 / 41.3 / 37.5%. The river share's
+ceiling is well under 100%: 28–35% of the near length crosses a river (segments at
+> 45° to it), and of the parallel near length ~75% is on it. A shorter
+`border_river_min_run_km` (30) changed nothing for big rivers.

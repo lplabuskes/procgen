@@ -21,6 +21,8 @@ import copy
 from typing import List, Optional
 
 import numpy as np
+from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
 
 from core.display import POSITIONS_KEY, RIVER_SEGMENTS_KEY, TextureRecipe
@@ -162,6 +164,8 @@ class PolityLabelField:
 
         # Borders moved onto rivers run by run (``river_follow``); set by ``with_swaps``.
         self.swaps: Optional[RiverSwaps] = None
+        # Tiny enclaves handed to their surroundings; set by ``with_specks``.
+        self.specks: Optional[Specks] = None
 
     def with_rivers(self, segments: Optional[np.ndarray]) -> "PolityLabelField":
         """This field with its swaps moved onto packed ``(M, 8)`` river ``segments`` (``pack_river_segments``).
@@ -179,6 +183,12 @@ class PolityLabelField:
         """This field with ``swaps`` (borders moved onto rivers) applied after the plain labels."""
         other = copy.copy(self)
         other.swaps = swaps if swaps is not None and len(swaps) else None
+        return other
+
+    def with_specks(self, specks: Optional["Specks"]) -> "PolityLabelField":
+        """This field with ``specks`` (``find_specks``) relabelled after the swaps."""
+        other = copy.copy(self)
+        other.specks = specks if specks is not None and len(specks) else None
         return other
 
     def plain_land_labels(self, points: np.ndarray, owner: Optional[np.ndarray] = None) -> np.ndarray:
@@ -227,6 +237,8 @@ class PolityLabelField:
         out = self._plain_labels(pts, own)
         if self.swaps is not None:
             out = self.swaps.apply(pts, own, out)
+        if self.specks is not None:
+            out = self.specks.apply(pts, out)
         return out
 
     def _plain_labels(self, pts: np.ndarray, own: np.ndarray) -> np.ndarray:
@@ -257,6 +269,94 @@ class PolityLabelField:
         if lake_tex is not None:
             label[lake_tex[..., 0] > 0.5] = WATER
         return label.astype(np.int32)
+
+
+class Specks:
+    """Tiny land enclaves found on a lattice, handed to the polity round them.
+
+    A point takes the replacement when its nearest lattice vertex (among the specks'
+    vertices and the ring round them) is a speck's and it still carries that speck's
+    label, so every tier relabels the same places and nothing else.
+    """
+
+    def __init__(self, verts: np.ndarray, is_speck: np.ndarray, label: np.ndarray, replace: np.ndarray,
+                 spacing: float) -> None:
+        self.verts = np.asarray(verts, dtype=np.float64)
+        self.is_speck = np.asarray(is_speck, dtype=bool)
+        self.label = np.asarray(label, dtype=np.int64)
+        self.replace = np.asarray(replace, dtype=np.int64)
+        self.spacing = float(spacing)
+        self._tree = KDTree(self.verts) if len(self.verts) else None
+
+    def __len__(self) -> int:
+        return int(self.is_speck.sum())
+
+    def apply(self, points: np.ndarray, labels: np.ndarray) -> np.ndarray:
+        if self._tree is None or len(points) == 0:
+            return labels
+        d, j = self._tree.query(points, k=1, distance_upper_bound=self.spacing, workers=-1)
+        hit = np.isfinite(d)
+        jj = np.where(hit, j, 0)
+        hit &= self.is_speck[jj] & (labels == self.label[jj])
+        out = labels.copy()
+        out[hit] = self.replace[jj[hit]]
+        return out
+
+
+def find_specks(verts: np.ndarray, edges: np.ndarray, labels: np.ndarray, max_verts: int,
+                keep: Optional[np.ndarray] = None) -> Optional[Specks]:
+    """Land pieces of ``≤ max_verts`` lattice vertices of one label (over ``edges``), each
+    handed to its commonest land neighbour label; None when there are none.
+
+    Pieces without a land neighbour (islands) and pieces within a lattice spacing of
+    a ``keep`` point (``(S, 3)``, settlements) stay.
+    """
+    labels = np.asarray(labels, dtype=np.int64)
+    n = len(labels)
+    land = labels >= 0
+    a, b = edges[:, 0], edges[:, 1]
+    same = land[a] & (labels[a] == labels[b])
+    g = coo_matrix((np.ones(int(same.sum())), (a[same], b[same])), shape=(n, n))
+    _, comp = connected_components(g, directed=False)
+    size = np.bincount(comp[land], minlength=comp.max() + 1)
+    small = np.zeros(comp.max() + 1, dtype=bool)
+    small[np.flatnonzero((size > 0) & (size <= max_verts))] = True
+    in_speck = land & small[comp]
+    spacing = float(np.median(np.linalg.norm(verts[a[:1000]] - verts[b[:1000]], axis=1)))
+    if keep is not None and len(keep) and in_speck.any():
+        sv = np.flatnonzero(in_speck)
+        d, j = KDTree(verts[sv]).query(np.asarray(keep, dtype=np.float64).reshape(-1, 3),
+                                       distance_upper_bound=spacing)
+        d, j = np.atleast_1d(d), np.atleast_1d(j)
+        small[comp[sv[j[np.isfinite(d)]]]] = False
+        in_speck = land & small[comp]
+    if not in_speck.any():
+        return None
+    # Neighbour labels across each speck's rim: the commonest land one replaces it.
+    cross = land[a] & land[b] & (labels[a] != labels[b])
+    rim_a = cross & in_speck[a]
+    rim_b = cross & in_speck[b]
+    sp = np.concatenate([comp[a[rim_a]], comp[b[rim_b]]])
+    nb = np.concatenate([labels[b[rim_a]], labels[a[rim_b]]])
+    replace = np.full(comp.max() + 1, -1, dtype=np.int64)
+    if sp.size:
+        key = np.unique(np.stack([sp, nb], axis=1), axis=0, return_counts=True)
+        pairs, counts = key
+        order = np.lexsort((-counts, pairs[:, 0]))
+        pairs = pairs[order]
+        first = np.ones(len(pairs), dtype=bool)
+        first[1:] = pairs[1:, 0] != pairs[:-1, 0]
+        replace[pairs[first, 0]] = pairs[first, 1]
+    in_speck &= replace[comp] >= 0
+    if not in_speck.any():
+        return None
+    # The specks' vertices and the ring round them, so a point's nearest vertex decides.
+    ring = np.zeros(n, dtype=bool)
+    touch = in_speck[a] | in_speck[b]
+    ring[a[touch]] = True
+    ring[b[touch]] = True
+    idx = np.flatnonzero(ring | in_speck)
+    return Specks(verts[idx], in_speck[idx], labels[idx], replace[comp[idx]], spacing)
 
 
 def compute_texel_labels(

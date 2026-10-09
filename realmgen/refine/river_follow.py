@@ -69,6 +69,14 @@ _BRIDGEHEAD_ROUGHNESS = 0.35
 _BRIDGEHEAD_FREQS = np.array([160.0, 320.0, 640.0])
 _BRIDGEHEAD_AMPS = np.array([1.0, 0.5, 0.25]) / 1.75
 _BRIDGEHEAD_PERM = make_perm(7919)
+# A run end starting this far into reach (blend weight) joins the old border's end
+# on a wavering connector, not the polygon's straight closing edge.
+_JOIN_MIN_WEIGHT = 0.05
+# Connector: points every 2 km, swung sideways by up to this share of its length (fBm
+# at the bridgehead octaves, eased to 0 at both ends).
+_JOIN_STEP_KM = 2.0
+_JOIN_ROUGHNESS = 0.25
+_JOIN_PERM = make_perm(4271)
 
 
 @dataclass
@@ -273,6 +281,17 @@ class _SideGrid:
 # ── swaps ────────────────────────────────────────────────────────────────────
 
 
+def _connector(p: np.ndarray, q: np.ndarray) -> np.ndarray:
+    """``p`` → ``q`` (``q`` left out) every ``_JOIN_STEP_KM``, wavering sideways like a plain border."""
+    gap = float(np.linalg.norm(q - p))
+    n = max(1, int(np.ceil(gap * EARTH_RADIUS_KM / _JOIN_STEP_KM)))
+    t = np.arange(n) / n
+    base = _unit((1.0 - t)[:, None] * p + t[:, None] * q)
+    side = _unit(np.cross(base, q - p))
+    off = _JOIN_ROUGHNESS * gap * np.sin(np.pi * t) * fbm_sum(base, _JOIN_PERM, _BRIDGEHEAD_FREQS, _BRIDGEHEAD_AMPS)
+    return _unit(base + off[:, None] * side)
+
+
 @dataclass
 class RiverSwap:
     """One border run replaced by a river stretch: ``left`` / ``right`` of the new line.
@@ -296,11 +315,20 @@ class RiverSwap:
     # Ends cut short at a junction swap: past them the polygon is still claimed.
     open_start: bool = False
     open_end: bool = False
+    # Ends starting deep in reach: the line runs from the old border's end on a connector.
+    join_start: bool = False
+    join_end: bool = False
 
     def __post_init__(self) -> None:
         w = self.weight[:, None]
         blend = _unit((1.0 - w) * self.border + w * self.foot)
-        self.line = np.vstack([blend[:self.ia], self.river, blend[self.ib + 1:]])
+        body = np.vstack([blend[:self.ia], self.river, blend[self.ib + 1:]])
+        head = _connector(self.border[0], body[0]) if self.join_start and not self.open_start else body[:0]
+        tail = _connector(self.border[-1], body[-1])[::-1] if self.join_end and not self.open_end else body[:0]
+        self.line = np.vstack([head, body, tail])
+        # How far the line proper (without connectors) starts / ends off the old border's ends.
+        self.jumps = (float(np.linalg.norm(body[0] - self.border[0])),
+                      float(np.linalg.norm(body[-1] - self.border[-1])))
         ring = np.vstack([self.border, self.line[::-1]])
         self.centre = _unit(ring.mean(axis=0))
         self.e1, self.e2 = _tangent_basis(self.centre)
@@ -963,7 +991,8 @@ def _make_swap(riv: _Rivers, c: _Run, pts: np.ndarray, nr: _Near, la: int, lb: i
     river = riv.stretch(c.river, nr.s[ia], nr.s[ib])
     left, right = _sides(pts[sl], la, lb, plain_labels, _SIDE_PROBE_KM / EARTH_RADIUS_KM)
     return RiverSwap(left, right, p.clean_km / EARTH_RADIUS_KM, p.edge_km / EARTH_RADIUS_KM, depth, pts[sl], w,
-                     nr.foot[sl].copy(), a, b, river, riv.feature_index[c.river])
+                     nr.foot[sl].copy(), a, b, river, riv.feature_index[c.river],
+                     join_start=bool(w[0] > _JOIN_MIN_WEIGHT), join_end=bool(w[-1] > _JOIN_MIN_WEIGHT))
 
 
 def _settle(c: _Run, pts: np.ndarray, nr: _Near, la: int, lb: int, depth: int, ctx: tuple,
@@ -1239,7 +1268,7 @@ def _junction_swaps(accepted: List[tuple], chains: Sequence[tuple], per_chain: L
                 continue                                  # carried on by a junction swap already
             if (ca.i1 != len(pts_a) - 1) if hi else (ca.i0 != 0):
                 continue
-            jump = np.linalg.norm(sw_a.border[-1 if hi else 0] - sw_a.line[-1 if hi else 0])
+            jump = sw_a.jumps[1 if hi else 0]
             if jump * EARTH_RADIUS_KM < p.edge_km:
                 continue
             g = ca.ib if hi else ca.ia

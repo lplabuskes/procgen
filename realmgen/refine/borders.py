@@ -401,17 +401,19 @@ def _smooth_chains(ids: np.ndarray, points: np.ndarray, junctions: frozenset,
 def smooth_polity_borders(mesh, polities: List, field: PolityLabelField,
                           ocean_tex: np.ndarray, lake_tex: Optional[np.ndarray],
                           *, iterations: int = 2, lattice_depth: Optional[int] = None,
-                          lattice_offset: int = 0, bisect_steps: int = 5) -> dict:
+                          lattice_offset: int = 0, bisect_steps: int = 5,
+                          lattice: Optional[tuple] = None) -> dict:
     """Return ``{depth: (M, 6)}`` continuous, Chaikin-smoothed polity borders.
 
     Lattice is about texel-fine, shifted by ``lattice_offset`` levels
     (``lattice_depth`` overrides). Water from ``ocean_tex``/``lake_tex`` so
-    borders end at the texel coastline.
+    borders end at the texel coastline. ``lattice``: ``_lattice_labels``' result for
+    this field, already computed.
     """
     if not polities:
         return {}
-    verts, tris, edges, tri_edges, labels = _lattice_labels(mesh, field, ocean_tex, lake_tex,
-                                                            lattice_depth, lattice_offset)
+    verts, tris, edges, tri_edges, labels = lattice or _lattice_labels(mesh, field, ocean_tex, lake_tex,
+                                                                       lattice_depth, lattice_offset)
     return trace_lattice_borders(verts, tris, edges, tri_edges, labels, polities,
                                  iterations=iterations, label_fn=field.land_labels,
                                  bisect_steps=bisect_steps)

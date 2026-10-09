@@ -15,8 +15,8 @@ from core.params import param_field as _f, paramclass
 from core.pipeline import BuildContext, Stage
 from realmgen.channels import AUTHORITY, POLITY_ID
 from realmgen.persistence import pack_borders, pack_routes, unpack_borders, unpack_routes
-from realmgen.refine.borders import plain_border_chains, smooth_polity_borders
-from realmgen.refine.fill import PolityLabelField, colorize_labels
+from realmgen.refine.borders import _lattice_labels, plain_border_chains, smooth_polity_borders
+from realmgen.refine.fill import PolityLabelField, colorize_labels, find_specks
 from realmgen.refine.ridges import ridge_lines
 from realmgen.refine.river_follow import RiverFollowParams, build_river_swaps
 from realmgen.refine.settlements import refine_settlement_positions, remap_routes
@@ -76,6 +76,9 @@ class RefineParams:
     border_ridge_full_relief_km: float = _f(
         1.0, label="Border ridge: relief at full reach (km)", min=0.05, max=5.0, step=0.05
     )
+    border_max_speck_verts: int = _f(
+        10, label="Border specks: largest enclave removed (lattice points, 0=off)", min=0, max=100, step=1
+    )
 
 
 class RefineStage(Stage):
@@ -89,6 +92,8 @@ class RefineStage(Stage):
         # Final routes/borders, cached for serialization.
         self._routes: list | None = None
         self._borders: dict | None = None
+        # The border lattice labelled by the last field built (specks applied), for the border tracing.
+        self._lattice: tuple | None = None
 
     def build(self, ctx: BuildContext) -> None:
         world = ctx.world
@@ -127,7 +132,9 @@ class RefineStage(Stage):
                     mesh, polities, field, ocean_tex, lake_tex,
                     iterations=int(p.border_smoothing_iterations),
                     lattice_offset=int(p.border_lattice_offset),
+                    lattice=self._lattice,
                 ))
+                self._lattice = None
                 rgba = colorize_labels(labels, polities, ocean_tex, lake_tex)
                 mesh.set_face_textures("polity_fill", rgba.astype(np.float16), n_channels=4)
 
@@ -158,8 +165,30 @@ class RefineStage(Stage):
         )
         if (p.border_river_reach_km > 0.0 or p.border_ridge_reach_km > 0.0) and OCEAN_MASK.present(mesh):
             field = field.with_swaps(self._river_swaps(world, field, polities))
+        if p.border_max_speck_verts > 0 and OCEAN_MASK.present(mesh):
+            field = field.with_specks(self._specks(world, field))
+        else:
+            self._lattice = None
         world.add_feature("polity_label_field", field)
         return field
+
+    def _specks(self, world, field: PolityLabelField):
+        """Tiny enclaves of the field (swaps applied) on the border lattice, to hand to their surroundings."""
+        mesh, p = world.mesh, self.params
+        ocean_tex = OCEAN_MASK.read(mesh)
+        lake_tex = LAKE_MASK.read(mesh) if LAKE_MASK.present(mesh) else None
+        lattice = _lattice_labels(mesh, field, ocean_tex, lake_tex, None, int(p.border_lattice_offset))
+        verts, tris, edges, tri_edges, labels = lattice
+        settlements = world.get_feature("settlements") or []
+        keep = (np.array([np.asarray(s.site_position, dtype=np.float64) for s in settlements])
+                if settlements else None)
+        specks = find_specks(verts, edges, labels, int(p.border_max_speck_verts), keep)
+        if specks is not None:
+            land = labels >= 0
+            labels = labels.copy()
+            labels[land] = specks.apply(verts[land], labels[land])
+        self._lattice = (verts, tris, edges, tri_edges, labels)
+        return specks
 
     def _river_swaps(self, world, field: PolityLabelField, polities):
         """Border runs moved onto big rivers and ridges (``river_follow``), from the field's plain borders."""
