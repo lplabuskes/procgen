@@ -17,6 +17,7 @@ from realmgen.channels import AUTHORITY, POLITY_ID
 from realmgen.persistence import pack_borders, pack_routes, unpack_borders, unpack_routes
 from realmgen.refine.borders import plain_border_chains, smooth_polity_borders
 from realmgen.refine.fill import PolityLabelField, colorize_labels
+from realmgen.refine.ridges import ridge_lines
 from realmgen.refine.river_follow import RiverFollowParams, build_river_swaps
 from realmgen.refine.settlements import refine_settlement_positions, remap_routes
 from realmgen.refine.sites import SiteField
@@ -65,6 +66,15 @@ class RefineParams:
     )
     border_river_min_run_km: float = _f(
         40.0, label="Border river: shortest followed stretch (km)", min=5.0, max=300.0, step=5.0
+    )
+    border_ridge_reach_km: float = _f(
+        120.0, label="Border ridge follow reach (km, 0=off)", min=0.0, max=300.0, step=10.0
+    )
+    border_ridge_min_relief_km: float = _f(
+        0.2, label="Border ridge: min relief (km)", min=0.0, max=3.0, step=0.05
+    )
+    border_ridge_full_relief_km: float = _f(
+        1.0, label="Border ridge: relief at full reach (km)", min=0.05, max=5.0, step=0.05
     )
 
 
@@ -146,13 +156,13 @@ class RefineStage(Stage):
             warp_octaves=int(p.boundary_warp_octaves),
             warp_seed=int(world.seed or 0),
         )
-        if p.border_river_reach_km > 0.0 and OCEAN_MASK.present(mesh):
+        if (p.border_river_reach_km > 0.0 or p.border_ridge_reach_km > 0.0) and OCEAN_MASK.present(mesh):
             field = field.with_swaps(self._river_swaps(world, field, polities))
         world.add_feature("polity_label_field", field)
         return field
 
     def _river_swaps(self, world, field: PolityLabelField, polities):
-        """Border runs moved onto big rivers (``river_follow``), from the field's plain borders."""
+        """Border runs moved onto big rivers and ridges (``river_follow``), from the field's plain borders."""
         mesh, p = world.mesh, self.params
         ocean_tex = OCEAN_MASK.read(mesh)
         lake_tex = LAKE_MASK.read(mesh) if LAKE_MASK.present(mesh) else None
@@ -164,16 +174,23 @@ class RefineStage(Stage):
         follow = RiverFollowParams(reach_km=float(p.border_river_reach_km),
                                    min_flow=float(p.border_river_min_flow),
                                    full_flow=float(p.border_river_full_flow),
-                                   min_run_km=float(p.border_river_min_run_km))
+                                   min_run_km=float(p.border_river_min_run_km),
+                                   ridge_reach_km=float(p.border_ridge_reach_km),
+                                   ridge_min_relief_km=float(p.border_ridge_min_relief_km),
+                                   ridge_full_relief_km=float(p.border_ridge_full_relief_km))
         # The world rivers, then the streams below them (as stems, numbered on: the
         # region / local tiers' path ids), so a border can follow a drawn stream too.
         rivers = list(world.get_feature("rivers") or [])
         streams, texels = world.get_feature("streams"), world.get_feature("river_texels")
         if streams is not None and (texels is not None or not rivers):
             rivers += stream_stems(streams, texels)[0]
+        ridges = (ridge_lines(mesh, streams, texels, lattice_offset=int(p.border_lattice_offset),
+                              min_relief_km=float(p.border_ridge_min_relief_km))
+                  if p.border_ridge_reach_km > 0.0 else [])
+        world.add_feature("ridges", ridges)
         return build_river_swaps(chains, rivers, field.plain_land_labels,
                                  field.is_water_at, positions, field.centroids, follow,
-                                 labels_without=field.labels_without)
+                                 labels_without=field.labels_without, ridges=ridges)
 
     # ── Persistence ───────────────────────────────────────────────────────────
     # Owns the route/border round-trip; polity_fill persists via mesh textures.

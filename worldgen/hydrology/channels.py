@@ -11,6 +11,11 @@ LAKE_MASK = TextureChannel("lake_mask", n_channels=1)
 FILLED_HEIGHT = TextureChannel("filled_height", n_channels=1,
                                codec=TextureCodec(step=1e-4, relative_to="elevation"))
 
+# Per texel, the flat texel id (face·H·W + row·W + col) of the first stream-network
+# channel texel its downhill path reaches (itself on a channel), -1 where it reaches
+# the sea or an endorheic sink first: the drainage basin it belongs to. Exact integers.
+DRAINAGE_LANDING = TextureChannel("drainage_landing", n_channels=1, codec=TextureCodec(step=1.0))
+
 # ── Features ─────────────────────────────────────────────────────────────────
 # The rich ``List[River]`` objects consumed by resources and cost.
 RIVER_OBJECTS = FeatureChannel("river_objects")

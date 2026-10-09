@@ -21,7 +21,8 @@ and city jitter seeded from `World.seed`.
 - `realmgen/refine/sites.py` — `SiteField`: per-texel site features (coast, river, confluence, local fertility, face ownership), shared with the town stage
 - `realmgen/refine/settlements.py` — city siting (`refine_settlement_positions`, `city_site_scores`, `SITE_*` weights reused by region/local tiers) + `remap_routes`
 - `realmgen/refine/fill.py` — `PolityLabelField` (polity at any sphere point, incl. domain warp), texel labels, fill texture, `polity_fill_recipe`
-- `realmgen/refine/river_follow.py` — borders moved onto rivers run by run (`RiverSwaps`, `build_river_swaps`)
+- `realmgen/refine/river_follow.py` — borders moved onto rivers and ridges run by run (`RiverSwaps`, `build_river_swaps`)
+- `realmgen/refine/ridges.py` — ridge lines: the drainage divides between stream basins, contoured on the border lattice (`ridge_lines`)
 - `realmgen/refine/barriers.py` — `pack_river_segments` (river polylines → segment rows, the form views pass under `RIVER_SEGMENTS_KEY`), `flow_ramp`
 - `realmgen/refine/borders.py` — border polylines contoured from the same field on a seamless icosphere lattice (marching triangles + bisection + Chaikin)
 
@@ -37,10 +38,12 @@ and city jitter seeded from `World.seed`.
 - `boundary_warp_octaves` (hidden, 3).
 - `border_river_reach_km` (120) — how far from a big river a border is moved onto it ([River following](#river-following-river_followpy)); 0 = off. Face-level borders run along cell edges up to ~half a face (~100 km) off a river; 70 left many of those (region-scale borders 100–200 km beside a river).
 - `border_river_min_flow` (200) / `border_river_full_flow` (4000) — river flow at which the reach starts / is full (log ramp; world rivers start at 500, median ~1200, p90 ~7600 — 1000/8000 left the mid-size rivers that border most realms almost inert). Below 500 it reaches the stream stems: 300 → 200 let streams carry borders (reach ≤ ~37 km at 500).
-- `border_river_min_run_km` (40) — shortest river stretch a run is moved onto.
+- `border_river_min_run_km` (40) — shortest river (or ridge) stretch a run is moved onto.
+- `border_ridge_reach_km` (120) — as `border_river_reach_km`, for a full-relief ridge line ([Ridges](#ridges-ridgespy)); 0 = off (no ridge lines extracted).
+- `border_ridge_min_relief_km` (0.2) / `border_ridge_full_relief_km` (1.0) — ridge relief at which the reach starts / is full (linear ramp; ridge relief median ~0.05 km, p90 ~0.34, p99 ~1.0 on seed 4).
 
-Rivers play no part in claiming (the polity stage's cost surface has no river step), so
-this is the only river handling of borders.
+Rivers and ridges play no part in claiming (the polity stage's cost surface has no
+river or ridge step), so this is the only river and ridge handling of borders.
 
 ## Site features (`sites.py`)
 
@@ -130,6 +133,51 @@ palette, unclaimed grey, ocean/lake blues), stored as face texture `polity_fill`
 evaluates fill at its own texels with refined shoreline
 ([region.md](region.md#display-regiondisplaypy)).
 
+## Ridges (`ridges.py`)
+
+`ridge_lines(mesh, streams, river_texels)` → `[(positions, relief_km per segment)]`,
+the drainage divides between stream basins, as polylines:
+
+1. **Basins.** Hydrology's `DRAINAGE_LANDING` texture gives each texel the first
+   stream-network channel its downhill path reaches; `basin_texels` names it by that
+   channel's main stem (`stream_stems` ids: world rivers, then the streams below them),
+   or the coastal basin (`COASTAL`) where the path reaches the sea or an endorheic
+   sink first. Floor = the landing channel's filled height (0 for coastal).
+2. **Contour.** Basin labels at the border lattice's vertices (nearest texel, water
+   from the masks) go through the same marching triangles as the polity borders
+   (`borders._lattice_links`, one depth); no bisection (labels are per texel).
+3. **Join.** Chains between junctions are joined through each junction by pairing its
+   two arms of highest relief (mean of their first 6 points), so a crest carries on
+   past a spur, which ends there (`_join_at_junctions`).
+4. **Relief** per crossing: `min(e_a, e_b) − max(floor_a, floor_b)` over the edge's
+   two texels (`elevation`), clipped at 0 — how far the divide stands above the
+   valleys either side, so a flat watershed on a plain or a low pass barely counts.
+   Hubs take their neighbours'; a 5-point running mean along the line; Laplacian
+   smoothing (8 passes, as rivers) of the positions. Lines that never reach
+   `border_ridge_min_relief_km` are dropped.
+
+**Pruning.** Most divides are low (median relief ~0.05 km, p75 ~0.15), so crossings
+under half `border_ridge_min_relief_km` are dropped before chaining (`_PRUNE_SHARE`),
+breaking lines there; the chaining, joining and smoothing scale with what's kept.
+Seed 4: 2512 → 1236 lines, 1.14 → 0.69 s (lattice already built by the border
+tracing; ~0.6 s of that is locating the lattice and labelling basins, unpruned), ridge
+length at ≥ 0.2 / ≥ 0.5 km relief unchanged (216k / 61k km). Rebuilt with the label
+field on every build and load. The refine stage stores them as the `"ridges"` feature
+(not saved). The coastal basin keeps small coastal catchments (below the ~20,000 km²
+stream threshold) together: ridges between neighbouring short coastal streams are
+not found, a coastal range against an inland basin is.
+
+**Following.** Ridges join the rivers in `build_river_swaps` (`ridges=`, one pool:
+a run takes whichever line it shadows longest; swap ids `len(rivers) + k`). Reach
+is `border_ridge_reach_km` × the relief ramp. Relief comes and goes along a crest,
+so each stretch above the minimum (gaps of one segment bridged) is a line of its own
+(`_ridge_pieces`): whole lines let run bridging carry a border 2200 km along a
+50 m-relief divide between a few high points. The region / local tiers draw no
+ridges, so ridge swaps keep the world line there (`with_rivers` finds no drawn line
+with their id). Seeds 4 / 31 / 35: 115 ridge swaps on seed 4 (15,000 km); share of
+sovereign border within 8 km of a ≥ 0.5 km ridge, among the length within 60 km of
+one, 19.7 / 13.4 / 15.3% → 41.1 / 40.7 / 34.5% (pruned); river shares unchanged.
+
 ## River following (`river_follow.py`)
 
 Decided once on the globe, as "border points
@@ -139,7 +187,8 @@ Decided once on the globe, as "border points
    is traced on the global lattice into chains between junctions / coasts, each
    with its leaf label pair (`borders.plain_border_chains` → `trace_lattice_chains`).
 2. **Runs.** Per chain, each world river (land segments, reach = `reach_km` × the
-   flow ramp) gives runs of chain points within reach (gaps of ≤ 2 points bridged).
+   flow ramp) or ridge line ([Ridges](#ridges-ridgespy)) gives runs of chain points
+   within reach (gaps of ≤ 2 points bridged).
    "Rivers" are the world `"rivers"` then the stream network's channels below them as
    main stems (`hydrology.rivers.stream_stems`, ids numbered on from the rivers) — the
    region tier draws those too, so a border may follow a stream; the flow ramp keeps

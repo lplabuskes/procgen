@@ -48,6 +48,13 @@ stem as a `(positions, flows)` polyline (smoothed as a river's) — the refine s
 border following takes them as rivers too. Region and local rivers carry that id per
 vertex (`RegionRivers.path_rivers`). ~0.07 s per call.
 
+**`DRAINAGE_LANDING`** (texture, `RiverGenerator.drainage_landing(stream threshold)`):
+per texel, the flat id of the first channel texel of the stream network on its downhill
+path along the same tree (itself on a channel), -1 where the path reaches the sea or an
+endorheic sink first — its drainage basin. Pointer doubling, ~0.02 s. Saved exactly
+(codec step 1). The refine stage's ridge lines are the boundaries between these basins
+([realm_refine.md](realm_refine.md#ridges-ridgespy)).
+
 **`StreamNetwork`** (`types.py`, `RiverGenerator.stream_network(threshold)`): the
 single-receiver tree down to `stream_flow_threshold` — channel texels plus the
 sea/endorheic texels they drain into, as sparse parallel arrays: `nodes` (flat

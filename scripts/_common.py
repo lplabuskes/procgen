@@ -84,7 +84,7 @@ def realm_params(overrides: list[str]):  # type: ignore[no-untyped-def]
 
 def add_set_arg(parser) -> None:  # type: ignore[no-untyped-def]
     parser.add_argument("--set", action="append", default=[], metavar="PATH=VALUE",
-                        help="Override a RealmParams field, e.g. polity.barriers.ridge_weight=0")
+                        help="Override a RealmParams field, e.g. refine.border_ridge_reach_km=0")
 
 
 def avg(rows: list[dict], key: str) -> float:

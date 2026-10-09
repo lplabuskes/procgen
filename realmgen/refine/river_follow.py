@@ -87,6 +87,9 @@ class RiverFollowParams:
     border_step_km: float = 1.0     # the swap's border edge is densified to this and bisected onto the boundary
     edge_km: float = 8.0            # margin round the old border taken by side (~ a lattice edge: what tracing cut off)
     clean_km: float = 20.0          # band either side of the new line taken by side (clears enclaves)
+    ridge_reach_km: float = 120.0   # as reach_km, for a full-relief ridge (0 = ridges off)
+    ridge_min_relief_km: float = 0.2   # ridge reach ramps (linear) from 0 at this relief …
+    ridge_full_relief_km: float = 1.0  # … to ridge_reach_km here
 
 
 # ── geometry ─────────────────────────────────────────────────────────────────
@@ -289,7 +292,7 @@ class RiverSwap:
     ia: int
     ib: int
     river: np.ndarray         # (m, 3) the core's river stretch, from foot[ia] to foot[ib]
-    river_id: int             # that river's index: world ``"rivers"``, then stream stems (``stream_stems``)
+    river_id: int             # the line's id: the rivers passed (world ``"rivers"``, stream stems), then ridges
     # Ends cut short at a junction swap: past them the polygon is still claimed.
     open_start: bool = False
     open_end: bool = False
@@ -636,36 +639,58 @@ class _Near:
     foot: np.ndarray      # (K, 3)
 
 
-class _Rivers:
-    """World river segments eligible to carry a border, with per-river arc length."""
+def relief_ramp(relief: np.ndarray, *, min_relief: float, full_relief: float) -> np.ndarray:
+    """``clip((relief − min_relief) / (full_relief − min_relief), 0, 1)``."""
+    span = max(float(full_relief) - float(min_relief), 1e-9)
+    return np.clip((np.asarray(relief, dtype=np.float64) - float(min_relief)) / span, 0.0, 1.0)
 
-    def __init__(self, rivers: Optional[Iterable], p: RiverFollowParams) -> None:
+
+def _ridge_pieces(on: np.ndarray, max_gap: int = 1) -> List[tuple[int, int]]:
+    """``[(i0, i1)]`` segment ranges of the ``on`` stretches, gaps of ≤ ``max_gap`` bridged."""
+    at = np.flatnonzero(on)
+    if at.size == 0:
+        return []
+    cut = np.flatnonzero(np.diff(at) > max_gap + 1)
+    starts = np.concatenate([[at[0]], at[cut + 1]])
+    ends = np.concatenate([at[cut], [at[-1]]]) + 1
+    return [(int(a), int(b)) for a, b in zip(starts, ends)]
+
+
+class _Rivers:
+    """Line segments eligible to carry a border — world rivers, then ridges — with per-line arc length."""
+
+    def __init__(self, rivers: Optional[Iterable], p: RiverFollowParams,
+                 ridges: Optional[Iterable] = None) -> None:
         self.pos: List[np.ndarray] = []
-        self.feature_index: List[int] = []     # index into the world "rivers" of each kept river
+        # Per kept line its id: index into ``rivers``, then ``len(rivers) + k`` for ridge k.
+        self.feature_index: List[int] = []
         self.arc: List[np.ndarray] = []
-        a_parts, b_parts, rid_parts, sid_parts, reach_parts = [], [], [], [], []
-        for fi, path in enumerate(rivers or []):
+        rivers = list(rivers or [])
+        ridge_reach = p.ridge_reach_km / EARTH_RADIUS_KM
+        lines = [(fi, path, False) for fi, path in enumerate(rivers)]
+        if ridge_reach > 0.0:
+            lines += [(len(rivers) + k, path, True) for k, path in enumerate(ridges or [])]
+        self._parts: tuple[list, ...] = ([], [], [], [], [])    # a, b, line, segment, reach
+        for fi, path, is_ridge in lines:
             pos = _unit(np.asarray(path[0], dtype=np.float64))
-            flow = np.asarray(path[1], dtype=np.float64)
-            m = min(flow.size, len(pos) - 1)
+            strength = np.asarray(path[1], dtype=np.float64)
+            m = min(strength.size, len(pos) - 1)
             if m <= 0:
                 continue
-            r = len(self.pos)
-            self.feature_index.append(fi)
-            self.pos.append(pos[:m + 1])
-            self.arc.append(_arc_lengths(pos[:m + 1]))
-            ramp = flow_ramp(flow[:m], min_flow=p.min_flow, full_flow=p.full_flow)
-            reach = p.reach_km / EARTH_RADIUS_KM * ramp
-            # Through lakes too: a run reaching a lake shore carries on along the river's
-            # course across it (only land is labelled), instead of stopping at the outlet
-            # with the border still beside the river and jumping onto it on a straight edge.
-            idx = np.flatnonzero(reach > 0.0)
-            a_parts.append(pos[idx])
-            b_parts.append(pos[idx + 1])
-            rid_parts.append(np.full(idx.size, r))
-            sid_parts.append(idx)
-            reach_parts.append(reach[idx])
-        if a_parts and sum(len(x) for x in a_parts):
+            if is_ridge:
+                reach = ridge_reach * relief_ramp(strength[:m], min_relief=p.ridge_min_relief_km,
+                                                  full_relief=p.ridge_full_relief_km)
+                # Relief comes and goes along a crest: each stretch above the minimum is a
+                # line of its own, so no run (or bridge) carries a border across a low pass.
+                pieces = _ridge_pieces(reach > 0.0)
+            else:
+                reach = p.reach_km / EARTH_RADIUS_KM * flow_ramp(strength[:m], min_flow=p.min_flow,
+                                                                 full_flow=p.full_flow)
+                pieces = [(0, m)] if np.any(reach > 0.0) else []
+            for i0, i1 in pieces:
+                self._add(fi, pos[i0:i1 + 1], reach[i0:i1])
+        a_parts, b_parts, rid_parts, sid_parts, reach_parts = self._parts
+        if sum(len(x) for x in a_parts):
             self.a = np.concatenate(a_parts)
             self.b = np.concatenate(b_parts)
             self.rid = np.concatenate(rid_parts)
@@ -678,6 +703,23 @@ class _Rivers:
         self.tree = KDTree(0.5 * (self.a + self.b)) if len(self.a) else None
         self.half = 0.5 * float(np.linalg.norm(self.b - self.a, axis=1).max(initial=0.0))
         self.max_reach = float(self.reach.max(initial=0.0))
+
+    def _add(self, fi: int, pos: np.ndarray, reach: np.ndarray) -> None:
+        """Keep line ``pos`` (id ``fi``) with per-segment ``reach``; its segments in reach are indexed."""
+        a_parts, b_parts, rid_parts, sid_parts, reach_parts = self._parts
+        r = len(self.pos)
+        self.feature_index.append(fi)
+        self.pos.append(pos)
+        self.arc.append(_arc_lengths(pos))
+        # Through lakes too: a run reaching a lake shore carries on along the river's
+        # course across it (only land is labelled), instead of stopping at the outlet
+        # with the border still beside the river and jumping onto it on a straight edge.
+        idx = np.flatnonzero(reach > 0.0)
+        a_parts.append(pos[idx])
+        b_parts.append(pos[idx + 1])
+        rid_parts.append(np.full(idx.size, r))
+        sid_parts.append(idx)
+        reach_parts.append(reach[idx])
 
     def near(self, x: np.ndarray) -> dict:
         """``{river: _Near}`` for the rivers within reach of any of the points ``x``.
@@ -811,8 +853,13 @@ def build_river_swaps(
     params: Optional[RiverFollowParams] = None,
     stats: Optional[dict] = None,
     labels_without: Optional[Callable[[np.ndarray, int], np.ndarray]] = None,
+    ridges: Optional[Iterable] = None,
 ) -> RiverSwaps:
-    """Swaps for the plain border ``chains`` (``trace_lattice_chains``) onto ``rivers``.
+    """Swaps for the plain border ``chains`` (``trace_lattice_chains``) onto ``rivers`` and ``ridges``.
+
+    ``rivers`` are ``(positions, flows, ...)`` polylines, ``ridges`` ``(positions,
+    relief_km)`` (``ridges.ridge_lines``), one pool: a run takes whichever line it
+    shadows longest. A ridge's swap id is ``len(rivers) + k``.
 
     ``plain_labels``/``is_water_at`` label sphere points; ``settlements`` is
     ``(S, 3)`` positions no swap may hand to the neighbour. ``stats`` (if given)
@@ -822,7 +869,7 @@ def build_river_swaps(
     """
     p = params or RiverFollowParams()
     st = stats if stats is not None else {}
-    riv = _Rivers(rivers, p)
+    riv = _Rivers(rivers, p, ridges)
     min_run = p.min_run_km / EARTH_RADIUS_KM
     settle = np.asarray(settlements, dtype=np.float64).reshape(-1, 3)
     settle_lab = plain_labels(settle) if len(settle) else np.zeros(0, dtype=np.int64)

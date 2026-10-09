@@ -46,7 +46,7 @@ class ProjectionParams:
     range_floor: float = _f(
         0.5, label="Projection range floor (+ infrastructure)", min=0.0, max=2.0
     )
-    sea_range_factor: float = _f(1.2, label="Sea projection range factor (× land)", min=1.0, max=10.0)
+    sea_range_factor: float = _f(1.4, label="Sea projection range factor (× land)", min=1.0, max=10.0)
     sea_weight: float = _f(1.0, label="Sea channel magnitude weight (vs land)", min=0.0, max=1.0)
     legitimacy_spread: float = _f(0.3, label="Legitimacy spread (±)", min=0.0, max=1.0)
     maritime_scale: float = _f(1.5, label="Maritime reach scale (× trade)", min=0.0, max=5.0)
@@ -102,20 +102,13 @@ class _Ctx:
     p: "PolityParams"
     face_to_settlement: Dict[int, int]
     frontier: Optional[np.ndarray] = None  # (N,) march exposure from a previous pass; None = off
-    # Graphs deciding *who claims* a face (land, hybrid): the plain ones plus barrier
-    # steps (ridges), so borders snap to them while reach and classification don't
-    # change. None => claim on the plain graphs.
-    claim_graphs: Optional[Tuple[csr_matrix, Optional[csr_matrix]]] = None
     # Directed land–land adjacency (authority.land_edges); empty => no exclave merging.
     land_edges: Tuple[np.ndarray, np.ndarray] = field(
         default_factory=lambda: (np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)))
     distances: ProjectionDistances = field(init=False)
-    claim_distances: ProjectionDistances = field(init=False)
 
     def __post_init__(self) -> None:
         self.distances = ProjectionDistances(self.land_graph, self.hybrid_graph, self.n)
-        self.claim_distances = (ProjectionDistances(*self.claim_graphs, self.n)
-                                if self.claim_graphs is not None else self.distances)
 
 
 class ForestBuilder:
@@ -194,12 +187,11 @@ class ForestBuilder:
             capital_faces = [int(s.settlement_faces[i]) for i in capital_sidx]
             scalars = self._roll(capital_sidx, capital_faces)
             fields = self._project(capital_faces, scalars)
-            claim_fields = self._project(capital_faces, scalars, claim=True)
             partition, n_iters = claim_faces(
-                claim_fields, capital_faces, land_mask,
+                fields, capital_faces, land_mask,
                 hysteresis=p.claiming.hysteresis, max_iters=p.claiming.max_iters, prev=prev,
             )
-            partition = self._merge_exclaves(partition, capital_faces, claim_fields)
+            partition = self._merge_exclaves(partition, capital_faces, fields)
             prev = partition
 
             # Capital's raw power, not the domain sum (which would let a big empire hold everything).
@@ -272,15 +264,15 @@ class ForestBuilder:
 
     # ── projection / scalar helpers ───────────────────────────────────────────
 
-    def _project(self, capital_faces: Sequence[int], sc: Scalars, *, claim: bool = False) -> np.ndarray:
-        """Authority fields ``(C, N)``; ``claim`` over the barrier graphs (who holds a face)."""
+    def _project(self, capital_faces: Sequence[int], sc: Scalars) -> np.ndarray:
+        """Authority fields ``(C, N)``."""
         p = self.s.p
         return compute_authority_fields(
             self.s.n, capital_faces, sc.legitimacy, sc.infrastructure, sc.maritime_reach,
             self.s.land_graph, self.s.hybrid_graph,
             base_range=p.projection.base_range, range_floor=p.projection.range_floor,
             sea_range_factor=p.projection.sea_range_factor, sea_weight=p.projection.sea_weight,
-            distances=self.s.claim_distances if claim else self.s.distances,
+            distances=self.s.distances,
         )
 
     def _roll(self, capital_sidx, capital_faces) -> Scalars:
@@ -382,7 +374,7 @@ class ForestBuilder:
                 arr[0] = float(parent_val[0])
             terr_mask = np.zeros(s.n, dtype=bool)
             terr_mask[territory] = True
-            sub_field = self._project(sub_caps, sub, claim=True)
+            sub_field = self._project(sub_caps, sub)
             sub_assign, _ = claim_faces(
                 sub_field, sub_caps, terr_mask,
                 hysteresis=p.claiming.hysteresis, max_iters=p.claiming.max_iters,

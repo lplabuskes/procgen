@@ -458,6 +458,26 @@ class RiverGenerator:
             resolution=self.resolution,
         )
 
+    def drainage_landing(self, threshold: float) -> np.ndarray:
+        """``(N, H, W, 1)`` float32: per texel, the flat id of the first channel texel
+        (``stream_network(threshold)``) on its downhill path, itself on a channel; -1
+        where the path reaches the sea or an endorheic sink first (and on the sea).
+
+        Ids are exact in float32 below 2²⁴ texels. Call after generate().
+        """
+        ocean = self._ocean_mask
+        channel = (self._tree_accum >= threshold) & ~ocean
+        end = channel | ocean | self._endorheic_mask | (self._tree_receiver < 0)
+        nxt = np.where(end, np.arange(self.n_nodes), self._tree_receiver)
+        while True:                                   # pointer doubling to each path's end
+            jump = nxt[nxt]
+            if np.array_equal(jump, nxt):
+                break
+            nxt = jump
+        landing = np.where(channel[nxt], nxt, -1)
+        res = self.resolution
+        return landing.reshape(self.n_faces, res, res, 1).astype(np.float32)
+
     def get_lake_polygons(self) -> List[np.ndarray]:
         """Lake boundary polygons as ordered unit-sphere positions. Call after generate()."""
         if not self._lake_mask.any():

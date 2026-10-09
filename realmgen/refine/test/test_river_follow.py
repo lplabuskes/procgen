@@ -236,3 +236,30 @@ def test_walk_to_river_finds_where_the_boundary_returns_to_the_river():
     assert spans[-1] == (1, 0, 3)
     assert s_end == pytest.approx(0.45, abs=0.01)    # x = 0.15 along a river starting at x = -0.3
     assert _walk_to_river(chains, ends, 1, 0, True, 1, riv, 0, s_from, 1.0, 0.01) is None   # 1's border leaves
+
+
+def test_border_moves_onto_a_nearby_ridge(split):
+    """A ridge is a line like a river (relief for flow); its swap id comes after the rivers'."""
+    field, chains = split
+    pos, _ = _river_at(0.05)
+    ridge = (pos, np.full(len(pos) - 1, 2.0))                    # 2 km relief: full reach
+    params = RiverFollowParams(**{**_PARAMS.__dict__, "ridge_reach_km": _PARAMS.reach_km})
+    swaps = build_river_swaps(chains, [], field.plain_land_labels, field.is_water_at, np.zeros((0, 3)),
+                              field.centroids, params, ridges=[ridge])
+    assert len(swaps) >= 1 and all(sw.river_id == 0 for sw in swaps.swaps)
+    flips, _ = _flips_along_x(field.with_swaps(swaps))
+    assert len(flips) == 1
+    assert flips[0] == pytest.approx(0.05 / np.sqrt(1 + 0.05 ** 2), abs=4e-3)
+    river = _river_at(-0.04, flow=8500.0)
+    both = build_river_swaps(chains, [river], field.plain_land_labels, field.is_water_at, np.zeros((0, 3)),
+                             field.centroids, params, ridges=[ridge])
+    assert {sw.river_id for sw in both.swaps} <= {0, 1}         # river 0, the ridge 1
+
+
+def test_low_ridge_holds_no_border(split):
+    field, chains = split
+    pos, _ = _river_at(0.05)
+    params = RiverFollowParams(**{**_PARAMS.__dict__, "ridge_reach_km": _PARAMS.reach_km})
+    swaps = build_river_swaps(chains, [], field.plain_land_labels, field.is_water_at, np.zeros((0, 3)),
+                              field.centroids, params, ridges=[(pos, np.full(len(pos) - 1, 0.1))])
+    assert len(swaps) == 0

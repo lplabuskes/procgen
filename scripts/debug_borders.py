@@ -16,6 +16,7 @@ Usage:
     python3 scripts/debug_borders.py --depth 0            # only sovereign borders (default: all)
     python3 scripts/debug_borders.py --seams --vertices   # overlay hexagon seams + border vertices
     python3 scripts/debug_borders.py --rivers             # overlay big rivers (flow >= --river-flow)
+    python3 scripts/debug_borders.py --pick-ridge 2       # centre on the 3rd longest border moved onto a ridge
     python3 scripts/debug_borders.py --pick-river         # auto-centre on a border beside a big river
     python3 scripts/debug_borders.py --set refine.border_river_reach_km=0   # RealmParams override
     python3 scripts/debug_borders.py --rebuild-cache --out /tmp/borders.png
@@ -134,6 +135,23 @@ def pick_river_face(world, river_lines, min_flow: float, k: int) -> int:
     return int(order[min(k, order.size - 1)])
 
 
+def pick_ridge_centre(world, k: int) -> np.ndarray:
+    """Midpoint of the ``k``-th longest swap core on a ridge (ids after the rivers and stems)."""
+    from worldgen.hydrology.rivers import stream_stems
+    field = world.get_feature("polity_label_field")
+    swaps = list(field.swaps.swaps) if field is not None and field.swaps is not None else []
+    base = len(world.get_feature("rivers") or [])
+    if world.get_feature("streams") is not None:
+        base += len(stream_stems(world.get_feature("streams"), world.get_feature("river_texels"))[0])
+    ridge = [sw for sw in swaps if sw.river_id >= base]
+    if not ridge:
+        raise SystemExit("no border stretch follows a ridge")
+    ridge.sort(key=lambda sw: -float(np.linalg.norm(np.diff(sw.river, axis=0), axis=1).sum()))
+    core = ridge[min(k, len(ridge) - 1)].river
+    mid = np.asarray(core[len(core) // 2], dtype=np.float64)
+    return mid / np.linalg.norm(mid)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -158,10 +176,16 @@ def main() -> None:
     ap.add_argument("--river-flow", type=float, default=1000.0, help="min river flow drawn / picked")
     ap.add_argument("--pick-river", type=int, nargs="?", const=0, default=None, metavar="K",
                     help="centre on the K-th busiest sovereign-border-beside-a-big-river face (implies --rivers)")
+    ap.add_argument("--ridges", action="store_true", help="overlay ridge lines with relief >= --ridge-relief")
+    ap.add_argument("--ridge-relief", type=float, default=0.2, help="min ridge relief (km) drawn")
+    ap.add_argument("--pick-ridge", type=int, nargs="?", const=0, default=None, metavar="K",
+                    help="centre on the K-th longest border stretch moved onto a ridge (implies --ridges)")
     add_set_arg(ap)
     args = ap.parse_args()
     if args.pick_river is not None:
         args.rivers = True
+    if args.pick_ridge is not None:
+        args.ridges = True
 
     seed = resolve_seeds(args, DEFAULT_SEEDS)[0]
     world, mesh, polities, labels, borders = build_realm(seed, args.rebuild_cache, args.lattice_offset, args.set)
@@ -178,6 +202,9 @@ def main() -> None:
         lat, lon = np.radians(args.lat or 0.0), np.radians(args.lon or 0.0)
         center = np.array([np.cos(lat) * np.cos(lon),
                            np.cos(lat) * np.sin(lon), np.sin(lat)])
+        center_face = int(np.argmax(centroids @ center))
+    elif args.pick_ridge is not None:
+        center = pick_ridge_centre(world, args.pick_ridge)
         center_face = int(np.argmax(centroids @ center))
     elif args.pick_river is not None:
         center_face = pick_river_face(world, river_lines, args.river_flow, args.pick_river)
@@ -272,6 +299,19 @@ def main() -> None:
                 widths.append(0.6 + 1.6 * min(np.log(flow[k] / args.river_flow) / np.log(10.0), 1.0))
         if segs:
             ax.add_collection(LineCollection(segs, colors="#1f6fd1", linewidths=widths, zorder=4))
+
+    # ── ridges ──────────────────────────────────────────────────────────────
+    if args.ridges:
+        segs, widths = [], []
+        for pos, relief in world.get_feature("ridges") or []:
+            pos = np.asarray(pos, dtype=np.float64)
+            for k in range(min(len(relief), len(pos) - 1)):
+                if relief[k] < args.ridge_relief or (pos[k] @ center < cull and pos[k + 1] @ center < cull):
+                    continue
+                segs.append([to_2d(pos[k][None])[0], to_2d(pos[k + 1][None])[0]])
+                widths.append(0.6 + 1.6 * min(float(relief[k]) / 1.0, 1.0))
+        if segs:
+            ax.add_collection(LineCollection(segs, colors="#8a5a2b", linewidths=widths, zorder=4))
 
     # ── border polylines ────────────────────────────────────────────────────
     depths = sorted(borders) if args.depth is None else [args.depth]
