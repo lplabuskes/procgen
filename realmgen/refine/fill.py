@@ -36,6 +36,11 @@ WATER = -2
 UNCLAIMED = -1
 # Nearest other-polity faces voting in ``labels_without``.
 _WITHOUT_K = 12
+# Specks: points within this many lattice spacings of a speck vertex are checked, and
+# the same-label vertices up to ``_SPECK_HOPS`` edges from a speck kept to decide them
+# (enough to hold every vertex nearer such a point than the speck is).
+_SPECK_REACH = 2.0
+_SPECK_HOPS = 5
 
 
 def domain_warp(
@@ -274,9 +279,11 @@ class PolityLabelField:
 class Specks:
     """Tiny land enclaves found on a lattice, handed to the polity round them.
 
-    A point takes the replacement when its nearest lattice vertex (among the specks'
-    vertices and the ring round them) is a speck's and it still carries that speck's
-    label, so every tier relabels the same places and nothing else.
+    A point carrying a speck's label takes the replacement when, of the lattice
+    vertices with that label near the speck (``_SPECK_HOPS`` edges out), the nearest
+    is the speck's: the field's enclave runs past its vertices' own cells, and a
+    nearer same-label vertex outside the speck is land that stays. Every tier
+    relabels the same places and nothing else.
     """
 
     def __init__(self, verts: np.ndarray, is_speck: np.ndarray, label: np.ndarray, replace: np.ndarray,
@@ -286,20 +293,34 @@ class Specks:
         self.label = np.asarray(label, dtype=np.int64)
         self.replace = np.asarray(replace, dtype=np.int64)
         self.spacing = float(spacing)
-        self._tree = KDTree(self.verts) if len(self.verts) else None
+        sv = np.flatnonzero(self.is_speck)
+        self._speck_tree = KDTree(self.verts[sv]) if sv.size else None
+        # Per speck label: the kept vertices with that label and their tree.
+        self._by_label: dict = {}
+        for lab in np.unique(self.label[sv]):
+            idx = np.flatnonzero(self.label == lab)
+            self._by_label[int(lab)] = (idx, KDTree(self.verts[idx]))
 
     def __len__(self) -> int:
         return int(self.is_speck.sum())
 
     def apply(self, points: np.ndarray, labels: np.ndarray) -> np.ndarray:
-        if self._tree is None or len(points) == 0:
+        if self._speck_tree is None or len(points) == 0:
             return labels
-        d, j = self._tree.query(points, k=1, distance_upper_bound=self.spacing, workers=-1)
-        hit = np.isfinite(d)
-        jj = np.where(hit, j, 0)
-        hit &= self.is_speck[jj] & (labels == self.label[jj])
+        pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+        d, _ = self._speck_tree.query(pts, k=1, distance_upper_bound=_SPECK_REACH * self.spacing, workers=-1)
+        cand = np.flatnonzero(np.isfinite(d))
         out = labels.copy()
-        out[hit] = self.replace[jj[hit]]
+        for lab in np.unique(labels[cand]):
+            entry = self._by_label.get(int(lab))
+            if entry is None:
+                continue
+            idx, tree = entry
+            sel = cand[labels[cand] == lab]
+            _, j = tree.query(pts[sel], k=1, workers=-1)
+            v = idx[np.asarray(j, dtype=np.int64)]
+            hit = self.is_speck[v]
+            out[sel[hit]] = self.replace[v[hit]]
         return out
 
 
@@ -350,12 +371,13 @@ def find_specks(verts: np.ndarray, edges: np.ndarray, labels: np.ndarray, max_ve
     in_speck &= replace[comp] >= 0
     if not in_speck.any():
         return None
-    # The specks' vertices and the ring round them, so a point's nearest vertex decides.
-    ring = np.zeros(n, dtype=bool)
-    touch = in_speck[a] | in_speck[b]
-    ring[a[touch]] = True
-    ring[b[touch]] = True
-    idx = np.flatnonzero(ring | in_speck)
+    # The specks' vertices and those a few edges out, so a point's nearest same-label vertex decides.
+    near = in_speck.copy()
+    for _ in range(_SPECK_HOPS):
+        touch = near[a] | near[b]
+        near[a[touch]] = True
+        near[b[touch]] = True
+    idx = np.flatnonzero(near)
     return Specks(verts[idx], in_speck[idx], labels[idx], replace[comp[idx]], spacing)
 
 

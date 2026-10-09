@@ -36,3 +36,19 @@ def test_find_specks_keeps_settlements_and_islands():
     island = labels.copy()
     island[nbrs[nbrs != speck]] = WATER                        # ringed by water: an island
     assert find_specks(verts, edges, island, max_verts=3) is None
+
+
+def test_specks_take_the_enclave_past_their_vertices_cells():
+    """The field's enclave runs past the speck vertex's own cell: those points go too, the land beyond stays."""
+    from realmgen.refine.fill import find_specks
+    verts, edges, labels, speck = _lattice_with_speck()
+    specks = find_specks(verts, edges, labels, max_verts=3)
+    assert specks is not None
+    ring = np.unique(edges[(edges == speck).any(axis=1)])
+    ring = ring[ring != speck][0]
+    # 70% of the way to a ring vertex: nearer it than the speck's, still carrying the speck's label.
+    p = verts[speck] + 0.7 * (verts[ring] - verts[speck])
+    assert specks.apply((p / np.linalg.norm(p))[None], np.array([1]))[0] == 0
+    # Polity 1's own land (the southern hemisphere) keeps its label.
+    south = verts[verts[:, 2] < -0.1]
+    assert np.all(specks.apply(south, np.ones(len(south), dtype=np.int64)) == 1)

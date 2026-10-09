@@ -665,6 +665,8 @@ class _Near:
     d: np.ndarray         # distance (inf out of reach)
     reach: np.ndarray     # reach at the foot
     foot: np.ndarray      # (K, 3)
+    # Points another line in reach is far closer to (``_shadowed``): never in this one's core.
+    shadowed: Optional[np.ndarray] = None
 
 
 def relief_ramp(relief: np.ndarray, *, min_relief: float, full_relief: float) -> np.ndarray:
@@ -728,6 +730,7 @@ class _Rivers:
             self.a = self.b = np.zeros((0, 3))
             self.rid = self.sid = np.zeros(0, dtype=np.int64)
             self.reach = np.zeros(0)
+        self.n_seg = np.array([len(q) - 1 for q in self.pos], dtype=np.int64)
         self.tree = KDTree(0.5 * (self.a + self.b)) if len(self.a) else None
         self.half = 0.5 * float(np.linalg.norm(self.b - self.a, axis=1).max(initial=0.0))
         self.max_reach = float(self.reach.max(initial=0.0))
@@ -766,10 +769,22 @@ class _Rivers:
         sg = np.fromiter((k for h in hits for k in h), dtype=np.int64, count=int(lens.sum()))
         a, b = self.a[sg], self.b[sg]
         ab = b - a
-        t = np.clip(((x[pt] - a) * ab).sum(-1) / np.maximum((ab * ab).sum(-1), 1e-30), 0.0, 1.0)
+        t_raw = ((x[pt] - a) * ab).sum(-1) / np.maximum((ab * ab).sum(-1), 1e-30)
+        t = np.clip(t_raw, 0.0, 1.0)
         foot = a + t[:, None] * ab
         dist = np.linalg.norm(x[pt] - foot, axis=-1)
-        hold = dist < self.reach[sg]
+        # Past a line's very end (its nearest segment the first / last, the foot clamped
+        # to its end point) a point isn't beside it: every point beyond a tributary's
+        # confluence would otherwise cluster onto it.
+        rid_all = self.rid[sg]
+        last = self.n_seg[rid_all] - 1
+        past = ((self.sid[sg] == 0) & (t_raw < 0.0)) | ((self.sid[sg] == last) & (t_raw > 1.0))
+        key = pt * len(self.pos) + rid_all
+        order = np.lexsort((dist, key))
+        first = np.ones(len(order), dtype=bool)
+        first[1:] = key[order][1:] != key[order][:-1]
+        past_keys = np.unique(key[order][first & past[order]])
+        hold = (dist < self.reach[sg]) & ~np.isin(key, past_keys)
         pt, sg, t, foot, dist = pt[hold], sg[hold], t[hold], foot[hold], dist[hold]
         rid = self.rid[sg]
         # Per (point, river), the nearest segment holding the point.
@@ -865,7 +880,10 @@ class _Run:
 
 
 def _core(nr: _Near, i0: int, i1: int, g: float) -> Optional[tuple[int, int]]:
-    full = np.flatnonzero(nr.mask[i0:i1 + 1] & (nr.d[i0:i1 + 1] <= g * nr.reach[i0:i1 + 1]))
+    full = nr.mask[i0:i1 + 1] & (nr.d[i0:i1 + 1] <= g * nr.reach[i0:i1 + 1])
+    if nr.shadowed is not None:
+        full &= ~nr.shadowed[i0:i1 + 1]
+    full = np.flatnonzero(full)
     if full.size == 0:
         return None
     return i0 + int(full[0]), i0 + int(full[-1])
@@ -915,8 +933,11 @@ def build_river_swaps(
         near = riv.near(pts)
         if not near:
             continue
+        _shadow(near)
         ci = len(per_chain)
-        per_chain.append((pts, near, la, lb, depth, np.zeros(len(pts), dtype=bool), k))
+        # Per chain point: the accepted run holding it (-1 none), and whether in its core.
+        per_chain.append((pts, near, la, lb, depth, np.full(len(pts), -1, dtype=np.int64), k,
+                          np.zeros(len(pts), dtype=bool)))
         for r, nr in near.items():
             for i0, i1 in _bridged_runs(nr, p):
                 run = _candidate(r, nr, i0, i1, pts, p, min_run, st)
@@ -928,24 +949,115 @@ def build_river_swaps(
     river_taken: dict = {}
     accepted: List[tuple] = []
     for depth, _, _, ci, c in cands:
-        pts, near, la, lb, _, taken, _ = per_chain[ci]
-        if taken[c.i0:c.i1 + 1].any():
-            _bump(st, "overlap")
-            continue
+        pts, near, la, lb, _, owner, _, core = per_chain[ci]
         nr = near[c.river]
+        if core[c.i0:c.i1 + 1].any():
+            # Another run's core lies in it (where two rivers both shadow the border, e.g.
+            # a tributary's run reaching past its confluence): keep the longest free stretch.
+            c = _free_part(c, core, nr, pts, p, min_run, st)
+            if c is None:
+                _bump(st, "overlap")
+                continue
         lo, hi = sorted((float(nr.s[c.ia]), float(nr.s[c.ib])))
         if any(lo < t_hi and t_lo < hi for t_lo, t_hi in river_taken.get(c.river, ())):
             _bump(st, "river_taken")
             continue
         _bump(st, "candidates")
         for sw, piece in _settle(c, pts, nr, la, lb, depth, ctx):
-            taken[piece.i0:piece.i1 + 1] = True
+            # Earlier runs' lead-outs this one takes: they end where it starts.
+            cut: Optional[tuple] = (sw, piece)
+            for n in np.unique(owner[piece.i0:piece.i1 + 1]):
+                if n >= 0 and cut is not None:
+                    cut = _cut_back(accepted, int(n), cut[1], cut[0], per_chain, ctx)
+            if cut is None:
+                continue
+            sw, piece = cut
+            owner[piece.i0:piece.i1 + 1] = len(accepted)
+            core[piece.ia:piece.ib + 1] = True
             river_taken.setdefault(c.river, []).append((lo, hi))
             accepted.append((depth, -c.span, len(accepted), sw, ci, piece))
     if labels_without is not None:
         accepted = _junction_swaps(accepted, chains, per_chain, labels_without, ctx)
     accepted.sort(key=lambda t: t[:3])
     return RiverSwaps([t[3] for t in accepted], centroids, p)
+
+
+# A point is in no line's core where another line in reach is under this share of its distance.
+_SHADOW_RATIO = 0.5
+
+
+def _shadow(near: dict) -> None:
+    """Mark each line's points that another line is far closer to (``_Near.shadowed``).
+
+    Past a tributary's confluence the border runs beside the stem, still in reach of
+    the tributary's lower course: those points go to the stem. Two parallel lines at
+    similar distances shadow neither, so a border doesn't flip between them.
+    """
+    if len(near) < 2:
+        return
+    d = np.stack([nr.d for nr in near.values()])          # (R, P), inf out of reach
+    order = np.sort(d, axis=0)
+    for k, nr in enumerate(near.values()):
+        # The closest other line: the best, or the second best where this one is the best.
+        other = np.where(d[k] == order[0], order[1], order[0])
+        nr.shadowed = nr.mask & (other < _SHADOW_RATIO * d[k])
+
+
+def _free_part(c: _Run, core: np.ndarray, nr: _Near, pts: np.ndarray, p: RiverFollowParams,
+               min_run: float, st: dict) -> Optional[_Run]:
+    """The longest candidate in ``c``'s points clear of accepted runs' ``core`` points."""
+    free = np.zeros(len(core), dtype=bool)
+    free[c.i0:c.i1 + 1] = ~core[c.i0:c.i1 + 1] & nr.mask[c.i0:c.i1 + 1]
+    best = None
+    for j0, j1 in _runs(free, 0):
+        run = _candidate(c.river, nr, j0, j1, pts, p, min_run, st)
+        if run is not None and (best is None or run.span > best.span):
+            best = run
+    return best
+
+
+def _cut_back(accepted: List[tuple], n: int, piece: _Run, sw_new: RiverSwap, per_chain: List[tuple],
+              ctx: tuple) -> Optional[tuple]:
+    """Runs ``n`` and ``piece`` (``sw_new``, same chain, overlapping on lead-outs) split between their cores.
+
+    The split is the chain point between the cores where the two rivers' feet are
+    closest (a tributary's run meets its stem's at the confluence); without one in
+    reach of both, at ``n``'s core end. Both meet open (no connector back to the old
+    border between two rivers). Returns ``piece``'s new ``(swap, run)``, or None when
+    the cores overlap.
+    """
+    riv, p, _, plain_labels = ctx[:4]
+    step = p.border_step_km / EARTH_RADIUS_KM
+    depth, span, order, sw_old, ci, run = accepted[n]
+    pts, near, la, lb = per_chain[ci][:4]
+    nr_old, nr_new = near[run.river], near[piece.river]
+    after = run.ib < piece.ia                  # ``piece`` comes after ``n`` along the chain
+    lo, hi = (run.ib, piece.ia) if after else (piece.ib, run.ia)
+    if hi - lo < 1:
+        return None
+    k = np.arange(lo, hi)                      # split after k: [.., k] to the earlier run
+    both = nr_old.mask[k] & nr_old.mask[k + 1] & nr_new.mask[k] & nr_new.mask[k + 1]
+    if both.any():
+        gap = np.linalg.norm(nr_old.foot[k] - nr_new.foot[k], axis=1)
+        split = int(k[both][np.argmin(gap[both])])
+    else:
+        split = lo if after else hi - 1
+    if after:
+        cut = _Run(run.river, run.i0, split, run.ia, run.ib, run.span)
+        grown = _Run(piece.river, split + 1, piece.i1, piece.ia, piece.ib, piece.span)
+    else:
+        cut = _Run(run.river, split + 1, run.i1, run.ia, run.ib, run.span)
+        grown = _Run(piece.river, piece.i0, split, piece.ia, piece.ib, piece.span)
+    sw = _make_swap(riv, cut, pts, nr_old, la, lb, depth, p, plain_labels)
+    sw = replace(sw, open_start=sw_old.open_start or not after, open_end=sw_old.open_end or after)
+    accepted[n] = (depth, span, order, _on_boundary(sw, plain_labels, step), ci, cut)
+    if grown != piece:
+        sw_new = replace(_on_boundary(_make_swap(riv, grown, pts, nr_new, la, lb, sw_new.depth, p, plain_labels),
+                                      plain_labels, step),
+                         open_start=sw_new.open_start, open_end=sw_new.open_end)
+    _bump(ctx[-1], "cut_back")
+    sw_new = replace(sw_new, open_start=sw_new.open_start or after, open_end=sw_new.open_end or not after)
+    return sw_new, grown
 
 
 def _candidate(r: int, nr: _Near, i0: int, i1: int, pts: np.ndarray, p: RiverFollowParams,
@@ -1019,7 +1131,7 @@ def _settle(c: _Run, pts: np.ndarray, nr: _Near, la: int, lb: int, depth: int, c
                     keep &= np.abs(nr.s - s_at) > clear
             keep[:c.i0] = False
             keep[c.i1 + 1:] = False
-            sub = _Near(keep, nr.s, nr.d, nr.reach, nr.foot)
+            sub = _Near(keep, nr.s, nr.d, nr.reach, nr.foot, nr.shadowed)
             if at is None or not at.mask.any():
                 # Not beside this river: drop the points nearest to it instead.
                 for x in settle[idx]:
@@ -1306,7 +1418,7 @@ def _junction_swaps(accepted: List[tuple], chains: Sequence[tuple], per_chain: L
         pts, near, la, lb = per_chain[ci][:4]
         run = _Run(c.river, i0, i1, c.ia, c.ib, c.span)
         sw = _make_swap(riv, run, pts, near[c.river], la, lb, depth, p, plain_labels)
-        sw = replace(sw, open_start=i0 != c.i0, open_end=i1 != c.i1)
+        sw = replace(sw, open_start=i0 != c.i0 or out[n][3].open_start, open_end=i1 != c.i1 or out[n][3].open_end)
         out[n] = (depth, span, order, _on_boundary(sw, plain_labels, p.border_step_km / EARTH_RADIUS_KM), ci, run)
     return out
 

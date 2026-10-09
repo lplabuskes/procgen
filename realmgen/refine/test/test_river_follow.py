@@ -286,3 +286,25 @@ def test_run_starting_deep_in_reach_joins_the_old_border_end(split):
             if joined and not (sw.open_start if end == 0 else sw.open_end):
                 assert np.allclose(sw.line[end], sw.border[end])
         assert all(j >= 0.0 for j in sw.jumps)
+
+
+def test_points_past_a_rivers_end_are_not_beside_it():
+    """A border point beyond a river's end (its foot the end point) is out of its reach."""
+    from realmgen.refine.river_follow import _Rivers
+    river = _river_at(0.0, phi0=0.1, phi1=0.5)
+    riv = _Rivers([river], _PARAMS)
+    phi = np.array([0.3, 0.6])
+    beside = _unit(np.column_stack([np.full(2, 0.05), np.cos(phi), np.sin(phi)]))
+    nr = riv.near(beside)[0]
+    assert nr.mask.tolist() == [True, False]
+
+
+def test_a_far_closer_line_shadows_the_core():
+    from realmgen.refine.river_follow import _Near, _shadow
+    k = 3
+    far = _Near(np.ones(k, bool), np.zeros(k), np.array([0.010, 0.010, 0.010]), np.ones(k), np.zeros((k, 3)))
+    near = _Near(np.ones(k, bool), np.zeros(k), np.array([0.009, 0.004, 0.001]), np.ones(k), np.zeros((k, 3)))
+    _shadow({0: far, 1: near})
+    assert far.shadowed is not None and near.shadowed is not None
+    assert far.shadowed.tolist() == [False, True, True]       # similar distance shadows nothing
+    assert near.shadowed.tolist() == [False, False, False]

@@ -212,10 +212,23 @@ Decided once on the globe, as "border points
    between the core's ends (else it's a crossing; measuring against the border's
    *length* rejected borders that wander between two rivers — exactly the case to fix).
 3. **One river per run, one border per river.** Runs from all chains are taken
-   sovereign first, then longest river stretch; a run overlapping a taken one on its
-   chain is dropped, so a border never alternates between two parallel rivers, and so
-   is one whose river stretch already carries a border (both borders of a strip a
-   river runs down can be within reach of it; their claims fought).
+   sovereign first, then longest river stretch; a run overlapping a taken one's
+   **core** keeps only its longest free stretch (`_free_part`; dropped if that has no
+   core of its own), so a border never alternates between two parallel rivers, and a
+   run whose river stretch already carries a border is dropped (both borders of a
+   strip a river runs down can be within reach of it; their claims fought). A run
+   overlapping only an earlier one's **lead-out** takes it: the two are split between
+   their cores at the chain point where their rivers' feet are closest (a tributary
+   meets its stem at the confluence) and meet with open ends (`_cut_back`, ~40 a world).
+   **Ends and shadows.** A point whose nearest segment of a line is its first / last
+   with the foot clamped to the end point is not beside that line: every border point
+   beyond a tributary's confluence projected onto the tributary's end, so its run
+   claimed the stem's stretch as core and led out in a straight line toward that end
+   (seed 280040210 region 0 hex 174: a 671 km tributary run blocked the stem's run
+   and drew a ~40 km straight edge beside it). And a point is in no line's core where
+   another line in reach is under half its distance (`_shadow`): near a confluence the
+   stem is. Seeds 4 / 31 / 35: swaps 263 / 191 / 197 → 297 / 212 / 211; near-ridge share
+   38.6 → 44.7% mean, near-river unchanged.
 4. **New line.** The core is replaced by the river between the feet of its end
    points; outside the core each point is pulled toward its foot by
    `w = (reach − d) / (0.4 · reach)`, held non-decreasing toward the core, so the
@@ -331,11 +344,15 @@ After the swaps, `RefineStage._specks` labels the border lattice (`_lattice_labe
 and `fill.find_specks` takes each land piece of ≤ `border_max_speck_verts` points and
 hands it to its commonest land neighbour, unless it has none (an island) or a
 settlement lies within a lattice spacing of it. The result (`fill.Specks`) is an
-override on the field (`with_specks`, applied after the swaps): a point whose nearest
-lattice vertex — among the specks' and the ring round them — is a speck's, and which
-still carries that speck's label, takes the replacement, so every tier relabels the
-same places. Seeds 4 / 35: pieces ≤ 10 points 397 / 389 → 55 / 77 (islands,
-settlements). Specks under a lattice cell, seen only on region / local maps, stay.
+override on the field (`with_specks`, applied after the swaps): a point within two
+lattice spacings of a speck that carries its label takes the replacement when its
+nearest vertex *of that label* (among those up to five edges from the speck) is the
+speck's, so every tier relabels the same places. Deciding by the nearest vertex of any
+label instead left the enclave's rim — the field's piece runs past its vertices' own
+cells — as one- to three-texel exclaves on region maps (seed 709401773 region 13: 26
+interior enclaves → 10; seed 35 region 3: 59 → 14). Seeds 4 / 35: pieces ≤ 10 points
+397 / 389 → 55 / 77 (islands, settlements). Enclaves under a lattice cell (warp tips
+and swap edges), seen only on region / local maps, stay.
 The build reuses the speck pass's lattice labels for the border tracing (no extra
 time); a load, which doesn't trace, pays ~2 s.
 
