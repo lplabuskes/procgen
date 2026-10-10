@@ -8,14 +8,14 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["core*", "localmap*", "realmgen*", "region*", "utils*", "viz*", "worldgen*"]
+include = ["core*", "localmap*", "realmgen*", "region*", "settlegen*", "utils*", "viz*", "worldgen*"]
 
 [tool.flake8]
 max-line-length = 120
 exclude = [".venv", "__pycache__"]
 
 [tool.pytest.ini_options]
-testpaths = ["core", "localmap", "region", "viz", "worldgen", "realmgen"]
+testpaths = ["core", "localmap", "region", "settlegen", "viz", "worldgen", "realmgen"]
 
 
 [tool.pyright]
