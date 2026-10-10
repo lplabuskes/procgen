@@ -72,7 +72,8 @@ def _neighbour_any(mask: np.ndarray) -> np.ndarray:
 def _near(tree: Optional[KDTree], points: np.ndarray, radius: float) -> np.ndarray:
     if tree is None or points.shape[0] == 0:
         return np.zeros(points.shape[0], dtype=bool)
-    return tree.query(points, workers=-1)[0] < radius
+    # Bounded: points farther than ``radius`` from every tree point come back as inf, sooner.
+    return tree.query(points, workers=-1, distance_upper_bound=radius)[0] < radius
 
 
 def _tree(points: Optional[np.ndarray]) -> Optional[KDTree]:

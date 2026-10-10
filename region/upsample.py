@@ -41,7 +41,7 @@ from region.geometry import N_REGIONS, RegionGeometry
 from region.grid import RegionHexGrid
 from region.lakes import find_small_lakes
 from region.resources import RefineContext, refine_resources, refined_slope
-from region.sampling import GlobalSampler, anchor_means
+from region.sampling import GlobalSampler, anchor_means, anchor_plan, stencil_read
 from region.source import GlobalSource, Located, ParentSource
 from utils.simplex import fbm_sum, make_perm
 from worldgen.resources.minerals import mineral_workings, site_workers
@@ -499,10 +499,10 @@ def reshape_to_target(
 
 def conserve_additive(
     values: np.ndarray, anchors: np.ndarray, targets: np.ndarray,
-    weights: np.ndarray, n_anchors: int,
+    weights: np.ndarray, n_anchors: int, plan: Optional[tuple[np.ndarray, np.ndarray]] = None,
 ) -> np.ndarray:
-    """Shift each anchor group so its weighted mean equals the global value."""
-    means, counts = anchor_means(values, anchors, weights, n_anchors)
+    """Shift each anchor group so its weighted mean equals the global value (``plan``: :func:`anchor_plan`)."""
+    means, counts = anchor_means(values, anchors, weights, n_anchors, plan=plan)
     correction = targets - means[anchors]
     correction[counts[anchors] <= 0.0] = 0.0
     return values + correction
@@ -510,13 +510,13 @@ def conserve_additive(
 
 def conserve_multiplicative(
     values: np.ndarray, anchors: np.ndarray, targets: np.ndarray,
-    weights: np.ndarray, n_anchors: int,
+    weights: np.ndarray, n_anchors: int, plan: Optional[tuple[np.ndarray, np.ndarray]] = None,
 ) -> np.ndarray:
     """Scale each anchor group so its weighted mean equals the global value.
 
     For strictly-positive fields.  Groups with mean ~0 or no in-hex sample are left alone.
     """
-    means, counts = anchor_means(values, anchors, weights, n_anchors)
+    means, counts = anchor_means(values, anchors, weights, n_anchors, plan=plan)
     sample_means = means[anchors]
     scale = np.where(
         np.abs(sample_means) > 1e-12,
@@ -525,6 +525,23 @@ def conserve_multiplicative(
     )
     scale[counts[anchors] <= 0.0] = 1.0
     return values * scale
+
+
+def _smooth_setup(source: ParentSource, loc: Located) -> tuple:
+    """``(anchors, stencil anchors, stencil weights, n, plan)`` for :func:`conserve_smooth`, once per ``loc``.
+
+    Renumbered compactly to the anchors the points and their stencil touch (the parent has millions).
+    """
+    if "smooth" not in loc.memo:
+        idx, w = source.stencil(loc)
+        renumber = np.zeros(source.n_anchors, dtype=np.int64)
+        renumber[loc.anchors] = 1
+        renumber[idx.reshape(-1)] = 1
+        used = np.flatnonzero(renumber)
+        renumber[used] = np.arange(len(used))
+        anchors, n = renumber[loc.anchors], len(used)
+        loc.memo["smooth"] = (anchors, renumber[idx], w, n, anchor_plan(anchors, n))
+    return loc.memo["smooth"]
 
 
 # Over-relaxation per smoothing pass: a bilinear read returns ~1/4 (checkerboard)
@@ -548,14 +565,7 @@ def conserve_smooth(
     Convergence relies on every anchor owning its own position
     (:meth:`ParentSource.owners`); anchors no read touches can make it diverge.
     """
-    # Renumber compactly to the anchors this map touches (the parent has millions).
-    idx, w = source.stencil(loc)
-    renumber = np.zeros(source.n_anchors, dtype=np.int64)
-    renumber[loc.anchors] = 1
-    renumber[idx.reshape(-1)] = 1
-    used = np.flatnonzero(renumber)
-    renumber[used] = np.arange(len(used))
-    anchors, idx, n = renumber[loc.anchors], renumber[idx], len(used)
+    anchors, idx, w, n, plan = _smooth_setup(source, loc)
     tgt = np.zeros((n, targets.shape[1]))
     tgt[anchors] = targets
     v = np.asarray(values, dtype=np.float64).copy()
@@ -565,7 +575,7 @@ def conserve_smooth(
     well_covered = counts >= 0.5 * np.median(counts[live]) if live.any() else live
     kept, first, best = v, None, np.inf
     for _ in range(max_iterations):
-        means, _ = anchor_means(v, anchors, weights, n, counts=counts)
+        means, _ = anchor_means(v, anchors, weights, n, counts=counts, plan=plan)
         if multiplicative:
             ok = live[:, None] & (means > 1e-12) & (tgt > 1e-12)
             resid = np.where(ok, np.log(np.clip(tgt, 1e-12, None) / np.clip(means, 1e-12, None)), 0.0)
@@ -580,10 +590,10 @@ def conserve_smooth(
         first = worst if first is None else first
         if worst <= tolerance * first:
             break
-        step = _RELAXATION * np.einsum("pk,pkc->pc", w, resid[idx])   # ParentSource.interpolate
+        step = _RELAXATION * stencil_read(w, idx, resid)   # ParentSource.interpolate
         v = v * np.exp(step) if multiplicative else v + step
     finish = conserve_multiplicative if multiplicative else conserve_additive
-    return finish(v, anchors, targets, weights, n)
+    return finish(v, anchors, targets, weights, n, plan)
 
 
 # ── the pipeline ─────────────────────────────────────────────────────────────
@@ -828,6 +838,7 @@ def _reshape_coasts(
         bays = _varying_persistence_fbm(flat_pos, seed ^ _SEED_SALT_COAST, freqs, style.persistence)
         goal = goal + bays * np.clip(wander * 2.0 * feature_length_km * slope, 0.0, float(params.max_relief_km))
 
+    groups, n_groups = loc.groups()
     edit: dict[str, Any] = dict(
         max_scale=float(params.coast_max_scale),
         min_offset=float(params.coast_edit_min_km), max_offset=float(params.coast_edit_max_km),
@@ -835,7 +846,7 @@ def _reshape_coasts(
     out = e
     if sea_band is not None and sea_band.any():
         out = reshape_to_target(
-            out, out + sea_band * (goal - out), loc.anchors, weights, source.n_anchors,
+            out, out + sea_band * (goal - out), groups, weights, n_groups,
             level=SEA_LEVEL_KM, active=~water.lake, **edit,
         )
     if lake_band is not None and lake_band.any():
@@ -843,12 +854,11 @@ def _reshape_coasts(
         for _ in range(max(int(round(2.0 * n_t)), 1)):
             surface = np.where(np.isfinite(surface), surface, _neighbour_min(surface))
         out = reshape_to_target(
-            out, out + lake_band * (goal - out), loc.anchors, weights, source.n_anchors,
+            out, out + lake_band * (goal - out), groups, weights, n_groups,
             level=surface.reshape(-1), active=~water.ocean, **edit,
         )
     # Float crumbs only: the edit is mean-preserving by construction.
-    return conserve_additive(out[:, None], loc.anchors, source.anchor_values("elevation", loc), weights,
-                             source.n_anchors)
+    return conserve_additive(out[:, None], groups, source.anchor_values("elevation", loc), weights, n_groups)
 
 
 def _add_small_lakes(
@@ -902,15 +912,16 @@ def _add_small_lakes(
     # Drag the raw relief to the smoothed shores: under the surface in the lake, above it on the shore.
     target = np.where(new, np.minimum(smoothed, surface), np.maximum(smoothed, surface + 1e-6))
     flat = elevation.reshape(-1).astype(np.float64)
+    groups, n_groups = loc.groups()
     edited = reshape_to_target(
-        flat, target.reshape(-1), loc.anchors, weights, source.n_anchors,
+        flat, target.reshape(-1), groups, weights, n_groups,
         level=surface.reshape(-1), active=np.isfinite(surface).reshape(-1),
         max_scale=float(params.coast_max_scale),
         min_offset=float(params.coast_edit_min_km), max_offset=float(params.coast_edit_max_km),
         two_sided=True,
     )
-    edited = conserve_additive(edited[:, None], loc.anchors, source.anchor_values("elevation", loc), weights,
-                               source.n_anchors)[:, 0].reshape(elevation.shape)
+    edited = conserve_additive(edited[:, None], groups, source.anchor_values("elevation", loc), weights,
+                               n_groups)[:, 0].reshape(elevation.shape)
     new &= edited < surface
     textures["elevation"] = edited[..., None].astype(np.float32)
     textures["lake_mask"] = (lake | new)[..., None].astype(np.uint8)
@@ -950,7 +961,8 @@ def refine_fields(
     flat_pos = positions.reshape(-1, 3)
     weights = weights.reshape(-1).astype(np.float64)
     loc = source.locate(flat_pos)
-    anchors, n_anchors = loc.anchors, source.n_anchors
+    # Per-anchor sums group by compact labels (see Located.groups).
+    anchors, n_anchors = loc.groups()
 
     base_frequency = 0.5 / max(source.spacing_rad, 1e-12)
     max_frequency = (

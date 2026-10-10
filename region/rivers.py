@@ -41,7 +41,7 @@ from region.corridor import (
 )
 from region.distributaries import WATER_COST, DistributaryParams, add_distributaries
 from region.upsample import EARTH_RADIUS_KM, RegionFields
-from worldgen.hydrology.rivers import main_stem_paths, stream_stems
+from worldgen.hydrology.rivers import main_stem_paths, stream_stem_ids
 from worldgen.hydrology.types import StreamNetwork, laplacian_smooth_sphere
 
 if TYPE_CHECKING:
@@ -474,7 +474,7 @@ def build_region_rivers(
     global_spacing = float(np.sqrt(np.mean(mesh.face_areas))) / max(gw - 1, 1)
     radius_nodes = max(float(params.corridor_global_texels) * global_spacing / node_spacing_rad(fields, step), 1.5)
 
-    ids = stream_stems(streams, globe.get_feature("river_texels"))[1]
+    ids = stream_stem_ids(streams, globe.get_feature("river_texels"))
     paths = _stream_paths(streams, fields, lo, step, n, int(params.min_global_nodes), ids)
     rivers = route_stream_paths(fields, globe, paths, lo, step, n, radius_nodes, params)
     return add_distributaries(fields, globe, rivers, params)

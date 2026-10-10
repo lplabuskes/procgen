@@ -64,11 +64,12 @@ def _densify(paths: list, step_rad: float) -> tuple[np.ndarray, np.ndarray]:
         if len(p) < 2:
             continue
         seg_f = f[: len(p) - 1] if len(f) >= len(p) - 1 else np.full(len(p) - 1, f.max(initial=0.0))
-        for a, b, q in zip(p[:-1], p[1:], seg_f):
-            k = max(int(np.ceil(np.linalg.norm(b - a) / max(step_rad, 1e-12))), 1)
-            t = np.arange(k)[:, None] / k
-            pts.append(a + (b - a) * t)
-            flows.append(np.full(k, q))
+        a, b = p[:-1], p[1:]
+        k = np.maximum(np.ceil(np.linalg.norm(b - a, axis=1) / max(step_rad, 1e-12)).astype(np.int64), 1)
+        seg = np.repeat(np.arange(len(a)), k)
+        t = ((np.arange(len(seg)) - np.repeat(np.cumsum(k) - k, k)) / k[seg])[:, None]
+        pts.append(a[seg] + (b[seg] - a[seg]) * t)
+        flows.append(seg_f[seg])
     if not pts:
         return np.zeros((0, 3)), np.zeros(0)
     return np.concatenate(pts), np.concatenate(flows)

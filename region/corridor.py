@@ -7,6 +7,7 @@ the cost (:func:`route_corridor`'s ``edge_cost``).
 """
 from __future__ import annotations
 
+import weakref
 from dataclasses import dataclass
 from functools import cached_property
 from typing import TYPE_CHECKING, Callable, Optional, Sequence
@@ -90,6 +91,31 @@ def node_spacing_rad(fields: RegionFields, step: float) -> float:
     return float(np.linalg.norm(pair[1] - pair[0]))
 
 
+# The last few whole rasters' geometry: (weakref fields, weakref mesh, frame, data).
+# A map's rivers and streams sample the same whole raster.
+_WHOLE_RASTERS: list[tuple] = []
+_MAX_WHOLE_RASTERS = 2
+
+
+def _raster_geometry(fields: RegionFields, mesh, lo: float, step: float, n: int, idx: np.ndarray) -> tuple:
+    """``(sampler, points, faces, u, v, hexes, rows, cols, covered)`` at raster nodes ``idx`` (texture-free)."""
+    whole = len(idx) == n * n
+    if whole:
+        for f, m, frame, data in _WHOLE_RASTERS:
+            if f() is fields and m() is mesh and frame == (lo, step, n):
+                return data
+    rows, cols = np.divmod(idx, n)
+    s, t = lo + step * cols, lo + step * rows
+    pts = fields.geometry.local_to_ecef(s, t)
+    sampler = GlobalSampler(mesh)
+    faces, u, v = sampler.locate(pts)
+    data = (sampler, pts, faces, u, v, *fields.grid.nearest_texels(s, t, fields.tex_size))
+    if whole:
+        _WHOLE_RASTERS.insert(0, (weakref.ref(fields), weakref.ref(mesh), (lo, step, n), data))
+        del _WHOLE_RASTERS[_MAX_WHOLE_RASTERS:]
+    return data
+
+
 def sample_raster(
     fields: RegionFields, globe: "World", lo: float, step: float, n: int, sampled: np.ndarray,
     keys: Sequence[str] = (),
@@ -100,16 +126,9 @@ def sample_raster(
     region-only keys always read the nearest texel.  Multi-channel keys are
     summed (seasonal precipitation → annual).
     """
-    grid, tex = fields.grid, fields.tex_size
     idx = np.flatnonzero(sampled)
-    rows, cols = np.divmod(idx, n)
-    s, t = lo + step * cols, lo + step * rows
-    pts = fields.geometry.local_to_ecef(s, t)
-
     mesh = globe.mesh
-    sampler = GlobalSampler(mesh)
-    faces, u, v = sampler.locate(pts)
-    hexes, hrows, hcols, covered = grid.nearest_texels(s, t, tex)
+    sampler, pts, faces, u, v, hexes, hrows, hcols, covered = _raster_geometry(fields, mesh, lo, step, n, idx)
 
     def read(key: str) -> Optional[np.ndarray]:
         fine = (fields.textures[key][hexes, hrows, hcols].astype(np.float64).sum(axis=-1)
