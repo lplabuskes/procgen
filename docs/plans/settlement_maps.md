@@ -257,13 +257,18 @@ stencil (Phase 0 findings in Status). With one map it is just that map's
 `RegionSource`.
 
 `settlegen/upsample.py`: `SettlementUpsampleParams` (A3 defaults,
-`texel_m`), `build_settlement_fields(globe, local_maps, ref, params) →
-RegionFields` via `refine_fields(LocalMapsSource(local_maps), …)`, with
-`parent_anchors` = (map, local texel) in the concatenated space, and
-`settlement_conservation_report` (as `local_conservation_report`, over
-`anchor_residuals`, per contributing map). Fields as the local tier; `rural_density`
-is not needed at this scale but conserved anyway (cheap, keeps the report
-uniform).
+`texel_m`), `build_settlement_fields(globe, local_maps, center, side_km,
+params) → RegionFields` via `refine_terrain(LocalMapsSource(local_maps), …)` —
+the relief half of `refine_fields` (split out 2026-10-10, region / local
+output bit-identical), with `parent_anchors` = (map, local texel) in the
+concatenated space, and `settlement_conservation_report` (as
+`local_conservation_report`, over `anchor_residuals`, elevation only).
+**Only the terrain is refined**: elevation, water masks and shoreline, coast
+style, delta, and the small-lake flag following the refined lakes. Climate,
+biome, wetland, resources, rural density and danger are one value for the
+frame — the owning local map's at the settlement, broadcast so local
+consumers read them unchanged (decided 2026-10-10: they don't vary at
+settlement scale in any way the map uses).
 
 ### 4. Site features
 
@@ -375,8 +380,8 @@ cities, 3 towns, 3 cities picked near a hex edge; 2 of the 12 frames cross a
 local map's edge). Phase 3's field modules exist in `settlegen/` with tests.
 
 - **A1 holds** with the one-cell `SettlementGrid`: conservation per local
-  texel at float32 noise (worst 3e-5, precipitation in mm), 4 octaves, 0.2–1.0 s
-  per frame at T = 312–604.
+  texel at float32 noise, 4 octaves. After the terrain-only change, elevation
+  worst 2e-8 km and 0.1–0.3 s per frame at T = 312–604.
 - **A2b, multi-map source works**, after two fixes in `LocalMapsSource`: a
   map's over-hang past its parent hexagon is re-owned to the *nearest in-domain*
   texel of the map that owns that ground (the texel under the point can be
@@ -391,6 +396,6 @@ local map's edge). Phase 3's field modules exist in `settlegen/` with tests.
 - **A9**: opening the crossing frames' neighbour maps first moved neither
   settlement (0 m).
 - Cost is the chain, not the frame: regions ~7 s, local maps ~4 s each,
-  settlement fields ≤1 s.
+  settlement fields ≤0.3 s.
 
 Next: Phase 1 (Qt-free region map).

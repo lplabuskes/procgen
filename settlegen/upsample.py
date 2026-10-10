@@ -1,13 +1,20 @@
-"""Settlement refinement: local maps' fields refined onto one settlement's frame.
+"""Settlement refinement: local maps' terrain refined onto one settlement's frame.
 
-:mod:`localmap.upsample`'s recipe one tier down
-(:func:`region.upsample.refine_fields`, with the local maps the frame touches as
-parent via :class:`settlegen.source.LocalMapsSource`); downsampling recovers
-every local texel to float noise over its in-frame part
+Only the relief is refined — :mod:`localmap.upsample`'s recipe one tier down,
+stopped after the terrain (:func:`region.upsample.refine_terrain`, with the local
+maps the frame touches as parent via :class:`settlegen.source.LocalMapsSource`):
+elevation, the water masks and shoreline, coast style and delta.  Downsampling
+recovers every local texel's elevation to float noise over its in-frame part
 (:func:`settlement_conservation_report`).
 
+Everything else (climate, biome, wetland, resources, rural density, danger) is
+**one value for the frame**: the local map's at the settlement, broadcast
+(read-only, no copy) so local consumers read the textures unchanged.  A town or
+city spans a few km; its climate and soils don't vary on that scale in any way
+the map uses.  The small-lake flag is the exception: it follows the refined lakes.
+
 Defaults: ``texel_m = 15`` against the local map's ~365 m — a ~24× refinement,
-~4–5 octaves of detail.  Small lakes are off (the frame has no hex grid; the
+~4–5 octaves of detail.  No new small lakes (the frame has no hex grid; the
 local tier already draws lakes down to ~10 km²); cut-off sea is reconnected.
 
 The noise stream is shared by every settlement map of a world, so overlapping
@@ -25,14 +32,13 @@ import numpy as np
 from core.params import param_field as _f, paramclass
 from localmap.upsample import LocalUpsampleParams
 from region.sampling import GlobalSampler
-from region.upsample import EARTH_RADIUS_KM, RegionFields, anchor_residuals, refine_fields, worked_mine_points
+from region.upsample import EARTH_RADIUS_KM, SMALL_LAKE_KEY, RegionFields, anchor_residuals, refine_terrain
 from settlegen.geometry import SettlementGeometry
 from settlegen.grid import SettlementGrid
 from settlegen.source import LocalMapsSource
 
 if TYPE_CHECKING:
     from core.world import World
-    from worldgen.resources.builder import ResourcesParams
 
 _SEED_SALT_SETTLEMENT = 0x5E77
 
@@ -57,11 +63,6 @@ class SettlementUpsampleParams(LocalUpsampleParams):
     max_relief_km: float = _f(0.03, label="Max detail relief (km)", min=0.0, max=1.0, step=0.005)
     # About one local texel (~365 m / 15 m).
     water_spread_texels: int = _f(24, label="Shoreline spread (texels)", min=0, max=128)
-    biome_smoothing: int = _f(25, label="Biome climate averaging (texels)", min=0, max=63)
-    # Slopes over 15 m texels are steeper again.
-    slope_saturation: float = _f(
-        0.3, label="Slope saturation, resources (km/km)", min=0.01, max=2.0, step=0.01
-    )
 
 
 # The detail fields the settlement tier takes from the local tier: those it doesn't redeclare.
@@ -89,9 +90,6 @@ def build_settlement_fields(
     center: np.ndarray,
     side_km: float,
     params: Optional[SettlementUpsampleParams] = None,
-    *,
-    resources: Optional["ResourcesParams"] = None,
-    fertility_exponent: float = 2.0,
 ) -> RegionFields:
     """Refine the local maps ``maps`` onto a ``side_km`` square centred on ``center`` (unit vector).
 
@@ -121,16 +119,25 @@ def build_settlement_fields(
     texel_area_km2 = float(owner.texel_area_km2) * (side / tex_size / local_texel_units) ** 2
 
     source = LocalMapsSource(maps, globe.antimeridian)
-    textures, loc, octaves = refine_fields(
-        source, positions, weights, grid.texel_spacing_rad(tex_size), texel_area_km2,
-        params, int(globe.seed or 0) ^ _SEED_SALT_SETTLEMENT,
-        resources=resources, fertility_exponent=fertility_exponent,
-        mine_points=worked_mine_points(globe), neighbours=grid.texel_neighbours(tex_size),
+    terrain = refine_terrain(
+        source, positions, weights, grid.texel_spacing_rad(tex_size), params,
+        int(globe.seed or 0) ^ _SEED_SALT_SETTLEMENT, neighbours=grid.texel_neighbours(tex_size),
     )
+    textures, loc = terrain.textures, terrain.located
+    shape = (1, tex_size, tex_size)
+    if source.has(SMALL_LAKE_KEY) and "lake_mask" in textures:
+        near_small = source.coarse(SMALL_LAKE_KEY, loc)[:, 0].reshape(shape) > 0.0
+        textures[SMALL_LAKE_KEY] = ((textures["lake_mask"][..., 0] > 0.5) & near_small)[..., None].astype(np.uint8)
+    # Every other field: the owning map's value at the settlement, for the whole frame.
+    at_center = source.locate(np.asarray(center, dtype=np.float64).reshape(1, 3))
+    for key, tex in owner.textures.items():
+        if key in textures or not source.has(key):
+            continue
+        value = source.anchor_values(key, at_center)[0].astype(tex.dtype)
+        textures[key] = np.broadcast_to(value, shape + value.shape)
     gh, gw = globe.mesh.face_textures["elevation"].shape[1:3]
     sampler = GlobalSampler(globe.mesh)
     faces, u, v = sampler.locate(positions.reshape(-1, 3))
-    shape = (1, tex_size, tex_size)
     return RegionFields(
         region_id=owner.region_id,
         geometry=geometry,
@@ -142,7 +149,7 @@ def build_settlement_fields(
         faces=faces.reshape(shape).astype(np.int32),
         face_uv=np.stack([u, v], axis=-1).reshape(*shape, 2).astype(np.float32),
         textures=textures,
-        detail_octaves=octaves,
+        detail_octaves=terrain.detail_octaves,
         texel_area_km2=texel_area_km2,
         parent_anchors=loc.anchors.reshape(shape).astype(np.int32),
         in_map=np.ones(shape, dtype=bool),
@@ -152,10 +159,15 @@ def build_settlement_fields(
 def settlement_conservation_report(
     fields: RegionFields, maps: Sequence[RegionFields], antimeridian: float,
 ) -> dict[str, dict[str, float]]:
-    """:func:`localmap.upsample.local_conservation_report` one tier down: per
-    local texel (of every map in ``maps``, as passed to
-    :func:`build_settlement_fields`) the settlement mean against the local value."""
+    """:func:`localmap.upsample.local_conservation_report` one tier down, for the
+    one refined field: per local texel (of every map in ``maps``, as passed to
+    :func:`build_settlement_fields`) the settlement's mean elevation against the
+    local value.  (Nothing else is conserved: the rest is constant over the frame.)"""
     if fields.parent_anchors is None:
         raise ValueError("not a settlement map: no parent_anchors")
     parent = LocalMapsSource(maps, antimeridian).parent_textures()
-    return anchor_residuals(fields.textures, fields.parent_anchors, fields.domain, parent)
+    keys = ("elevation", "ocean_mask", "lake_mask")
+    return anchor_residuals(
+        {k: fields.textures[k] for k in keys if k in fields.textures}, fields.parent_anchors, fields.domain,
+        {k: parent[k] for k in keys if k in parent},
+    )

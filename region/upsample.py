@@ -919,32 +919,34 @@ def _add_small_lakes(
     textures["filled_height"] = np.where(new, surface, np.where(lake, filled, edited))[..., None].astype(np.float32)
 
 
-def refine_fields(
+@dataclass
+class Terrain:
+    """:func:`refine_terrain`'s result, with what the rest of :func:`refine_fields` reads."""
+
+    textures: dict[str, np.ndarray]   # elevation, water masks, filled_height, coast_smoothness, delta
+    located: Located
+    detail_octaves: int
+    water: "_AnchorWater"
+    elev_coarse: np.ndarray           # (P, 1) bilinear parent elevation
+    elevation: np.ndarray             # (P, 1) refined elevation
+
+
+def refine_terrain(
     source: ParentSource,
     positions: np.ndarray,
     weights: np.ndarray,
     spacing_rad: float,
-    texel_area_km2: float,
     params: RegionUpsampleParams,
     seed: int,
     *,
-    resources: Optional["ResourcesParams"] = None,
-    fertility_exponent: float = 2.0,
-    mine_points: Optional[np.ndarray] = None,
     neighbours: Optional[np.ndarray] = None,
-    grid: Optional[RegionHexGrid] = None,
-    drains: Optional[np.ndarray] = None,
-) -> tuple[dict[str, np.ndarray], Located, int]:
-    """Refine ``source``'s fields onto a child tier's ``(M, T, T, 3)`` texels.
+) -> Terrain:
+    """The relief half of :func:`refine_fields`: elevation (detail, conservation,
+    shore reshaping), the refined water masks (cut-off sea reconnected when
+    ``neighbours`` is given), and the parent's coast style and delta copied down.
 
-    Tier-agnostic: a region refines the globe (:class:`GlobalSource`), a local
-    map a region (:class:`region.source.RegionSource`).  ``weights`` is the
-    ``(M, T, T)`` aggregation mask, ``spacing_rad`` the child's texel spacing.
-    ``mine_points`` are worked deposits (unit vectors) for the miners' density.
-    ``neighbours`` (:meth:`RegionHexGrid.texel_neighbours`) enables :func:`connect_ocean`.
-    ``grid`` (the texels' hex grid) enables small lakes, drained by the
-    parent's channels ``drains`` (``(K, 2, 3)`` unit-vector segments).
-    Returns ``(textures, located, detail_octaves)``.
+    A settlement map stops here; the rest of a region's or local map's fields
+    are derived from this.
     """
     m, tex_size = positions.shape[0], positions.shape[1]
     flat_pos = positions.reshape(-1, 3)
@@ -1006,9 +1008,6 @@ def refine_fields(
     textures.update(masks)
     textures["elevation"] = elevation.reshape(m, tex_size, tex_size, 1).astype(np.float32)
 
-    # Sub-grid relief (km), ~zero-mean per anchor: drives every derived field.
-    relief_anomaly = elevation[:, 0] - elev_coarse[:, 0]
-
     # Copied (bilinear, not conserved) so the tier below styles its shores alike.
     if style is not None:
         textures["coast_smoothness"] = source.coarse("coast_smoothness", loc).reshape(
@@ -1020,6 +1019,47 @@ def refine_fields(
         textures["delta"] = np.clip(source.coarse("delta", loc), 0.0, 1.0).reshape(
             m, tex_size, tex_size, -1
         ).astype(np.float32)
+
+    return Terrain(textures, loc, int(freqs.size), water, elev_coarse, elevation)
+
+
+def refine_fields(
+    source: ParentSource,
+    positions: np.ndarray,
+    weights: np.ndarray,
+    spacing_rad: float,
+    texel_area_km2: float,
+    params: RegionUpsampleParams,
+    seed: int,
+    *,
+    resources: Optional["ResourcesParams"] = None,
+    fertility_exponent: float = 2.0,
+    mine_points: Optional[np.ndarray] = None,
+    neighbours: Optional[np.ndarray] = None,
+    grid: Optional[RegionHexGrid] = None,
+    drains: Optional[np.ndarray] = None,
+) -> tuple[dict[str, np.ndarray], Located, int]:
+    """Refine ``source``'s fields onto a child tier's ``(M, T, T, 3)`` texels.
+
+    Tier-agnostic: a region refines the globe (:class:`GlobalSource`), a local
+    map a region (:class:`region.source.RegionSource`).  ``weights`` is the
+    ``(M, T, T)`` aggregation mask, ``spacing_rad`` the child's texel spacing.
+    ``mine_points`` are worked deposits (unit vectors) for the miners' density.
+    ``neighbours`` (:meth:`RegionHexGrid.texel_neighbours`) enables :func:`connect_ocean`.
+    ``grid`` (the texels' hex grid) enables small lakes, drained by the
+    parent's channels ``drains`` (``(K, 2, 3)`` unit-vector segments).
+    Returns ``(textures, located, detail_octaves)``.
+    """
+    m, tex_size = positions.shape[0], positions.shape[1]
+    flat_pos = positions.reshape(-1, 3)
+    weights = weights.reshape(-1).astype(np.float64)
+    terrain = refine_terrain(source, positions, weights, spacing_rad, params, seed, neighbours=neighbours)
+    textures, loc = terrain.textures, terrain.located
+    anchors, n_anchors = loc.anchors, source.n_anchors
+    water, elev_coarse, elevation = terrain.water, terrain.elev_coarse, terrain.elevation
+
+    # Sub-grid relief (km), ~zero-mean per anchor: drives every derived field.
+    relief_anomaly = elevation[:, 0] - elev_coarse[:, 0]
 
     # ── temperature: lapse rate on the refined relief ────────────────────────
     if source.has("temperature"):
@@ -1094,7 +1134,7 @@ def refine_fields(
         textures, params, resources, fertility_exponent,
         source.danger(loc, flat_pos),
     ))
-    return textures, loc, int(freqs.size)
+    return textures, loc, terrain.detail_octaves
 
 
 def worked_mine_points(globe: "World") -> Optional[np.ndarray]:

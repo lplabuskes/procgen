@@ -1,13 +1,13 @@
 """The settlement tier's critical invariant: a settlement map refines the local
-texels it covers — on one local map, or across the seam between two."""
+texels' elevation it covers — on one local map, or across the seam between two —
+and holds every other field constant at the settlement's local value."""
 import numpy as np
 import pytest
 
+from region.upsample import SMALL_LAKE_KEY
 from settlegen.source import LocalMapsSource
 from settlegen.test.conftest import FRAME_TEXELS, settlement_params
 from settlegen.upsample import build_settlement_fields, settlement_conservation_report
-
-SCALE = {"elevation": 1.0, "temperature": 30.0, "precipitation": 500.0, "rural_density": 20.0}
 
 
 @pytest.fixture(scope="module")
@@ -22,10 +22,10 @@ def seam(globe, lake_local, neighbour_local, seam_center, side_km):
 
 
 def _assert_conserved(report):
-    assert {"elevation", "temperature", "precipitation", "rural_density"} <= set(report)
-    for key, r in report.items():
-        assert r["n_anchors"] > 0, key
-        assert r["max"] <= 1e-5 * SCALE.get(key, 1.0), (key, r)
+    assert set(report) == {"elevation"}
+    r = report["elevation"]
+    assert r["n_anchors"] > 0
+    assert r["max"] <= 1e-5, r
 
 
 def test_settlement_map_has_the_local_layers(inner, lake_local):
@@ -36,8 +36,20 @@ def test_settlement_map_has_the_local_layers(inner, lake_local):
     assert inner.detail_octaves > 0
 
 
-def test_downsampling_recovers_the_local_map(inner, lake_local, globe):
+def test_downsampling_recovers_the_local_elevation(inner, lake_local, globe):
     _assert_conserved(settlement_conservation_report(inner, [lake_local], globe.antimeridian))
+
+
+def test_the_rest_is_the_settlements_local_value(inner, lake_local, inner_center, globe):
+    at = LocalMapsSource([lake_local], globe.antimeridian)
+    loc = at.locate(inner_center[None])
+    refined = {"elevation", "ocean_mask", "lake_mask", "filled_height", "coast_smoothness", "delta", SMALL_LAKE_KEY}
+    constant = set(lake_local.textures) - refined
+    assert {"temperature", "precipitation", "biome", "fertility", "danger"} <= constant
+    for key in constant:
+        tex = inner.textures[key]
+        expected = at.anchor_values(key, loc)[0].astype(tex.dtype)
+        assert (tex == expected).all(), key
 
 
 def test_a_frame_across_the_seam_reads_both_maps(seam, lake_local, neighbour_local, globe):
