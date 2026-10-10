@@ -12,8 +12,8 @@ from core.params import param_field as _f, paramclass
 
 _CACHE_DIR = Path(__file__).parent.parent.parent / "mesh_cache"
 _N_CACHED = 5
-# Version of the derived geometry saved beside each mesh (texel positions, boundary
-# pixel pairs): bump whenever ``PolygonMesh`` changes how either is computed.
+# Version of the derived geometry saved beside each mesh (texel positions, in-polygon
+# masks, boundary pixel pairs): bump whenever ``PolygonMesh`` changes how any is computed.
 GEOMETRY_VERSION = 1
 
 

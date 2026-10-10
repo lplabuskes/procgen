@@ -42,11 +42,13 @@ _ARM_POINTS = 6
 _PRUNE_SHARE = 0.5
 
 
-def basin_texels(mesh, streams: StreamNetwork, river_texels: Optional[list]) -> tuple[np.ndarray, np.ndarray]:
-    """``(basin, floor)`` per flat texel: the landing channel's stem id (``stream_stems``),
-    ``COASTAL`` without one; and its height (km), 0 for the coastal basin."""
+def basin_texels(mesh, streams: StreamNetwork, river_texels: Optional[list],
+                 stem_ids: Optional[np.ndarray] = None) -> tuple[np.ndarray, np.ndarray]:
+    """``(basin, floor)`` per flat texel: the landing channel's stem id (``stream_stems``;
+    ``stem_ids`` its ids, already computed), ``COASTAL`` without one; and its height
+    (km), 0 for the coastal basin."""
     landing = np.rint(np.asarray(DRAINAGE_LANDING.read(mesh), dtype=np.float64).reshape(-1)).astype(np.int64)
-    _, ids = stream_stems(streams, river_texels)
+    ids = stream_stems(streams, river_texels)[1] if stem_ids is None else stem_ids
     basin = np.full(landing.size, COASTAL, dtype=np.int64)
     if len(streams):
         order = np.argsort(streams.nodes, kind="stable")
@@ -129,8 +131,12 @@ def _join_at_junctions(chains: List[list], junctions: frozenset, relief: np.ndar
 
 def ridge_lines(mesh, streams: Optional[StreamNetwork], river_texels: Optional[list], *,
                 lattice_depth: Optional[int] = None, lattice_offset: int = 0,
-                min_relief_km: float = 0.0) -> list:
+                min_relief_km: float = 0.0, located: Optional[tuple[np.ndarray, np.ndarray, np.ndarray]] = None,
+                stem_ids: Optional[np.ndarray] = None) -> list:
     """``[(positions (K, 3) float32, relief_km (K − 1,) float32)]``: the drainage divides.
+
+    ``located``: ``GlobalSampler.locate`` of the lattice's vertices, and ``stem_ids``
+    ``stream_stems``' ids, when already computed.
 
     Crossings below ``_PRUNE_SHARE × min_relief_km`` are dropped before chaining (the
     lines break there) and lines whose relief never reaches ``min_relief_km`` are left
@@ -147,8 +153,8 @@ def ridge_lines(mesh, streams: Optional[StreamNetwork], river_texels: Optional[l
     verts, tris, edges, tri_edges = _icosphere_lattice(int(lattice_depth))
 
     sampler = GlobalSampler(mesh)
-    texel = sampler.anchors(*sampler.locate(verts), h, w)
-    basin, floor = basin_texels(mesh, streams, river_texels)
+    texel = sampler.anchors(*(located or sampler.locate(verts)), h, w)
+    basin, floor = basin_texels(mesh, streams, river_texels, stem_ids)
     elev = np.asarray(ELEVATION.read(mesh), dtype=np.float64).reshape(-1)
     water = np.asarray(ocean_tex).reshape(-1) > 0.5
     if LAKE_MASK.present(mesh):

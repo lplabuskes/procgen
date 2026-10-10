@@ -50,10 +50,10 @@ Features: `add_feature`, `get_feature(name, default=None)`, `has_feature`,
 - `World.__init__` builds if unpopulated, then `load_random(seed)`. **Changing `MeshParams` does not rebuild an existing cache.**
 
 **Derived geometry.** A loaded mesh's `geometry_store` (`_SidecarStore`) persists
-`face_texture_positions` and `boundary_pixel_pairs` as `mesh_<i>.<key>.npz`
-beside it (~40 MB at `tex_size` 16; first build ~1 s). Stamped with
-`GEOMETRY_VERSION` and the mesh file's size/mtime — **bump `GEOMETRY_VERSION` when
-either computation changes**. Other meshes (`geometry_store is None`) cache in
+`face_texture_positions`, `face_texture_in_polygon` (full set, default `eps`) and
+`boundary_pixel_pairs` as `mesh_<i>.<key>.npz` beside it (~40 MB at `tex_size` 16;
+first build ~1 s). Stamped with `GEOMETRY_VERSION` and the mesh file's size/mtime —
+**bump `GEOMETRY_VERSION` when any of these computations changes**. Other meshes (`geometry_store is None`) cache in
 memory only.
 
 ## `core/persistence.py` — Save / load
@@ -133,7 +133,7 @@ to a `MapWindow`.
   - `set_face_colors`, `set_face_metadata(face_idx, **kw)`, `apply_metadata_channel(key, values)`
   - `set_face_textures(name, textures, n_channels=4)` — `(N, H, W, C)` float32 (1 for data, 4 for RGBA)
   - `face_texture_positions(h, w)` — unit-sphere position per texel (grid endpoints, `linspace(0, 1, T)`; over-hanging corners extrapolated from the nearest fan triangle)
-  - `face_texture_in_polygon(h, w)` — `(N, H, W)` bool: inside polygon vs over-hang
+  - `face_texture_in_polygon(h, w)` — `(N, H, W)` bool: inside polygon vs over-hang (full set cached read-only)
   - `face_tangent_frames()`; `face_uv_to_3d` / `face_3d_to_uv`
   - `boundary_pixel_pairs(tex_size)` — matched texel pairs across shared edges, cached per size (seam smoothing, ocean flood, seam metrics); `measure_boundary_texture_jumps(texture)`
 - **`Mesh`** (triangles only):

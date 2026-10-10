@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from functools import lru_cache
-from typing import Callable, List, Optional
+from typing import Callable, List, NamedTuple, Optional
 
 import numpy as np
 
@@ -358,9 +358,27 @@ def trace_lattice_chains(verts: np.ndarray, tris: np.ndarray, edges: np.ndarray,
     return out
 
 
-def _lattice_labels(mesh, field: PolityLabelField, ocean_tex: np.ndarray, lake_tex: Optional[np.ndarray],
-                    lattice_depth: Optional[int], lattice_offset: int, plain: bool = False):
-    """``(verts, tris, edges, tri_edges, labels)`` of the global lattice, water from the masks."""
+class LatticeBase(NamedTuple):
+    """The global lattice located on the mesh and labelled by a field before swaps and specks."""
+
+    verts: np.ndarray
+    tris: np.ndarray
+    edges: np.ndarray
+    tri_edges: np.ndarray
+    owner: np.ndarray       # (V,) face holding each vertex (``GlobalSampler.locate``) …
+    u: np.ndarray           # … and its texture coordinates there
+    v: np.ndarray
+    water: np.ndarray       # (V,) on the ocean / lake masks
+    plain: np.ndarray       # (V,) ``plain_land_labels``
+
+
+def lattice_base(mesh, field: PolityLabelField, ocean_tex: np.ndarray, lake_tex: Optional[np.ndarray],
+                 lattice_depth: Optional[int] = None, lattice_offset: int = 0) -> LatticeBase:
+    """The global lattice, located, with water from the masks and the field's plain labels.
+
+    The plain labels are the same for every ``with_swaps`` / ``with_specks`` copy of
+    the field, so one base serves them all.
+    """
     from region.sampling import GlobalSampler
 
     if lattice_depth is None:
@@ -369,12 +387,24 @@ def _lattice_labels(mesh, field: PolityLabelField, ocean_tex: np.ndarray, lake_t
 
     sampler = GlobalSampler(mesh)
     faces, u, v = sampler.locate(verts)
-    labels = (field.plain_land_labels if plain else field.land_labels)(verts, owner=faces)
+    plain = field.plain_land_labels(verts, owner=faces)
     water = sampler.sample(ocean_tex, faces, u, v)[:, 0] > 0.5
     if lake_tex is not None:
         water |= sampler.sample(lake_tex, faces, u, v)[:, 0] > 0.5
-    labels[water] = WATER
-    return verts, tris, edges, tri_edges, labels
+    return LatticeBase(verts, tris, edges, tri_edges, faces, u, v, water, plain)
+
+
+def _lattice_labels(mesh, field: PolityLabelField, ocean_tex: np.ndarray, lake_tex: Optional[np.ndarray],
+                    lattice_depth: Optional[int], lattice_offset: int, plain: bool = False,
+                    base: Optional[LatticeBase] = None):
+    """``(verts, tris, edges, tri_edges, labels)`` of the global lattice, water from the masks.
+
+    ``base``: ``lattice_base``' result for this field (or a copy of it), already computed.
+    """
+    b = base or lattice_base(mesh, field, ocean_tex, lake_tex, lattice_depth, lattice_offset)
+    labels = b.plain.copy() if plain else field.land_labels(b.verts, owner=b.owner, plain=b.plain)
+    labels[b.water] = WATER
+    return b.verts, b.tris, b.edges, b.tri_edges, labels
 
 
 def _smooth_chains(ids: np.ndarray, points: np.ndarray, junctions: frozenset,
@@ -422,11 +452,14 @@ def smooth_polity_borders(mesh, polities: List, field: PolityLabelField,
 def plain_border_chains(mesh, polities: List, field: PolityLabelField,
                         ocean_tex: np.ndarray, lake_tex: Optional[np.ndarray],
                         *, lattice_depth: Optional[int] = None, lattice_offset: int = 0,
-                        bisect_steps: int = 5) -> list:
-    """Border chains of the field before any river following (``trace_lattice_chains``)."""
+                        bisect_steps: int = 5, base: Optional[LatticeBase] = None) -> list:
+    """Border chains of the field before any river following (``trace_lattice_chains``).
+
+    ``base``: ``lattice_base``' result for this field, already computed.
+    """
     if not polities:
         return []
     verts, tris, edges, tri_edges, labels = _lattice_labels(mesh, field, ocean_tex, lake_tex,
-                                                            lattice_depth, lattice_offset, plain=True)
+                                                            lattice_depth, lattice_offset, plain=True, base=base)
     return trace_lattice_chains(verts, tris, edges, tri_edges, labels, polities,
                                 label_fn=field.plain_land_labels, bisect_steps=bisect_steps)

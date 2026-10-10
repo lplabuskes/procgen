@@ -5,6 +5,7 @@ single-receiver accumulation tree, decomposed into main stems and tributaries (H
 """
 from __future__ import annotations
 
+import weakref
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -107,6 +108,29 @@ def texel_neighbor_csr(
     return indptr, flat
 
 
+# Per mesh and resolution: ``(inter_adj, indptr, flat)`` (``texel_graph``), shared by the
+# hydrology and wetland stages; the globe pipeline drops them when done (~100 MB at 16).
+_TEXEL_GRAPHS: "weakref.WeakKeyDictionary[PolygonMesh, Dict[int, tuple]]" = weakref.WeakKeyDictionary()
+
+
+def texel_graph(mesh: PolygonMesh, resolution: int) -> Tuple[Dict[int, List[int]], np.ndarray, np.ndarray]:
+    """Cached ``(inter_face_adjacency, *texel_neighbor_csr)`` of ``mesh``; treat as read-only."""
+    per_mesh = _TEXEL_GRAPHS.setdefault(mesh, {})
+    cached = per_mesh.get(int(resolution))
+    if cached is None:
+        inter_adj = inter_face_adjacency(mesh, resolution)
+        indptr, flat = texel_neighbor_csr(len(mesh.faces), resolution, inter_adj)
+        indptr.flags.writeable = False
+        flat.flags.writeable = False
+        cached = per_mesh[int(resolution)] = (inter_adj, indptr, flat)
+    return cached
+
+
+def clear_texel_graphs(mesh: PolygonMesh) -> None:
+    """Free the cached :func:`texel_graph` of ``mesh``."""
+    _TEXEL_GRAPHS.pop(mesh, None)
+
+
 class RiverGenerator:
     """End-to-end river generation pipeline.
 
@@ -197,8 +221,8 @@ class RiverGenerator:
         # Inter-face adjacency from the mesh's cached boundary pixel pairs (no
         # separate stitch pass; their strict t∈[0,1] band differs from stitch's
         # ±1e-3 slack on ~0.3% of edges — negligible).
-        self._inter_adj: Dict[int, List[int]] = inter_face_adjacency(mesh, h)
-        self._nbr_indptr, self._nbr_flat = texel_neighbor_csr(n_faces, h, self._inter_adj)
+        self._inter_adj: Dict[int, List[int]]
+        self._inter_adj, self._nbr_indptr, self._nbr_flat = texel_graph(mesh, h)
 
     # ------------------------------------------------------------------
     # Node indexing helpers

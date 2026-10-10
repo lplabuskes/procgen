@@ -187,6 +187,9 @@ Decided once on the globe, as "border points
 1. **Plain chains.** The field without any river handling (`plain_land_labels`)
    is traced on the global lattice into chains between junctions / coasts, each
    with its leaf label pair (`borders.plain_border_chains` → `trace_lattice_chains`).
+   The lattice, located on the mesh with its water and plain labels
+   (`borders.lattice_base`), is built once per field and shared with the specks
+   and the ridge lines.
 2. **Runs.** Per chain, each world river (land segments, reach = `reach_km` × the
    flow ramp) or ridge line ([Ridges](#ridges-ridgespy)) gives runs of chain points
    within reach (gaps of ≤ 2 points bridged).
@@ -340,7 +343,8 @@ in-lake segments included) and contour their own lines from that field
 
 The warped power diagram folds where the domain warp is steep, leaving tiny islands
 of one polity inside another (seeds 4 / 35: ~390 land pieces of ≤ 10 lattice points).
-After the swaps, `RefineStage._specks` labels the border lattice (`_lattice_labels`)
+After the swaps, `RefineStage._specks` labels the border lattice (`_lattice_labels`, the swaps
+applied on the shared `lattice_base`'s plain labels)
 and `fill.find_specks` takes each land piece of ≤ `border_max_speck_verts` points and
 hands it to its commonest land neighbour, unless it has none (an island) or a
 settlement lies within a lattice spacing of it. The result (`fill.Specks`) is an

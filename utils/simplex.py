@@ -204,6 +204,27 @@ if _HAVE_NUMBA:
             out[p] = acc
         return out
 
+    @njit(cache=True)
+    def _fbm_sum_njit_serial(xyz, perm, grad3, freqs, amps):  # pragma: no cover - njit
+        # ``_fbm_sum_njit`` without the thread launch, which dominates small calls.
+        n_pts = xyz.shape[0]
+        n_oct = freqs.shape[0]
+        out = np.zeros(n_pts, dtype=np.float64)
+        for p in range(n_pts):
+            px = xyz[p, 0]
+            py = xyz[p, 1]
+            pz = xyz[p, 2]
+            acc = 0.0
+            for o in range(n_oct):
+                f = freqs[o]
+                acc += amps[o] * _simplex3_point(px * f, py * f, pz * f, perm, grad3)
+            out[p] = acc
+        return out
+
+
+# Points below which ``fbm_sum`` runs single-threaded.
+_SERIAL_MAX_POINTS = 2048
+
 
 def fbm_sum(xyz: np.ndarray, perm: np.ndarray, freqs: np.ndarray, amps: np.ndarray) -> np.ndarray:
     """Un-normalized ``(N,) float64`` sum of ``amps[o] * simplex3_vec(xyz * freqs[o])``.
@@ -215,7 +236,8 @@ def fbm_sum(xyz: np.ndarray, perm: np.ndarray, freqs: np.ndarray, amps: np.ndarr
     if len(freqs) == 0:
         return np.zeros(len(xyz), dtype=np.float64)
     if _HAVE_NUMBA:
-        return _fbm_sum_njit(
+        kernel = _fbm_sum_njit_serial if len(xyz) < _SERIAL_MAX_POINTS else _fbm_sum_njit
+        return kernel(
             np.ascontiguousarray(xyz, dtype=np.float64),
             np.ascontiguousarray(perm, dtype=np.int64),
             _GRAD3,

@@ -9,13 +9,16 @@ Purely geometric; no population/polity recomputation. Mutates world features:
 """
 from __future__ import annotations
 
+from typing import Optional
+
 import numpy as np
 
 from core.params import param_field as _f, paramclass
 from core.pipeline import BuildContext, Stage
 from realmgen.channels import AUTHORITY, POLITY_ID
 from realmgen.persistence import pack_borders, pack_routes, unpack_borders, unpack_routes
-from realmgen.refine.borders import _lattice_labels, plain_border_chains, smooth_polity_borders
+from realmgen.refine.borders import (LatticeBase, _lattice_labels, lattice_base, plain_border_chains,
+                                     smooth_polity_borders)
 from realmgen.refine.fill import PolityLabelField, colorize_labels, find_specks
 from realmgen.refine.ridges import ridge_lines
 from realmgen.refine.river_follow import RiverFollowParams, build_river_swaps
@@ -163,21 +166,28 @@ class RefineStage(Stage):
             warp_octaves=int(p.boundary_warp_octaves),
             warp_seed=int(world.seed or 0),
         )
-        if (p.border_river_reach_km > 0.0 or p.border_ridge_reach_km > 0.0) and OCEAN_MASK.present(mesh):
-            field = field.with_swaps(self._river_swaps(world, field, polities))
-        if p.border_max_speck_verts > 0 and OCEAN_MASK.present(mesh):
-            field = field.with_specks(self._specks(world, field))
+        swaps = (p.border_river_reach_km > 0.0 or p.border_ridge_reach_km > 0.0) and OCEAN_MASK.present(mesh)
+        specks = p.border_max_speck_verts > 0 and OCEAN_MASK.present(mesh)
+        # The lattice and its plain labels, shared by the swaps' chains and the specks.
+        base = (lattice_base(mesh, field, OCEAN_MASK.read(mesh),
+                             LAKE_MASK.read(mesh) if LAKE_MASK.present(mesh) else None,
+                             lattice_offset=int(p.border_lattice_offset))
+                if swaps or specks else None)
+        if swaps:
+            field = field.with_swaps(self._river_swaps(world, field, polities, base))
+        if specks:
+            field = field.with_specks(self._specks(world, field, base))
         else:
             self._lattice = None
         world.add_feature("polity_label_field", field)
         return field
 
-    def _specks(self, world, field: PolityLabelField):
+    def _specks(self, world, field: PolityLabelField, base: Optional[LatticeBase]):
         """Tiny enclaves of the field (swaps applied) on the border lattice, to hand to their surroundings."""
         mesh, p = world.mesh, self.params
         ocean_tex = OCEAN_MASK.read(mesh)
         lake_tex = LAKE_MASK.read(mesh) if LAKE_MASK.present(mesh) else None
-        lattice = _lattice_labels(mesh, field, ocean_tex, lake_tex, None, int(p.border_lattice_offset))
+        lattice = _lattice_labels(mesh, field, ocean_tex, lake_tex, None, int(p.border_lattice_offset), base=base)
         verts, tris, edges, tri_edges, labels = lattice
         settlements = world.get_feature("settlements") or []
         keep = (np.array([np.asarray(s.site_position, dtype=np.float64) for s in settlements])
@@ -190,13 +200,13 @@ class RefineStage(Stage):
         self._lattice = (verts, tris, edges, tri_edges, labels)
         return specks
 
-    def _river_swaps(self, world, field: PolityLabelField, polities):
+    def _river_swaps(self, world, field: PolityLabelField, polities, base: Optional[LatticeBase]):
         """Border runs moved onto big rivers and ridges (``river_follow``), from the field's plain borders."""
         mesh, p = world.mesh, self.params
         ocean_tex = OCEAN_MASK.read(mesh)
         lake_tex = LAKE_MASK.read(mesh) if LAKE_MASK.present(mesh) else None
         chains = plain_border_chains(mesh, polities, field, ocean_tex, lake_tex,
-                                     lattice_offset=int(p.border_lattice_offset))
+                                     lattice_offset=int(p.border_lattice_offset), base=base)
         settlements = world.get_feature("settlements") or []
         positions = (np.array([np.asarray(s.site_position, dtype=np.float64) for s in settlements])
                      if settlements else np.zeros((0, 3)))
@@ -211,10 +221,13 @@ class RefineStage(Stage):
         # region / local tiers' path ids), so a border can follow a drawn stream too.
         rivers = list(world.get_feature("rivers") or [])
         streams, texels = world.get_feature("streams"), world.get_feature("river_texels")
-        if streams is not None and (texels is not None or not rivers):
-            rivers += stream_stems(streams, texels)[0]
+        stems = stream_stems(streams, texels) if streams is not None else None
+        if stems is not None and (texels is not None or not rivers):
+            rivers += stems[0]
         ridges = (ridge_lines(mesh, streams, texels, lattice_offset=int(p.border_lattice_offset),
-                              min_relief_km=float(p.border_ridge_min_relief_km))
+                              min_relief_km=float(p.border_ridge_min_relief_km),
+                              located=None if base is None else (base.owner, base.u, base.v),
+                              stem_ids=None if stems is None else stems[1])
                   if p.border_ridge_reach_km > 0.0 else [])
         world.add_feature("ridges", ridges)
         return build_river_swaps(chains, rivers, field.plain_land_labels,

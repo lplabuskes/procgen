@@ -20,7 +20,7 @@ from worldgen.climate.channels import PRECIPITATION, TEMPERATURE
 from worldgen.climate.classification import WETLAND_BIOME
 from worldgen.geology.channels import ELEVATION, OCEAN_MASK
 from worldgen.hydrology.channels import LAKE_MASK, STREAMS
-from worldgen.hydrology.rivers import inter_face_adjacency, potential_evapotranspiration, texel_neighbor_csr
+from worldgen.hydrology.rivers import potential_evapotranspiration, texel_graph
 from worldgen.resources.terrain import global_slope
 from worldgen.wetland.channels import WETLAND, WETLAND_FRACTION
 from worldgen.wetland.score import combine, drainage_targets, flatness, flood_height_above, flood_term, rain_term
@@ -98,7 +98,7 @@ def wetland_score(
     else:
         rain = np.zeros(n * h * w)
 
-    indptr, nbrs = texel_neighbor_csr(n, h, inter_face_adjacency(mesh, h))
+    _, indptr, nbrs = texel_graph(mesh, h)
     water_flat = ~land
     channel = np.zeros(n * h * w, dtype=bool)
     if channel_nodes is not None:

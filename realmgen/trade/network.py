@@ -95,61 +95,46 @@ def _collect_hybrid_edges(
     river_switch_cost: float,
     ports: np.ndarray | None = None,
     landing_cost: float = np.inf,
-) -> tuple[list, list, list]:
-    """Return (rows, cols, data) for the base (2N, 2N) hybrid graph (no virtual source).
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return ``(rows, cols, data)`` arrays for the base (2N, 2N) hybrid graph (no virtual source).
 
     ``ports`` (``(N,)`` bool) limits land↔water transitions (port edges and river
     switches) to those faces; elsewhere they cost ``landing_cost`` (``inf`` = none).
-    ``None`` allows them everywhere.
+    ``None`` allows them everywhere.  Edges come land, sea, river switches, then port
+    edges, each by face then adjacency order.
     """
-    rows: List[int] = []
-    cols: List[int] = []
-    data: List[float] = []
-
     land_p = np.asarray(land_passable, dtype=bool)
     sea_p = np.asarray(sea_passable, dtype=bool)
     amphibious = land_p & sea_p
 
-    for i, (adj, costs) in enumerate(zip(face_adjacency, land_edge_costs)):
-        for j, c in zip(adj, costs):
-            if np.isfinite(c):
-                rows.append(i)
-                cols.append(j)
-                data.append(float(c))
+    deg = np.fromiter((len(a) for a in face_adjacency), dtype=np.int64, count=len(face_adjacency))
+    src = np.repeat(np.arange(len(face_adjacency), dtype=np.int64), deg)
+    dst = np.fromiter((j for a in face_adjacency for j in a), dtype=np.int64, count=int(deg.sum()))
 
-    for i, (adj, costs) in enumerate(zip(face_adjacency, sea_edge_costs)):
-        for j, c in zip(adj, costs):
-            if np.isfinite(c):
-                rows.append(n + i)
-                cols.append(n + j)
-                data.append(float(c))
+    def surface(costs: List[np.ndarray], offset: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        c = np.concatenate([np.asarray(x, dtype=np.float64) for x in costs]) if costs else np.zeros(0)
+        ok = np.isfinite(c)
+        return src[ok] + offset, dst[ok] + offset, c[ok]
 
     port = np.ones(n, dtype=bool) if ports is None else np.asarray(ports, dtype=bool)
     landing = max(float(landing_cost), 0.0)
 
-    def transition(i: int, j: int, cost: float) -> None:
-        c = cost if port[i] else landing
-        if not np.isfinite(c):
-            return
-        rows.append(i)
-        cols.append(n + j)
-        data.append(c)
-        rows.append(n + j)
-        cols.append(i)
-        data.append(c)
+    # Transitions i (land) ↔ n + j (sea), both ways: river switches at amphibious
+    # faces, then ports from land-only faces onto sea-only neighbours.
+    amph = np.flatnonzero(amphibious)
+    coastal = land_p[src] & ~sea_p[src] & sea_p[dst] & ~land_p[dst]
+    ti = np.concatenate([amph, src[coastal]])
+    tj = np.concatenate([amph, dst[coastal]])
+    base = np.concatenate([np.full(amph.size, max(float(river_switch_cost), 0.0)),
+                           np.full(int(coastal.sum()), max(float(port_cost), 0.0))])
+    tc = np.where(port[ti], base, landing)
+    keep = np.isfinite(tc)
+    ti, tj, tc = ti[keep], tj[keep], tc[keep]
 
-    sc = max(float(river_switch_cost), 0.0)
-    for raw_i in np.where(amphibious)[0]:
-        transition(int(raw_i), int(raw_i), sc)
-
-    pc = max(float(port_cost), 0.0)
-    for i, adj in enumerate(face_adjacency):
-        if not land_p[i] or sea_p[i]:
-            continue
-        for j in adj:
-            if sea_p[j] and not land_p[j]:
-                transition(i, j, pc)
-
+    land, sea = surface(land_edge_costs, 0), surface(sea_edge_costs, n)
+    rows = np.concatenate([land[0], sea[0], np.stack([ti, n + tj], axis=1).ravel()])
+    cols = np.concatenate([land[1], sea[1], np.stack([n + tj, ti], axis=1).ravel()])
+    data = np.concatenate([land[2], sea[2], np.repeat(tc, 2)])
     return rows, cols, data
 
 
@@ -241,15 +226,9 @@ def build_base_hybrid_graph(
         sea_edge_costs, np.asarray(sea_passable, dtype=bool),
         port_cost, river_switch_cost,
     )
-    if not data:
+    if data.size == 0:
         return csr_matrix((size, size), dtype=np.float64)
-    return csr_matrix(
-        (
-            np.array(data, dtype=np.float64),
-            (np.array(rows, dtype=np.int32), np.array(cols, dtype=np.int32)),
-        ),
-        shape=(size, size),
-    )
+    return csr_matrix((data, (rows.astype(np.int32), cols.astype(np.int32))), shape=(size, size))
 
 
 def build_hybrid_cost_graph(
@@ -294,22 +273,15 @@ def build_hybrid_cost_graph(
 
     dp = max(float(demand_penalty), 0.0)
     demands = np.asarray(settlement_demands, dtype=np.float64)
-    for s_node, demand in zip(settlement_land_nodes, demands):
-        virtual_cost = dp * (1.0 - float(demand))
-        rows.append(virtual)
-        cols.append(int(s_node))
-        data.append(virtual_cost)
+    k = min(len(settlement_land_nodes), len(demands))
+    rows = np.concatenate([rows, np.full(k, virtual, dtype=np.int64)])
+    cols = np.concatenate([cols, np.asarray(settlement_land_nodes[:k], dtype=np.int64)])
+    data = np.concatenate([data, dp * (1.0 - demands[:k])])
 
     shape = (virtual + 1, virtual + 1)
-    if not data:
+    if data.size == 0:
         return csr_matrix(shape, dtype=np.float64)
-    return csr_matrix(
-        (
-            np.array(data, dtype=np.float64),
-            (np.array(rows, dtype=np.int32), np.array(cols, dtype=np.int32)),
-        ),
-        shape=shape,
-    )
+    return csr_matrix((data, (rows.astype(np.int32), cols.astype(np.int32))), shape=shape)
 
 
 def compute_trade_network(
@@ -411,14 +383,8 @@ def compute_trade_network(
         sea_edge_costs, np.asarray(sea_passable, dtype=bool),
         port_cost, river_switch_cost, ports, landing_cost,
     )
-    if data:
-        graph = csr_matrix(
-            (
-                np.array(data, dtype=np.float64),
-                (np.array(rows, dtype=np.int32), np.array(cols, dtype=np.int32)),
-            ),
-            shape=(size, size),
-        )
+    if data.size:
+        graph = csr_matrix((data, (rows.astype(np.int32), cols.astype(np.int32))), shape=(size, size))
     else:
         graph = csr_matrix((size, size), dtype=np.float64)
 

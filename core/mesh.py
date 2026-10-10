@@ -80,10 +80,12 @@ class PolygonMesh:
 
         self.face_textures: Dict[str, np.ndarray] = {}
         self.face_metadata: List[Dict[str, Any]] = [{} for _ in range(n_faces)]
-        # Seam pixel pairs per tex_size and texel positions per (h, w): geometry-only, read-only.
+        # Seam pixel pairs per tex_size, texel positions and in-polygon masks per (h, w):
+        # geometry-only, read-only.
         self._boundary_pair_cache: Dict[int, Tuple[np.ndarray, ...]] = {}
         self._texture_position_cache: Dict[Tuple[int, int], np.ndarray] = {}
-        # Persists both across loads (set by ``core.mesh_cache``; bump its GEOMETRY_VERSION on change).
+        self._in_polygon_cache: Dict[Tuple[int, int], np.ndarray] = {}
+        # Persists them across loads (set by ``core.mesh_cache``; bump its GEOMETRY_VERSION on change).
         self.geometry_store: Optional[GeometryStore] = None
         self.face_adjacency: List[List[int]] = self._build_face_adjacency()
         self.face_centroids: np.ndarray = self._compute_face_centroids()
@@ -491,7 +493,27 @@ class PolygonMesh:
 
         Inside iff the centre or any corner is in a fan triangle (barycentrics >= -eps),
         so straddling texels count as inside.  Given ``faces``, only those, in that order.
+        The full set at the default ``eps`` is cached read-only.
         """
+        default = eps == 1e-9
+        cached = self._in_polygon_cache.get((h, w)) if default else None
+        if cached is not None:
+            return cached if faces is None else cached[np.asarray(faces, dtype=np.int64)]
+        if faces is None and default:
+            key = f"in_polygon_{h}x{w}"
+            stored = self.geometry_store.load(key) if self.geometry_store is not None else None
+            if stored is not None:
+                mask = stored[0]
+            else:
+                mask = self._face_texture_in_polygon(h, w, eps, None)
+                if self.geometry_store is not None:
+                    self.geometry_store.save(key, (mask,))
+            mask.flags.writeable = False
+            self._in_polygon_cache[(h, w)] = mask
+            return mask
+        return self._face_texture_in_polygon(h, w, eps, faces)
+
+    def _face_texture_in_polygon(self, h: int, w: int, eps: float, faces: Optional[Sequence[int]]) -> np.ndarray:
         u_coords = np.linspace(0.0, 1.0, w, dtype=np.float64)
         v_coords = np.linspace(0.0, 1.0, h, dtype=np.float64)
         uu, vv = np.meshgrid(u_coords, v_coords)

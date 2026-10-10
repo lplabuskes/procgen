@@ -18,6 +18,7 @@ claimed-land neighbours.
 from __future__ import annotations
 
 import copy
+from functools import lru_cache
 from typing import List, Optional
 
 import numpy as np
@@ -41,6 +42,19 @@ _WITHOUT_K = 12
 # (enough to hold every vertex nearer such a point than the speck is).
 _SPECK_REACH = 2.0
 _SPECK_HOPS = 5
+# Points per KD-tree query below which one thread beats the pool's start-up.
+_THREADED_MIN_POINTS = 2048
+
+
+def _workers(n: int) -> int:
+    return -1 if n >= _THREADED_MIN_POINTS else 1
+
+
+@lru_cache(maxsize=None)
+def _warp_perm(seed: int) -> np.ndarray:
+    perm = make_perm(seed)
+    perm.flags.writeable = False
+    return perm
 
 
 def domain_warp(
@@ -72,7 +86,7 @@ def domain_warp(
     total = total or 1.0
     disp = np.empty_like(flat)
     for c in range(3):
-        perm = make_perm(seed * 3 + c + 1)
+        perm = _warp_perm(seed * 3 + c + 1)
         disp[:, c] = fbm_sum(flat, perm, freqs_arr, amps_arr) / total
     warped = flat + amplitude * disp
     return warped.reshape(np.asarray(positions).shape)
@@ -220,7 +234,7 @@ class PolityLabelField:
         warped = self._warp(pts)
         # Candidates nearest the warped point (the one scored), so neighbouring points
         # vote among the same faces.
-        _, nn = tree.query(warped, k=k, workers=-1)
+        _, nn = tree.query(warped, k=k, workers=_workers(len(pts)))
         c = faces[np.asarray(nn).reshape(len(pts), k)]
         score = ((warped[:, None, :] - self.centroids[c]) ** 2).sum(axis=-1) - self._power[c]
         return self.pof[c[np.arange(len(pts)), np.argmin(score, axis=1)]]
@@ -232,14 +246,18 @@ class PolityLabelField:
     def owner(self, points: np.ndarray) -> np.ndarray:
         """Nearest-centroid face of each ``(P, 3)`` point."""
         pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
-        _, faces = self._tree.query(pts, k=1, workers=-1)
+        _, faces = self._tree.query(pts, k=1, workers=_workers(len(pts)))
         return np.asarray(faces, dtype=np.int64)
 
-    def land_labels(self, points: np.ndarray, owner: Optional[np.ndarray] = None) -> np.ndarray:
-        """``(P,)`` land label of each ``(P, 3)`` unit-sphere point (water ignored)."""
+    def land_labels(self, points: np.ndarray, owner: Optional[np.ndarray] = None,
+                    plain: Optional[np.ndarray] = None) -> np.ndarray:
+        """``(P,)`` land label of each ``(P, 3)`` unit-sphere point (water ignored).
+
+        ``plain``: the points' ``plain_land_labels``, already computed.
+        """
         pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
         own = self.owner(pts) if owner is None else np.asarray(owner, dtype=np.int64)
-        out = self._plain_labels(pts, own)
+        out = self._plain_labels(pts, own) if plain is None else np.array(plain, dtype=np.int64)
         if self.swaps is not None:
             out = self.swaps.apply(pts, own, out)
         if self.specks is not None:
@@ -308,7 +326,8 @@ class Specks:
         if self._speck_tree is None or len(points) == 0:
             return labels
         pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
-        d, _ = self._speck_tree.query(pts, k=1, distance_upper_bound=_SPECK_REACH * self.spacing, workers=-1)
+        d, _ = self._speck_tree.query(pts, k=1, distance_upper_bound=_SPECK_REACH * self.spacing,
+                                      workers=_workers(len(pts)))
         cand = np.flatnonzero(np.isfinite(d))
         out = labels.copy()
         for lab in np.unique(labels[cand]):
@@ -317,7 +336,7 @@ class Specks:
                 continue
             idx, tree = entry
             sel = cand[labels[cand] == lab]
-            _, j = tree.query(pts[sel], k=1, workers=-1)
+            _, j = tree.query(pts[sel], k=1, workers=_workers(len(sel)))
             v = idx[np.asarray(j, dtype=np.int64)]
             hit = self.is_speck[v]
             out[sel[hit]] = self.replace[v[hit]]
