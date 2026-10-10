@@ -977,13 +977,14 @@ class RegionView(QWidget):
             painter.setBrush(brush)
             painter.drawPolygon(self._hex_polygon(cx, cy, r_px))
 
-        # Faint hex outlines.
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(_cosmetic_pen(QColor(20, 25, 30, 60)))
-        for s, t in self._grid.centers:
-            painter.drawPolygon(
-                self._hex_polygon(x0 + s * size, y0 + (1.0 - t) * size, r_px)
-            )
+        # Faint hex outlines: in a region only while picking a local map.
+        if self._local is not None or self._local_pick:
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(_cosmetic_pen(QColor(20, 25, 30, 60)))
+            for s, t in self._grid.centers:
+                painter.drawPolygon(
+                    self._hex_polygon(x0 + s * size, y0 + (1.0 - t) * size, r_px)
+                )
         painter.restore()
 
     def _draw_hex_grid(self, painter: QPainter, x0: float, y0: float, size: float) -> None:
