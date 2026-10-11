@@ -923,6 +923,8 @@ class MapWindow(QMainWindow):
         self._settlement_view.set_hover_callback(
             lambda texel: self._zoomed_hover(self._settlement_view, texel))
         self._settlement_params = SettlementMapParams()
+        # --debug: settlement maps also offer their diagnostic overlays (anchor candidates, buildable ground).
+        self._debug = False
         # The view a settlement map was opened from: Back returns there.
         self._settlement_origin: Optional[QWidget] = None
         self._map.set_city_click_callback(lambda k: self._enter_settlement(SettlementRef("city", k)))
@@ -945,6 +947,10 @@ class MapWindow(QMainWindow):
 
     def set_mesh(self, mesh: PolygonMesh) -> None:
         self._map.set_mesh(mesh)
+
+    def set_debug(self, debug: bool) -> None:
+        """Offer debug-only overlays (settlement maps' anchor candidates and buildable ground)."""
+        self._debug = bool(debug)
 
     def set_settlement_params(self, params: SettlementMapParams) -> None:
         """Tune the settlement tier; the settlement map on screen (if any) is rebuilt."""
@@ -1056,6 +1062,9 @@ class MapWindow(QMainWindow):
         globe = self._map.globe
         if globe is None:
             return
+        if self._debug:
+            self.add_overlay("settlement_anchors", "Anchor candidates (debug)", checked=False)
+            self.add_overlay("buildable", "Buildable ground (debug)", checked=False)
         current = self._stack.currentWidget()
         if current is not self._settlement_view:
             self._settlement_origin = current

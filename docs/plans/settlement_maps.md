@@ -571,7 +571,53 @@ local map's own hexes (seed 4 city 15, a straight horizontal line, 6× the
 typical step between rows) — the Option C seam, inside a local map. Small next
 to 17–66 m of relief but visible in hillshade, and it nudges the slope penalty.
 
-Next: Phase 4d (anchor candidates, hinterland).
+**Phase 4d done 2026-10-11** (anchors, hinterland):
+- `settlegen/anchors.py` → `SettlementSite.anchors` (`AnchorCandidates`, best
+  `per_kind` per kind, `separation_m` apart, scores in [0, 1], what each scored
+  on in `Anchor.detail`): **citadel** — knolls in the footprint by height above
+  their surroundings (relief less its 300 m blur) and steepness around (the
+  highest ground where there are too few knolls); **market** — points along the
+  roads in the footprint by the flow passing within 75 m, nearness to the
+  centre, flat ground; **waterfront** — the footprint's edge within 25 m of
+  water, plus the landings, by water (sea > lake > river by width), flat
+  ground, landing flow; **sacred** — central high ground.
+- `settlegen/hinterland.py` → `SettlementSite.hinterland`: claimed at the
+  settlement tier (as the footprint, not from the local farmland, whose garden
+  ring was drawn round the local footprint), by the local tier's rules
+  (`LocalParams.farmland`): a city's market-garden ring, a town's or
+  village's fields from its footprint's edge, and every neighbouring village's
+  and town's fields from its position — gardens first, then the cheapest
+  (settlement, texel) pair (`localmap.farmland._claim`), never water, a
+  channel or the footprint, villages on their own bank of a river ≥ 50 m. On
+  a ≤ 320² raster (~30 m), traced to polygons. Neighbours are the local maps'
+  villages, towns and cities in the frame, each from the map owning its ground.
+- The footprint also grows to its waterfront now (`water_pull`, as the road
+  pull), and drops slivers the water's cut leaves.
+Seed 4, 30 largest cities + 3 towns: 16 of 17 cities sited on water have a
+waterfront candidate on that water. Anchors + hinterland ≤ 0.15 s per site.
+Frames rarely hold a neighbour: villages are ≥ 2.9 km apart (median 5.3 km;
+none near towns and cities on the local maps) against frames 2.2–5 km from
+centre to edge. And a town's fields (half its people × 1.5 ha: ~52 km² for 7,000
+people) outgrow its ~22 km² frame: the hinterland is what lies inside it.
+Seen upstream, not fixed: seed-4 city 224 (sited on a river) is drawn 1.7 km
+from the 49 m river in its frame, beyond what its footprint grows to.
+
+**Village farming share 2026-10-11** (user request; both tiers): fishers and
+miners are part of a village's people (they're in the rural density), so only
+its farmers grow its fields: `Villages.farming_share` = 1 − (fishing + mining
+density) / rural density at its site, used by `localmap.farmland` (in place of
+the mining flag for villages) and the settlement hinterland. Seed 4 (city 3's
+coast): fishing villages farm ~8% of their people. Towns keep their rule.
+
+**Phase 4e done 2026-10-11** (viewer): settlement maps draw the hinterland's
+fields and gardens (toggled with who farms them, local-map colours), the
+footprint, channels and shorelines, the site's roads and water legs, and in
+screen pixels gates, bridges, fords and landings (Trade Routes). Under
+`--debug` (`MapWindow.set_debug`, from `main.py`) they also offer Anchor
+candidates and Buildable ground toggles, off by default. See
+docs/viz_regionview.md.
+
+Phase 4 is done. Next: Phase 5 (settlement profile).
 
 Polygon library for Decision 8: **shapely** (approved 2026-10-10; in
 `requirements.txt`).

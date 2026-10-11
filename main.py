@@ -40,7 +40,7 @@ class AppParams:
     local: LocalParams = dataclasses.field(
         default_factory=LocalParams, metadata={"label": "Local map"}
     )
-    # Settlement maps (debug viewer for now); view-side only, like ``region`` / ``local``.
+    # Settlement maps; view-side only, like ``region`` / ``local``.
     settlement: SettlementMapParams = dataclasses.field(
         default_factory=SettlementMapParams, metadata={"label": "Settlement map"}
     )
@@ -132,6 +132,7 @@ def main() -> None:
     app = QApplication(sys.argv)
 
     window = MapWindow(projection=projection)
+    window.set_debug(debug)
     window.setWindowTitle("Procedural World")
 
     current_params: list[AppParams] = [AppParams()]

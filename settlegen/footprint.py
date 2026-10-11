@@ -21,7 +21,8 @@ everything but the site; the site only raises density, so the footprint fits.
 
 **The claim**: ``population / density`` of dry ground, by priority — nearness to
 the centre, a pull towards the roads (ribbon growth along them,
-``road_pull`` within ``road_pull_m``), spatially correlated noise along the
+``road_pull`` within ``road_pull_m``) and the water (a river or harbour
+town grows to its waterfront, ``water_pull`` within ``water_pull_m``), spatially correlated noise along the
 edge for a ragged outline (``edge_roughness``), less a penalty on ground steeper
 than ``slope_free`` (the slope smoothed over ``slope_smoothing_m``).  Never water
 or a river channel: a city spans its rivers.  Detached pieces under
@@ -80,6 +81,8 @@ class SettlementFootprintParams:
     max_density_per_ha: float = _f(450.0, label="Max density (people/ha)", min=50.0, max=2000.0, step=10.0)
     road_pull: float = _f(0.3, label="Road pull", min=0.0, max=2.0, step=0.05)
     road_pull_m: float = _f(120.0, label="Road pull reach (m)", min=10.0, max=1000.0, step=10.0)
+    water_pull: float = _f(0.3, label="Waterfront pull", min=0.0, max=2.0, step=0.05)
+    water_pull_m: float = _f(150.0, label="Waterfront pull reach (m)", min=10.0, max=1000.0, step=10.0)
     edge_roughness: float = _f(1.0, label="Footprint edge roughness", min=0.0, max=3.0, step=0.05)
     # Correlation length of the edge noise.
     roughness_m: float = _f(100.0, label="Edge roughness scale (m)", min=5.0, max=500.0, step=5.0)
@@ -227,7 +230,8 @@ def _trace(claimed: np.ndarray, frame: Frame, wet_poly: MultiPolygon) -> MultiPo
     poly = shapely.make_valid(poly.simplify(0.25 * texel_m))
     if not wet_poly.is_empty:
         poly = poly.difference(wet_poly)
-    return _as_multipolygon(poly)
+    # Slivers the water's cut leaves.
+    return MultiPolygon([g for g in _as_multipolygon(poly).geoms if g.area >= _MIN_PIECE_TEXELS * texel_m ** 2])
 
 
 def build_footprint(
@@ -260,9 +264,13 @@ def build_footprint(
 
     # Nearness, 0.5 at the radius; the roads pull growth along them out to twice that.
     base = np.clip(1.0 - dist / (2.0 * r), 0.0, 1.0)
+    reach = base > 0
     road_d = _road_distance_m(roads, frame, t)
     if road_d is not None and params.road_pull > 0:
-        base = base + float(params.road_pull) * np.exp(-road_d / float(params.road_pull_m)) * (base > 0)
+        base = base + float(params.road_pull) * np.exp(-road_d / float(params.road_pull_m)) * reach
+    if wet.any() and params.water_pull > 0:
+        water_d = np.asarray(distance_transform_edt(~wet)) * texel_m
+        base = base + float(params.water_pull) * np.exp(-water_d / float(params.water_pull_m)) * reach
     rng = np.random.default_rng(_seed(globe_seed, ref, _CLAIM_STREAM))
     noise = _noise(base.shape, float(params.roughness_m) / texel_m, rng)
     # Only along the edge: none deep inside or far out.

@@ -85,3 +85,17 @@ def test_the_whole_map_builds(globe, region, region_rivers, river_hex):
     assert lm.hex_index == river_hex
     assert lm.rivers.paths and len(lm.villages) > 0
     assert village_budget_report(lm.fields, lm.villages)["max_relative_residual"] < 1e-5
+
+
+def test_a_villages_farming_share_is_what_its_site_does_not_fish_or_mine(local, villages):
+    share = villages.farming_share
+    assert len(share) == len(villages) and ((share >= 0.0) & (share <= 1.0)).all()
+    rho = local.textures["rural_density"][..., 0].astype(np.float64)
+    others = sum(local.textures[k][..., 0].astype(np.float64) for k in ("fishing_density", "mining_density")
+                 if k in local.textures)
+    s, t, _ = local.geometry.ecef_to_local(villages.positions)
+    hexes, rows, cols, _ = local.grid.texels_at(s, t, local.tex_size)
+    expect = np.where(rho[hexes, rows, cols] > 0,
+                      np.clip(1.0 - np.broadcast_to(others, rho.shape)[hexes, rows, cols]
+                              / np.maximum(rho[hexes, rows, cols], 1e-300), 0.0, 1.0), 1.0)
+    np.testing.assert_allclose(share, expect, atol=1e-6)

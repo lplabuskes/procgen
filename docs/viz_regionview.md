@@ -53,8 +53,19 @@ rivers or `LocalParams.streams` change) and world tuning. Draws `Villages.rural_
 net of villages) as `rural_density`.
 
 **Settlement maps** (`set_settlement`): a third mode for `settlegen`'s
-settlement maps — the refined terrain on the square frame (one texture), the
-owning local map's rivers, roads, villages, towns and footprints over it.
+settlement maps — the refined terrain on the square frame (one texture) with
+the vector site over it (`_draw_site`, in cell-layout pixels): hinterland
+fields and market gardens (toggled with whoever farms them, as on local maps),
+the footprint (with its own overlay: Settlements, Towns or Villages; a neutral
+built-up colour), river channels and shorelines (Rivers); the site's roads and
+river/lake legs as trade routes; and its point features in screen pixels
+(`_draw_site_markers`, Trade Routes): gates (a red bar across the road),
+bridges (light bars), fords (blue dots), landings (cyan diamonds). With
+`--debug` (`MapWindow.set_debug`) a settlement map also offers **Anchor
+candidates** (citadel ▲, market ■, waterfront ◆, sacred ✚, sized by score) and
+**Buildable ground** (the ground too steep to build on, tinted red), both off
+by default. The owning local map's other villages, towns and city footprints
+are drawn as markers; the settlement's own local footprint is not.
 Cartographic overlay sizes follow the local map's scale (`_equivalent_zoom`).
 `settlement_at_cursor` / `set_settlement_click_callback`: the settlement under a
 click at the scale on screen (region: towns, city markers; local or settlement

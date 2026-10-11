@@ -11,12 +11,15 @@
   clear ``settlement_clearance_km`` scaled from 1,000 people.
 - Accounting: an unsited village stays rural; each budget's rural density is
   scaled down by exactly what its villages took (:func:`village_budget_report`).
+- Farmers: a village's people are its site's mix — fishers and miners
+  (``fishing_density``, ``mining_density``) are part of the rural density — so
+  ``Villages.farming_share`` is the share that farms, which alone needs fields.
 
 Deterministic: each budget has its own stream (world seed, map, global texel).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
@@ -79,6 +82,8 @@ class Villages:
     budget_anchor: np.ndarray    # (B,)
     budget_people: np.ndarray    # (B,)
     budget_placed: np.ndarray    # (B,)
+    # (V,) share of its people who farm: 1 − (fishers + miners) / rural people at its site.
+    farming_share: np.ndarray = field(default_factory=lambda: np.zeros(0))
 
     def __len__(self) -> int:
         return int(self.positions.shape[0])
@@ -165,6 +170,12 @@ def place_villages(
     miners = np.zeros_like(fishers)
     if "mining_density" in tex:
         miners = tex["mining_density"][..., 0].astype(np.float64)[dry] > 0.5 * cand_rho
+    # The share who farm: the rest of the rural people there fish or mine.
+    others = np.zeros(len(cand_rho))
+    for key in ("fishing_density", "mining_density"):
+        if key in tex:
+            others += tex[key][..., 0].astype(np.float64)[dry]
+    farming = np.where(cand_rho > 0, np.clip(1.0 - others / np.maximum(cand_rho, 1e-300), 0.0, 1.0), 1.0)
     kind = np.select(
         [miners, fishers, near_river | confluence, near_road],
         [VILLAGE_MINING, VILLAGE_COAST, VILLAGE_RIVER, VILLAGE_ROAD],
@@ -199,7 +210,7 @@ def place_villages(
         for pos, r in zip(np.asarray(settlement_positions, dtype=np.float64), radii):
             blocked[tree.query_ball_point(pos, r)] = True
 
-    placed_pos, placed_pop, placed_kind, placed_anchor = [], [], [], []
+    placed_pos, placed_pop, placed_kind, placed_anchor, placed_farming = [], [], [], [], []
     placed = np.zeros(budget_anchor.size)
     base_radius = _chord(p.spacing_km)
     for size, b, _ in requests:
@@ -220,6 +231,7 @@ def place_villages(
         placed_pop.append(size)
         placed_kind.append(kind[c])
         placed_anchor.append(budget_anchor[b])
+        placed_farming.append(farming[c])
 
     # ── the countryside net of its villages ──────────────────────────────────
     keep = np.where(people > 0, 1.0 - placed / np.maximum(people, 1e-300), 1.0)
@@ -237,6 +249,7 @@ def place_villages(
         budget_anchor=budget_anchor.astype(np.int64),
         budget_people=people,
         budget_placed=placed,
+        farming_share=np.asarray(placed_farming, dtype=np.float64),
     )
 
 

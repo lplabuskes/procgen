@@ -132,3 +132,12 @@ def test_mining_settlements_farm_only_their_farming_share(local, sites):
     assert v_area[0] == round(20 * share)
     assert v_area[1] == 20
     np.testing.assert_allclose(fm.target_km2[FARM_TOWN], t_pop * share * FarmlandParams().ha_per_farmer * 0.01)
+
+
+def test_only_a_villages_farmers_need_fields(local, sites):
+    """Fishers and miners are part of a village's people: only the farming share is fed by fields."""
+    v_pop = _people(local, [20, 20])
+    fm = place_farmland(local, sites[:2], v_pop, np.zeros((0, 3)), np.zeros(0), None, seed=9,
+                        village_mining=np.array([True, False]), village_farming=np.array([0.25, 0.5]))
+    v_area = np.bincount(fm.owner[fm.kind == FARM_VILLAGE], minlength=2)
+    assert list(v_area) == [5, 10]

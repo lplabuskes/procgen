@@ -78,9 +78,9 @@ Display-only; medieval rules of thumb:
 
 | | Farmland | Default |
 |---|---|---|
-| Village | every villager × `ha_per_farmer` (three-field rotation, fallow, meadow, pasture) | 1.5 ha |
+| Village | every villager who farms (`Villages.farming_share`) × `ha_per_farmer` (three-field rotation, fallow, meadow, pasture) | 1.5 ha |
 | Town | `town_farming_share` × `ha_per_farmer` (the rest eat from surrounding villages) | 0.5 |
-| Mining village/town | only `mining_farming_share` farm | 0.1 |
+| Mining town | only `mining_farming_share` farm | 0.1 |
 | City | trade-fed; ring of market gardens/orchards `city_garden_ring_km` wide outside its footprint | 1.5 km |
 
 - Claimed outward like a footprint, distance stretched by `1 +
@@ -120,6 +120,11 @@ settlement_populations, seed, params) → Villages`.
 - **Kinds** (precedence): mining (miners are most of the site's rural density —
   `mining_density`), fishing (coast, or fishers most of it — `fishing_density`;
   both [region_fields.md](region_fields.md)), river, roadside, farming.
+- **Farming share** (`Villages.farming_share`): fishers and miners are part of
+  the rural density, so a village's people are its site's mix; the share that
+  farms — `1 − (fishing_density + mining_density) / rural_density` at its texel
+  — is all that needs fields (`place_farmland(village_farming=…)`; the
+  settlement tier's hinterland reads it too). Seed 4: fishing villages ~0.08.
 - **Accounting.** No free site → stays rural; each budget's rural density scaled
   down by what villages took, so rural + villages per budget unchanged
   (`village_budget_report`: ~1e-8 relative). `Villages.rural_density` = net of

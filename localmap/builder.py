@@ -214,7 +214,7 @@ def build_local_map(
     footprints = city_footprints(local, c_pos, c_pop, seed, params.cities, river_covered=covered)
     farmland = place_farmland(
         local, villages.positions, villages.population, t_pos, t_pop, footprints, seed, params.farmland,
-        village_mining=villages.kind == VILLAGE_MINING,
+        village_mining=villages.kind == VILLAGE_MINING, village_farming=villages.farming_share,
         town_mining=_town_kinds(globe, t_idx) == TOWN_MINING,
         channels=channels, river_covered=covered,
     )

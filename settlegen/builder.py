@@ -49,7 +49,8 @@ def build_settlement_map(
         globe, [m.fields for m in chain.maps], chain.center, chain.side_km, params.upsample)
     realm, world = store.realm_params, store.world_params
     site = build_site(
-        globe, fields, chain, params.rivers, params.roads, params.footprint,
+        globe, fields, chain, params.rivers, params.roads, params.footprint, params.anchors,
+        farmland=store.local_params.farmland,
         local_road_raster_texels=float(store.local_params.roads.raster_texels),
         land=world.cost.land if world is not None else None,
         danger_scale=float(realm.danger.movement_scale) if realm is not None else 2.0,

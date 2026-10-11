@@ -14,7 +14,7 @@ from core.display import SchemeSpec
 from localmap.builder import LocalMap
 from localmap.geometry import PARENT_CENTER, PARENT_RADIUS
 from localmap.params import LocalParams
-from localmap.farmland import farmland_rgba
+from localmap.farmland import FARM_CITY, FARM_KIND_COLORS, FARM_TOWN, FARM_VILLAGE, farmland_rgba
 from localmap.villages import VILLAGE_KIND_NAMES
 from region.borders import view_polity_borders
 from region.display import build_layer_texture, snap_to_land
@@ -110,7 +110,7 @@ class RegionView(QWidget):
         self._press_pos: Optional[tuple[float, float]] = None
         # ── local maps ──
         self._local: Optional[LocalMap] = None
-        # ── settlement maps (debug): the map on screen, and what a click on a town or city opens ──
+        # ── settlement maps: the map on screen, and what a click on a settlement opens ──
         self._settlement: Optional[SettlementMap] = None
         self._settlement_land_texels = 0
         self._settlement_click_callback: Optional[Callable[[SettlementRef], None]] = None
@@ -548,6 +548,8 @@ class RegionView(QWidget):
                 painter, self._globe, self._overlay_visible, self._overlay_projector(),
                 refined=self._refined_features(),
             )
+            if self._settlement is not None:
+                self._draw_site_markers(painter, transform, x0, y0, size)
             painter.restore()
 
         # Outside the map, bottom-aligned with the cell's footprint to its left.
@@ -1042,8 +1044,10 @@ class RegionView(QWidget):
 
     def _draw_site(self, painter: QPainter, x0: float, y0: float, size: float) -> None:
         """A settlement map's vector site over its terrain, in cell-layout pixels (under the
-        screen-space overlays): its footprint, with its own overlay (cities, towns or
-        villages); river channels and shorelines, with the rivers overlay."""
+        screen-space overlays): its hinterland's fields and gardens (with the overlay of
+        who farms them), the ground too steep to build on (debug), its footprint (with
+        its own overlay: cities, towns or villages), river channels and shorelines (with
+        the rivers overlay).  Its point features are :meth:`_draw_site_markers`."""
         assert self._settlement is not None
         site = self._settlement.site
         side = site.frame.side_m
@@ -1055,7 +1059,24 @@ class RegionView(QWidget):
         painter.save()
         self._clip_to_outline(painter, x0, y0, size)
         ref = self._settlement.ref
-        overlay = {"city": "settlements", "town": "towns", "village": "villages"}[ref.kind]
+        overlay = _KIND_OVERLAY[ref.kind]
+        # The hinterland, with the overlay of who farms it (as the local map's farmland).
+        painter.setPen(Qt.PenStyle.NoPen)
+        hint = site.hinterland
+        plots = [(hint.own, overlay, FARM_CITY if hint.own_kind == "gardens" else
+                  FARM_TOWN if ref.kind == "town" else FARM_VILLAGE)]
+        plots += [(n.fields, _KIND_OVERLAY[n.kind], FARM_TOWN if n.kind == "town" else FARM_VILLAGE)
+                  for n in hint.neighbours]
+        for geom, toggle, farm in plots:
+            if not geom.is_empty and self._overlay_visible.get(toggle, True):
+                painter.setBrush(QColor.fromRgbF(*FARM_KIND_COLORS[farm]))
+                painter.drawPath(_site_path(geom, to_px))
+        if self._overlay_visible.get("buildable", False):
+            # Ground too steep to build on (debug): the frame less the buildable ground and the water.
+            blocked = site.frame.box().difference(site.buildable).difference(site.water.bodies)
+            if not blocked.is_empty:
+                painter.setBrush(_UNBUILDABLE_FILL)
+                painter.drawPath(_site_path(blocked, to_px))
         if self._overlay_visible.get(overlay, True) and not site.footprint.is_empty:
             painter.setPen(_cosmetic_pen(_FOOTPRINT_PEN))
             painter.setBrush(_BUILT_FILL)          # not the tier colour: some tiers are blue, as water
@@ -1076,6 +1097,56 @@ class RegionView(QWidget):
                 painter.drawPolyline(QPolygonF([QPointF(float(x), float(y)) for x, y in pts]))
         painter.restore()
 
+    def _draw_site_markers(self, painter: QPainter, transform: QTransform, x0: float, y0: float, size: float) -> None:
+        """A settlement map's point features, pixel-sized in screen space: with the trade
+        routes overlay its gates (a bar across the road), bridges and fords, and
+        landings (quays); with the debug overlay its anchor candidates, sized by score."""
+        assert self._settlement is not None
+        site = self._settlement.site
+        side = site.frame.side_m
+
+        def screen(xy: np.ndarray) -> QPointF:
+            return transform.map(QPointF(x0 + (float(xy[0]) / side + 0.5) * size,
+                                         y0 + (0.5 - float(xy[1]) / side) * size))
+
+        def heading(xy: np.ndarray, direction: np.ndarray) -> np.ndarray:
+            a, b = screen(xy), screen(np.asarray(xy) + 10.0 * np.asarray(direction))
+            d = np.array([b.x() - a.x(), b.y() - a.y()])
+            return d / max(float(np.linalg.norm(d)), 1e-9)
+
+        roads = site.roads
+        if self._overlay_visible.get("trade_routes", True):
+            for g in roads.gates:
+                p, d = screen(g.xy), heading(g.xy, g.direction)
+                across = np.array([-d[1], d[0]]) * _GATE_PX
+                painter.setPen(QPen(_GATE_COLOR, 3.0))
+                painter.drawLine(QPointF(p.x() - across[0], p.y() - across[1]),
+                                 QPointF(p.x() + across[0], p.y() + across[1]))
+            for c in roads.crossings:
+                p = screen(c.xy)
+                painter.setPen(QPen(QColor(25, 22, 18, 235), 1.0))
+                if c.bridge:
+                    painter.setBrush(_BRIDGE_FILL)
+                    painter.drawRect(QRectF(p.x() - _MARK_PX, p.y() - 0.6 * _MARK_PX, 2 * _MARK_PX, 1.2 * _MARK_PX))
+                else:
+                    painter.setBrush(_FORD_FILL)
+                    painter.drawEllipse(p, 0.8 * _MARK_PX, 0.8 * _MARK_PX)
+            for landing in roads.landings:
+                p = screen(landing.xy)
+                painter.setPen(QPen(QColor(25, 22, 18, 235), 1.0))
+                painter.setBrush(_LANDING_FILL)
+                r = _MARK_PX * 1.1
+                painter.drawPolygon(QPolygonF([QPointF(p.x(), p.y() - r), QPointF(p.x() + r, p.y()),
+                                               QPointF(p.x(), p.y() + r), QPointF(p.x() - r, p.y())]))
+        if self._overlay_visible.get("settlement_anchors", False):
+            for kind, color in _ANCHOR_COLORS.items():
+                for a in site.anchors[kind]:
+                    p = screen(a.xy)
+                    r = _MARK_PX * (0.6 + 0.8 * a.score)
+                    painter.setPen(QPen(QColor(15, 15, 15, 240), 1.0))
+                    painter.setBrush(color)
+                    painter.drawPolygon(_anchor_shape(kind, p, r))
+
     def _draw_hex_grid(self, painter: QPainter, x0: float, y0: float, size: float) -> None:
         """Fallback: bare scaffolding when no globe data is available."""
         assert self._grid is not None
@@ -1095,6 +1166,35 @@ _CHANNEL_FILL = QColor(100, 180, 255, 220)      # the rivers overlay's colour
 _SHORE_PEN = QColor(40, 80, 140, 220)
 _FOOTPRINT_PEN = QColor(25, 22, 18, 235)        # as the local map's city footprints
 _BUILT_FILL = QColor(170, 140, 110, 215)
+_UNBUILDABLE_FILL = QColor(160, 40, 40, 90)
+_KIND_OVERLAY = {"city": "settlements", "town": "towns", "village": "villages"}
+# Site markers (screen px): gates, bridges, fords, landings, anchor candidates.
+_MARK_PX = 4.0
+_GATE_PX = 6.0
+_GATE_COLOR = QColor(200, 40, 30, 240)
+_BRIDGE_FILL = QColor(235, 230, 215, 240)
+_FORD_FILL = QColor(120, 190, 240, 240)
+_LANDING_FILL = QColor(60, 220, 230, 240)
+_ANCHOR_COLORS = {
+    "citadel": QColor(220, 50, 40, 230), "market": QColor(240, 200, 40, 230),
+    "waterfront": QColor(60, 220, 230, 230), "sacred": QColor(250, 250, 250, 230),
+}
+
+
+def _anchor_shape(kind: str, p: QPointF, r: float) -> QPolygonF:
+    """Citadel ▲, market ■, waterfront ◆, sacred ✚ (a cross), about ``r`` px."""
+    x, y = p.x(), p.y()
+    if kind == "citadel":
+        pts = [(x, y - r), (x + r, y + r), (x - r, y + r)]
+    elif kind == "market":
+        pts = [(x - r, y - r), (x + r, y - r), (x + r, y + r), (x - r, y + r)]
+    elif kind == "waterfront":
+        pts = [(x, y - r), (x + r, y), (x, y + r), (x - r, y)]
+    else:
+        w = 0.35 * r
+        pts = [(x - w, y - r), (x + w, y - r), (x + w, y - w), (x + r, y - w), (x + r, y + w), (x + w, y + w),
+               (x + w, y + r), (x - w, y + r), (x - w, y + w), (x - r, y + w), (x - r, y - w), (x - w, y - w)]
+    return QPolygonF([QPointF(a, b) for a, b in pts])
 
 
 def _without_city(city_index: np.ndarray, positions: np.ndarray, footprints, city: int):  # type: ignore[no-untyped-def]

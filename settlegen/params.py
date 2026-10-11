@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from core.params import field, paramclass
+from settlegen.anchors import SettlementAnchorParams
 from settlegen.footprint import SettlementFootprintParams
 from settlegen.roads import SettlementRoadParams
 from settlegen.upsample import SettlementUpsampleParams
@@ -19,3 +20,5 @@ class SettlementMapParams:
     roads: SettlementRoadParams = field(default_factory=SettlementRoadParams, metadata={"label": "Roads"})
     footprint: SettlementFootprintParams = field(
         default_factory=SettlementFootprintParams, metadata={"label": "Footprint"})
+    anchors: SettlementAnchorParams = field(
+        default_factory=SettlementAnchorParams, metadata={"label": "Anchor candidates"})

@@ -3,9 +3,11 @@
 Area farmed (medieval rules of thumb):
 
 - villages: ``ha_per_farmer`` (1.5 ha: ~1 ha cropland under three-field rotation
-  plus meadow and pasture) per villager;
+  plus meadow and pasture) per villager who farms (``Villages.farming_share``:
+  fishers and miners need no fields);
 - towns: ``town_farming_share`` of their people;
-- mining villages and towns: only ``mining_farming_share`` (they buy food);
+- mining towns: only ``mining_farming_share`` (they buy food); so mining villages
+  too when their farming share isn't given;
 - cities: no fields (fed by trade), just a ``city_garden_ring_km`` ring of market
   gardens outside the footprint, wider over good ground, narrower over poor.
 
@@ -110,13 +112,15 @@ def place_farmland(
     params: Optional[FarmlandParams] = None,
     *,
     village_mining: Optional[np.ndarray] = None,
+    village_farming: Optional[np.ndarray] = None,
     town_mining: Optional[np.ndarray] = None,
     channels: Optional[Channels] = None,
     river_covered: Optional[np.ndarray] = None,
 ) -> Farmland:
     """Claim every settlement's farmland.  See the module docstring.
 
-    ``village_mining`` / ``town_mining``: per-settlement bool mining flags.
+    ``village_farming``: each village's share of people who farm (overrides
+    ``village_mining``); ``village_mining`` / ``town_mining``: per-settlement bool mining flags.
     ``channels``: the map's rivers (:func:`localmap.banks.river_channels`), whose
     wide ones bound village fields; ``river_covered``: ``(M, T, T)`` texels under
     them (:func:`localmap.banks.covered_texels`), never farmed.
@@ -133,6 +137,8 @@ def place_farmland(
     texel_km2 = float(local.texel_area_km2)
     mining_share = float(p.mining_farming_share)
     v_share = np.where(_flags(village_mining, len(v_pop)), mining_share, 1.0)
+    if village_farming is not None and len(village_farming) == len(v_pop):
+        v_share = np.clip(np.asarray(village_farming, dtype=np.float64), 0.0, 1.0)
     t_share = np.where(_flags(town_mining, len(t_pop)), mining_share, float(p.town_farming_share))
     v_target = v_pop * v_share * float(p.ha_per_farmer) * _KM2_PER_HA
     t_target = t_pop * t_share * float(p.ha_per_farmer) * _KM2_PER_HA

@@ -395,3 +395,21 @@ def test_towns_and_cities_open_from_the_region_and_cities_from_the_world(app, gl
     assert window._back_btn.text() == "← World Map"
     window._go_back()
     assert window._stack.currentWidget() is world and window._back_btn.isHidden()
+
+
+def test_settlement_maps_draw_their_site_and_offer_debug_overlays_only_in_debug(app, globe, settled):  # noqa: F811
+    for debug in (False, True):
+        window = _settlement_window(globe)
+        window.set_debug(debug)
+        window._region_view.set_region(RegionGeometry(REGION_ID, globe.antimeridian), globe)
+        window._stack.setCurrentWidget(window._region_view)
+        window._enter_local(settled)
+        local = window._local_view.local_map
+        assert local is not None and len(local.villages)
+        window._enter_settlement(SettlementRef("village", 0, map=(local.fields.region_id, local.hex_index)))
+        offered = {"settlement_anchors", "buildable"} <= set(window._overlay_actions)
+        assert offered == debug
+        view = window._settlement_view
+        for name in ("rivers", "trade_routes", "villages", "towns", "settlements", "settlement_anchors", "buildable"):
+            view.set_overlay_visible(name, True)
+        _painted(view)
