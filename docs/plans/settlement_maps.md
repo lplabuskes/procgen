@@ -502,7 +502,39 @@ was 12.8); one seam city (356) still 4.6 m max — residual per-map differences
 regional texels cut by a local map's hexagon edge are exact over their whole
 area, not the map's part.
 
-Next: Phase 4b (roads, gates, landings, crossings).
+**Phase 4b done 2026-10-10** (roads): `settlegen/roads.py` → `SiteRoads` on
+`SettlementSite.roads` (lines, sea legs, landings, crossings, gates, and the
+roads on the sphere for drawing). The viewer now draws the site's roads in
+place of the owning local map's.
+- **Roads**: the local maps' roads, each clipped to its own map's ground and
+  chained across seams (undirected: either end may join), re-traced at 45 m within one
+  local texel. At this scale a river is many raster nodes wide (seed 4 city 16:
+  700 m), so the router treats it as a **channel**, not a line
+  (`region.roads._road_cost` gained `bank_flow` / `channel_climb`, defaults
+  unchanged): entering pays the world's ford cost, each step inside costs as
+  much as climbing a 1 km/km slope (`channel_climb`; the street-scale relief's
+  ruggedness otherwise sends roads down the flat bed), the along-river
+  discount moves to a 60 m bank band, road ends inside a channel move to its
+  nearest bank, and the corridor widens to clear the widest channel.
+- **Landings**: a sea leg's coast end is on the region's ~9 km raster, often
+  outside the frame, so the road that reached it lands where it passes nearest
+  the traced shore (sea or lake) and is cut there. Two port hops sharing a coast
+  point (chained city → coast → city by the region) are split there into one road.
+- **Crossings**: planar segment intersection in frame metres (shapely), not
+  `crossing_pairs` — the frame is flat, so they're the same.
+  A bridge if the channel is ≥ `bridge_width_m` (20 m) wide or the
+  settlement is a city.
+- **Gates**: where roads cross the footprint edge, facing out. Two routes
+  re-traced onto one way share one gate and crossing, with their flows summed.
+  **The footprint is provisional** until 4c: a disc of the local footprint's
+  area, minus still water.
+Seed 4, 15 frames: every gate on the footprint edge; landings at the lake/sea
+ports (cities 13, 3); city 16's road crosses its river once instead of
+running down the channel (5 false bridges before). Water + roads ≤0.1 s per site.
+Seen upstream, not fixed: city 152 (a port) has no road reaching its frame on
+its local map, and its sea legs start 26 km away.
+
+Next: Phase 4c (footprint, buildable area).
 
 Polygon library for Decision 8: **shapely** (approved 2026-10-10; in
 `requirements.txt`).

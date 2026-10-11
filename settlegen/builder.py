@@ -47,5 +47,11 @@ def build_settlement_map(
     chain = ensure_local_maps(store, ref, float(params.upsample.margin_km))
     fields = build_settlement_fields(
         globe, [m.fields for m in chain.maps], chain.center, chain.side_km, params.upsample)
-    site = build_site(globe, fields, chain.side_km, chain.maps, params.rivers)
+    realm, world = store.realm_params, store.world_params
+    site = build_site(
+        globe, fields, chain.side_km, chain.radius_km, chain.maps, params.rivers, params.roads,
+        city=ref.kind == "city", local_road_raster_texels=float(store.local_params.roads.raster_texels),
+        land=world.cost.land if world is not None else None,
+        danger_scale=float(realm.danger.movement_scale) if realm is not None else 2.0,
+    )
     return SettlementMap(chain=chain, fields=fields, site=site)

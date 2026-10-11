@@ -23,7 +23,6 @@ from scipy.ndimage import distance_transform_edt
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon
 
 from core.params import param_field as _f, paramclass
-from localmap.banks import river_channels
 from localmap.builder import LocalMap
 from localmap.rivers import LocalRiverParams, build_local_rivers
 from region.rivers import RegionRivers, RiverPath
@@ -237,23 +236,27 @@ def river_lines(rivers: RegionRivers, frame: Frame, discharge_scale: float) -> l
     return out
 
 
-def channel_polygons(rivers: RegionRivers, frame: Frame, discharge_scale: float) -> MultiPolygon:
-    """The ground the channels cover: each dry segment widened to its bankfull width."""
-    channels = river_channels(rivers, discharge_scale)
-    if len(channels) == 0:
+def channel_polygons(lines: Sequence[RiverLine], clip: Optional[Polygon] = None) -> MultiPolygon:
+    """The ground the channels cover: each dry segment widened to its bankfull width
+    (clipped to ``clip``, if given)."""
+    a, b, half = [], [], []
+    for line in lines:
+        dry = ~line.in_water
+        a.append(line.xy[:-1][dry])
+        b.append(line.xy[1:][dry])
+        half.append(np.maximum(0.5 * line.width_m[dry], 0.5 * _MIN_CHANNEL_M))
+    if not a or not sum(len(x) for x in a):
         return MultiPolygon()
-    a, b = frame.to_xy(channels.a), frame.to_xy(channels.b)
-    lines = shapely.linestrings(np.stack([a, b], axis=1))
-    half = np.maximum(channels.width_km * 500.0, 0.5 * _MIN_CHANNEL_M)
+    a_xy, b_xy, h = np.concatenate(a), np.concatenate(b), np.concatenate(half)
     # Flat ends, so a channel stops square at a shore or the frame instead of in a disc
     # its full width; each joint between two segments rounded at the narrower one's width.
-    parts = list(shapely.buffer(lines, half, cap_style="flat"))
-    joint = np.linalg.norm(a[1:] - b[:-1], axis=1) < 1e-6
+    parts = list(shapely.buffer(shapely.linestrings(np.stack([a_xy, b_xy], axis=1)), h, cap_style="flat"))
+    joint = np.linalg.norm(a_xy[1:] - b_xy[:-1], axis=1) < 1e-6
     if joint.any():
         k = np.flatnonzero(joint)
-        parts.extend(shapely.buffer(shapely.points(a[k + 1]), np.minimum(half[k], half[k + 1]), quad_segs=4))
-    merged = shapely.union_all(parts).intersection(frame.box())
-    return _as_multipolygon(merged)
+        parts.extend(shapely.buffer(shapely.points(a_xy[k + 1]), np.minimum(h[k], h[k + 1]), quad_segs=4))
+    merged = shapely.union_all(parts)
+    return _as_multipolygon(merged.intersection(clip) if clip is not None else merged)
 
 
 def build_site_water(
@@ -266,9 +269,9 @@ def build_site_water(
     parent, streams = parent_rivers(maps, globe.antimeridian)
     rivers = (build_local_rivers(fields, maps[0].fields, parent, globe, params, streams)
               if parent.paths or streams else RegionRivers(region_id=fields.region_id, paths=[]))
-    scale = discharge_per_flow_unit(globe.mesh)
+    lines = river_lines(rivers, frame, discharge_per_flow_unit(globe.mesh))
     still = _as_multipolygon(shapely.union_all([sea, lakes]))
     return SiteWater(
         sea=sea, lakes=lakes, shorelines=shorelines(still, frame),
-        lines=river_lines(rivers, frame, scale), channels=channel_polygons(rivers, frame, scale), rivers=rivers,
+        lines=lines, channels=channel_polygons(lines, frame.box()), rivers=rivers,
     )

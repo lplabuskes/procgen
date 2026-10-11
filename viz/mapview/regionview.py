@@ -212,10 +212,9 @@ class RegionView(QWidget):
     # ── settlement maps ──────────────────────────────────────────────────────
 
     def set_settlement(self, settlement: SettlementMap, globe: "World", land_texels: int = 0) -> None:
-        """Show a settlement map: its refined terrain on the square frame, and its
-        owning local map's rivers, roads, villages, towns and footprints over it
-        (until the site phase re-traces them).  ``land_texels``: how far (texels)
-        markers on water are moved onto land."""
+        """Show a settlement map: its refined terrain on the square frame, its site's
+        rivers and roads, and its owning local map's villages, towns and footprints
+        over it.  ``land_texels``: how far (texels) markers on water are moved onto land."""
         self._settlement = settlement
         self._settlement_land_texels = int(land_texels)
         self._local = None
@@ -225,8 +224,9 @@ class RegionView(QWidget):
         self._grid = settlement.fields.grid
         self._fields = settlement.fields
         owner = settlement.chain.owner
-        # The site's re-traced rivers (polity borders snap to them; drawn as channel polygons).
-        self._rivers, self._roads, self._deltas = settlement.site.water.rivers, owner.roads, owner.deltas
+        # The site's re-traced rivers (polity borders snap to them; drawn as channel polygons) and roads.
+        site = settlement.site
+        self._rivers, self._roads, self._deltas = site.water.rivers, site.roads.roads, owner.deltas
         self._hex_images = []
         self._farm_images = []
         self._land_positions = {}

@@ -137,9 +137,16 @@ def _river_nodes(rivers: Optional[RegionRivers], fields: RegionFields, raster: R
 
 def _road_cost(
     raster: Raster, river_flow: np.ndarray, land: "LandCostParams", danger_scale: float, node_km: float,
-    face_km: float,
+    face_km: float, bank_flow: Optional[np.ndarray] = None, channel_climb: float = 0.0,
 ):
-    """Per-edge road cost in world land-cost units (one face-width step of base cost 1 costs 1)."""
+    """Per-edge road cost in world land-cost units (one face-width step of base cost 1 costs 1).
+
+    Entering a ``river_flow`` node pays the ford; a step between two of them gets
+    the along-river discount — or, when the rivers are wider than a node (a
+    settlement map: ``river_flow`` on the channel, ``bank_flow`` on a band beside
+    it), costs as much more as climbing at a slope of ``channel_climb`` (km/km),
+    and the discount goes to steps between two ``bank_flow`` nodes instead.
+    """
     biome = np.clip(np.rint(raster.values.get("biome", np.full(raster.n ** 2, 3.0))), 0,
                     len(BIOME_TRAVERSAL_COST) - 1).astype(np.int64)
     base = float(land.biome_cost_scale) * BIOME_TRAVERSAL_COST[biome].astype(np.float64)
@@ -153,14 +160,20 @@ def _road_cost(
     weight = np.minimum(river_flow / ref, 1.0)
     on_river = river_flow > 0.0
     ford = np.minimum(float(land.river_ford_strength) * weight, float(land.river_max_mult) - 1.0)
-    along = np.maximum(1.0 - float(land.river_corridor_strength) * weight, float(land.river_min_mult))
+    along_flow = river_flow if bank_flow is None else bank_flow
+    on_bank = along_flow > 0.0
+    along = np.maximum(
+        1.0 - float(land.river_corridor_strength) * np.minimum(along_flow / ref, 1.0), float(land.river_min_mult))
     per_step = node_km / face_km
     climb_per_km = float(land.ruggedness_cost_per_km)
 
     def edge_cost(sub: np.ndarray, a: np.ndarray, b: np.ndarray, length: np.ndarray) -> np.ndarray:
         na, nb = sub[a], sub[b]
         cost = 0.5 * (base[na] + base[nb]) * length * per_step
-        both = on_river[na] & on_river[nb]
+        if bank_flow is not None:
+            in_channel = climb_per_km * float(channel_climb) * length * node_km
+            cost = np.where(on_river[na] & on_river[nb], cost + in_channel, cost)
+        both = on_bank[na] & on_bank[nb]
         cost = np.where(both, cost * np.minimum(along[na], along[nb]), cost)
         entering = on_river[nb] & ~on_river[na]
         cost = cost + np.where(entering, ford[nb] * base[nb], 0.0)
