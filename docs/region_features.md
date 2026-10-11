@@ -301,6 +301,13 @@ coast on seed 4.
 
 - **Which, where.** As towns: once, by the region containing the site; dry
   in-hex texels of its own face within `refine_radius_global_texels`.
+- **Water links, hard.** A city with `Settlement.water_links` only goes where
+  this tier meets them — on its drawing of the tagged river (`path_rivers` ids,
+  dry stretches; `river_threshold_factor` × texel) or ocean / globe-lake coast —
+  (or, when none meets them all, the confluence > mouth > coast > river
+  fallback of [realm_refine.md](realm_refine.md#city-siting-settlementspy)),
+  in reach if any candidate there does, else anywhere in its face. The same
+  code runs on local maps (within the local map).
 - **Kind kept.** Harbour → refined coast (ocean, or a globe lake — not a small
   lake — for a lake port), then
   preferring a drawn river/confluence if it had one; river city → drawn

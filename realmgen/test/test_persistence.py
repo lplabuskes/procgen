@@ -21,7 +21,7 @@ def test_settlements_round_trip():
             face_id=3, position=np.array([0.0, 0.0, 1.0]), tier=0, score=0.9,
             population=12000.0, defensibility=1.4, has_walls=True, wall_strength=0.8,
             site_kind=5, site_position=np.array([0.0, 0.6, 0.8]), region_position=np.array([0.0, 0.8, 0.6]),
-            refined=True, local_refined=True,
+            refined=True, local_refined=True, water_links=[(12, 3), (-1,)],
         ),
         Settlement(
             face_id=7, position=np.array([1.0, 0.0, 0.0]), tier=2, score=0.3,
@@ -43,6 +43,7 @@ def test_settlements_round_trip():
         assert np.allclose(a.site_position, b.site_position)
         assert np.allclose(a.region_position, b.region_position)
         assert (a.refined, a.local_refined) == (b.refined, b.local_refined)
+        assert a.water_links == b.water_links
 
 
 def test_a_new_site_drops_the_finer_refinement():

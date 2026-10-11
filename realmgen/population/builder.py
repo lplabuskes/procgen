@@ -37,9 +37,12 @@ from realmgen.population.trade_spawn import spawn_trade_settlements
 from realmgen.scoring.suitability import _positions_to_face_ids
 from realmgen.persistence import pack_settlements, unpack_settlements
 from realmgen.trade.network import GOOD_RARITY_WEIGHTS, RARE_BIO_TYPE_OFFSET, TradeResult, compute_trade_network
+from realmgen.trade.water_links import (
+    WaterAccess, build_water_access, mask_sea_edges, port_links, settlement_water_links,
+)
 from viz.color_stops import interp_stops_scalar
 from worldgen.cost.channels import COST_SURFACES, IS_WATER
-from worldgen.geology.channels import OCEAN_MASK
+from worldgen.geology.channels import IS_OCEAN, OCEAN_MASK
 from worldgen.geology.display import OCEAN_COLOR, is_water_meta
 from worldgen.hydrology.channels import LAKE_MASK
 from worldgen.resources.channels import FERTILITY_MEAN, MINERALS, RARE_BIO
@@ -241,6 +244,8 @@ class PopulationStage(Stage):
             float(self.danger_params.movement_scale) if self.danger_params is not None else 0.0
         )
 
+        access: Optional[WaterAccess] = None
+        port_ok: Optional[np.ndarray] = None
         if COST_SURFACES.present(world):
             from worldgen.cost.surfaces import build_land_edge_costs, build_sea_edge_costs
             cs = COST_SURFACES.read(world)
@@ -274,6 +279,16 @@ class PopulationStage(Stage):
                 wind_dir=cs.wind_dir,
             )
             sea_passable = cs.sea_passable
+            if OCEAN_MASK.present(mesh):
+                # Ports and river-face water edges only where the face's texels reach that water.
+                access = build_water_access(
+                    mesh, OCEAN_MASK.read(mesh), LAKE_MASK.read(mesh) if LAKE_MASK.present(mesh) else None,
+                    world.get_feature("rivers"),
+                    IS_OCEAN.read(mesh) if IS_OCEAN.present(mesh) else is_water,
+                    ~is_water, sea_passable,
+                )
+                sea_edge_costs = mask_sea_edges(mesh, sea_edge_costs, access)
+                port_ok = port_links(mesh, access)
         else:
             base = np.where(is_water, np.inf, 1.5) + danger_scale * danger
             edge_costs = [
@@ -328,6 +343,7 @@ class PopulationStage(Stage):
                 deposit_decay=tp.deposit_decay,
                 hub_display_quantile=tp.hub_display_quantile,
                 settlement_demands=settlement_demands,
+                port_ok=port_ok,
             )
 
         population = np.array([s.population for s in self.settlements], dtype=np.float64)
@@ -496,6 +512,11 @@ class PopulationStage(Stage):
             tier_arr[s.face_id] = population_display_tier(population[k], max_pop)
         mesh.apply_metadata_channel("settlement_tier", tier_arr.tolist())
 
+        if access is not None and len(self.trade_result.settlement_links) == len(self.settlements):
+            tags = settlement_water_links(
+                access, [s.face_id for s in self.settlements], self.trade_result.settlement_links)
+            for s, t in zip(self.settlements, tags):
+                s.water_links = t
         world.add_feature("settlements", self.settlements)
         world.add_feature("trade_routes", self.trade_result.routes)
         # Aligned with trade_routes: which hops are land, water or a port transfer.

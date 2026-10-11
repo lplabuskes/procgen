@@ -6,6 +6,9 @@ river (additive with coast, so a river mouth beats a bare shore), 3×3
 fertility, a mild pull to the face centre (keeps cities off seams), and a small
 per-``(seed, face)`` jitter (avoids a visible lattice at region scale).
 
+A city tagged with water links (``Settlement.water_links``, from its trade) is
+sited only on texels meeting them: on the tagged river, or the ocean / lake coast.
+
 Cities are sited largest first; sites within ``min_spacing`` of an already-sited
 city are rejected (if all are, the farthest is taken). ``Settlement.site_kind``
 records what the site offered so the region/local tiers can re-site without
@@ -19,6 +22,7 @@ from realmgen.placement.types import (
     SITE_KIND_CONFLUENCE, SITE_KIND_LAKE_COAST, SITE_KIND_OCEAN_COAST, SITE_KIND_RIVER,
 )
 from realmgen.refine.sites import SiteField
+from realmgen.trade.water_links import water_link_mask
 
 SITE_OCEAN = 3.0
 SITE_LAKE = 2.0
@@ -90,6 +94,12 @@ def refine_settlement_positions(
         idx = face.sites()
         if idx.size == 0:
             continue  # all-water texel grid; leave at centroid
+
+        # Hard constraint: on the water its trade uses.
+        on_water = water_link_mask(s.water_links, face.coast_ocean[idx], face.coast_lake[idx],
+                                   lambda r: sites.near_river(face, idx, r), sites.river_flows)
+        if on_water is not None:
+            idx = idx[on_water]
 
         rng = np.random.default_rng([int(seed), f])
         score = city_site_scores(face, idx, sites.centroids[f], rng)

@@ -59,7 +59,20 @@ def pack_settlements(settlements: List[Settlement]) -> Dict[str, np.ndarray]:
         ).reshape(-1, 3),
         "settle_refined": np.array([s.refined for s in settlements], dtype=np.bool_),
         "settle_local_refined": np.array([s.local_refined for s in settlements], dtype=np.bool_),
+        # Water links: per settlement its links' tag counts, and their tags flat.
+        **_pack_ragged("settle_link_sizes", [[len(t) for t in s.water_links] for s in settlements]),
+        **_pack_ragged("settle_link_tags", [[x for t in s.water_links for x in t] for s in settlements]),
     }
+
+
+def _unpack_water_links(arrays: Mapping[str, np.ndarray], n: int) -> List[list]:
+    if "settle_link_sizes_flat" not in arrays:
+        return [[] for _ in range(n)]
+    out = []
+    for sizes, tags in zip(_unpack_ragged("settle_link_sizes", arrays), _unpack_ragged("settle_link_tags", arrays)):
+        ends = np.cumsum(sizes).tolist()
+        out.append([tuple(tags[e - k:e]) for k, e in zip(sizes, ends)])
+    return out
 
 
 def unpack_settlements(arrays: Mapping[str, np.ndarray]) -> List[Settlement]:
@@ -71,6 +84,7 @@ def unpack_settlements(arrays: Mapping[str, np.ndarray]) -> List[Settlement]:
     defens = arrays["settle_defensibility"]
     walls = arrays["settle_has_walls"]
     wall_strength = arrays["settle_wall_strength"]
+    links = _unpack_water_links(arrays, len(fid))
     return [
         Settlement(
             face_id=int(fid[i]),
@@ -86,6 +100,7 @@ def unpack_settlements(arrays: Mapping[str, np.ndarray]) -> List[Settlement]:
             region_position=np.asarray(arrays["settle_region_position"][i], dtype=np.float64),
             refined=bool(arrays["settle_refined"][i]),
             local_refined=bool(arrays["settle_local_refined"][i]),
+            water_links=links[i],
         )
         for i in range(len(fid))
     ]

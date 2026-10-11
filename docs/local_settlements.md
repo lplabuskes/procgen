@@ -39,7 +39,8 @@ Re-sited once more from the region's positions with the region's rules
 [region_features.md](region_features.md#towns-and-cities)) on ~0.36 km texels and
 local coast, rivers and roads, within `refine_radius_parent_texels` (1.5
 regional texels, ~7 km). Harbours/ports → local shore, river cities/towns →
-local river, when in reach. **Saved on the world** (`position`, flagged
+local river, when in reach; a city's water links are hard constraints, met past
+the reach when they must be. **Saved on the world** (`position`, flagged
 `local_refined`; `region_position` keeps the region's), so it stands in the same
 place on every map.
 
