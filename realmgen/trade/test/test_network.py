@@ -6,6 +6,9 @@ import pytest
 
 from realmgen.test.conftest import _settlement
 from realmgen.trade.network import (
+    ROUTE_LAND,
+    ROUTE_TRANSFER,
+    ROUTE_WATER,
     TradeResult,
     build_hybrid_cost_graph,
     compute_trade_network,
@@ -407,6 +410,33 @@ class TestComputeTradeNetwork:
         # overland (cost 10), so less of it arrives.
         assert strict.face_flow[1] < loose.face_flow[1]
         assert strict.landing_flow.sum() == 0.0
+
+    def test_route_layers_mark_water_hops(self):
+        """Down the river 1-3 to the sea at 4 is water; boarding at 1 and landing at 5
+        are transfers; the haul from the deposit at 0 to the city at 1 is by land."""
+        n = 6
+        mesh = _line_mesh(n)
+        land_p = np.array([True, True, True, True, False, True])
+        sea_p = np.array([True, True, True, True, True, False])
+        land_ec = [np.where(land_p[i] & land_p[np.array(mesh.face_adjacency[i])], 10.0, np.inf)
+                   for i in range(n)]
+        sea_ec = [np.where(sea_p[i] & sea_p[np.array(mesh.face_adjacency[i])], 1.0, np.inf)
+                  for i in range(n)]
+        result = compute_trade_network(
+            mesh, [_settlement(1, tier=0), _settlement(5, tier=0)], [(0, 5.0, 0)],
+            land_ec, land_p, sea_ec, sea_p, port_cost=1.0, flow_decay=0.1,
+        )
+        assert result.route_layers.shape == (len(result.routes),)
+        c = mesh.face_centroids
+
+        def layer(a: int, b: int) -> set[int]:
+            return {int(k) for (p, q, _), k in zip(result.routes, result.route_layers)
+                    if {tuple(p), tuple(q)} == {tuple(c[a]), tuple(c[b])}}
+
+        assert layer(0, 1) == {ROUTE_LAND}
+        assert layer(1, 2) == layer(2, 3) == layer(3, 4) == {ROUTE_WATER}
+        assert layer(4, 5) == {ROUTE_TRANSFER}
+        assert layer(1, 1) == {ROUTE_TRANSFER}       # boarding at the river port
 
     def test_deterministic(self):
         mesh = _line_mesh(8)

@@ -194,8 +194,8 @@ Held in `LocalParams.streams` (**Local map** dialog). `min_catchment_pct` (1.35 
 
 `build_region_roads(fields, globe, rivers, params, land, danger_scale,
 land_reach, moved) → RegionRoads` (`segments` in the world `"trade_routes"`
-`(start, end, flow)` form, `polylines` + per-edge `polyline_flows`, `sea`,
-`undrawn`). ~0.2 s per region. `route_polyline` re-routes each chain (also used
+`(start, end, flow)` form, `polylines` + per-edge `polyline_flows`, river and
+lake legs `water_polylines` + `water_flows` + `water_pins`, `sea`, `undrawn`). ~0.2 s per region. `route_polyline` re-routes each chain (also used
 by local maps).
 
 World routes are chains of straight face-centroid hops (~225 km); which places
@@ -203,14 +203,25 @@ trade, over which faces, and how much are world facts.
 
 - **Which hops.** Only drawn ones (flow ≥ world median, the renderer's
   threshold) near the raster. Others → `undrawn`, straight, for town siting.
-- **Chains.** A hop is land when both ends' faces are `land_passable`
-  (`cost_surfaces`); land hops are chained at junctions (`_chains`; loops cut).
-  A port hop (land → water) is split at the first refined water: land part joins
-  the chain, rest is a straight `sea` leg. The world only puts land↔water hops at
-  ports and river mouths ([realm_population.md](realm_population.md#ports)), so
-  the land part is the short port-to-shore road. River faces count as land (river
-  trade drawn as a road, kept in the valley by the along-river discount). Pure
-  sea hops stay straight. Chains cut at the raster edge.
+- **Water semantics.** Each hop's graph layer comes from the world's
+  `trade_route_layers` (land / water / transfer;
+  [realm_population.md](realm_population.md#outputs)):
+  - land hop → road; land hops are chained at junctions and settlements
+    (`_chains` `stops`; loops cut) — a routed chain lands only on its ends, so a
+    settlement mid-chain would be passed by;
+  - water hop on a navigable river or lake (either end's face not `IS_OCEAN`) →
+    **river/lake leg**, chained the same way and routed over water (below);
+  - water hop between two ocean faces → straight `sea` leg;
+  - transfer between faces (a port) → split at the first refined water along the
+    hop from the port as drawn (moved ashore by `snap_to_land`): the land part joins
+    a road chain (the short port-to-shore road), the rest is a river/lake leg from
+    that coast point, or a straight `sea` leg onto the ocean. Water right at the
+    port → no road, the leg starts at the port; no water before the raster edge →
+    a road;
+  - transfer within one face (boarding at a river port) → nothing.
+
+  Without layers (an older world) a hop is guessed from its faces' `land_passable`:
+  river faces count as land, so river trade becomes road. Chains cut at the raster edge.
 - **Cost** — the world land-cost model per node, same units (a face-width step at
   base 1 costs 1):
   - base = `biome_cost_scale · BIOME_TRAVERSAL_COST[biome] + forest_cost_strength
@@ -229,10 +240,22 @@ trade, over which faces, and how much are world facts.
     refined water by `snap_to_land` (`land_reach`, the view's; default 6 texels).
   - Laplacian-smoothed; each hop's flow goes on the stretch between the path
     points nearest its ends. No dry way through → keeps the world line.
+- **River and lake legs** route through a corridor `water_corridor_face_fraction`
+  (0.5; a river can lie half a face off the centroid line) over the regional
+  rivers (rasterised as for fords) and refined water at one per step, land at
+  `water_land_cost` (20) per step. Ends at a port (a settlement) or a port hop's
+  coast point are **pinned** (`water_pins`): the leg starts on the marker and
+  crosses the bank to the water. Other ends (junctions on the water, raster
+  edge) start on the nearest wet node, so legs meeting there join. Chains end at
+  pinned nodes, so a river port mid-chain is called at, not sailed past. Across open
+  water a straight line replaces the grid path wherever it stays on water
+  (`_pull_string`), so boats sail straight across lakes while river legs keep
+  their bends. Drawn in `segments` like the roads; towns read them as routes.
 
 ### `RegionRoadParams`
 `raster_texels` (2.0), `margin` (0.08), `corridor_face_fraction` (0.35),
-`smoothing_iterations` (6).
+`smoothing_iterations` (6), `water_corridor_face_fraction` (0.5),
+`water_land_cost` (20).
 
 ## Towns and cities
 
@@ -250,7 +273,7 @@ stage's site.
 - **Where.** Dry in-hexagon regional texels of the town's own face within
   `refine_radius_global_texels` (~15 km) of its site, scored with the stage's
   `site_log_weight_and_kind` on: refined rural density; routes from regional
-  roads (polylines, sea legs, undrawn hops, within `route_radius_km`; world
+  roads (polylines, river/lake legs, sea legs, undrawn hops, within `route_radius_km`; world
   straight routes if no roads); minerals (`town_site_context`); refined coast;
   river/confluence from regional paths (streams included) and
   `RegionRivers.confluences` within `river_threshold_factor` × regional texel

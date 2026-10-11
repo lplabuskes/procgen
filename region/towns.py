@@ -111,10 +111,10 @@ class _Sites:
 
 
 def _route_points(roads: RegionRoads, step: float) -> Optional[np.ndarray]:
-    """Points along the region's roads — re-routed or straight — for the route flag."""
+    """Points along the region's trade routes — roads, river and lake legs, straight hops — for the route flag."""
     straight = [np.stack([np.asarray(a), np.asarray(b)]) for a, b, _ in roads.undrawn]
     sea = [np.stack([np.asarray(a), np.asarray(b)]) for a, b, _ in roads.sea]
-    return densify_polylines([*roads.polylines, *sea, *straight], step)
+    return densify_polylines([*roads.polylines, *roads.water_polylines, *sea, *straight], step)
 
 
 def tier_sites(

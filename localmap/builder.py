@@ -122,7 +122,17 @@ def _move_road_ends(roads: RegionRoads, moved: tuple[np.ndarray, np.ndarray]) ->
         polylines.append(verts)
         segments.extend((verts[k].astype(np.float32), verts[k + 1].astype(np.float32), float(flows[k]))
                         for k in range(len(verts) - 1))
-    return dataclasses.replace(roads, segments=segments, polylines=polylines, sea=sea)
+    water_polylines = []
+    for verts, flows, pins in zip(roads.water_polylines, roads.water_flows, roads.water_pins):
+        verts = np.asarray(verts, dtype=np.float64).copy()
+        for k, end in enumerate((0, -1)):
+            if pins[k]:
+                verts[end] = move_points(verts[[end]], moved)[0]
+        water_polylines.append(verts)
+        segments.extend((verts[k].astype(np.float32), verts[k + 1].astype(np.float32), float(flows[k]))
+                        for k in range(len(verts) - 1))
+    return dataclasses.replace(roads, segments=segments, polylines=polylines, sea=sea,
+                               water_polylines=water_polylines)
 
 
 def _town_kinds(globe: "World", t_idx: np.ndarray) -> np.ndarray:

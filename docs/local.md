@@ -162,12 +162,18 @@ danger_scale, land_reach, moved)` re-traces each `RegionRoads.polylines` (with
 world land-cost model and local river fords (`region.roads.route_polyline`).
 Ends moved off local water and landed exactly on their points — a city's region
 position first moved to its local re-site (`moved`;
-[local_settlements.md](local_settlements.md#towns-and-cities)). Sea legs and
-undrawn routes pass straight. ~0.1 s per map.
+[local_settlements.md](local_settlements.md#towns-and-cities)). River and lake
+legs (`RegionRoads.water_polylines`) are re-traced the same way over the local
+water and rivers within `water_corridor_parent_texels` (3) — the region's water
+cost and straight sailing over open water
+([region_features.md](region_features.md#roads-regionroadspy)); only their pinned
+(port) ends move with cities and off the water. Sea legs and undrawn routes pass
+straight. ~0.1 s per map.
 
 ### `LocalRoadParams`
 `raster_texels` (2.0), `margin` (0.03), `corridor_parent_texels` (2.0),
-`smoothing_iterations` (6).
+`smoothing_iterations` (6), `water_corridor_parent_texels` (3.0),
+`water_land_cost` (20, as the region's).
 
 ## Diagnostics
 
