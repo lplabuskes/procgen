@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPainterPath, QPen, QPolygonF, QTransform
 from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtWidgets import QWidget
+from shapely.geometry import MultiPolygon, Polygon
 
 from core.display import SchemeSpec
 from localmap.builder import LocalMap
@@ -33,7 +34,11 @@ from realmgen.towns.types import TOWN_KIND_NAMES, Towns
 from region.upsample import RegionFields
 from settlegen.builder import SettlementMap
 from settlegen.chain import SettlementRef
-from settlegen.display import WATER_RGB, relief_legend, relief_rgba
+from settlegen.display import (
+    ARTERIAL_RGB, DISTRICT_RGB, OPEN_RGB, STREET_RGB, WATER_RGB, relief_legend, relief_rgba,
+)
+from settlegen.layout import SettlementLayout, describe_at, summary as layout_summary
+from worldgen.climate.classification import BIOME_NAMES
 from worldgen.hydrology.discharge import EARTH_RADIUS_KM
 from worldgen.geology.display import ELEVATION_RECIPE
 from worldgen.resources.minerals import mineral_workings
@@ -117,6 +122,8 @@ class RegionView(QWidget):
         # ── settlement maps: the map on screen, and what a click on a settlement opens ──
         self._settlement: Optional[SettlementMap] = None
         self._settlement_land_texels = 0
+        # (layout id, district → path, lots path, …) in frame metres, built once per layout.
+        self._layout_paths: Optional[tuple[int, dict]] = None
         self._settlement_click_callback: Optional[Callable[[SettlementRef], None]] = None
         # Region mode: clicking a hex opens its local map.
         self._local_pick = False
@@ -220,6 +227,7 @@ class RegionView(QWidget):
         rivers and roads, and its owning local map's villages, towns and footprints
         over it.  ``land_texels``: how far (texels) markers on water are moved onto land."""
         self._settlement = settlement
+        self._layout_paths = None
         self._settlement_land_texels = int(land_texels)
         self._local = None
         self._region_map = None
@@ -421,9 +429,8 @@ class RegionView(QWidget):
         if self._settlement is not None:
             c = self._settlement.chain
             return (
-                f"Settlement map · {c.ref.kind} {c.ref.index} · {c.side_km:.1f} km frame, {f.tex_size}² texels "
-                f"(~{math.sqrt(f.texel_area_km2) * 1000:.0f} m) · {f.detail_octaves} detail octaves · "
-                f"{len(c.maps)} local map{'s' if len(c.maps) > 1 else ''} · terrain only so far"
+                f"Settlement map · {layout_summary(self._settlement.layout, self._settlement.profile)} · "
+                f"{c.side_km:.1f} km frame at ~{math.sqrt(f.texel_area_km2) * 1000:.0f} m"
             )
         if self._local is not None:
             v = self._local.villages
@@ -554,6 +561,17 @@ class RegionView(QWidget):
                 painter.setClipRect(QRectF(left, 0.0, W - left, H))
             cell = QPainterPath()
             cell.addPolygon(transform.map(self._outline(x0, y0, size)))
+            settlement = self._settlement
+            if settlement is not None and settlement.layout.blocks and \
+                    self._overlay_visible.get(_KIND_OVERLAY[settlement.ref.kind], True):
+                # Inside the city its own arterials and streets carry the roads.
+                side = settlement.site.frame.side_m
+
+                def to_px(xy: np.ndarray) -> np.ndarray:
+                    xy = np.asarray(xy, dtype=np.float64).reshape(-1, 2)
+                    return np.column_stack([x0 + (xy[:, 0] / side + 0.5) * size, y0 + (0.5 - xy[:, 1] / side) * size])
+
+                cell = cell.subtracted(transform.map(_site_path(settlement.site.footprint, to_px)))
             painter.setClipPath(cell, Qt.ClipOperation.IntersectClip)
             draw_overlays(
                 painter, self._globe, self._overlay_visible, self._overlay_projector(),
@@ -825,6 +843,41 @@ class RegionView(QWidget):
             return None                     # a local map's square corner, outside the parent hexagon
         return texel
 
+    def _cursor_frame_xy(self) -> Optional[np.ndarray]:
+        """The cursor in the settlement frame's metres, or None."""
+        if self._settlement is None or self._cell_layout is None or self._mouse is None:
+            return None
+        x0, y0, size, transform = self._cell_layout
+        inverse, ok = transform.inverted()
+        if not ok:
+            return None
+        p = inverse.map(QPointF(float(self._mouse[0]), float(self._mouse[1])))
+        side = self._settlement.site.frame.side_m
+        return np.array([((p.x() - x0) / size - 0.5) * side, (0.5 - (p.y() - y0) / size) * side])
+
+    def settlement_hover(self, texel: Optional[tuple[int, int, int]]) -> list[str]:
+        """Status fragments over a settlement map: what of the layout is under the cursor,
+        then the ground — height in metres, and sea, lake or biome."""
+        if self._settlement is None:
+            return []
+        parts: list[str] = []
+        xy = self._cursor_frame_xy()
+        settlement = self._settlement
+        if xy is not None and self._overlay_visible.get(_KIND_OVERLAY[settlement.ref.kind], True):
+            what = describe_at(settlement.layout, settlement.site, xy, settlement.profile.tier)
+            if what:
+                parts.append(what)
+        if texel is not None and self._fields is not None:
+            tex = self._fields.textures
+            parts.append(f"{float(tex['elevation'][texel][0]) * 1000.0:+.1f} m")
+            if "ocean_mask" in tex and tex["ocean_mask"][texel][0] > 0.5:
+                parts.append("Sea")
+            elif "lake_mask" in tex and tex["lake_mask"][texel][0] > 0.5:
+                parts.append("Lake")
+            elif "biome" in tex:
+                parts.append(BIOME_NAMES[int(tex["biome"][texel][0])])
+        return parts
+
     def settlements_under_cursor(self, texel: Optional[tuple[int, int, int]]) -> list[str]:
         """Status fragments for the settlements at the cursor: the fort, the city, then the
         town/village dot (local map) or the towns in ``texel``'s hexagon (region)."""
@@ -1089,9 +1142,14 @@ class RegionView(QWidget):
                 painter.setBrush(_UNBUILDABLE_FILL)
                 painter.drawPath(_site_path(blocked, to_px))
         if self._overlay_visible.get(overlay, True) and not site.footprint.is_empty:
-            painter.setPen(_cosmetic_pen(_FOOTPRINT_PEN))
-            painter.setBrush(_BUILT_FILL)          # not the tier colour: some tiers are blue, as water
-            painter.drawPath(_site_path(site.footprint, to_px))
+            layout = self._settlement.layout
+            if layout.fill_footprint or not layout.blocks:
+                painter.setPen(_cosmetic_pen(_FOOTPRINT_PEN))
+                # Not the tier colour: some tiers are blue, as water.  Under a layout, the streets' colour.
+                painter.setBrush(_STREET_FILL if layout.blocks else _BUILT_FILL)
+                painter.drawPath(_site_path(site.footprint, to_px))
+            if layout.blocks:
+                self._draw_layout(painter, layout, x0, y0, size, side)
         # The sea and lakes as their smooth outlines (over the raster's texels); the channels
         # in the same colour with the rivers overlay, so a river runs into its sea unbroken.
         water = site.water
@@ -1100,17 +1158,110 @@ class RegionView(QWidget):
         still = water.sea.union(water.lakes)
         if not still.is_empty:
             painter.drawPath(_site_path(still, to_px))
+        piers = self._settlement.layout.piers
+        if piers and self._overlay_visible.get(overlay, True):
+            # Out over the water: over the sea and lakes (and the channels below cover none of them).
+            painter.setPen(_cosmetic_pen(QColor(60, 45, 30, 230)))
+            painter.setBrush(QColor.fromRgbF(*OPEN_RGB["pier"]))
+            painter.drawPath(_site_path(MultiPolygon(piers), to_px))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(_WATER_FILL)
         if not self._overlay_visible.get("rivers", True):
             painter.restore()
             return
         if not water.channels.is_empty:
             painter.drawPath(_site_path(water.channels, to_px))
+            if piers and self._overlay_visible.get(overlay, True):
+                painter.setPen(_cosmetic_pen(QColor(60, 45, 30, 230)))
+                painter.setBrush(QColor.fromRgbF(*OPEN_RGB["pier"]))
+                painter.drawPath(_site_path(MultiPolygon(piers), to_px))
         if not water.shorelines.is_empty:
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.setPen(_cosmetic_pen(_SHORE_PEN))
             for line in water.shorelines.geoms:
                 pts = to_px(np.asarray(line.coords))
                 painter.drawPolyline(QPolygonF([QPointF(float(x), float(y)) for x, y in pts]))
+        painter.restore()
+
+    def _layout_cache(self, layout: SettlementLayout) -> dict:
+        """The layout's painter paths in frame metres (built once per layout)."""
+        if self._layout_paths is not None and self._layout_paths[0] == id(layout):
+            return self._layout_paths[1]
+
+        def ident(xy: np.ndarray) -> np.ndarray:
+            return np.asarray(xy, dtype=np.float64).reshape(-1, 2)
+
+        by_district: dict[str, list] = {}
+        lots = []
+        for b in layout.blocks:
+            by_district.setdefault(b.district, []).append(b.polygon)
+            lots.extend(b.lots)
+        cache: dict = {
+            "districts": {d: _site_path(MultiPolygon(polys), ident) for d, polys in by_district.items()},
+            "lots": _site_path(MultiPolygon([g for g in lots if isinstance(g, Polygon)]), ident),
+            "open": {k: _site_path(getattr(layout, k), ident)
+                     for k in ("green", "quays", "plaza", "precinct", "citadel")},
+            "arterials": _lines_path(layout.arterials),
+            "walls": _lines_path(list(layout.walls.line.geoms)) if layout.walls is not None else QPainterPath(),
+        }
+        self._layout_paths = (id(layout), cache)
+        return cache
+
+    def _draw_layout(self, painter: QPainter, layout: SettlementLayout, x0: float, y0: float, size: float,
+                     side: float) -> None:
+        """The layout over the footprint: blocks by district, lots (once a lot spans a few
+        pixels), plaza, precinct and citadel, arterials, walls and towers — all in metres."""
+        cache = self._layout_cache(layout)
+        painter.save()
+        painter.translate(x0 + 0.5 * size, y0 + 0.5 * size)
+        painter.scale(size / side, -size / side)
+        t = painter.worldTransform()
+        px_per_m = math.hypot(t.m11(), t.m12())
+        painter.setPen(Qt.PenStyle.NoPen)
+        for district, path in cache["districts"].items():
+            painter.setBrush(QColor.fromRgbF(*DISTRICT_RGB.get(district, (0.8, 0.7, 0.6))))
+            painter.drawPath(path)
+        if px_per_m * 8.0 >= 4.0:
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(_cosmetic_pen(QColor(70, 50, 35, 150)))
+            painter.drawPath(cache["lots"])
+        painter.setPen(_cosmetic_pen(QColor(60, 50, 40, 200)))
+        for key, path in cache["open"].items():
+            painter.setBrush(QColor.fromRgbF(*OPEN_RGB[key]))
+            painter.drawPath(path)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        width = float(layout.arterial_m)
+        casing = QPen(QColor(120, 100, 80, 220), width + 2.0 / max(px_per_m, 1e-9))
+        casing.setCapStyle(Qt.PenCapStyle.RoundCap)
+        casing.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(casing)
+        painter.drawPath(cache["arterials"])
+        fill = QPen(QColor.fromRgbF(*ARTERIAL_RGB), width)
+        fill.setCapStyle(Qt.PenCapStyle.RoundCap)
+        fill.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(fill)
+        painter.drawPath(cache["arterials"])
+        walls = layout.walls
+        if walls is not None:
+            stone = walls.kind == "stone"
+            pen = QPen(QColor(70, 66, 62, 240) if stone else QColor(110, 80, 50, 230),
+                       max(float(walls.width_m), 2.0 / max(px_per_m, 1e-9)))
+            if not stone:
+                pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.drawPath(cache["walls"])
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(60, 56, 52, 245))
+            r = max(6.0, 2.5 / max(px_per_m, 1e-9))
+            for x, y in walls.towers:
+                painter.drawRect(QRectF(float(x) - r, float(y) - r, 2 * r, 2 * r))
+        if px_per_m >= 0.6:
+            for kind, color in (("well", QColor(40, 110, 200, 230)), ("shrine", QColor(250, 250, 250, 240))):
+                painter.setPen(_cosmetic_pen(QColor(20, 20, 20, 200)))
+                painter.setBrush(color)
+                r = 3.0 / px_per_m
+                for x, y in layout.points.get(kind, np.zeros((0, 2))):
+                    painter.drawEllipse(QPointF(float(x), float(y)), r, r)
         painter.restore()
 
     def _draw_site_markers(self, painter: QPainter, transform: QTransform, x0: float, y0: float, size: float) -> None:
@@ -1182,6 +1333,7 @@ _WATER_FILL = QColor.fromRgbF(*WATER_RGB)          # sea, lakes and channels (se
 _SHORE_PEN = QColor(40, 80, 140, 220)
 _FOOTPRINT_PEN = QColor(25, 22, 18, 235)        # as the local map's city footprints
 _BUILT_FILL = QColor(170, 140, 110, 215)
+_STREET_FILL = QColor.fromRgbF(*STREET_RGB)
 _UNBUILDABLE_FILL = QColor(160, 40, 40, 90)
 _KIND_OVERLAY = {"city": "settlements", "town": "towns", "village": "villages"}
 # Site markers (screen px): gates, bridges, fords, landings, anchor candidates.
@@ -1239,6 +1391,19 @@ def _site_path(geom, to_px) -> QPainterPath:  # type: ignore[no-untyped-def]
         for ring in (poly.exterior, *poly.interiors):
             pts = to_px(np.asarray(ring.coords))
             path.addPolygon(QPolygonF([QPointF(float(x), float(y)) for x, y in pts]))
+    return path
+
+
+def _lines_path(lines) -> QPainterPath:  # type: ignore[no-untyped-def]
+    """Polylines in frame metres as one painter path."""
+    path = QPainterPath()
+    for line in lines:
+        xy = np.asarray(line.coords)
+        if len(xy) < 2:
+            continue
+        path.moveTo(float(xy[0, 0]), float(xy[0, 1]))
+        for x, y in xy[1:]:
+            path.lineTo(float(x), float(y))
     return path
 
 

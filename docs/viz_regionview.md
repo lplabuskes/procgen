@@ -69,6 +69,18 @@ candidates** (citadel ▲, market ■, waterfront ◆, sacred ✚, sized by scor
 **Buildable ground** (the ground too steep to build on, tinted red), both off
 by default. The owning local map's other villages, towns and city footprints
 are drawn as markers; the settlement's own local footprint is not.
+**Layout** (`_draw_layout`, with the footprint's overlay): the footprint in the
+street colour, blocks filled by district (`settlegen.display.DISTRICT_RGB`), lot
+outlines once a lot spans ~4 px, plaza / precinct / citadel, arterials (cased,
+true width), walls (stone solid with towers, palisade dashed), wells and
+shrines once zoomed in. Painted in frame metres from painter paths cached per
+layout (`_layout_cache`). While the layout shows, the screen-space overlays are
+clipped out of the footprint (its arterials carry the roads there). A village's
+footprint is not filled (its tofts and streets are the village); a green,
+quays (stone) and piers (timber, over the water) draw with it. Hover on a
+settlement map (`settlement_hover`): what of the layout is under the cursor
+(`settlegen.layout.describe_at`), the height in metres, sea/lake/biome — not the
+world face's readouts; the status line is `settlegen.layout.summary`.
 Cartographic overlay sizes follow the local map's scale (`_equivalent_zoom`).
 `settlement_at_cursor` / `set_settlement_click_callback`: the settlement under a
 click at the scale on screen (region: towns, city markers; local or settlement

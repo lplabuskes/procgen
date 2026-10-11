@@ -683,7 +683,157 @@ the line, or into still water turned halfway towards the water's middle. The
 band is then cut by the frame, the water or the other channel, not stopped. A
 source stays put.
 
-Phase 4 is done. Next: Phase 5 (settlement profile).
+Phase 4 is done.
+
+**Phase 5, 2026-10-11.** `settlegen/profile.py` → `SettlementProfile` on
+`SettlementMap.profile` (`SettlementProfileParams`, advanced, under
+`SettlementMapParams.profile`); derived only, nothing written back; every realm
+input optional (the synthetic test globe has none). Choices beyond the table:
+
+- `kind`: towns/villages their own (lower-case); cities `port` (sea/lake flag)
+  > `river` (river/confluence) > `inland`, every flag in `site_kinds`. `tier`
+  0–3 city display tiers, 4 town, 5 village.
+- `polity`: towns/villages take the polity governing their face (`direct`
+  under a sovereign, `vassal` under a vassal); `capital` only for cities whose
+  face is a `capital_face` (seed 4: 177 of 395). March proxy (A8):
+  `clip(border_tension / march_tension (0.2)) · (0.6 + 0.4 · autonomy)`
+  (direct: × 0.6), plus a `fort` flag (`fort_population` on the face). No realm
+  change.
+- `wealth` (A7): percentile among peers — cities by exports + imports per head
+  (seed 4 spans ~100×), towns by face `trade_flow` per head, villages by face
+  `trade_flow` among land faces.
+- `industries`: named entries in [0, 1] with their goods, merged and ranked
+  (floor 0.1, at most 8): mining / fishing (kind, or 2 × share of rural density),
+  shipping (port 0.8, river 0.5), hostelry (waypoint, roadside), commerce
+  (wealth; market town ≥ 0.8), crop industries (milling, brewing, sugar,
+  weaving, coffee) × fertility × farming share, timber (forest), herding /
+  tanning / wool on pasture biomes, mineral workings (mining, salt works,
+  quarrying, smithing for iron/coal) and rare bio within `resource_reach_km`
+  (10) at `0.3 + 0.7 · nearness`.
+- `wind_xy`: annual-mean vector at the face, in frame axes (not north), with
+  steadiness |mean| / mean |v|.
+- `materials`: stone / timber / brick / adobe shares from relief (frame land
+  p2–p98 / `rugged_relief_m` 80), forest, biome aridity, fertility (clay),
+  nearby marble, city wealth.
+- Stubs: `founding_age` lognormal(σ 0.5) about 100 y × (pop/500)^0.35, × 1.5
+  for a capital, in [10, 3000]; `planned` with chance by kind (waypoint 0.5,
+  mining 0.35, other towns 0.15, cities 0.1, villages 0.05; march ≥ 0.5 → 0.4).
+  Seeded per (world, kind, index[, map]).
+
+Seed 4: city 13 (588k, port, walled, sovereign seat) → fishing, shipping,
+sugar, commerce; brick/stone. Town 100 (market) → commerce, timber, milling,
+brewing; timber. Town 2000 (waypoint) → hostelry, timber, commerce, wool;
+planned. City 36 (vassal seat) march 0.22.
+
+Phase 5 is done.
+
+**Phase 6, first cut, 2026-10-11.** User chose **block subdivision** (over
+growth from gates and tensor fields). `settlegen/layout.py` → `SettlementLayout`
+on `SettlementMap.layout` (`SettlementLayoutParams`, advanced, under
+`SettlementMapParams.layout`); reads only the site, the profile and the slope
+grid, so it is tested on a hand-built site (`test_layout.py`). Seeded by
+`profile.settlement_key`.
+
+- **Anchors**: market always (best candidate; else a point in the footprint);
+  citadel for a capital, march ≥ 0.3 or walls ≥ 0.6 (towns and cities);
+  waterfront where shipping or fishing ≥ 0.5; sacred apart from the others.
+- **Core**: the dense footprint inside a smooth wobbly blob (harmonics 2–5)
+  about the market (60%) and citadel (40%), radius bisected to hold `core_share`
+  0.45 + 0.25 · wall strength + 0.2 · youth (founding age < 300 y), all of a
+  village; citadel unioned in. **Walls** round each core piece's outside, open
+  within 15 m of water; stone from strength 0.4 (towers every 70 m / strength),
+  else palisade; wall gates where arterials cross.
+- **Open ground** (m² per person, clipped): plaza 0.08 (300–15,000), citadel
+  0.15 (1,500–60,000), precinct 0.05 (300–12,000) — wobbly polygons.
+- **Arterials**: one Dijkstra from the market on a 20 m grid (cost 1 + 10 ·
+  slope; water × 40 except on the site's roads, which × 0.6; off the
+  footprint × 1.5) to every gate, the waterfront, citadel and sacred site; the
+  paths' union line-merged, simplified and Chaikin-smoothed. Bridges where
+  they cross channels.
+- **Blocks**: footprint less arterials (10 m), walls (5 m) and open ground,
+  core and outside apart; recursive cuts across the minimum-rotated-rectangle's
+  long axis by 5 m streets until ~`block_ha` 0.35 (outside × 2, sparse × 4,
+  lognormal σ 0.35); organic: offset ±25%, angle ±14°; planned: centred, on the
+  grid of the longest arterial. Pieces under 12% of the goal dropped (open).
+- **Districts** (in order): market (round the plaza, ≤ 12), quay (≤ 40 m from
+  water near the waterfront), elite (12% of core blocks, cluster near citadel,
+  upwind), craft quarters from industries (clustered; `weight · 0.06` of
+  blocks; noxious — tanners, dyers, smiths, butchers (every town/city) —
+  downwind, downstream, outside the core; water trades on the water),
+  graveyards (churchyard by the precinct, then 1 per 20k on small outer
+  blocks), squares (1 per 12k, small core blocks), rest residential (core) /
+  suburb / gardens (sparse).
+- **Lots**: strips along each block's long sides, 8 m × 22 m (suburb × 1.5,
+  gardens × 3; depth × √), jitter ±30% (planned ±5%); one row in a thin block,
+  two back to back, or yards in the middle of a deep one. Wells 1 per 1.5 core
+  ha, shrines 1 per 1,500 people, on streets.
+
+Seed 4: city 13 (588k, planned, stone walls) 0.9 s, ~2,800 blocks, ~43k lots;
+city 36 (51k, organic) 0.2 s, ~700 blocks, ~11k lots; town 100 0.1 s. Viewer:
+see [viz_regionview.md](../viz_regionview.md) (layout in the main view with the
+settlement's overlay; trade routes clipped out of the footprint).
+
+Known gaps: arterials mostly follow the site's roads in (the roads already end
+at the centre); no ring street inside the walls; wall gates count only arterial
+crossings; houses within lots not drawn. Next: review with the user.
+
+**Layout round 2, 2026-10-11** (user review: cities good; villages wrong, towns
+somewhat; seed 536582844 city 32 looked walled without walls; wants docks;
+hover out of date; don't over-index on the inherited trade roads):
+
+- **Per tier.** Villages (`settlegen/village_layout.py`): households (`P / 5`)
+  as tofts fronting a street — *street* 45%, *green* 30% (oval green with the
+  street round it), *cluster* 25% (3–4 lanes); a fishing village by the water
+  lays its street along the shore. Toft size from the footprint
+  (`toft_share` 0.85 of it, 300–3,000 m², 2.5:1); tofts nearest the middle
+  first on buildable ground as far as the streets run, clear of each other
+  and the streets, ~12% gaps; church and churchyard at the middle, a manor
+  (≥ 400 people, 50%); streets trimmed to the tofts; lanes to the road gates
+  and the jetty (cut out of the plots they cross). No footprint fill, no
+  market, crafts or graveyards. Towns: a main street through the market along
+  the footprint's long axis (or a gate within 35° of it), a market street
+  (widened to 24 m, 800–5,000 m²), burgage plots 7 × 45 m along it with cross
+  lanes every ~140 m and a back lane, the rest in blocks 1.5× a city's; ≤ 2
+  craft quarters (weight ≥ 0.4), elite only by a castle, churchyard only.
+- **Walls only when walled.** Unwalled, the core is not cut out: block and lot
+  size grow smoothly toward the edge (smoothstep over 0.4–1 of the radius);
+  no "suburb".
+- **Not led by the roads.** Cities also run main streets to the footprint's
+  edge in the widest gaps between their gates (at least 3, up to 8 by size).
+  Roads stay cheap to follow (their river crossings), but no plan needs one.
+- **Docks** (`settlegen/docks.py`) wherever a waterfront is chosen: a 12 m
+  quay strip along the footprint's shore within reach of it (150–1,500 m by
+  size), piers every ~60 m — on sea/lake 60 m × size (0.5–1.5), on rivers ≥
+  40 m wide ≤ 0.2 × width — over water, clear of each other; moles at the
+  landings; counts by size and shipping/fishing weight; fishing villages a
+  jetty and a lane to it.
+- **Hover.** Settlement maps no longer show the world face's readouts: the
+  layout under the cursor (`layout.describe_at`: pier, wall/tower, citadel,
+  market, church, green, quay, main street, district · plot size, yard, river,
+  street), the ground's height in metres, sea/lake/biome. Status line:
+  `layout.summary` (tier, kind, people, rule, walls, blocks/plots or
+  farmsteads, piers).
+- Route ends are pinned before smoothing (a merge could run a line through the
+  market and Chaikin cut the corner off it).
+
+Seed 536582844: city 32 unwalled, 6 piers; town 716 main street + burgage
+plots + quay with piers; villages 50/115/0–4 street, lane and shore forms.
+Seed 4 city 13 unchanged in character, now with radial main streets.
+
+**Villages round 3, 2026-10-11** (user: cap the street; fishing villages should
+have several rows, close to the jetty; streets must follow the coast — village
+50/115/1 ran a straight tangent street far past its lake). A fishing village
+within 300 m of the sea or a lake is a **harbour** village about the shore
+point nearest it (its jetty): rows of streets that are offsets of the water's
+edge (10 m + half a street back, then every two plot depths + a street),
+enough rows (2–6) to keep it about as wide as deep, a spine lane from the jetty
+up through the rows and lanes joining the row ends; rows lengthen (×1.3) and
+multiply until their usable frontage holds every household. Every other form
+caps each arm at 300 m: cluster villages take 3–6 lanes as their households
+need, each as long as its share; street and green villages add back lanes a
+plot-pair behind their arms (offset curves, up to twice). Seed 536582844 local
+map 50/115, villages 0–39: 39 of 40 place ≥ 85% of their households (was 25 of
+40 before the back lanes), the one short (73%) a cluster.
 
 Polygon library for Decision 8: **shapely** (approved 2026-10-10; in
 `requirements.txt`).

@@ -1230,6 +1230,11 @@ class MapWindow(QMainWindow):
         if texel is None or fields is None:
             self.set_status(view.status_text())
             return
+        if view.settlement_map is not None:
+            # Street scale: the layout and the ground under the cursor (the world's per-face
+            # readouts are a province's, not this street's).
+            self.set_status("  |  ".join(view.settlement_hover(texel)) or view.status_text())
+            return
         hex_idx, row, col = texel
 
         def _local(keys: tuple[str, ...]) -> Optional[list[str]]:

@@ -3,9 +3,9 @@
 1. the chain to its local maps (:func:`settlegen.chain.ensure_local_maps`, through
    the shared :class:`localmap.store.MapStore`: built only if not held);
 2. the frame's terrain (:func:`settlegen.upsample.build_settlement_fields`);
-3. the site, as vectors (:func:`settlegen.site.build_site`).
-
-Profile and layout (plan phases 5–6) will follow here.  Qt-free.
+3. the site, as vectors (:func:`settlegen.site.build_site`);
+4. the profile (:func:`settlegen.profile.build_profile`);
+5. the layout (:func:`settlegen.layout.build_layout`).  Qt-free.
 """
 from __future__ import annotations
 
@@ -14,7 +14,10 @@ from typing import TYPE_CHECKING, Optional
 
 from region.upsample import RegionFields
 from settlegen.chain import SettlementMaps, SettlementRef, ensure_local_maps
+from settlegen.footprint import site_slope
+from settlegen.layout import SettlementLayout, build_layout
 from settlegen.params import SettlementMapParams
+from settlegen.profile import SettlementProfile, build_profile, settlement_key
 from settlegen.site import SettlementSite, build_site
 from settlegen.upsample import build_settlement_fields
 
@@ -24,11 +27,13 @@ if TYPE_CHECKING:
 
 @dataclass
 class SettlementMap:
-    """Everything one settlement map holds (so far: its local maps, terrain and site)."""
+    """Everything one settlement map holds (so far: its local maps, terrain, site, profile and layout)."""
 
     chain: SettlementMaps
     fields: RegionFields
     site: SettlementSite
+    profile: SettlementProfile
+    layout: SettlementLayout
 
     @property
     def ref(self) -> SettlementRef:
@@ -55,4 +60,6 @@ def build_settlement_map(
         land=world.cost.land if world is not None else None,
         danger_scale=float(realm.danger.movement_scale) if realm is not None else 2.0,
     )
-    return SettlementMap(chain=chain, fields=fields, site=site)
+    profile = build_profile(globe, fields, site.frame, chain, params.profile)
+    layout = build_layout(site, profile, site_slope(fields, site.frame), settlement_key(globe, ref), params.layout)
+    return SettlementMap(chain=chain, fields=fields, site=site, profile=profile, layout=layout)

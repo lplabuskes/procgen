@@ -85,3 +85,33 @@ def relief_legend(fields: RegionFields, n: int = 5) -> list[tuple[str, tuple]]:
         r, g, b = (float(c) for c in ramp(np.array(share)))
         out.append((f"{lo + share * (hi - lo):+.0f} m", (r, g, b, 1.0)))
     return out
+
+
+# The layout's districts (settlegen.layout.DISTRICTS), muted so the lots read over them.
+DISTRICT_RGB: dict[str, tuple[float, float, float]] = {
+    "residential": (0.80, 0.66, 0.52),
+    "suburb": (0.82, 0.74, 0.62),
+    "gardens": (0.68, 0.74, 0.52),
+    "elite": (0.86, 0.58, 0.50),
+    "market": (0.93, 0.78, 0.45),
+    "quay": (0.62, 0.72, 0.80),
+    "graveyard": (0.55, 0.65, 0.50),
+    "square": (0.90, 0.87, 0.80),
+    "tanners": (0.62, 0.50, 0.40),
+    "dyers": (0.66, 0.50, 0.66),
+    "smiths": (0.55, 0.52, 0.52),
+    "butchers": (0.60, 0.30, 0.36),
+    "brewers": (0.80, 0.68, 0.40),
+    "millers": (0.86, 0.80, 0.60),
+    "sugar mills": (0.88, 0.82, 0.70),
+    "weavers": (0.74, 0.70, 0.82),
+    "carpenters": (0.72, 0.60, 0.42),
+    "shipwrights": (0.56, 0.64, 0.72),
+    "salters": (0.85, 0.85, 0.88),
+    "fishers": (0.58, 0.70, 0.74),
+    "artisans": (0.78, 0.66, 0.74),
+}
+STREET_RGB = (0.93, 0.90, 0.84)        # the footprint between blocks
+ARTERIAL_RGB = (0.97, 0.95, 0.90)
+OPEN_RGB = {"plaza": (0.94, 0.90, 0.80), "precinct": (0.92, 0.92, 0.86), "citadel": (0.60, 0.48, 0.42),
+            "green": (0.56, 0.70, 0.42), "quays": (0.80, 0.78, 0.74), "pier": (0.62, 0.48, 0.34)}
