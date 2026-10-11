@@ -22,15 +22,26 @@ def in_flat_hexagon(offsets: np.ndarray, radius: float) -> np.ndarray:
 
 class LocalHexGrid(RegionHexGrid):
     """Flat-top hexagons over a local map, kept only where they overlap the
-    parent hexagon (~2/3 of the square) — the corners belong to neighbouring
-    local maps."""
+    parent hexagon grown by ``halo`` (local units) — the band past the parent the
+    map conserves over so it agrees with its neighbours (``LocalUpsampleParams.
+    conservation_halo_parent_texels``); the square's corners beyond belong to
+    neighbouring local maps."""
+
+    def __init__(self, geometry, n_cols: int = 16, halo: float = 0.0) -> None:  # type: ignore[no-untyped-def]
+        self.halo = max(float(halo), 0.0)
+        super().__init__(geometry, n_cols)
 
     def _layout(self) -> np.ndarray:
         centers = super()._layout()
-        # A hex overlapping the parent has its centre within R of it, so inside
-        # the parent grown by R in inradius (circumradius + 2R/√3) — a superset.
-        reach = PARENT_RADIUS + self.radius * 2.0 / math.sqrt(3.0)
+        # A hex overlapping the grown parent has its centre within R of it, so inside
+        # it grown by R in inradius (circumradius + 2R/√3) — a superset.
+        reach = PARENT_RADIUS + self.halo * 2.0 / math.sqrt(3.0) + self.radius * 2.0 / math.sqrt(3.0)
         return centers[in_flat_hexagon(centers - PARENT_CENTER, reach)]
+
+    def texture_in_halo(self, tex_size: int) -> np.ndarray:
+        """(M, T, T) bool: texels inside the parent hexagon grown by ``halo`` (inradius)."""
+        grown = PARENT_RADIUS + self.halo * 2.0 / math.sqrt(3.0)
+        return in_flat_hexagon(self.texture_local(tex_size) - PARENT_CENTER, grown)
 
     def texture_in_map(self, tex_size: int) -> np.ndarray:
         """(M, T, T) bool: texels inside the parent hexagon — the map's domain."""

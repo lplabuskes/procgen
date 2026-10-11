@@ -225,7 +225,8 @@ class RegionView(QWidget):
         self._grid = settlement.fields.grid
         self._fields = settlement.fields
         owner = settlement.chain.owner
-        self._rivers, self._roads, self._deltas = owner.rivers, owner.roads, owner.deltas
+        # The site's re-traced rivers (polity borders snap to them; drawn as channel polygons).
+        self._rivers, self._roads, self._deltas = settlement.site.water.rivers, owner.roads, owner.deltas
         self._hex_images = []
         self._farm_images = []
         self._land_positions = {}
@@ -518,6 +519,8 @@ class RegionView(QWidget):
             self._draw_textured_hexes(painter, x0, y0, size)
         else:
             self._draw_hex_grid(painter, x0, y0, size)
+        if self._settlement is not None:
+            self._draw_site(painter, x0, y0, size)
 
         painter.setPen(_cosmetic_pen(QColor(70, 85, 100)))
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -573,7 +576,9 @@ class RegionView(QWidget):
                 )
             if local.city_footprints is not None:
                 out["cities"] = (local.city_index, local.city_positions, local.city_footprints)
-        if self._rivers is not None:
+        if self._settlement is not None:
+            out["rivers"] = []              # drawn as the site's channel polygons (_draw_site)
+        elif self._rivers is not None:
             out["rivers"] = [*self._rivers.paths, *self._rivers.streams]
         if self._overlay_visible.get("polity_borders"):
             borders = self._polity_borders()
@@ -1031,6 +1036,34 @@ class RegionView(QWidget):
                 )
         painter.restore()
 
+    def _draw_site(self, painter: QPainter, x0: float, y0: float, size: float) -> None:
+        """A settlement map's vector site over its terrain, in cell-layout pixels (under the
+        screen-space overlays): river channels and shorelines, with the rivers overlay."""
+        assert self._settlement is not None
+        site = self._settlement.site
+        side = site.frame.side_m
+
+        def to_px(xy: np.ndarray) -> np.ndarray:
+            xy = np.asarray(xy, dtype=np.float64).reshape(-1, 2)
+            return np.column_stack([x0 + (xy[:, 0] / side + 0.5) * size, y0 + (0.5 - xy[:, 1] / side) * size])
+
+        if not self._overlay_visible.get("rivers", True):
+            return
+        painter.save()
+        self._clip_to_outline(painter, x0, y0, size)
+        water = site.water
+        if not water.channels.is_empty:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(_CHANNEL_FILL)
+            painter.drawPath(_site_path(water.channels, to_px))
+        if not water.shorelines.is_empty:
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(_cosmetic_pen(_SHORE_PEN))
+            for line in water.shorelines.geoms:
+                pts = to_px(np.asarray(line.coords))
+                painter.drawPolyline(QPolygonF([QPointF(float(x), float(y)) for x, y in pts]))
+        painter.restore()
+
     def _draw_hex_grid(self, painter: QPainter, x0: float, y0: float, size: float) -> None:
         """Fallback: bare scaffolding when no globe data is available."""
         assert self._grid is not None
@@ -1044,6 +1077,23 @@ class RegionView(QWidget):
             cy = y0 + (1.0 - t) * size
             painter.drawPolygon(self._hex_polygon(cx, cy, r_px))
         painter.restore()
+
+
+_CHANNEL_FILL = QColor(100, 180, 255, 220)      # the rivers overlay's colour
+_SHORE_PEN = QColor(40, 80, 140, 220)
+
+
+def _site_path(geom, to_px) -> QPainterPath:  # type: ignore[no-untyped-def]
+    """A (multi)polygon in frame metres as one painter path (holes cut by odd-even fill)."""
+    path = QPainterPath()
+    path.setFillRule(Qt.FillRule.OddEvenFill)
+    for poly in getattr(geom, "geoms", [geom]):
+        if poly.is_empty:
+            continue
+        for ring in (poly.exterior, *poly.interiors):
+            pts = to_px(np.asarray(ring.coords))
+            path.addPolygon(QPolygonF([QPointF(float(x), float(y)) for x, y in pts]))
+    return path
 
 
 def _side_rad(geometry: RegionGeometry) -> float:

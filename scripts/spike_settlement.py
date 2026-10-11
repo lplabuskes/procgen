@@ -57,8 +57,8 @@ def make_store(seed: int) -> MapStore:
     return store
 
 
-def seam_report(fields: RegionFields, source: LocalMapsSource) -> Optional[tuple[float, float, int]]:
-    """``(mean |Δe| across a map seam, mean |Δe| elsewhere, seam pairs)`` in metres, or None."""
+def seam_report(fields: RegionFields, source: LocalMapsSource) -> Optional[tuple[float, float, int, float, float]]:
+    """``(mean |Δe| across a map seam, mean |Δe| elsewhere, seam pairs, p99 and max across)`` in metres, or None."""
     which = source.map_of(fields.positions.reshape(-1, 3).astype(np.float64)).reshape(fields.tex_size, -1)
     if len(np.unique(which)) < 2:
         return None
@@ -70,7 +70,8 @@ def seam_report(fields: RegionFields, source: LocalMapsSource) -> Optional[tuple
         steps.append(de[~cross])
         seam.append(de[cross])
     inside, across = np.concatenate(steps), np.concatenate(seam)
-    return float(across.mean()), float(inside.mean()), int(across.size)
+    return (float(across.mean()), float(inside.mean()), int(across.size),
+            float(np.percentile(across, 99)), float(across.max()))
 
 
 def describe(world: "World", ref: SettlementRef) -> str:
@@ -161,8 +162,9 @@ def print_result(r: dict) -> None:
     print(f"    slope p50/p90/p99 km/km: settlement {fs[0]:.3f}/{fs[1]:.3f}/{fs[2]:.3f} · "
           f"local {ls[0]:.3f}/{ls[1]:.3f}/{ls[2]:.3f} · land relief {r['relief_m']:.0f} m")
     if r["seam"] is not None:
-        across, inside, n = r["seam"]
-        print(f"    seam: mean step {across:.2f} m across ({n} pairs) vs {inside:.2f} m elsewhere")
+        across, inside, n, p99, top = r["seam"]
+        print(f"    seam: mean step {across:.2f} m across ({n} pairs; p99 {p99:.2f}, max {top:.2f}) "
+              f"vs {inside:.2f} m elsewhere")
 
 
 def main() -> None:

@@ -2,9 +2,10 @@
 
 1. the chain to its local maps (:func:`settlegen.chain.ensure_local_maps`, through
    the shared :class:`localmap.store.MapStore`: built only if not held);
-2. the frame's terrain (:func:`settlegen.upsample.build_settlement_fields`).
+2. the frame's terrain (:func:`settlegen.upsample.build_settlement_fields`);
+3. the site, as vectors (:func:`settlegen.site.build_site`).
 
-Site features, profile and layout (plan phases 4–6) will follow here.  Qt-free.
+Profile and layout (plan phases 5–6) will follow here.  Qt-free.
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ from typing import TYPE_CHECKING, Optional
 from region.upsample import RegionFields
 from settlegen.chain import SettlementMaps, SettlementRef, ensure_local_maps
 from settlegen.params import SettlementMapParams
+from settlegen.site import SettlementSite, build_site
 from settlegen.upsample import build_settlement_fields
 
 if TYPE_CHECKING:
@@ -22,10 +24,11 @@ if TYPE_CHECKING:
 
 @dataclass
 class SettlementMap:
-    """Everything one settlement map holds (so far: its local maps and its terrain)."""
+    """Everything one settlement map holds (so far: its local maps, terrain and site)."""
 
     chain: SettlementMaps
     fields: RegionFields
+    site: SettlementSite
 
     @property
     def ref(self) -> SettlementRef:
@@ -44,4 +47,5 @@ def build_settlement_map(
     chain = ensure_local_maps(store, ref, float(params.upsample.margin_km))
     fields = build_settlement_fields(
         globe, [m.fields for m in chain.maps], chain.center, chain.side_km, params.upsample)
-    return SettlementMap(chain=chain, fields=fields)
+    site = build_site(globe, fields, chain.side_km, chain.maps, params.rivers)
+    return SettlementMap(chain=chain, fields=fields, site=site)

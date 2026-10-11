@@ -475,7 +475,34 @@ same view zoom (the true scale would draw them tens of pixels wide). Seed 4:
 from the world map, a city 12.6 s (its region and local maps built); a town
 from its region 6.4 s; a village from its local map 0.6 s.
 
-Next: Phase 4 (site features).
+**Phase 4a done 2026-10-10** (water): `settlegen/frame.py` (frame metres ↔
+ECEF), `settlegen/contour.py` (marching squares on a smooth field, closed along
+the frame and polygonized with shapely), `settlegen/water.py`: sea and lake
+polygons traced at the water surface with the sign forced to the refined masks
+(seed 4: area within 0.1% of the masks, all valid); the local maps' rivers and
+streams clipped to each map's ground and chained across seams (by world river
+id), re-traced with `build_local_rivers` one tier down (45 m raster, 12
+smoothing passes — 15 m kept the router's 45° turns), channel polygons at
+bankfull width (flat ends, rounded joints). ~0.1–0.2 s per site.
+`settlegen/site.py` `SettlementSite` (frame, water), on `SettlementMap.site`;
+the viewer draws the channels and shorelines on settlement maps (Rivers toggle).
+
+**Seam slivers fixed upstream (Option C, 2026-10-10).** Neighbouring local maps
+disagreed along their shared edge (seed 4: 7.5 m mean / 24.5 m max at a point),
+which exact per-local-texel conservation forced into settlement terrain as a
+line (max step 8–13 m). Cause: each local map conserved regional texels only
+over its own hexagon, so the smooth corrections faded out differently at the
+seam; regions likewise seeded their noise per region (cell edges: 7.3 m / 44 m).
+Fix: local maps conserve over a halo 2 regional texels past the hexagon
+(`LocalUpsampleParams.conservation_halo_parent_texels`, docs/local.md) and
+regions seed their noise per world. Now local seams 0.4 / 5.4 m, region edges
+0.2 / 10 m; settlement seam max steps 1.0 m (city 36, was 9.5) and 3.5 m (328,
+was 12.8); one seam city (356) still 4.6 m max — residual per-map differences
+(small lakes, likely). No measurable build-time change. Trade-off accepted:
+regional texels cut by a local map's hexagon edge are exact over their whole
+area, not the map's part.
+
+Next: Phase 4b (roads, gates, landings, crossings).
 
 Polygon library for Decision 8: **shapely** (approved 2026-10-10; in
 `requirements.txt`).

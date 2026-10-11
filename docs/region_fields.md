@@ -15,7 +15,7 @@ from its region's — see [local.md](local.md)).
 ## Refinement (`region/upsample.py`)
 
 `build_region_fields(globe, region_id, params, *, resources, fertility_exponent)
-→ RegionFields`, seeded `world.seed XOR region_id` (regenerates identically). It
+→ RegionFields`, seeded per world (`world.seed XOR _SEED_SALT_REGION`, so neighbouring regions agree where their hexes overlap past the cell edge; regenerates identically, in any order). It
 wraps the tier-agnostic `refine_fields(source, positions, weights, spacing_rad,
 texel_area_km2, params, seed, …)` with a `GlobalSource`; the local tier runs the
 same function over a region. Water masks also write back `filled_height` (lake

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from core.params import field, paramclass
 from settlegen.upsample import SettlementUpsampleParams
+from settlegen.water import SettlementRiverParams
 
 
 @paramclass
@@ -12,3 +13,4 @@ class SettlementMapParams:
 
     upsample: SettlementUpsampleParams = field(
         default_factory=SettlementUpsampleParams, metadata={"label": "Terrain refinement"})
+    rivers: SettlementRiverParams = field(default_factory=SettlementRiverParams, metadata={"label": "Rivers"})

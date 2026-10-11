@@ -11,7 +11,7 @@ This doc: frame, fields, rivers, roads. Rest of the tier:
 ## Files
 - `localmap/geometry.py` — `LocalGeometry`: parent hex's texture square mapped affinely onto `[0, 1]²`
 - `localmap/grid.py` — `LocalHexGrid`: `RegionHexGrid` kept to the parent hexagon; `texture_in_map`
-- `localmap/upsample.py` — `LocalUpsampleParams`, `build_local_fields`, `local_conservation_report`
+- `localmap/upsample.py` — `LocalUpsampleParams` (incl. `conservation_halo_parent_texels`), `build_local_fields`, `local_conservation_report`
 - `localmap/rivers.py` — `LocalRiverParams`, `build_local_rivers`
 - `localmap/roads.py` — `LocalRoadParams`, `build_local_roads`
 - `localmap/settlements.py`, `villages.py`, `cities.py`, `farmland.py`, `banks.py` — ([local_settlements.md](local_settlements.md))
@@ -85,13 +85,23 @@ neighbouring local maps never double-count a texel.
   region's rivers and streams (`build_local_map` passes their `path_segments`
   as `drains`), with none within 1.25 regional texels of them; **danger** = region's continuous danger, bilinear, conserved
   per regional texel.
-- **Noise** seeded `world.seed XOR 0x10CA`, shared by all local maps of a world,
-  so neighbours agree where they meet.
+- **Noise** seeded `world.seed XOR 0x10CA`, shared by all local maps of a world
+  (as the region tier's is, per world).
+- **Conserved over a halo** `conservation_halo_parent_texels` (2 regional
+  texels, ~9 km) past the parent hexagon (`RegionFields.conserved`;
+  `LocalHexGrid(halo=…)` keeps the hexes that cover it, ~13% more). Conserving
+  over the hexagon alone, neighbouring maps' smooth corrections faded out
+  differently at their seam: seed 4 (region 16, hexes 96 | 110) disagreed by
+  7.5 m mean / 24.5 m max at a point; with the halo, 0.4 m / 5.4 m, at no
+  measurable build cost. The regional texels the hexagon edge cuts (~5%) are
+  conserved over their whole area, so over a map's own part alone they are no
+  longer exact (seed 4: p95 ~10 m, max ~30 m); every other texel is.
 
 `local_conservation_report(local, region)` = `conservation_report` one tier down
-(`anchor_residuals` per regional texel inside the parent hexagon). Seed 4: all
-fields at float32 noise (elevation ~2e-8 km). Rural people match the parent hex
-to ~0.03% at `T=64` (tiers count rim texels slightly differently, ~1/T).
+(`anchor_residuals` per regional texel over the texels it is conserved with:
+the parent hexagon and its halo). Seed 4: all fields at float32 noise
+(elevation ~2e-8 km). Rural people match the parent hex to ~0.03% at `T=64`
+(tiers count rim texels slightly differently, ~1/T).
 
 ### `LocalUpsampleParams`
 

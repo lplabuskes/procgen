@@ -8,6 +8,7 @@ import pytest
 
 from region.distributaries import DistributaryParams, mouth_count
 from region.rivers import RegionRiverParams, build_region_rivers
+from region.sampling import GlobalSampler
 from region.upsample import EARTH_RADIUS_KM, RegionUpsampleParams, build_region_fields
 from worldgen.delta.deposit import DeltaFan
 from worldgen.delta.shape import BIRDFOOT, CUSPATE
@@ -77,19 +78,26 @@ def test_the_delta_river_fans_out(branched, plain_rivers):
         assert np.array_equal(a[0], b[0])
 
 
-def test_branches_leave_a_channel_and_reach_the_sea(branched, plain_rivers, delta_setup):
+def test_branches_leave_a_channel_and_reach_the_sea(branched, plain_rivers, delta_setup, synthetic_globe):
     rivers, _ = branched
     fields, _, stem = delta_setup
     extra = rivers.paths[len(plain_rivers.paths):]
     lines = [np.asarray(rivers.paths[stem][0], dtype=np.float64)]
     spacing = fields.grid.texel_spacing_rad(fields.tex_size)
     ocean = fields.positions[fields.textures["ocean_mask"][..., 0] > 0.5]
+    sampler = GlobalSampler(synthetic_globe.mesh)
     for positions, flows, _ in extra:
         pts = np.asarray(positions, dtype=np.float64)
         # Starts exactly on the stem or an earlier branch.
         assert min(np.linalg.norm(line - pts[0][None, :], axis=1).min() for line in lines) < 1e-6
-        # Ends on the refined sea.
-        assert np.linalg.norm(ocean - pts[-1][None, :], axis=1).min() < 2.0 * spacing
+        # Ends on the sea as the router sees it: the refined sea on the region's textures,
+        # the globe's past them (sample_raster), where a branch off the cell's edge may end.
+        s, t, _ = fields.geometry.ecef_to_local(pts[-1:])
+        if fields.grid.nearest_texels(s, t, fields.tex_size)[3][0]:
+            assert np.linalg.norm(ocean - pts[-1][None, :], axis=1).min() < 2.0 * spacing
+        else:
+            faces, u, v = sampler.locate(pts[-1:])
+            assert sampler.sample(synthetic_globe.mesh.face_textures["ocean_mask"], faces, u, v)[0, 0] > 0.5
         lines.append(pts)
 
 

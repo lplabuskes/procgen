@@ -7,8 +7,12 @@ recovers the region's texels to float noise (:func:`local_conservation_report`).
 Defaults (``n_cols=16``, ``tex_size=64``): local hex ~23 km, texel ~365 m vs the
 region's ~4.5 km — a 12× refinement, ~3 octaves of detail.
 
-The noise stream is shared by every local map of a world, so neighbouring local
-maps of one region agree at their seam; regions, seeded per region, do not.
+The noise stream is shared by every local map of a world (as the region tier's
+is), and each map conserves over a halo past its parent hexagon
+(``conservation_halo_parent_texels``), so neighbouring local maps agree at their
+seam: each conserves the regional texels its edge cuts over their whole area,
+not just its own part of them, and the smooth correction is the same on both
+sides.  (Over its own part alone, such a texel is no longer exact.)
 """
 from __future__ import annotations
 
@@ -77,6 +81,12 @@ class LocalUpsampleParams(RegionUpsampleParams):
     slope_saturation: float = _f(
         0.1, label="Slope saturation, resources (km/km)", min=0.002, max=0.5, step=0.002
     )
+    # Conserving only over the parent hexagon, neighbouring maps' corrections fade out
+    # differently at their seam (seed 4: 5.5 m mean / 24 m max disagreement); over ~2
+    # regional texels past it, they agree to ~0.5 m.  0: conserve over the hexagon only.
+    conservation_halo_parent_texels: float = _f(
+        2.0, label="Conservation halo past the hexagon (regional texels)", min=0.0, max=4.0, step=0.5
+    )
 
 
 # The detail fields the local tier takes from the region: those it doesn't redeclare.
@@ -114,18 +124,21 @@ def build_local_fields(
     params = params or LocalUpsampleParams()
     tex_size = int(params.tex_size)
     geometry = LocalGeometry(region.geometry, region.grid, hex_index)
-    grid = LocalHexGrid(geometry, int(params.n_cols))
+    # The halo in local units: a regional texel is 1 / T_region of the local map's width.
+    halo = float(params.conservation_halo_parent_texels) / float(region.tex_size)
+    grid = LocalHexGrid(geometry, int(params.n_cols), halo=halo)
     positions = grid.texture_positions(tex_size)                 # (M, T, T, 3)
     in_hex = grid.texture_in_hexagon(tex_size)
     in_map = grid.texture_in_map(tex_size)
     domain = in_hex & in_map
+    conserved = in_hex & grid.texture_in_halo(tex_size)
     m = len(grid)
 
     parent_area_km2 = region.texel_area_km2 * float(region.in_hex[hex_index].sum())
     texel_area_km2 = parent_area_km2 / max(int(domain.sum()), 1)
 
     textures, loc, octaves = refine_fields(
-        RegionSource(region), positions, domain, grid.texel_spacing_rad(tex_size), texel_area_km2,
+        RegionSource(region), positions, conserved, grid.texel_spacing_rad(tex_size), texel_area_km2,
         params, int(globe.seed or 0) ^ _SEED_SALT_LOCAL,
         resources=resources, fertility_exponent=fertility_exponent,
         mine_points=worked_mine_points(globe), neighbours=grid.texel_neighbours(tex_size, in_map),
@@ -150,6 +163,7 @@ def build_local_fields(
         texel_area_km2=texel_area_km2,
         parent_anchors=loc.anchors.reshape(shape).astype(np.int32),
         in_map=in_map,
+        conserved=conserved,
     )
 
 
@@ -165,7 +179,9 @@ def path_segments(paths: Sequence[RiverPath]) -> np.ndarray:
 
 def local_conservation_report(local: RegionFields, region: RegionFields) -> dict[str, dict[str, float]]:
     """:func:`region.upsample.conservation_report` one tier down: per regional
-    texel in the parent hexagon, the local mean against the regional value."""
+    texel the map conserves, the local mean over the texels it conserves it with
+    (the parent hexagon and its halo) against the regional value."""
     if local.parent_anchors is None:
         raise ValueError("not a local map: no parent_anchors")
-    return anchor_residuals(local.textures, local.parent_anchors, local.domain, region.textures)
+    weights = local.conserved if local.conserved is not None else local.domain
+    return anchor_residuals(local.textures, local.parent_anchors, weights, region.textures)

@@ -64,6 +64,8 @@ ICECAP_WARMEST_C = 0.0
 
 _SEED_SALT_ELEVATION = 0x9E37
 _SEED_SALT_COAST = 0xC0A5
+# The region tier's noise stream, one per world (the local tier's is localmap.upsample._SEED_SALT_LOCAL).
+_SEED_SALT_REGION = 0x5E61
 
 
 @paramclass
@@ -245,10 +247,12 @@ class RegionFields:
     detail_octaves: int
     texel_area_km2: float
     # Local maps only: each texel's anchor on the region (``hex*T*T + row*T + col``),
-    # the conservation target one tier up (``anchors``/``faces`` stay global), and
-    # which texels lie inside the parent hexagon.
+    # the conservation target one tier up (``anchors``/``faces`` stay global),
+    # which texels lie inside the parent hexagon, and which were conserved (the
+    # map's own texels and a halo past the parent hexagon; None: the domain).
     parent_anchors: Optional[np.ndarray] = None   # (M, T, T) int32
     in_map: Optional[np.ndarray] = None           # (M, T, T) bool
+    conserved: Optional[np.ndarray] = None        # (M, T, T) bool
 
     @property
     def n_hexes(self) -> int:
@@ -1181,7 +1185,10 @@ def build_region_fields(
 ) -> RegionFields:
     """Refine the global fields inside one region onto its hex-texture grid.
 
-    Seeded with ``world.seed XOR region_id``.  ``resources`` and
+    Seeded per world (``world.seed XOR _SEED_SALT_REGION``), not per region: the
+    detail is a function of position, so neighbouring regions agree where their
+    hexes overlap past the cell edge, and the tiers below don't seam at a cell
+    edge.  Regenerates identically, in any order.  ``resources`` and
     ``fertility_exponent`` (the population model's γ) are the world's tuning.
     """
     params = params or RegionUpsampleParams()
@@ -1201,7 +1208,7 @@ def build_region_fields(
 
     textures, loc, octaves = refine_fields(
         source, positions, in_hex, grid.texel_spacing_rad(tex_size), texel_area_km2,
-        params, int(globe.seed or 0) ^ int(region_id),
+        params, int(globe.seed or 0) ^ _SEED_SALT_REGION,
         resources=resources, fertility_exponent=fertility_exponent,
         mine_points=worked_mine_points(globe), neighbours=grid.texel_neighbours(tex_size),
         grid=grid, drains=world_channel_segments(globe),
