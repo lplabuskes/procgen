@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import dataclasses
 import math
-from collections import OrderedDict
 from typing import TYPE_CHECKING, Callable, Optional
 
 import numpy as np
@@ -12,7 +11,7 @@ from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtWidgets import QWidget
 
 from core.display import SchemeSpec
-from localmap.builder import LocalMap, build_local_map
+from localmap.builder import LocalMap
 from localmap.geometry import PARENT_CENTER, PARENT_RADIUS
 from localmap.params import LocalParams
 from localmap.farmland import farmland_rgba
@@ -22,16 +21,16 @@ from region.display import build_layer_texture, snap_to_land
 from realmgen.refine.barriers import pack_river_segments
 from viz.mapview.legend import draw_legend, legend_size
 from viz.mapview.overlays import city_floor_radius, draw_overlays, fort_markers, settlement_markers, town_markers
-from region.builder import RegionMap, land_reach, refine_region_features
+from localmap.store import MapStore
+from region.builder import RegionMap, land_reach
 from region.geometry import RegionGeometry
 from region.grid import RegionHexGrid
 from region.params import RegionParams
-from region.rivers import RegionRivers, RiverPath
+from region.rivers import RegionRivers
 from region.roads import RegionRoads
-from region.streams import RegionStreamParams
 from realmgen.placement.types import TIER_NAMES, format_population, population_display_tier
 from realmgen.towns.types import TOWN_KIND_NAMES, Towns
-from region.upsample import RegionFields, build_region_fields
+from region.upsample import RegionFields
 from worldgen.hydrology.discharge import EARTH_RADIUS_KM
 from worldgen.resources.minerals import mineral_workings
 
@@ -62,8 +61,6 @@ class RegionView(QWidget):
     """
 
     MAX_ZOOM = 20.0
-    # Local maps kept for revisiting, most recent last.
-    LOCAL_CACHE_SIZE = 6
     # A press-release that moved less than this (px) is a click, not a drag.
     _CLICK_SLOP = 4.0
     # How close (px) the cursor must be to a village dot to describe it.
@@ -76,9 +73,9 @@ class RegionView(QWidget):
         self._geometry: Optional[RegionGeometry] = None
         self._grid: Optional[RegionHexGrid] = None
         self._fields: Optional[RegionFields] = None
-        self._region_params = RegionParams()
-        self._realm_params: Optional["RealmParams"] = None
-        self._world_params: Optional["GlobeParams"] = None
+        # Builds and holds the region and local maps, and owns the tiers' params;
+        # shared with the other view (and the settlement chain) by ``set_store``.
+        self._store = MapStore()
         # The region's rivers, roads, deltas and streams (region mode only).
         self._region_map: Optional[RegionMap] = None
         # What is drawn: the region map's, or in local mode the local map's.
@@ -110,12 +107,7 @@ class RegionView(QWidget):
         self._drag_start_pan = np.zeros(2, dtype=np.float64)
         self._press_pos: Optional[tuple[float, float]] = None
         # ── local maps ──
-        self._local_params = LocalParams()
         self._local: Optional[LocalMap] = None
-        # (region_id, hex) → LocalMap, valid for ``_cache_owner`` (the region
-        # fields they were built from) and the current local params.
-        self._local_cache: "OrderedDict[tuple[int, int], LocalMap]" = OrderedDict()
-        self._cache_owner: Optional[RegionFields] = None
         # Region mode: clicking a hex opens its local map.
         self._local_pick = False
         self._hover_hex: Optional[int] = None
@@ -127,11 +119,22 @@ class RegionView(QWidget):
 
     # ── data ─────────────────────────────────────────────────────────────────
 
+    @property
+    def store(self) -> MapStore:
+        return self._store
+
+    def set_store(self, store: MapStore) -> None:
+        """Build and hold maps in ``store`` (shared with other views) from now on."""
+        self._store = store
+
     def set_region(self, geometry: RegionGeometry, globe: Optional["World"] = None) -> None:
-        """Show a region, refining the global fields inside it when a globe is given."""
+        """Show a region, refining the global fields inside it when a globe is given
+        (or taking the store's map of it, if it holds one)."""
         self._geometry = geometry
         self._globe = globe
-        self._grid = RegionHexGrid(geometry, int(self._region_params.upsample.n_cols))
+        if globe is not None:
+            self._store.set_globe(globe)
+        self._grid = RegionHexGrid(geometry, int(self._store.region_params.upsample.n_cols))
         self._local = None
         self._hover_hex = None
         self._fields = None
@@ -145,71 +148,27 @@ class RegionView(QWidget):
         self._zoom = 1.0
         self._pan[:] = 0.0
         if globe is not None and "elevation" in globe.mesh.face_textures:
-            realm, world = self._realm_params, self._world_params
-            self._fields = build_region_fields(
-                globe, geometry.region_id, self._region_params.upsample,
-                resources=world.resources if world is not None else None,
-                fertility_exponent=float(realm.population.fertility_exponent) if realm is not None else 2.0,
-            )
-            self._grid = self._fields.grid
-            self._refine_features()   # first: riparian wetland edits the biome the images draw
+            # Settlements are refined in the world's features, so they persist (and
+            # are saved) after the region is left.
+            m = self._region_map = self._store.region(geometry.region_id)
+            self._fields, self._grid = m.fields, m.fields.grid
+            self._rivers, self._roads, self._deltas = m.rivers, m.roads, m.deltas
             self._rebuild_images()
         self.update()
 
-    def _refine_features(self) -> None:
-        """Re-route rivers and roads over the refined terrain, snap deltas, and refine
-        this region's cities and towns.  Settlements are refined in the world's
-        features, so they persist (and are saved) after the region is left."""
-        assert self._fields is not None and self._globe is not None
-        realm, world = self._realm_params, self._world_params
-        m = self._region_map = refine_region_features(
-            self._globe, self._fields, self._region_params,
-            land=world.cost.land if world is not None else None,
-            danger_scale=float(realm.danger.movement_scale) if realm is not None else 2.0,
-            town_params=realm.towns if realm is not None else None,
-            population_params=realm.population if realm is not None else None,
-            river_threshold_factor=realm.refine.river_threshold_factor if realm is not None else 1.5,
-        )
-        self._rivers, self._roads, self._deltas = m.rivers, m.roads, m.deltas
-
     # ── local maps ───────────────────────────────────────────────────────────
 
-    def _region_streams(self, params: RegionStreamParams) -> list[RiverPath]:
-        """This region's streams for its local maps, cached until the region or ``params`` change."""
-        if self._region_map is None or self._globe is None:
-            return []
-        return self._region_map.streams(self._globe, params)
-
     def set_local(self, parent: "RegionView", hex_index: int, keep_view: bool = False) -> None:
-        """Show the local map of ``parent``'s regional hex ``hex_index`` (cached per region fields).
+        """Show the local map of ``parent``'s regional hex ``hex_index``, from
+        ``parent``'s store (built only if it doesn't hold it; this view shares the store from now on).
 
         ``keep_view`` keeps the zoom and pan (a rebuild of the map on screen).
         """
         fields, globe = parent._fields, parent._globe
         if fields is None or globe is None:
             return
-        if self._cache_owner is not fields:
-            self._local_cache.clear()
-            self._cache_owner = fields
-        key = (fields.region_id, int(hex_index))
-        local = self._local_cache.pop(key, None)
-        if local is None:
-            realm, world = self._realm_params, self._world_params
-            local = build_local_map(
-                globe, fields, int(hex_index), self._local_params,
-                region_rivers=parent._rivers, region_roads=parent._roads, region_deltas=parent._deltas,
-                region_streams=parent._region_streams(self._local_params.streams),
-                resources=world.resources if world is not None else None,
-                fertility_exponent=float(realm.population.fertility_exponent) if realm is not None else 2.0,
-                land=world.cost.land if world is not None else None,
-                danger_scale=float(realm.danger.movement_scale) if realm is not None else 2.0,
-                town_params=realm.towns if realm is not None else None,
-                population_params=realm.population if realm is not None else None,
-                river_threshold_factor=realm.refine.river_threshold_factor if realm is not None else 1.5,
-            )
-        self._local_cache[key] = local
-        while len(self._local_cache) > self.LOCAL_CACHE_SIZE:
-            self._local_cache.popitem(last=False)
+        self._store = parent._store
+        local = self._store.local(fields.region_id, int(hex_index))
 
         self._local = local
         self._globe = globe
@@ -231,24 +190,12 @@ class RegionView(QWidget):
         self.update()
 
     def set_local_params(self, params: LocalParams, globe: Optional["World"] = None) -> None:
-        """Replace the local tuning, dropping cached local maps (the caller re-opens the one
-        on screen) and resetting every settlement's local refinement in ``globe``."""
-        if params == self._local_params:
-            return
-        self._local_params = params
-        self._local_cache.clear()
-        globe = globe if globe is not None else self._globe
+        """Replace the local tuning (in the store: every local map dropped and every
+        settlement's local refinement reset; the caller re-opens the one on screen)."""
         if globe is not None:
-            towns = globe.get_feature("towns")
-            if towns is not None:
-                towns.reset_local_refinement()
-            for city in globe.get_feature("settlements") or []:
-                city.reset_local_refinement()
+            self._store.set_globe(globe)
+        if self._store.set_local_params(params):
             self._land_positions = {}
-
-    def clear_local_cache(self) -> None:
-        self._local_cache.clear()
-        self._cache_owner = None
 
     @property
     def local_map(self) -> Optional[LocalMap]:
@@ -266,40 +213,28 @@ class RegionView(QWidget):
         self._hex_click_callback = cb
 
     def set_params(self, params: RegionParams, globe: Optional["World"] = None) -> None:
-        """Replace the region tuning and refine the region on screen again.
-
-        Every settlement in ``globe`` is reset to its stage site, since any refinement
-        is now stale.  New river or settlement params keep the refined fields.
-        """
-        if params == self._region_params:
-            return
-        old, self._region_params = self._region_params, params
-        globe = globe if globe is not None else self._globe
+        """Replace the region tuning (in the store, with its resets: every settlement
+        back to its stage site, the maps rebuilt on next use) and refine the region on
+        screen again.  New river or settlement params keep the refined fields."""
         if globe is not None:
-            towns = globe.get_feature("towns")
-            if towns is not None:
-                towns.reset_refinement()
-            for city in globe.get_feature("settlements") or []:
-                city.reset_refinement()
-            self._land_positions = {}
+            self._store.set_globe(globe)
+        if not self._store.set_region_params(params):
+            return
+        self._land_positions = {}
         if self._geometry is None or self._fields is None:
             return
-        if params.upsample != old.upsample:
-            zoom, pan = self._zoom, self._pan.copy()
-            self.set_region(self._geometry, self._globe)
-            self._zoom, self._pan = zoom, pan
-        else:
-            self._refine_features()
-            self._rebuild_images()   # the rivers moved: layers that snap to them follow
+        zoom, pan = self._zoom, self._pan.copy()
+        self.set_region(self._geometry, self._globe)
+        self._zoom, self._pan = zoom, pan
         self.update()
 
     def set_realm_params(self, params: Optional["RealmParams"]) -> None:
         """The realm tuning the world was built with, used when refining (changes come with a new world)."""
-        self._realm_params = params
+        self._store.set_tuning(params, self._store.world_params)
 
     def set_world_params(self, params: Optional["GlobeParams"]) -> None:
         """The physical tuning the world was built with, used when refining (changes come with a new world)."""
-        self._world_params = params
+        self._store.set_tuning(self._store.realm_params, params)
 
     def clear_region(self) -> None:
         """Drop the current region (and its refined fields) until the next ``set_region``."""
@@ -595,7 +530,8 @@ class RegionView(QWidget):
         f = self._fields
         if f is None:
             return 0.0
-        upsample = self._local_params.upsample if self._local is not None else self._region_params.upsample
+        store = self._store
+        upsample = store.local_params.upsample if self._local is not None else store.region_params.upsample
         return land_reach(f, upsample.water_spread_texels)
 
     def _on_land(self, key: str, ecef: np.ndarray) -> np.ndarray:

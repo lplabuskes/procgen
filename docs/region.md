@@ -121,9 +121,11 @@ over-hang reads its neighbour), `slope`, `danger`, `has`, `n_anchors`,
 - Any change resets every refined town and city to its stage site
   (`Towns.reset_refinement`, `Settlement.reset_refinement`; local tier too, which
   refines from region positions); they re-refine as regions are visited.
-- On screen: new `upsample` re-refines the region (keeps zoom/pan); new
-  `rivers`/`roads`/`settlements` rebuilds rivers and roads and re-refines cities
-  and towns. Cached local maps dropped either way.
+- Applied by the shared `MapStore` (`localmap/store.py`): new `upsample` drops
+  every held region; new `rivers`/`roads`/`settlements` keeps their fields and
+  rebuilds rivers and roads and re-refines cities and towns on next use. Held
+  local maps dropped either way. The region on screen is re-shown (keeps
+  zoom/pan).
 
 ## `RegionFields` (`region/upsample.py`)
 

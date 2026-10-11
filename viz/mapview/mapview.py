@@ -27,6 +27,7 @@ from region.geometry import RegionGeometry, cell_border_polylines, ecef_to_cell
 from viz.mapview.legend import draw_legend
 from viz.mapview.overlays import draw_overlays
 from viz.mapview.projections import RobinsonProjection, Projection
+from localmap.store import MapStore
 from viz.mapview.regionview import RegionView
 
 # (face, uv, local) -> status fragments; see ``MapWindow.set_hover_parts``.
@@ -874,6 +875,10 @@ class MapWindow(QMainWindow):
         self._back_btn.clicked.connect(self._go_back)
         # A second view for local maps, so going back shows the region as it was.
         self._local_view = RegionView()
+        # One store for both views: a region or local map is built once, whichever asks first.
+        self._store = MapStore()
+        self._region_view.set_store(self._store)
+        self._local_view.set_store(self._store)
         self._local_view.set_hover_callback(lambda texel: self._zoomed_hover(self._local_view, texel))
         self._local_btn.toggled.connect(self._region_view.set_local_pick)
         self._region_view.set_hex_click_callback(self._enter_local)
@@ -900,7 +905,7 @@ class MapWindow(QMainWindow):
             self._exit_local()
         if self._stack.currentWidget() is self._region_view:
             self._exit_region()
-        self._local_view.clear_local_cache()
+        self._store.set_globe(globe)
         self._map.set_globe(globe)
 
     def set_realm_params(self, params: "RealmParams") -> None:
@@ -921,9 +926,8 @@ class MapWindow(QMainWindow):
             self.set_status("Refining region…")
             QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
         try:
+            # The store drops the local maps too: they depend on the region's rivers and roads.
             self._region_view.set_params(params, self._map.globe)
-            # Local maps depend on the region's rivers and roads, which may change without new fields.
-            self._local_view.clear_local_cache()
             if local:
                 self._reopen_local()
         finally:

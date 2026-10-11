@@ -80,7 +80,7 @@ API:
 - `register_legend`, `associate_scheme_texture` — forwarded to `MapWidget`
 - `associate_scheme_recipe(scheme, recipe)` — `TextureRecipe` the zoomed views rerun on refined data
 - `set_world_params` / `set_realm_params` — the `GlobeParams` / `RealmParams` the world was built with (zoomed views refine with them)
-- `set_region_params` / `set_local_params` — view-side tuning (`AppParams.region` / `.local`); rebuilds the map on screen; a region change also rebuilds an open local map and drops cached ones
+- `set_region_params` / `set_local_params` — view-side tuning (`AppParams.region` / `.local`), applied by the views' shared `MapStore`; rebuilds the map on screen; a region change also rebuilds an open local map and drops held ones
 - `set_hover_parts(fn)` — `fn(face, uv, local) -> list[str]`, joined into the status bar; zoomed views pass `local` to substitute refined values for contributors tagged `refined=` (`DisplayRegistry.hover`)
 - `set_rebuild_callback` / `set_params_callback` / `set_save_callback`, `set_status`, `set_rebuild_enabled`
 

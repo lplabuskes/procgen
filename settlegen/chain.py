@@ -1,0 +1,193 @@
+"""The chain from a town or city to the local maps its settlement map refines.
+
+:func:`ensure_local_maps` takes a settlement to every local map its frame needs,
+asking a :class:`localmap.store.MapStore` for each — so a region or local map is
+built only if the store doesn't already hold it (the viewer and the chain share
+one store):
+
+1. the settlement's region (it refines the settlement there, if not yet);
+2. its owning local map — the regional hex nearest its region position
+   (:func:`localmap.settlements.owning_hex`) — which refines it locally: its
+   position is final from here on;
+3. the frame: a square centred where that local map draws the settlement, of side
+   ``2 · (footprint radius + garden ring + margin)``;
+4. every other local map whose ground the frame reaches (each regional hexagon,
+   within its own region's cell, the frame overlaps), with their regions.
+
+The chain never resets a settlement; the store's params do (see its docstring).
+Qt-free.
+"""
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Literal
+
+import numpy as np
+from shapely.geometry import Polygon, box
+
+from localmap.builder import LocalMap
+from localmap.settlements import owning_hex
+from region.geometry import RegionGeometry, ecef_to_cell
+from region.grid import RegionHexGrid
+from settlegen.upsample import km_per_local_unit
+
+if TYPE_CHECKING:
+    from core.world import World
+    from localmap.store import MapStore
+
+_KM2_PER_HA = 0.01
+# Points per frame edge when mapping the frame into another region's frame (≤10 km: ~150 m apart).
+_EDGE_SAMPLES = 64
+
+
+@dataclass(frozen=True)
+class SettlementRef:
+    """A city (index into the ``settlements`` feature) or a town (index into ``towns``)."""
+
+    kind: Literal["city", "town"]
+    index: int
+
+
+def site_position(globe: "World", ref: SettlementRef) -> np.ndarray:
+    """The settlement's stage site — which region refines it."""
+    if ref.kind == "city":
+        return np.asarray(globe.get_feature("settlements")[ref.index].site_position, dtype=np.float64)
+    return np.asarray(globe.get_feature("towns").site_positions[ref.index], dtype=np.float64)
+
+
+def region_position(globe: "World", ref: SettlementRef) -> np.ndarray:
+    """Where its region put it — which local map refines it."""
+    if ref.kind == "city":
+        return np.asarray(globe.get_feature("settlements")[ref.index].region_position, dtype=np.float64)
+    return np.asarray(globe.get_feature("towns").region_positions[ref.index], dtype=np.float64)
+
+
+def position(globe: "World", ref: SettlementRef) -> np.ndarray:
+    """Its current position (the finest tier that has refined it)."""
+    if ref.kind == "city":
+        return np.asarray(globe.get_feature("settlements")[ref.index].position, dtype=np.float64)
+    return np.asarray(globe.get_feature("towns").positions[ref.index], dtype=np.float64)
+
+
+def population(globe: "World", ref: SettlementRef) -> float:
+    if ref.kind == "city":
+        return float(globe.get_feature("settlements")[ref.index].population)
+    return float(globe.get_feature("towns").population[ref.index])
+
+
+def is_local_refined(globe: "World", ref: SettlementRef) -> bool:
+    if ref.kind == "city":
+        return bool(globe.get_feature("settlements")[ref.index].local_refined)
+    return bool(globe.get_feature("towns").local_refined[ref.index])
+
+
+def region_of(globe: "World", ref: SettlementRef) -> int:
+    """The region that refines the settlement: the cell of its stage site."""
+    return int(ecef_to_cell(site_position(globe, ref)[None], globe.antimeridian)[0])
+
+
+@dataclass
+class SettlementMaps:
+    """The local maps one settlement's frame needs, and the frame."""
+
+    ref: SettlementRef
+    keys: list[tuple[int, int]]          # (region_id, hex_index), owning map first
+    maps: list[LocalMap]                 # in ``keys`` order
+    center: np.ndarray                   # (3,) where the owning local map draws the settlement
+    radius_km: float                     # footprint radius
+    side_km: float                       # frame side
+    built: list[tuple[str, object]] = field(default_factory=list)   # what this call had the store build
+
+    @property
+    def owner(self) -> LocalMap:
+        return self.maps[0]
+
+
+def drawn_position(local: LocalMap, ref: SettlementRef) -> np.ndarray:
+    """Where ``local`` draws the settlement (its position, moved just off a river channel)."""
+    index, positions = (local.city_index, local.city_positions) if ref.kind == "city" else \
+        (local.town_index, local.town_positions)
+    hit = np.flatnonzero(np.asarray(index) == ref.index)
+    if hit.size == 0:
+        raise ValueError(f"{ref.kind} {ref.index} is not on local map {local.hex_index}")
+    return np.asarray(positions[hit[0]], dtype=np.float64)
+
+
+def footprint_radius_km(globe: "World", local: LocalMap, ref: SettlementRef, density_per_ha: float) -> float:
+    """A city's local footprint as a disc; a town's people at the same built-up density."""
+    if ref.kind == "city" and local.city_footprints is not None:
+        k = int(np.flatnonzero(np.asarray(local.city_index) == ref.index)[0])
+        area = float(local.city_footprints.area_km2[k])
+    else:
+        area = population(globe, ref) / (max(float(density_per_ha), 1e-9) / _KM2_PER_HA)
+    return math.sqrt(max(area, 0.0) / math.pi)
+
+
+def frame_side_km(radius_km: float, garden_ring_km: float, margin_km: float) -> float:
+    return 2.0 * (float(radius_km) + float(garden_ring_km) + float(margin_km))
+
+
+def frame_keys(
+    globe: "World", owner: LocalMap, center: np.ndarray, side_km: float, n_cols: int,
+) -> list[tuple[int, int]]:
+    """``(region_id, hex_index)`` of every local map whose ground the frame overlaps,
+    the owning map first.  Exact on the regional hex grids (no region is built):
+    the frame square, in each touched region's ``(s, t)``, against that region's
+    hexagons clipped to its cell ``[0, 1]²`` — the ground its local maps own."""
+    geo = owner.fields.geometry
+    s, t, _ = geo.ecef_to_local(np.asarray(center, dtype=np.float64).reshape(1, 3))
+    half = 0.5 * float(side_km) / km_per_local_unit(owner.fields)
+    edge = np.linspace(-half, half, _EDGE_SAMPLES, endpoint=False)
+    ring = np.concatenate([
+        np.column_stack([edge, np.full_like(edge, -half)]), np.column_stack([np.full_like(edge, half), edge]),
+        np.column_stack([-edge, np.full_like(edge, half)]), np.column_stack([np.full_like(edge, -half), -edge]),
+    ]) + np.array([s[0], t[0]])
+    outline = geo.local_to_ecef(ring[:, 0], ring[:, 1])                  # (R, 3) frame boundary
+    owner_key = (owner.fields.region_id, owner.hex_index)
+    keys = [owner_key]
+    # A ≤10 km frame can't hold a whole region cell, so its outline meets every cell it touches.
+    for region_id in np.unique(ecef_to_cell(outline, globe.antimeridian)):
+        region = RegionGeometry(int(region_id), globe.antimeridian)
+        a, b, valid = region.ecef_to_local(outline)
+        if not valid.all():
+            continue
+        frame = Polygon(np.column_stack([a, b])).intersection(box(0.0, 0.0, 1.0, 1.0))
+        if frame.is_empty or frame.area <= 0.0:
+            continue
+        grid = RegionHexGrid(region, n_cols)
+        corners = grid.corner_offsets()
+        for h in range(len(grid)):
+            key = (int(region_id), h)
+            if key in keys:
+                continue
+            if Polygon(grid.centers[h] + corners).intersection(frame).area > 0.0:
+                keys.append(key)
+    return keys
+
+
+def ensure_local_maps(store: "MapStore", ref: SettlementRef, margin_km: float = 0.5) -> SettlementMaps:
+    """Every local map ``ref``'s frame needs, from ``store``.  See the module docstring."""
+    globe = store.globe
+    if globe is None:
+        raise ValueError("the store has no globe")
+    builds_before = len(store.builds)
+    region_id = region_of(globe, ref)
+    region = store.region(region_id)
+    hexes, valid = owning_hex(region.fields, region_position(globe, ref)[None])
+    if not valid[0]:
+        raise ValueError(f"{ref.kind} {ref.index} lies on the far side of region {region_id}")
+    owner = store.local(region_id, int(hexes[0]))
+    if not is_local_refined(globe, ref):
+        raise RuntimeError(f"{ref.kind} {ref.index} was not refined by its local map ({region_id}, {hexes[0]})")
+
+    local_params = store.local_params
+    center = drawn_position(owner, ref)
+    radius = footprint_radius_km(globe, owner, ref, local_params.cities.density_per_ha)
+    side = frame_side_km(radius, local_params.farmland.city_garden_ring_km, margin_km)
+    keys = frame_keys(globe, owner, center, side, int(store.region_params.upsample.n_cols))
+    maps = [owner] + [store.local(*key) for key in keys[1:]]
+    return SettlementMaps(
+        ref=ref, keys=keys, maps=maps, center=center, radius_km=radius, side_km=side,
+        built=list(store.builds[builds_before:]),
+    )

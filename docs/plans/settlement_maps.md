@@ -238,8 +238,8 @@ bit-identical.
 
 - `SettlementRef(kind: "city" | "town", index: int)`.
 - `region_of(globe, ref)`, `owning_hex(region_fields, ref)` (A4).
-- `ensure_local_maps(globe, ref, params, cache) → list[LocalMap]` — builds
-  the region (Phase 1) and the owning local map first, so the settlement is
+- `ensure_local_maps(store, ref) → SettlementMaps` — through the shared
+  `MapStore` (built only if not held), the region (Phase 1) and the owning local map first, so the settlement is
   `local_refined` at its final position; then sizes the frame from it
   (footprint + garden ring + margin), finds every regional hex the frame
   touches (A4's rule over points along the frame edge and inside), and builds
@@ -439,7 +439,25 @@ biome and every city and town position bit-identical to the viewer before the
 change (25,620 arrays). Tests: `region/test/test_builder.py`, and
 `test_the_view_builds_through_build_region_map` in the viewer tests.
 
-Next: Phase 2 (the chain).
+**Phase 2 done 2026-10-10**: `localmap/store.py` `MapStore` — the region and
+local maps built so far for one globe, their params and reset rules (moved out
+of `RegionView`), LRU 3 regions / 6 local maps (~100 MB each). `MapWindow`'s two
+views share one store, and the chain asks the same store, so **a region or
+local map is built only if not already held**, whoever built it. Re-entering a
+region in the viewer now reuses it instead of rebuilding.
+`settlegen/chain.py`: `SettlementRef`, `ensure_local_maps(store, ref)` →
+`SettlementMaps` (owning map first, frame centre / radius / side, what it had
+built); `frame_keys` finds the maps a frame needs exactly with shapely (frame
+square ∩ each regional hexagon clipped to its cell), from the hex grids alone,
+so no region is built unless one of its hexes is needed.
+`localmap.settlements.owning_hex` is the shared ownership rule (A4). Seed 4
+spike through the chain: same maps and numbers as Phase 0, 23 maps built for
+12 frames (region 28 once for its 4 cities), A9 still 0 m. Tests:
+`localmap/test/test_store.py`, `settlegen/test/test_chain.py`.
+`SettlementMapParams` on `AppParams` (Decision 6) waits for the viewer
+(Phase 7); the chain takes `margin_km` for now.
+
+Next: Phase 3 is already built (Phase 0); Phase 4 (site features).
 
 Polygon library for Decision 8: **shapely** (approved 2026-10-10; in
 `requirements.txt`).

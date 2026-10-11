@@ -5,7 +5,7 @@
 is saved on the world (``local_refined``) so every map shows it in one place.
 
 Ownership: each settlement is refined once, by the local map of the regional hex
-nearest its region position, in the region that refined it.  Other maps draw it
+nearest its region position (:func:`owning_hex`), in the region that refined it.  Other maps draw it
 wherever it currently stands.
 
 Cities go before the local roads (so roads end on them); towns after (their
@@ -42,19 +42,27 @@ class LocalSettlementParams:
     bank_clearance_km: float = _f(0.1, label="Clearance from river banks (km)", min=0.0, max=2.0, step=0.05)
 
 
+def owning_hex(region: RegionFields, region_positions: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """``((K,) hex, (K,) valid)``: the regional hex whose local map refines each
+    settlement — the one nearest its region position.  ``valid`` is False on the
+    region's far side."""
+    s, t, valid = region.geometry.ecef_to_local(np.asarray(region_positions, dtype=np.float64).reshape(-1, 3))
+    centers = region.grid.centers
+    nearest = np.argmin((s[:, None] - centers[None, :, 0]) ** 2 + (t[:, None] - centers[None, :, 1]) ** 2, axis=1)
+    return nearest, valid
+
+
 def local_owned(
     region: RegionFields, hex_index: int, site_positions: np.ndarray, region_positions: np.ndarray,
     refined: np.ndarray, local_refined: np.ndarray, antimeridian,
 ) -> np.ndarray:
     """``(K,)`` True for settlements this hex's local map refines: refined by
-    this region, not yet locally, and nearest this hex."""
+    this region, not yet locally, and nearest this hex (:func:`owning_hex`)."""
     site_positions = np.asarray(site_positions, dtype=np.float64).reshape(-1, 3)
     if len(site_positions) == 0:
         return np.zeros(0, dtype=bool)
     here = ecef_to_cell(site_positions, antimeridian) == region.region_id
-    s, t, valid = region.geometry.ecef_to_local(np.asarray(region_positions, dtype=np.float64).reshape(-1, 3))
-    centers = region.grid.centers
-    nearest = np.argmin((s[:, None] - centers[None, :, 0]) ** 2 + (t[:, None] - centers[None, :, 1]) ** 2, axis=1)
+    nearest, valid = owning_hex(region, region_positions)
     return here & valid & (nearest == int(hex_index)) & np.asarray(refined, bool) & ~np.asarray(local_refined, bool)
 
 

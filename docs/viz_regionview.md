@@ -27,30 +27,39 @@ back from a local map shows the region untouched.
 
 ## `RegionView`
 
-**`set_region(geometry, globe)`** refines synchronously (~1.0–1.4 s at defaults,
-⅓ resource/danger): `build_region_fields` (world `GlobeParams.resources`,
-`PopulationParams.fertility_exponent`), then `_refine_features` (~0.8 s), which
-calls the Qt-free `region.builder.refine_region_features` and keeps its
-`RegionMap`: `build_region_rivers` → `refine_region_cities` →
+**Maps come from a `MapStore`** (`localmap/store.py`): the Qt-free holder of
+the region and local maps built so far, their params and the realm/world
+tuning. `MapWindow` gives both views one store (`set_store`), and the
+settlement chain (`settlegen.chain`) asks the same one, so a region or local
+map is built only if the store doesn't hold it — LRU, `REGION_CAPACITY` = 3,
+`LOCAL_CAPACITY` = 6 (~100 MB each). A view made alone
+has its own store.
+
+**`set_region(geometry, globe)`** takes the store's `RegionMap` of the region,
+refining synchronously if it doesn't hold one (~1.0–1.4 s at defaults, ⅓
+resource/danger): `build_region_fields` (world `GlobeParams.resources`,
+`PopulationParams.fertility_exponent`), then `region.builder.refine_region_features`
+(~0.8 s): `build_region_rivers` → `refine_region_cities` →
 `build_region_roads` (world `cost.land` params, realm danger `movement_scale`,
 `moved` = cities' site → refined positions) → `snap_deltas` →
 `refine_region_towns` (realm town and population params,
 `refine.river_threshold_factor`). No globe → bare scaffolding.
 
-**`set_local(region_view, hex)`** → `build_local_map` from the region view's
-fields, rivers, roads, deltas, the region's streams (`RegionMap.streams` →
-`build_region_streams`, ~0.35 s, built on the region's first local map and kept
-until the region, its rivers or `LocalParams.streams` change) and world tuning — or from an LRU cache
-(`LOCAL_CACHE_SIZE` = 6, ~0.02 s) valid while the region's fields are the same
-object and local params unchanged. Draws `Villages.rural_density` (countryside
+**`set_local(region_view, hex)`** → the store's local map (and from then on
+the region view's store), else `build_local_map` from the region's fields,
+rivers, roads, deltas, streams (`RegionMap.streams` → `build_region_streams`,
+~0.35 s, built on the region's first local map and kept until the region, its
+rivers or `LocalParams.streams` change) and world tuning. Draws `Villages.rural_density` (countryside
 net of villages) as `rural_density`.
 
-**Params.** `set_params(RegionParams)` resets all refined towns/cities to stage
-sites; new `upsample` re-refines the region (keeps zoom/pan), other changes only
-re-run `_refine_features`. `set_local_params(LocalParams)` drops cached local
-maps and every local refinement (`reset_local_refinement`). `MapWindow` also
-clears the local cache on region-params change and rebuilds an open local map
-(`_reopen_local`). See [region.md](region.md#regionparams-regionparamspy).
+**Params** live in the store, which applies the resets
+(`MapStore.set_region_params` / `set_local_params`): new region params reset all
+refined towns/cities to stage sites and drop every local map; new `upsample`
+drops every region, other changes keep the regions' fields and re-run only
+their features on next use. New local params drop every local map and every
+local refinement (`reset_local_refinement`). `set_params` re-shows the region on
+screen (keeping zoom/pan); `MapWindow` rebuilds an open local map
+(`_reopen_local`); a new globe (`MapWindow.set_globe`) empties the store. See [region.md](region.md#regionparams-regionparamspy).
 
 **Drawing.**
 - Each hex's layer texture (`build_layer_texture`) cached as a `QImage`. Local

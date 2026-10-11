@@ -54,9 +54,11 @@ def _region_view(globe_) -> RegionView:
     return _painted(view)
 
 
-def _local_view() -> RegionView:
+def _local_view(region: RegionView) -> RegionView:
+    """A local view sharing ``region``'s store, as the window's views do."""
     view = RegionView()
     view.resize(600, 500)
+    view.set_store(region.store)
     view.set_local_params(_LOCAL)
     return view
 
@@ -98,7 +100,7 @@ def test_a_click_picks_a_hex_but_a_drag_does_not(app, globe):  # noqa: F811
 def test_the_local_view_shows_the_hexs_local_map(app, globe):  # noqa: F811
     region = _region_view(globe)
     h = _land_hex(region)
-    view = _local_view()
+    view = _local_view(region)
     view.set_local(region, h)
     _painted(view)
     local = view.local_map
@@ -122,7 +124,7 @@ def _xy(p: QPoint) -> tuple[float, float]:
 def test_local_maps_are_cached_until_the_params_change(app, globe):  # noqa: F811
     region = _region_view(globe)
     h = _land_hex(region)
-    view = _local_view()
+    view = _local_view(region)
     view.set_local(region, h)
     first = view.local_map
     view.set_local(region, h)
@@ -130,16 +132,21 @@ def test_local_maps_are_cached_until_the_params_change(app, globe):  # noqa: F81
     view.set_local_params(dataclasses.replace(_LOCAL, villages=dataclasses.replace(_LOCAL.villages, spacing_km=10.0)))
     view.set_local(region, h)
     assert view.local_map is not first
-    # A re-refined region invalidates everything built from the old one.
-    second = view.local_map
+    # Re-entering the region takes the store's maps: nothing is rebuilt.
+    second, fields, builds = view.local_map, region.fields, len(region.store.builds)
     region.set_region(RegionGeometry(REGION_ID, globe.antimeridian), globe)
+    view.set_local(region, h)
+    assert region.fields is fields and view.local_map is second
+    assert len(region.store.builds) == builds
+    # New region params drop the local maps built from the old region.
+    region.set_params(dataclasses.replace(_REGION, rivers=dataclasses.replace(_REGION.rivers, valley_seeking=1.0)))
     view.set_local(region, h)
     assert view.local_map is not second
 
 
 def test_hovering_a_village_describes_it(app, globe):  # noqa: F811
     region = _region_view(globe)
-    view = _local_view()
+    view = _local_view(region)
     view.set_local(region, _land_hex(region))
     _painted(view)
     local = view.local_map
@@ -214,7 +221,7 @@ def test_region_hover_names_the_city_and_counts_the_hexs_towns(app, globe, settl
 
 def test_local_hover_names_the_town_under_the_cursor(app, globe, settled):  # noqa: F811
     region = _region_view(globe)
-    view = _local_view()
+    view = _local_view(region)
     view.set_local(region, settled)
     _show_settlements(view)
     towns = view._refined_features().get("towns")
@@ -250,7 +257,7 @@ def test_the_window_steps_back_one_tier_at_a_time(app, globe):  # noqa: F811
 
 def test_farmland_follows_its_settlements_overlays(app, globe):  # noqa: F811
     region = _region_view(globe)
-    view = _local_view()
+    view = _local_view(region)
     view.set_local(region, _land_hex(region))
     _painted(view)
     local = view.local_map
@@ -284,7 +291,7 @@ def test_region_and_local_hover_name_the_fort_and_its_garrison(app, globe, settl
     globe.add_feature("forts", forts)
     try:
         region = _region_view(globe)
-        local = _local_view()
+        local = _local_view(region)
         local.set_local(region, settled)
         for view in (region, local):
             view.set_overlay_visible("forts", True)
