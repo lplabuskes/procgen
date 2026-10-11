@@ -117,7 +117,7 @@ Drawing order (feature key, registering stage):
 | `"forts"` (`Forts`, all views) | Crenellated keep (`_KEEP_OUTLINE`) in stone grey (`FORT_COLOR`, one for every kind), dark outline over a white halo; half-size `max(3, 3.8 · zoom^0.3)` px, × 1.15 in region/local (`fort_markers`); `on_land`-snapped; hovered in region/local by `RegionView.fort_under_cursor` |
 | `"towns"` (towns; region/local only) | Kind-coloured dots 0.9–1.6 px × zoom^0.3; ringed dark-then-white on local maps |
 | `"settlements"` (population) | Tier circles, radius `TIER_RADII[tier] · zoom^0.3 · (√(pop/max_pop)·0.4 + 0.6)`. Region: × 1.5, ≥ 2 × largest town, ringed. Local: built-up footprint (`localmap/cities.py`, texels unioned via `QRegion`, tier colour, dark outline); smaller than the floor marker (2 × largest town radius) → "walled" marker (dark outline, white band, dark ring, dark centre dot), never mistaken for a town |
-| `"polity_borders"` (polity) | Black by depth (2.0 / 1.2 / 0.7 px × zoom^0.3, fainter deeper), sovereign on top |
+| `"polity_borders"` (polity) | Black by depth (2.0 / 1.2 / 0.7 px × view_zoom^0.3 × level scale 1 / 1.25 / 1.5 for world / region / local, fainter deeper), sovereign on top |
 | farmland | Local only, no toggle ([viz_regionview.md](viz_regionview.md)) |
 
 ---
