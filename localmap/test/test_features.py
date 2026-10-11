@@ -138,3 +138,19 @@ def test_roads_are_rerouted_between_the_same_ends(local, region, road_input, glo
 def test_far_sea_legs_are_dropped(local, region, road_input, globe):
     roads = build_local_roads(local, region, road_input, globe)
     assert roads.sea == []
+
+
+def test_river_legs_are_rerouted_along_the_local_river(local, region, region_rivers, globe, rivers):
+    """A regional river leg, given as the straight line across the local river's
+    ends, is re-traced along that river, not as a road."""
+    path = max((np.asarray(p, dtype=np.float64) for p, _, _ in rivers.paths), key=len)
+    line = np.stack([path[0], path[-1]])
+    leg = RegionRoads(region_id=local.region_id, segments=[], water_polylines=[line],
+                      water_flows=[np.array([4.0])], water_pins=[(False, False)])
+    roads = build_local_roads(local, region, leg, globe, rivers)
+    assert roads.water_polylines and not roads.polylines
+    assert all(np.all(f == 4.0) for f in roads.water_flows)
+    pts = np.concatenate([p[1:-1] for p in roads.water_polylines])
+    spacing = local.grid.texel_spacing_rad(local.tex_size)
+    # The local road raster is two texels; smoothing pulls a little off it.
+    assert np.mean(_dist_to(pts, path) < 3.0 * spacing) > 0.8

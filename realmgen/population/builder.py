@@ -498,6 +498,8 @@ class PopulationStage(Stage):
 
         world.add_feature("settlements", self.settlements)
         world.add_feature("trade_routes", self.trade_result.routes)
+        # Aligned with trade_routes: which hops are land, water or a port transfer.
+        world.add_feature("trade_route_layers", self.trade_result.route_layers)
         # (S, S), read by the polity stage for loyalty secession; guard a stale shape.
         attribution = self.trade_result.pair_flow
         if attribution.shape != (len(self.settlements), len(self.settlements)):

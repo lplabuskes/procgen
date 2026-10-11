@@ -59,6 +59,10 @@ GOOD_RARITY_WEIGHTS: dict[int, float] = {
     18: 3.5,  # Pearls
 }
 
+# Graph layer of a route hop: both ends land nodes, both sea nodes (open water,
+# lakes and navigable rivers), or a land↔water transfer (port or river switch).
+ROUTE_LAND, ROUTE_WATER, ROUTE_TRANSFER = 0, 1, 2
+
 
 @dataclass
 class TradeResult:
@@ -79,6 +83,8 @@ class TradeResult:
     # (S,) flow of each settlement's own goods at its face: deposit hauls arriving
     # plus everything it exports (the rest of its face flow is imports and transit).
     goods_flow: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.float64))
+    # (len(routes),) int8 — each route hop's graph layer (``ROUTE_LAND`` / ``_WATER`` / ``_TRANSFER``).
+    route_layers: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int8))
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -501,10 +507,12 @@ def compute_trade_network(
     threshold = float(min_display_flow) if min_display_flow is not None else 0.0
 
     routes = []
+    layers = []
     for a, b, flow in zip(edge_a.tolist(), edge_b.tolist(), edge_flow.tolist()):
         if flow < threshold:
             continue
         routes.append((centroids[a % n].copy(), centroids[b % n].copy(), float(flow)))
+        layers.append(ROUTE_LAND if max(a, b) < n else ROUTE_WATER if min(a, b) >= n else ROUTE_TRANSFER)
 
     return TradeResult(
         face_flow=face_flow.astype(np.float32),
@@ -516,4 +524,5 @@ def compute_trade_network(
         deposit_cost=deposit_cost,
         deposit_credit=deposit_credit,
         goods_flow=goods_flow,
+        route_layers=np.array(layers, dtype=np.int8),
     )

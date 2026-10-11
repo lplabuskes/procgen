@@ -165,5 +165,5 @@ trade-fed-city test).
 ## Outputs
 
 - Per face: `TRADE_FLOW`, `POPULATION`, `HINTERLAND_ID`, `RURAL_POPULATION`, `FISHING_POPULATION` (fishers within rural, pre-towns), `MINING_POPULATION` (miners within it, at deposit faces), `TOWN_POPULATION` (zeroed), `is_trade_hub`, `settlement_tier` (now the *display* tier from `population / max_pop`).
-- Features: `settlements` (+ population, defensibility, walls), `trade_routes`, `trade_attribution` (`(S, S)`), `mine_workers` (per deposit, aligned with `minerals`; saved with settlements).
+- Features: `settlements` (+ population, defensibility, walls), `trade_routes`, `trade_route_layers` (`(len(trade_routes),)` int8 aligned with it: `ROUTE_LAND` / `ROUTE_WATER` (sea layer — ocean, lake or navigable river) / `ROUTE_TRANSFER` (port or river switch); `TradeResult.route_layers`; the region and local tiers keep water hops on the water), `trade_attribution` (`(S, S)`), `mine_workers` (per deposit, aligned with `minerals`; saved with settlements).
 - Overlays: **Settlements**, **Trade Routes** (checked). World-map hover: tier name + population (`world_only`; zoomed views name the city under the cursor). Debug schemes: Trade Flow, Hinterland. (Rural density is drawn by the town stage.)

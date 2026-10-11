@@ -10,7 +10,10 @@ trade and how much are world facts.  A region refines only where the road runs:
   cost (biome, forest, danger × movement scale) per face-width, plus
   ``ruggedness_cost_per_km`` per km climbed; regional rivers charge the ford
   penalty to cross and discount travel along them.  Refined water is impassable.
-- Sea legs stay straight; a port hop is split at the refined coast.
+- Water hops keep to the water (the world's ``trade_route_layers``): river and
+  lake legs are chained and re-traced over refined water and the regional rivers,
+  land costing ``water_land_cost`` times as much; open-sea legs stay straight.  A
+  port hop is split at the refined coast, the road ending where the boat leaves.
 - Only routes the world map draws (flow ≥ median) are re-routed; the rest are
   kept for town siting.  Settlement ends land exactly on their markers; ``moved``
   carries cities re-sited by ``region/cities.py``.
@@ -38,7 +41,9 @@ from region.display import snap_to_land
 from region.rivers import RegionRivers
 from region.sampling import GlobalSampler
 from region.upsample import EARTH_RADIUS_KM, RegionFields
+from realmgen.trade.network import ROUTE_LAND, ROUTE_TRANSFER
 from worldgen.cost.surfaces import BIOME_TRAVERSAL_COST
+from worldgen.geology.channels import IS_OCEAN
 from worldgen.hydrology.types import laplacian_smooth_sphere
 
 if TYPE_CHECKING:
@@ -60,6 +65,11 @@ class RegionRoadParams:
     corridor_face_fraction: float = _f(
         0.35, label="Corridor half-width (face spacings)", min=0.05, max=1.0, step=0.05)
     smoothing_iterations: int = _f(6, label="Road smoothing iterations", min=0, max=20)
+    # River and lake legs: corridor half-width (the river can be half a face from the
+    # centroid line) and the cost of a step over land relative to one over water.
+    water_corridor_face_fraction: float = _f(
+        0.5, label="Water corridor half-width (face spacings)", min=0.05, max=1.0, step=0.05)
+    water_land_cost: float = _f(20.0, label="Water route land-step cost", min=1.0, max=200.0, step=1.0)
 
 
 @dataclass
@@ -77,6 +87,11 @@ class RegionRoads:
     sea: list[RouteSegment] = field(default_factory=list)
     # (K - 1,) per-edge flow of each of ``polylines``, for the tier below.
     polyline_flows: list[np.ndarray] = field(default_factory=list)
+    # Re-routed river and lake legs (also in ``segments``), their per-edge flows, and
+    # whether each end is pinned to a place on land (a port or the coast point of a port hop).
+    water_polylines: list[np.ndarray] = field(default_factory=list)
+    water_flows: list[np.ndarray] = field(default_factory=list)
+    water_pins: list[tuple[bool, bool]] = field(default_factory=list)
 
 
 # Chord distance for a road end to match a settlement's old position (float32 round-off).
@@ -170,14 +185,34 @@ def _road_cost(
     return edge_cost
 
 
+def _wet_nodes(raster: Raster, river_flow: np.ndarray) -> np.ndarray:
+    """``(n²,)`` nodes a boat can use: refined water or a regional river."""
+    return raster.sampled & (raster.water | (river_flow > 0.0))
+
+
+def _water_cost(wet: np.ndarray, land_cost: float):
+    """Per-edge cost of a river or lake leg: one per step on water, ``land_cost`` per step on land."""
+    node = np.where(wet, 1.0, float(land_cost))
+
+    def edge_cost(sub: np.ndarray, a: np.ndarray, b: np.ndarray, length: np.ndarray) -> np.ndarray:
+        return 0.5 * (node[sub[a]] + node[sub[b]]) * length
+
+    return edge_cost
+
+
 # ── chaining the world's hops ────────────────────────────────────────────────
 
 
-def _chains(edges: list[tuple[int, int, float]], n_nodes: int) -> list[tuple[list[int], list[float]]]:
+def _chains(
+    edges: list[tuple[int, int, float]], n_nodes: int, stops: Optional[np.ndarray] = None,
+) -> list[tuple[list[int], list[float]]]:
     """Cut an undirected edge list into maximal chains through degree-2 nodes.
 
-    Returns ``(nodes, edge flows)`` per chain; a closed loop is cut at one node.
+    ``stops`` (``(n_nodes,)`` bool) also end chains: a routed chain lands exactly
+    on its ends only.  Returns ``(nodes, edge flows)`` per chain; a closed loop is
+    cut at one node.
     """
+    stop = np.zeros(n_nodes, dtype=bool) if stops is None else np.asarray(stops, dtype=bool)
     adj: list[list[tuple[int, int]]] = [[] for _ in range(n_nodes)]
     for e, (a, b, _) in enumerate(edges):
         adj[a].append((b, e))
@@ -195,7 +230,7 @@ def _chains(edges: list[tuple[int, int, float]], n_nodes: int) -> list[tuple[lis
             nodes.append(nxt)
             flows.append(f)
             cur = nxt
-            if len(adj[cur]) != 2:
+            if len(adj[cur]) != 2 or stop[cur]:
                 return nodes, flows
             e2 = [x for _, x in adj[cur] if not used[x]]
             if not e2:
@@ -203,7 +238,7 @@ def _chains(edges: list[tuple[int, int, float]], n_nodes: int) -> list[tuple[lis
             e = e2[0]
 
     for v in range(n_nodes):
-        if len(adj[v]) != 2:
+        if len(adj[v]) != 2 or stop[v]:
             for _, e in adj[v]:
                 if not used[e]:
                     chains.append(walk(v, e))
@@ -216,7 +251,8 @@ def _chains(edges: list[tuple[int, int, float]], n_nodes: int) -> list[tuple[lis
 def _coast_point(
     raster: Raster, fields: RegionFields, land_end: np.ndarray, sea_end: np.ndarray,
 ) -> Optional[np.ndarray]:
-    """The last dry raster node before the hop ``land_end`` → ``sea_end`` meets refined water, or None."""
+    """Where the hop ``land_end`` → ``sea_end`` meets refined water: the last dry raster node before it,
+    ``land_end`` itself when the water starts there, or None when the hop meets none on the raster."""
     pts = np.stack([land_end, sea_end])
     s, t, valid = fields.geometry.ecef_to_local(pts)
     if not valid.all():
@@ -229,26 +265,27 @@ def _coast_point(
     rows = np.rint(y[0] + frac * (y[1] - y[0])).astype(np.int64)
     n = raster.n
     inside = (cols >= 0) & (cols < n) & (rows >= 0) & (rows < n)
-    if not inside.all():
+    # Up to where the hop leaves the raster.
+    k = int(np.argmin(inside)) if not inside.all() else len(inside)
+    idx = rows[:k] * n + cols[:k]
+    hit = np.flatnonzero(raster.water[idx] & raster.sampled[idx])
+    if hit.size == 0:
         return None
-    idx = rows * n + cols
-    wet = raster.water[idx] & raster.sampled[idx]
-    hit = np.flatnonzero(wet)
-    if hit.size == 0 or hit[0] == 0:
-        return None
+    if hit[0] == 0:
+        return land_end
     return raster.positions[idx[hit[0] - 1]].copy()
 
 
-def _dry_node(raster: Raster, node: int, radius: float) -> int:
-    """``node``, or the nearest dry sampled node within ``radius`` nodes of it."""
-    if not raster.water[node] and raster.sampled[node]:
+def _nearest_node(raster: Raster, node: int, radius: float, allowed: np.ndarray) -> int:
+    """``node``, or the nearest ``allowed`` node within ``radius`` nodes of it."""
+    if allowed[node]:
         return node
     n = raster.n
     r0, c0 = divmod(node, n)
     rad = int(np.ceil(radius))
     rr, cc = np.mgrid[max(r0 - rad, 0):min(r0 + rad + 1, n), max(c0 - rad, 0):min(c0 + rad + 1, n)]
     cand = (rr * n + cc).ravel()
-    ok = raster.sampled[cand] & ~raster.water[cand]
+    ok = allowed[cand]
     if not ok.any():
         return node
     d = np.hypot(rr.ravel() - r0, cc.ravel() - c0)
@@ -327,6 +364,34 @@ def _assign_flows(path: np.ndarray, verts: np.ndarray, flows: np.ndarray) -> np.
 
 # ── entry point ──────────────────────────────────────────────────────────────
 
+# What a drawn world hop becomes: a road, a port hop (road to the coast, then
+# water), a river/lake leg, a straight open-sea leg, or nothing (a river switch).
+_LAND, _PORT, _WATER, _SEA, _SKIP = range(5)
+
+
+def _hop_kinds(
+    globe: "World", f0: np.ndarray, f1: np.ndarray, layers: Optional[np.ndarray],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """``(kind, land0, ocean)`` per drawn hop from its ends' faces ``f0``/``f1`` and world ``layers``.
+
+    ``land0``: the start face is land-passable; ``ocean``: per face (all faces).
+    Without ``layers`` the kind is guessed from the faces, river faces counting as land.
+    """
+    mesh = globe.mesh
+    cs = globe.get_feature("cost_surfaces")
+    lp = (np.asarray(cs.land_passable, dtype=bool) if cs is not None
+          else np.ones(len(mesh.faces), dtype=bool))
+    ocean = np.asarray(IS_OCEAN.read(mesh), dtype=bool) if IS_OCEAN.present(mesh) else ~lp
+    land0, land1 = lp[f0], lp[f1]
+    if layers is None:
+        kind = np.select([land0 & land1, land0 | land1], [_LAND, _PORT], _SEA)
+    else:
+        kind = np.select(
+            [layers == ROUTE_LAND, (layers == ROUTE_TRANSFER) & (f0 == f1), layers == ROUTE_TRANSFER,
+             ocean[f0] & ocean[f1]],
+            [_LAND, _SKIP, _PORT, _SEA], _WATER)
+    return kind, land0, ocean
+
 
 def build_region_roads(
     fields: RegionFields,
@@ -351,6 +416,9 @@ def build_region_roads(
     empty = RegionRoads(region_id=fields.region_id, segments=[])
     if not routes:
         return empty
+    layers = globe.get_feature("trade_route_layers")
+    if layers is not None and len(layers) != len(routes):
+        layers = None
     mesh = globe.mesh
     lo, step, n = raster_frame(fields, params.raster_texels, params.margin)
     hi = lo + step * (n - 1)
@@ -376,21 +444,20 @@ def build_region_roads(
     if not drawn.any():
         return RegionRoads(region_id=fields.region_id, segments=[], undrawn=undrawn)
 
-    # Land or sea at each hop end, by its face's land-passability.
-    cs = globe.get_feature("cost_surfaces")
     sampler = GlobalSampler(mesh)
     idx = np.flatnonzero(drawn)
     f0, _, _ = sampler.locate(starts[idx])
     f1, _, _ = sampler.locate(ends[idx])
-    if cs is not None:
-        land0, land1 = cs.land_passable[f0], cs.land_passable[f1]
-    else:
-        land0 = land1 = np.ones(len(idx), dtype=bool)
+    kinds, land0, ocean = _hop_kinds(globe, f0, f1, None if layers is None else np.asarray(layers)[idx])
 
     radius_nodes = max(float(params.corridor_face_fraction) * face_rad / node_rad, 1.5)
-    any_land = land0 | land1
-    lines = [(np.array([s0[i], s1[i]]), np.array([t0[i], t1[i]])) for i in idx[any_land]]
-    reach = corridor_reach(lines, lo, step, n, radius_nodes + 2.0)
+    water_radius = max(float(params.water_corridor_face_fraction) * face_rad / node_rad, 1.5)
+
+    def lines(mask: np.ndarray) -> list[tuple[np.ndarray, np.ndarray]]:
+        return [(np.array([s0[i], s1[i]]), np.array([t0[i], t1[i]])) for i in idx[mask]]
+
+    reach = corridor_reach(lines((kinds == _LAND) | (kinds == _PORT)), lo, step, n, radius_nodes + 2.0)
+    reach |= corridor_reach(lines((kinds == _WATER) | (kinds == _PORT)), lo, step, n, water_radius + 2.0)
     raster = sample_raster(fields, globe, lo, step, n, reach, keys=("biome", "forest_density", "danger"))
 
     # Nodes: every hop end, plus a coast point per port hop.
@@ -404,44 +471,85 @@ def build_region_roads(
             points.append(np.asarray(p, dtype=np.float64))
         return keys[k]
 
+    def straight(a: np.ndarray, b: np.ndarray, f: float) -> RouteSegment:
+        return (np.asarray(a, dtype=np.float32), np.asarray(b, dtype=np.float32), f)
+
     land_edges: list[tuple[int, int, float]] = []
+    water_edges: list[tuple[int, int, float]] = []
+    pinned_nodes: set[int] = set()
     sea: list[RouteSegment] = []
     for j, i in enumerate(idx):
         a, b, f = starts[i], ends[i], float(flows[i])
-        if land0[j] and land1[j]:
+        kind = kinds[j]
+        if kind == _LAND:
             land_edges.append((node(a), node(b), f))
-        elif land0[j] or land1[j]:
-            land_end, sea_end = (a, b) if land0[j] else (b, a)
-            coast = _coast_point(raster, fields, land_end, sea_end)
+        elif kind == _PORT:
+            land_end, sea_end, sea_face = (a, b, f1[j]) if land0[j] else (b, a, f0[j])
+            # From the port as drawn: a settlement on refined water is moved ashore.
+            port = snap_to_land(fields, land_end[None], land_reach)[0]
+            coast = _coast_point(raster, fields, port, sea_end)
             if coast is None:
                 land_edges.append((node(a), node(b), f))
                 continue
-            land_edges.append((node(land_end), node(coast), f))
-            sea.append((coast.astype(np.float32), np.asarray(sea_end, dtype=np.float32), f))
-        else:
-            sea.append((np.asarray(a, dtype=np.float32), np.asarray(b, dtype=np.float32), f))
+            if coast is port:        # the water starts at the port: no road
+                start = node(land_end)
+            else:
+                land_edges.append((node(land_end), node(coast), f))
+                start = node(coast)
+            pinned_nodes.add(start)
+            if ocean[sea_face]:
+                sea.append(straight(coast, sea_end, f))
+            else:
+                water_edges.append((start, node(sea_end), f))
+        elif kind == _WATER:
+            water_edges.append((node(a), node(b), f))
+        elif kind == _SEA:
+            sea.append(straight(a, b, f))
 
     river_flow, _ = _river_nodes(rivers, fields, raster)
     node_km = node_rad * EARTH_RADIUS_KM
     edge_cost = _road_cost(raster, river_flow, land, danger_scale, node_km, face_rad * EARTH_RADIUS_KM)
 
-    pts = np.array(points)
+    pts = np.array(points).reshape(-1, 3)
     ends_on_land = snap_to_land(fields, pts, land_reach)
     segments: list[RouteSegment] = list(sea)
-    polylines: list[np.ndarray] = []
-    polyline_flows: list[np.ndarray] = []
-    for chain, chain_flows in _chains(land_edges, len(points)):
-        routed_chain = route_polyline(
-            fields, raster, ends_on_land[chain], np.asarray(chain_flows), radius_nodes, edge_cost,
-            int(params.smoothing_iterations),
-        )
-        for path, edge_flows in routed_chain:
-            polylines.append(path)
-            polyline_flows.append(np.asarray(edge_flows, dtype=np.float64))
-            for k in range(len(path) - 1):
-                segments.append((path[k].astype(np.float32), path[k + 1].astype(np.float32), float(edge_flows[k])))
-    return RegionRoads(region_id=fields.region_id, segments=segments, undrawn=undrawn, polylines=polylines, sea=sea,
-                       polyline_flows=polyline_flows)
+    out = RegionRoads(region_id=fields.region_id, segments=segments, undrawn=undrawn, sea=sea)
+    smoothing = int(params.smoothing_iterations)
+    # Routes pass through their settlements: chains end at them (a routed chain only lands on its ends).
+    settlements = globe.get_feature("settlements") or []
+    settled = {_key(np.asarray(c.position, dtype=np.float64)) for c in settlements}
+    at_settlement = np.array([k in settled for k in keys], dtype=bool)
+    for chain, chain_flows in _chains(land_edges, len(points), at_settlement):
+        for path, edge_flows, _ in route_polyline(
+            fields, raster, ends_on_land[chain], np.asarray(chain_flows), radius_nodes, edge_cost, smoothing,
+        ):
+            out.polylines.append(path)
+            out.polyline_flows.append(np.asarray(edge_flows, dtype=np.float64))
+            segments.extend(_segments(path, edge_flows))
+
+    if water_edges:
+        # A water leg is pinned to the land at a port (a settlement) or at a port hop's coast point.
+        pinned = at_settlement.copy()
+        pinned[list(pinned_nodes)] = True
+        verts = np.where(pinned[:, None], ends_on_land, pts)
+        wet = _wet_nodes(raster, river_flow)
+        water_cost = _water_cost(wet, float(params.water_land_cost))
+        for chain, chain_flows in _chains(water_edges, len(points), pinned):
+            for path, edge_flows, pins in route_polyline(
+                fields, raster, verts[chain], np.asarray(chain_flows), water_radius, water_cost, smoothing,
+                wet=wet, pin=(bool(pinned[chain[0]]), bool(pinned[chain[-1]])),
+            ):
+                out.water_polylines.append(path)
+                out.water_flows.append(np.asarray(edge_flows, dtype=np.float64))
+                out.water_pins.append(pins)
+                segments.extend(_segments(path, edge_flows))
+    return out
+
+
+def _segments(path: np.ndarray, edge_flows: np.ndarray) -> list[RouteSegment]:
+    """A routed polyline as world-form ``(start, end, flow)`` segments."""
+    return [(path[k].astype(np.float32), path[k + 1].astype(np.float32), float(edge_flows[k]))
+            for k in range(len(path) - 1)]
 
 
 def route_polyline(
@@ -452,37 +560,82 @@ def route_polyline(
     radius_nodes: float,
     edge_cost,
     smoothing_iterations: int,
-) -> list[tuple[np.ndarray, np.ndarray]]:
-    """Re-route one polyline ``verts`` (K, 3) over ``raster``; ``(path, edge flows)`` per stretch.
+    *,
+    wet: Optional[np.ndarray] = None,
+    pin: tuple[bool, bool] = (True, True),
+) -> list[tuple[np.ndarray, np.ndarray, tuple[bool, bool]]]:
+    """Re-route one polyline ``verts`` (K, 3) over ``raster``; ``(path, edge flows, pinned ends)`` per stretch.
 
-    Ends land exactly on their points; a stretch with no dry way through keeps the given line.
+    A road (``wet`` None) is routed between the dry nodes nearest its ends and
+    ends exactly on its points; a stretch with no dry way through keeps the given
+    line.  A water leg (``wet`` the ``(n²,)`` nodes a boat can use) starts from a
+    ``pin``-ned end's own point and lands on it, and from the nearest wet node at
+    any other end (a junction on the water, or the raster edge).
     """
     hi = raster.lo + raster.step * (raster.n - 1)
     s, t, _ = fields.geometry.ecef_to_local(verts)
     out = []
     for st in _stretches(s, t, verts, flows, raster.lo, hi):
+        pins = (bool(st.real[0]) and pin[0], bool(st.real[-1]) and pin[1])
         anchors = np.where(st.real[:, None], st.ecef, fields.geometry.local_to_ecef(st.s, st.t))
-        routed = _route_stretch(raster, st.s, st.t, radius_nodes, edge_cost)
+        routed = _route_stretch(raster, st.s, st.t, radius_nodes, edge_cost, wet, pins)
         if routed is None:
-            out.append((anchors, st.flows))
+            out.append((anchors, st.flows, pins))
             continue
+        if wet is not None:
+            routed = _pull_string(raster, routed, wet)
         path = raster.positions[routed].copy()
-        if st.real[0]:
+        if pins[0]:
             path[0] = st.ecef[0]
-        if st.real[-1]:
+        if pins[1]:
             path[-1] = st.ecef[-1]
         path = np.stack(laplacian_smooth_sphere(list(path), iterations=smoothing_iterations)).astype(np.float64)
-        out.append((path, _assign_flows(path, anchors, st.flows)))
+        out.append((path, _assign_flows(path, anchors, st.flows), pins))
     return out
+
+
+def _line_nodes(raster: Raster, a: int, b: int) -> np.ndarray:
+    """Raster nodes on the straight line from node ``a`` to node ``b``, two samples per step."""
+    (ra, ca), (rb, cb) = divmod(a, raster.n), divmod(b, raster.n)
+    m = max(int(np.ceil(2.0 * np.hypot(rb - ra, cb - ca))), 1)
+    frac = np.arange(m + 1) / m
+    return np.rint(ra + frac * (rb - ra)).astype(np.int64) * raster.n + np.rint(ca + frac * (cb - ca)).astype(np.int64)
+
+
+def _pull_string(raster: Raster, nodes: np.ndarray, wet: np.ndarray) -> np.ndarray:
+    """``nodes`` with every run a straight line over ``wet`` nodes can replace cut short.
+
+    Grid paths cross open water in 45° doglegs; the boat sails straight.  A
+    meandering river keeps its bends (the straight line would cross land).  The
+    shortcuts are re-sampled one node apart, so smoothing only rounds the corners.
+    """
+    def clear(a: int, b: int) -> bool:
+        return bool(wet[_line_nodes(raster, a, b)].all())
+
+    out = [np.asarray(nodes[:1])]
+    i, last = 0, len(nodes) - 1
+    while i < last:
+        j = last
+        while j > i + 1 and not clear(int(nodes[i]), int(nodes[j])):
+            j -= 1
+        line = _line_nodes(raster, int(nodes[i]), int(nodes[j]))
+        out.append(line[1:][np.r_[np.diff(line) != 0]])
+        i = j
+    return np.concatenate(out)
 
 
 def _route_stretch(
     raster: Raster, s: np.ndarray, t: np.ndarray, radius_nodes: float, edge_cost,
+    wet: Optional[np.ndarray] = None, pins: tuple[bool, bool] = (True, True),
 ) -> Optional[np.ndarray]:
-    """Raster nodes of the least-cost road along one stretch, ends moved to the nearest dry node."""
+    """Raster nodes of the least-cost path along one stretch.
+
+    A road's ends move to the nearest dry node; a water leg's unpinned ends to the nearest wet one.
+    """
     ends, _ = raster.index(np.array([s[0], s[-1]]), np.array([t[0], t[-1]]))
-    a = _dry_node(raster, int(ends[0]), radius_nodes)
-    b = _dry_node(raster, int(ends[1]), radius_nodes)
+    allowed = raster.sampled & ~raster.water if wet is None else wet
+    a, b = (int(e) if wet is not None and pinned else _nearest_node(raster, int(e), radius_nodes, allowed)
+            for e, pinned in zip(ends, pins))
     ra, ca = divmod(a, raster.n)
     rb, cb = divmod(b, raster.n)
     s = s.copy()

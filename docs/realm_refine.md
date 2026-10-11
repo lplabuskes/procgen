@@ -395,8 +395,8 @@ Mutates: `settlements` (`Settlement.set_site`: `.position`, `.site_position`,
 ("Polities") and in-memory feature `polity_label_field` (read by the recipe). No
 new overlays.
 
-Persistence: `RefineStage` owns final `trade_routes` and `polity_borders`
-(`pack_routes` / `pack_borders`); `polity_fill` persists as a mesh texture.
+Persistence: `RefineStage` owns final `trade_routes` (with `trade_route_layers`
+as `route_layer`) and `polity_borders` (`pack_routes` / `pack_borders`); `polity_fill` persists as a mesh texture.
 
 ## Validation
 

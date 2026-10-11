@@ -94,6 +94,7 @@ class RefineStage(Stage):
         self.params = params or RefineParams()
         # Final routes/borders, cached for serialization.
         self._routes: list | None = None
+        self._route_layers: np.ndarray | None = None
         self._borders: dict | None = None
         # The border lattice labelled by the last field built (specks applied), for the border tracing.
         self._lattice: tuple | None = None
@@ -145,6 +146,7 @@ class RefineStage(Stage):
 
         # Captured even if refinement didn't run (raw routes/borders then).
         self._routes = world.get_feature("trade_routes")
+        self._route_layers = world.get_feature("trade_route_layers")
         self._borders = world.get_feature("polity_borders")
 
     def _label_field(self, world) -> PolityLabelField | None:
@@ -241,6 +243,8 @@ class RefineStage(Stage):
         arrays: dict = {}
         if self._routes:
             arrays.update(pack_routes(self._routes))
+            if self._route_layers is not None and len(self._route_layers) == len(self._routes):
+                arrays["route_layer"] = np.asarray(self._route_layers, dtype=np.int8)
         if self._borders:
             arrays.update(pack_borders(self._borders))
         return arrays
@@ -250,6 +254,9 @@ class RefineStage(Stage):
         if "route_flow" in arrays:
             self._routes = unpack_routes(arrays)
             world.add_feature("trade_routes", self._routes)
+        if "route_layer" in arrays:
+            self._route_layers = np.asarray(arrays["route_layer"], dtype=np.int8)
+            world.add_feature("trade_route_layers", self._route_layers)
         if "border_segs" in arrays:
             self._borders = unpack_borders(arrays)
             world.add_feature("polity_borders", self._borders)
