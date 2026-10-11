@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 from typing import TYPE_CHECKING, Callable, Optional, Sequence
 
 import numpy as np
@@ -25,9 +26,13 @@ from core.display import LocalHoverFn, SchemeSpec, TextureRecipe
 from region.display import describe_texel
 from region.geometry import RegionGeometry, cell_border_polylines, ecef_to_cell
 from viz.mapview.legend import draw_legend
-from viz.mapview.overlays import draw_overlays
+from viz.mapview.overlays import draw_overlays, settlement_markers
 from viz.mapview.projections import RobinsonProjection, Projection
 from localmap.store import MapStore
+from settlegen.builder import build_settlement_map
+from settlegen.chain import SettlementRef
+from settlegen.params import SettlementMapParams
+from settlegen.upsample import with_local_detail
 from viz.mapview.regionview import RegionView
 
 # (face, uv, local) -> status fragments; see ``MapWindow.set_hover_parts``.
@@ -273,6 +278,8 @@ class MapWidget(QWidget):
 
         self._hover_callback: Optional[Callable[[Optional[int], Optional[np.ndarray]], None]] = None
         self._region_click_callback: Optional[Callable[[int], None]] = None
+        # Called with the index of a city marker clicked (opens its settlement map).
+        self._city_click_callback: Optional[Callable[[int], None]] = None
 
         self._zoom: float = 1.0
         self._center: np.ndarray = np.zeros(2, dtype=np.float64)
@@ -661,6 +668,27 @@ class MapWidget(QWidget):
         """Callback invoked with a region cell index when one is clicked in region mode."""
         self._region_click_callback = cb
 
+    def set_city_click_callback(self, cb: Optional[Callable[[int], None]]) -> None:
+        """Callback invoked with a city's index when its marker is clicked (before region picking)."""
+        self._city_click_callback = cb
+
+    # How far (px) past a city marker's fill still counts as clicking it.
+    _MARKER_SLOP = 3.0
+
+    def city_at_screen(self, mx: float, my: float) -> Optional[int]:
+        """Index of the city marker under a screen point, if the settlements overlay is shown."""
+        if self._globe is None or not self._overlay_visible.get("settlements"):
+            return None
+        markers = settlement_markers(self._globe, _WorldProjector(self, float(self.width()), float(self.height())))
+        if markers is None:
+            return None
+        sx, sy, keep, _, radii = markers
+        d = np.where(keep, np.hypot(sx - mx, sy - my), np.inf)
+        d = np.where(d <= radii + self._MARKER_SLOP, d, np.inf)
+        if d.size == 0 or not np.isfinite(d.min()):
+            return None
+        return int(np.argmin(d))
+
     def _hit_face(self, mx: float, my: float) -> tuple[Optional[int], Optional[np.ndarray]]:
         """Return (face_src, face_uv) for the face under screen point (mx, my)."""
         if not self._proj_faces or self._face_bbox_min.size == 0:
@@ -721,14 +749,20 @@ class MapWidget(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position()
             mx, my = float(pos.x()), float(pos.y())
-            # A negligible-movement press-release in region mode is a click, not a drag.
-            if (
-                self._region_mode
-                and self._region_click_callback is not None
-                and self._drag_start is not None
+            # A negligible-movement press-release is a click, not a drag: a city marker
+            # opens its settlement map; otherwise, in region mode, the cell opens.
+            clicked = (
+                self._drag_start is not None
                 and abs(mx - self._drag_start[0]) < 4.0
                 and abs(my - self._drag_start[1]) < 4.0
-            ):
+            )
+            city = self.city_at_screen(mx, my) if clicked and self._city_click_callback is not None else None
+            if city is not None and self._city_click_callback is not None:
+                self._drag_start = None
+                self.setCursor(Qt.CursorShape.OpenHandCursor)
+                self._city_click_callback(city)
+                return
+            if clicked and self._region_mode and self._region_click_callback is not None:
                 region = self._region_at_screen(mx, my)
                 if region is not None:
                     self._region_click_callback(region)
@@ -882,11 +916,24 @@ class MapWindow(QMainWindow):
         self._local_view.set_hover_callback(lambda texel: self._zoomed_hover(self._local_view, texel))
         self._local_btn.toggled.connect(self._region_view.set_local_pick)
         self._region_view.set_hex_click_callback(self._enter_local)
+        # A third for settlement maps: clicking a settlement wherever it is drawn opens one
+        # (cities on every map, towns on region and local maps, villages on local maps).
+        self._settlement_view = RegionView()
+        self._settlement_view.set_store(self._store)
+        self._settlement_view.set_hover_callback(
+            lambda texel: self._zoomed_hover(self._settlement_view, texel))
+        self._settlement_params = SettlementMapParams()
+        # The view a settlement map was opened from: Back returns there.
+        self._settlement_origin: Optional[QWidget] = None
+        self._map.set_city_click_callback(lambda k: self._enter_settlement(SettlementRef("city", k)))
+        for view in (self._region_view, self._local_view, self._settlement_view):
+            view.set_settlement_click_callback(self._enter_settlement)
 
         self._stack = QStackedWidget()
         self._stack.addWidget(self._map)          # index 0: world map
         self._stack.addWidget(self._region_view)  # index 1: zoomed region
         self._stack.addWidget(self._local_view)   # index 2: a regional hex's local map
+        self._stack.addWidget(self._settlement_view)  # index 3: a town's or city's settlement map
 
         layout.addWidget(toolbar)
         layout.addWidget(self._stack, stretch=1)
@@ -899,8 +946,19 @@ class MapWindow(QMainWindow):
     def set_mesh(self, mesh: PolygonMesh) -> None:
         self._map.set_mesh(mesh)
 
+    def set_settlement_params(self, params: SettlementMapParams) -> None:
+        """Tune the settlement tier; the settlement map on screen (if any) is rebuilt."""
+        if params == self._settlement_params:
+            return
+        self._settlement_params = params
+        shown = self._settlement_view.settlement_map
+        if self._stack.currentWidget() is self._settlement_view and shown is not None:
+            self._enter_settlement(shown.ref)
+
     def set_globe(self, globe: "World") -> None:
         # Any region on screen is stale after a re-run: drop back to the world map.
+        if self._stack.currentWidget() is self._settlement_view:
+            self._exit_settlement()
         if self._stack.currentWidget() is self._local_view:
             self._exit_local()
         if self._stack.currentWidget() is self._region_view:
@@ -920,6 +978,9 @@ class MapWindow(QMainWindow):
 
     def set_region_params(self, params: "RegionParams") -> None:
         """Tune the region tier, re-refining any region or local map on screen."""
+        # A settlement map is built from the local maps these params drop: back to its local map.
+        if self._stack.currentWidget() is self._settlement_view:
+            self._exit_settlement()
         local = self._stack.currentWidget() is self._local_view
         showing = local or self._stack.currentWidget() is self._region_view
         if showing:
@@ -937,6 +998,8 @@ class MapWindow(QMainWindow):
 
     def set_local_params(self, params: "LocalParams") -> None:
         """Tune the local tier; the local map on screen (if any) is rebuilt."""
+        if self._stack.currentWidget() is self._settlement_view and params != self._store.local_params:
+            self._exit_settlement()
         self._local_view.set_local_params(params, self._map.globe)
         if self._stack.currentWidget() is self._local_view:
             self.set_status("Building local map…")
@@ -988,16 +1051,69 @@ class MapWindow(QMainWindow):
         self._back_btn.setText("← Region")
         self._local_btn.setVisible(False)
 
+    def _enter_settlement(self, ref: SettlementRef) -> None:
+        """Open the settlement map of a city, town or village clicked on any map; Back returns there."""
+        globe = self._map.globe
+        if globe is None:
+            return
+        current = self._stack.currentWidget()
+        if current is not self._settlement_view:
+            self._settlement_origin = current
+            if current is self._map:
+                self._prev_status = self._status_label.text()
+        self.set_status(f"Building settlement map of {ref.kind} {ref.index}…")
+        QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
+        try:
+            params = dataclasses.replace(self._settlement_params, upsample=with_local_detail(
+                self._settlement_params.upsample, self._store.local_params.upsample))
+            settlement = build_settlement_map(self._store, ref, params)
+            self._sync_region_layer(self._settlement_view)
+            self._settlement_view.set_settlement(
+                settlement, globe, land_texels=int(params.upsample.water_spread_texels))
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.set_status(self._settlement_view.status_text())
+        self._stack.setCurrentWidget(self._settlement_view)
+        origin = self._settlement_origin
+        self._back_btn.setText(
+            "← Local map" if origin is self._local_view else "← Region" if origin is self._region_view
+            else "← World Map")
+        self._back_btn.setVisible(True)
+        self._local_btn.setVisible(False)
+        self._region_btn.setVisible(False)
+
+    def _exit_settlement(self) -> None:
+        """Return from a settlement map to the view it was opened from."""
+        origin = self._settlement_origin or self._map
+        self._settlement_origin = None
+        self._stack.setCurrentWidget(origin)
+        self._settlement_view.clear_region()
+        if origin is self._local_view:
+            self._sync_region_layer(self._local_view)
+            self._back_btn.setText("← Region")
+            self.set_status(self._local_view.status_text())
+        elif origin is self._region_view:
+            self._sync_region_layer(self._region_view)
+            self._back_btn.setText("← World Map")
+            self._local_btn.setVisible(True)
+            self.set_status(self._region_view.status_text())
+        else:
+            self._back_btn.setVisible(False)
+            self._region_btn.setVisible(True)
+            self.set_status(self._prev_status)
+
     def _active_view(self) -> "MapWidget | RegionView":
         """Whichever view is on screen — the zoom buttons act on it."""
         current = self._stack.currentWidget()
-        if current is self._region_view or current is self._local_view:
+        if current is self._region_view or current is self._local_view or current is self._settlement_view:
             return current  # type: ignore[return-value]
         return self._map
 
     def _go_back(self) -> None:
-        """One tier up: local map → region → world map."""
-        if self._stack.currentWidget() is self._local_view:
+        """One tier up: settlement map → local map → region → world map."""
+        if self._stack.currentWidget() is self._settlement_view:
+            self._exit_settlement()
+        elif self._stack.currentWidget() is self._local_view:
             self._exit_local()
         else:
             self._exit_region()
@@ -1023,7 +1139,7 @@ class MapWindow(QMainWindow):
         """One Coloration combo drives both views, so the layer survives switching."""
         self._map.set_color_scheme(name)
         current = self._stack.currentWidget()
-        if current is self._region_view or current is self._local_view:
+        if current is self._region_view or current is self._local_view or current is self._settlement_view:
             QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
             try:
                 self._sync_region_layer(current)  # type: ignore[arg-type]
@@ -1139,6 +1255,7 @@ class MapWindow(QMainWindow):
         self._map.set_overlay_visible(name, visible)
         self._region_view.set_overlay_visible(name, visible)
         self._local_view.set_overlay_visible(name, visible)
+        self._settlement_view.set_overlay_visible(name, visible)
 
     @property
     def active_scheme(self) -> "str | None":

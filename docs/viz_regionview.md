@@ -52,6 +52,16 @@ rivers, roads, deltas, streams (`RegionMap.streams` → `build_region_streams`,
 rivers or `LocalParams.streams` change) and world tuning. Draws `Villages.rural_density` (countryside
 net of villages) as `rural_density`.
 
+**Settlement maps** (`set_settlement`): a third mode for `settlegen`'s
+settlement maps — the refined terrain on the square frame (one texture), the
+owning local map's rivers, roads, villages, towns and footprints over it.
+Cartographic overlay sizes follow the local map's scale (`_equivalent_zoom`).
+`settlement_at_cursor` / `set_settlement_click_callback`: the settlement under a
+click at the scale on screen (region: towns, city markers; local or settlement
+map: towns, cities by marker or footprint, villages), ahead of hex picking.
+`MapWindow` keeps a third view for it, opened from any map (the world map's city
+markers via `MapWidget.set_city_click_callback`); Back returns to the opener.
+
 **Params** live in the store, which applies the resets
 (`MapStore.set_region_params` / `set_local_params`): new region params reset all
 refined towns/cities to stage sites and drop every local map; new `upsample`

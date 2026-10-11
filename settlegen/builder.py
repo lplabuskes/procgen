@@ -1,0 +1,47 @@
+"""One settlement map, end to end: :func:`build_settlement_map` runs
+
+1. the chain to its local maps (:func:`settlegen.chain.ensure_local_maps`, through
+   the shared :class:`localmap.store.MapStore`: built only if not held);
+2. the frame's terrain (:func:`settlegen.upsample.build_settlement_fields`).
+
+Site features, profile and layout (plan phases 4–6) will follow here.  Qt-free.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Optional
+
+from region.upsample import RegionFields
+from settlegen.chain import SettlementMaps, SettlementRef, ensure_local_maps
+from settlegen.params import SettlementMapParams
+from settlegen.upsample import build_settlement_fields
+
+if TYPE_CHECKING:
+    from localmap.store import MapStore
+
+
+@dataclass
+class SettlementMap:
+    """Everything one settlement map holds (so far: its local maps and its terrain)."""
+
+    chain: SettlementMaps
+    fields: RegionFields
+
+    @property
+    def ref(self) -> SettlementRef:
+        return self.chain.ref
+
+
+def build_settlement_map(
+    store: "MapStore", ref: SettlementRef, params: Optional[SettlementMapParams] = None,
+) -> SettlementMap:
+    """Build ``ref``'s settlement map from ``store``'s local maps.  ``params.upsample``
+    is expected to carry the local tier's shared detail (:func:`settlegen.upsample.with_local_detail`)."""
+    params = params or SettlementMapParams()
+    globe = store.globe
+    if globe is None:
+        raise ValueError("the store has no globe")
+    chain = ensure_local_maps(store, ref, float(params.upsample.margin_km))
+    fields = build_settlement_fields(
+        globe, [m.fields for m in chain.maps], chain.center, chain.side_km, params.upsample)
+    return SettlementMap(chain=chain, fields=fields)

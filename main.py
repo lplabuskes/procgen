@@ -15,6 +15,8 @@ from viz.params_dialog import ParamsDialog
 from realmgen.builder import RealmParams, RealmPipeline
 from localmap.params import LocalParams
 from localmap.upsample import with_region_detail
+from settlegen.params import SettlementMapParams
+from settlegen.upsample import with_local_detail
 from region.params import RegionParams
 from worldgen import GlobePipeline, GlobeParams
 
@@ -38,6 +40,10 @@ class AppParams:
     local: LocalParams = dataclasses.field(
         default_factory=LocalParams, metadata={"label": "Local map"}
     )
+    # Settlement maps (debug viewer for now); view-side only, like ``region`` / ``local``.
+    settlement: SettlementMapParams = dataclasses.field(
+        default_factory=SettlementMapParams, metadata={"label": "Settlement map"}
+    )
 
     def __post_init__(self) -> None:
         # Coupled params live once in the dialog; copy them to where the stages read them
@@ -49,6 +55,9 @@ class AppParams:
         )
         self.local = dataclasses.replace(
             self.local, upsample=with_region_detail(self.local.upsample, self.region.upsample)
+        )
+        self.settlement = dataclasses.replace(
+            self.settlement, upsample=with_local_detail(self.settlement.upsample, self.local.upsample)
         )
 
 
@@ -141,6 +150,7 @@ def main() -> None:
         current_params[0] = params
         window.set_region_params(params.region)
         window.set_local_params(params.local)
+        window.set_settlement_params(params.settlement)
         window.set_realm_params(params.realm)
         window.set_world_params(params.globe)
 
@@ -171,6 +181,7 @@ def main() -> None:
         current_pipeline[0] = pipeline
         window.set_region_params(params.region)
         window.set_local_params(params.local)
+        window.set_settlement_params(params.settlement)
         window.set_realm_params(params.realm)
         window.set_world_params(params.globe)
 
@@ -190,12 +201,13 @@ def main() -> None:
             new_params = dialog.result_params(current_params[0])
             if new_params == current_params[0]:
                 return
-            # Region and local params only re-refine the views; anything else rebuilds the world.
+            # Region, local and settlement params only re-refine the views; anything else rebuilds the world.
             old = current_params[0]
-            if dataclasses.replace(new_params, region=old.region, local=old.local) == old:
+            if dataclasses.replace(new_params, region=old.region, local=old.local, settlement=old.settlement) == old:
                 current_params[0] = new_params
                 window.set_region_params(new_params.region)
                 window.set_local_params(new_params.local)
+                window.set_settlement_params(new_params.settlement)
             else:
                 _build_and_apply(new_params)
 

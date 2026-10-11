@@ -21,7 +21,9 @@ from region.geometry import RegionGeometry  # noqa: E402
 from region.params import RegionParams  # noqa: E402
 from region.test.conftest import synthetic_globe  # noqa: E402, F401  (fixture)
 from region.test.test_resources import globe  # noqa: E402, F401  (fixture)
-from viz.mapview.mapview import MapWindow  # noqa: E402
+from viz.mapview.mapview import MapWindow, _WorldProjector  # noqa: E402
+from viz.mapview.overlays import settlement_markers  # noqa: E402
+from settlegen.chain import SettlementRef  # noqa: E402
 from viz.mapview.regionview import RegionView  # noqa: E402
 
 REGION_ID = 40
@@ -303,3 +305,93 @@ def test_region_and_local_hover_name_the_fort_and_its_garrison(app, globe, settl
             assert view.fort_under_cursor() is None
     finally:
         globe.remove_feature("forts")
+
+
+def _settlement_window(globe):  # noqa: F811
+    from settlegen.params import SettlementMapParams
+    from settlegen.upsample import SettlementUpsampleParams
+
+    window = MapWindow()
+    window.resize(900, 700)
+    window.set_region_params(_REGION)
+    window.set_local_params(_LOCAL)
+    window.set_settlement_params(SettlementMapParams(upsample=SettlementUpsampleParams(texel_m=100.0)))
+    window._store.set_globe(globe)
+    window._map._globe = globe          # the settlement map reads the world map's globe
+    return window
+
+
+def test_clicking_a_town_on_a_local_map_opens_its_settlement_map(app, globe, settled):  # noqa: F811
+    window = _settlement_window(globe)
+    window._region_view.set_region(RegionGeometry(REGION_ID, globe.antimeridian), globe)
+    window._stack.setCurrentWidget(window._region_view)
+    window._enter_local(settled)
+    local = window._local_view
+    _show_settlements(local)
+    town = local._refined_features()["towns"]
+    _hover_at(local, local._on_land("towns", town.positions)[0])
+    ref = local.settlement_at_cursor()
+    assert ref is not None and ref.kind == "town"
+
+    builds = len(window._store.builds)
+    window._enter_settlement(ref)
+    view = window._settlement_view
+    assert window._stack.currentWidget() is view and view.settlement_map is not None
+    assert view.settlement_map.ref == ref
+    assert "Settlement map" in view.status_text()
+    assert window._back_btn.text() == "← Local map"
+    # Its local map was already open: nothing else built unless the frame reaches past it.
+    assert len(window._store.builds) - builds == len(view.settlement_map.chain.keys) - 1
+    _painted(view)
+
+    window._go_back()
+    assert window._stack.currentWidget() is local
+    assert window._back_btn.text() == "← Region"
+
+
+def test_villages_open_their_settlement_maps(app, globe, settled):  # noqa: F811
+    window = _settlement_window(globe)
+    window._region_view.set_region(RegionGeometry(REGION_ID, globe.antimeridian), globe)
+    window._stack.setCurrentWidget(window._region_view)
+    window._enter_local(settled)
+    local = window._local_view
+    _painted(local)
+    v = local.local_map.villages  # type: ignore[union-attr]
+    assert len(v) > 0
+    _hover_at(local, v.positions[0])
+    ref = local.settlement_at_cursor()
+    assert ref is not None and ref.kind == "village" and ref.map == (REGION_ID, settled)
+    window._enter_settlement(ref)
+    shown = window._settlement_view.settlement_map
+    assert shown is not None and shown.chain.keys[0] == (REGION_ID, settled)
+
+
+def test_towns_and_cities_open_from_the_region_and_cities_from_the_world(app, globe, settled):  # noqa: F811
+    window = _settlement_window(globe)
+    region = window._region_view
+    region.set_region(RegionGeometry(REGION_ID, globe.antimeridian), globe)
+    window._stack.setCurrentWidget(region)
+    _show_settlements(region)
+    city = globe.get_feature("settlements")[0]
+    _hover_at(region, region._on_land("settlements", city.position[None])[0])
+    ref = region.settlement_at_cursor()
+    assert ref is not None and ref.kind == "city" and ref.index == 0
+    window._enter_settlement(ref)
+    assert window._back_btn.text() == "← Region"
+    window._go_back()
+    assert window._stack.currentWidget() is region and window._back_btn.text() == "← World Map"
+
+    # The world map: a city marker is hit before region picking, and Back returns there.
+    window._go_back()
+    world = window._map
+    assert window._stack.currentWidget() is world
+    world.set_overlay_visible("settlements", True)
+    markers = settlement_markers(globe, _WorldProjector(world, float(world.width()), float(world.height())))
+    assert markers is not None
+    sx, sy = float(markers[0][0]), float(markers[1][0])
+    assert world.city_at_screen(sx, sy) == 0
+    assert world.city_at_screen(sx + 200.0, sy + 200.0) is None
+    window._enter_settlement(SettlementRef("city", 0))
+    assert window._back_btn.text() == "← World Map"
+    window._go_back()
+    assert window._stack.currentWidget() is world and window._back_btn.isHidden()

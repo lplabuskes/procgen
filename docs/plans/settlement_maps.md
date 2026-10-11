@@ -27,9 +27,9 @@ is derived from.
 
 - **Cities** (`settlements` feature) **and towns** (`towns` feature) — both
   are saved on the world with a final, locally refined position.
-- **Not villages** in this plan: they are local-view only, regenerated per
-  (world, region, hex), with no identity that survives a local-params change.
-  A later phase can key them by (region, hex, village index).
+- **Villages** (added 2026-10-10): they are local-view only, regenerated per
+  (world, region, hex), so they are keyed by (region, hex, village index) on
+  their local map — valid while the local params don't change.
 - **Not the history layer.** Inputs it will eventually supply (founding age,
   past fires and sieges, ruins) are explicit stubs here (see Phase 5).
 
@@ -457,7 +457,25 @@ spike through the chain: same maps and numbers as Phase 0, 23 maps built for
 `SettlementMapParams` on `AppParams` (Decision 6) waits for the viewer
 (Phase 7); the chain takes `margin_km` for now.
 
-Next: Phase 3 is already built (Phase 0); Phase 4 (site features).
+**Phase 7, early cut 2026-10-10** (for evaluating the terrain), **in the main
+view** (user decision, not debug): clicking a settlement wherever it is drawn
+opens its settlement map — cities on the world, region and local maps, towns on
+region and local maps, villages on local maps (and any of them on a settlement
+map's own overlays) — built through the shared store (`settlegen/builder.py`
+`build_settlement_map`); **Back** returns to the view it was opened from. A
+click on a settlement wins over region / hex picking. **Villages** are now in
+scope: `SettlementRef("village", i, map=(region, hex))`, the `i`-th village of
+that local map (valid while its params don't change), framed like a town. `RegionView` has a settlement
+mode (`set_settlement`): the refined terrain on the square frame in the active
+layer, with the *owning local map's* rivers, roads, villages, towns and city
+footprints over it (not yet re-traced — Phase 4). `AppParams.settlement`
+(`SettlementMapParams.upsample`, advanced-only) rebuilds the map on screen.
+Overlay markers and border lines are sized as on the owning local map at the
+same view zoom (the true scale would draw them tens of pixels wide). Seed 4:
+from the world map, a city 12.6 s (its region and local maps built); a town
+from its region 6.4 s; a village from its local map 0.6 s.
+
+Next: Phase 4 (site features).
 
 Polygon library for Decision 8: **shapely** (approved 2026-10-10; in
 `requirements.txt`).

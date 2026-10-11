@@ -31,6 +31,8 @@ from region.roads import RegionRoads
 from realmgen.placement.types import TIER_NAMES, format_population, population_display_tier
 from realmgen.towns.types import TOWN_KIND_NAMES, Towns
 from region.upsample import RegionFields
+from settlegen.builder import SettlementMap
+from settlegen.chain import SettlementRef
 from worldgen.hydrology.discharge import EARTH_RADIUS_KM
 from worldgen.resources.minerals import mineral_workings
 
@@ -108,6 +110,10 @@ class RegionView(QWidget):
         self._press_pos: Optional[tuple[float, float]] = None
         # ── local maps ──
         self._local: Optional[LocalMap] = None
+        # ── settlement maps (debug): the map on screen, and what a click on a town or city opens ──
+        self._settlement: Optional[SettlementMap] = None
+        self._settlement_land_texels = 0
+        self._settlement_click_callback: Optional[Callable[[SettlementRef], None]] = None
         # Region mode: clicking a hex opens its local map.
         self._local_pick = False
         self._hover_hex: Optional[int] = None
@@ -132,6 +138,7 @@ class RegionView(QWidget):
         (or taking the store's map of it, if it holds one)."""
         self._geometry = geometry
         self._globe = globe
+        self._settlement = None
         if globe is not None:
             self._store.set_globe(globe)
         self._grid = RegionHexGrid(geometry, int(self._store.region_params.upsample.n_cols))
@@ -171,6 +178,7 @@ class RegionView(QWidget):
         local = self._store.local(fields.region_id, int(hex_index))
 
         self._local = local
+        self._settlement = None
         self._globe = globe
         self._geometry = local.fields.geometry
         self._grid = local.fields.grid
@@ -200,6 +208,97 @@ class RegionView(QWidget):
     @property
     def local_map(self) -> Optional[LocalMap]:
         return self._local
+
+    # ── settlement maps ──────────────────────────────────────────────────────
+
+    def set_settlement(self, settlement: SettlementMap, globe: "World", land_texels: int = 0) -> None:
+        """Show a settlement map: its refined terrain on the square frame, and its
+        owning local map's rivers, roads, villages, towns and footprints over it
+        (until the site phase re-traces them).  ``land_texels``: how far (texels)
+        markers on water are moved onto land."""
+        self._settlement = settlement
+        self._settlement_land_texels = int(land_texels)
+        self._local = None
+        self._region_map = None
+        self._globe = globe
+        self._geometry = settlement.fields.geometry
+        self._grid = settlement.fields.grid
+        self._fields = settlement.fields
+        owner = settlement.chain.owner
+        self._rivers, self._roads, self._deltas = owner.rivers, owner.roads, owner.deltas
+        self._hex_images = []
+        self._farm_images = []
+        self._land_positions = {}
+        self._zoom = 1.0
+        self._pan[:] = 0.0
+        self._rebuild_images()
+        self.update()
+
+    @property
+    def settlement_map(self) -> Optional[SettlementMap]:
+        return self._settlement
+
+    def set_settlement_click_callback(self, cb: Optional[Callable[[SettlementRef], None]]) -> None:
+        """Called with the settlement clicked (:meth:`settlement_at_cursor`; ``None`` turns clicking off)."""
+        self._settlement_click_callback = cb
+
+    @property
+    def _feature_local(self) -> Optional[LocalMap]:
+        """The local map whose villages, towns and footprints are drawn: this local
+        map's, or the settlement map's owning one; None on a region."""
+        if self._local is not None:
+            return self._local
+        return self._settlement.chain.owner if self._settlement is not None else None
+
+    def settlement_at_cursor(self) -> Optional[SettlementRef]:
+        """The settlement under the cursor at the scale on screen, if its overlay is shown:
+        a region's towns and city markers; a local (or settlement) map's towns, cities
+        (marker or footprint) and villages."""
+        if not self._cursor_ready():
+            return None
+        assert self._globe is not None and self._mouse is not None
+        proj = self._overlay_projector()
+        local = self._feature_local
+        if local is None:
+            towns = self._globe.get_feature("towns")
+            if self._overlay_visible.get("towns") and towns is not None and len(towns):
+                sx, sy, keep, radii = town_markers(towns, proj)
+                found = self._nearest_marker(sx, sy, keep, radii)
+                if found is not None:
+                    return SettlementRef("town", found)
+            markers = settlement_markers(self._globe, proj) if self._overlay_visible.get("settlements") else None
+            if markers is not None:
+                sx, sy, keep, _, radii = markers
+                found = self._nearest_marker(sx, sy, keep, radii)
+                if found is not None:
+                    return SettlementRef("city", found)
+            return None
+        if self._overlay_visible.get("towns"):
+            towns = self._refined_features().get("towns")
+            if towns is not None and len(towns):
+                sx, sy, keep, radii = town_markers(towns, proj)
+                found = self._nearest_marker(sx, sy, keep, radii)
+                if found is not None:
+                    return SettlementRef("town", int(local.town_index[found]))
+        if self._overlay_visible.get("settlements") and len(local.city_index):
+            texel = self.texel_at_screen(*self._mouse) if self._local is not None else None
+            footprints = local.city_footprints
+            c = int(footprints.owner[texel]) if texel is not None and footprints is not None else -1
+            if c < 0:
+                sx, sy, keep = proj.points(np.asarray(local.city_positions, dtype=np.float64))
+                found = self._nearest_marker(
+                    sx, sy, keep, np.full(len(local.city_index), city_floor_radius(proj, walled=True)))
+                c = -1 if found is None else found
+            if c >= 0:
+                return SettlementRef("city", int(local.city_index[c]))
+        v = local.villages
+        if self._overlay_visible.get("villages", True) and len(v):
+            sx, sy, keep = proj.points(v.positions)
+            d = np.where(keep, np.hypot(sx - self._mouse[0], sy - self._mouse[1]), np.inf)
+            i = int(np.argmin(d))
+            if d[i] <= self._VILLAGE_HOVER_PX:
+                return SettlementRef("village", i, map=(local.fields.region_id, local.hex_index))
+        return None
 
     def set_local_pick(self, enabled: bool) -> None:
         """Region mode: highlight the hex under the cursor and report clicks on it."""
@@ -243,6 +342,7 @@ class RegionView(QWidget):
         self._grid = None
         self._fields = None
         self._local = None
+        self._settlement = None
         self._hover_hex = None
         self._region_map = None
         self._rivers = None
@@ -313,6 +413,13 @@ class RegionView(QWidget):
         if self._fields is None or self._grid is None:
             return f"Region {self.region_id}"
         f = self._fields
+        if self._settlement is not None:
+            c = self._settlement.chain
+            return (
+                f"Settlement map · {c.ref.kind} {c.ref.index} · {c.side_km:.1f} km frame, {f.tex_size}² texels "
+                f"(~{math.sqrt(f.texel_area_km2) * 1000:.0f} m) · {f.detail_octaves} detail octaves · "
+                f"{len(c.maps)} local map{'s' if len(c.maps) > 1 else ''} · terrain only so far"
+            )
         if self._local is not None:
             v = self._local.villages
             return (
@@ -452,19 +559,20 @@ class RegionView(QWidget):
         deltas, mineral workings; local maps add villages, their towns and city footprints.
         (Region towns and cities need no override: their refined positions are in the world features.)"""
         out: dict = {}
-        if self._local is not None:
-            out["villages"] = self._local.villages
+        local = self._feature_local
+        if local is not None:
+            out["villages"] = local.villages
             towns = self._globe.get_feature("towns") if self._globe is not None else None
             if towns is not None and len(towns):
-                idx = self._local.town_index
+                idx = local.town_index
                 out["towns"] = Towns(
-                    positions=self._local.town_positions, population=towns.population[idx],
+                    positions=local.town_positions, population=towns.population[idx],
                     face_id=towns.face_id[idx], parent=towns.parent[idx], kind=towns.kind[idx],
                     site_positions=towns.site_positions[idx], refined=towns.refined[idx],
                     has_walls=towns.has_walls[idx], wall_strength=towns.wall_strength[idx],
                 )
-            if self._local.city_footprints is not None:
-                out["cities"] = (self._local.city_index, self._local.city_positions, self._local.city_footprints)
+            if local.city_footprints is not None:
+                out["cities"] = (local.city_index, local.city_positions, local.city_footprints)
         if self._rivers is not None:
             out["rivers"] = [*self._rivers.paths, *self._rivers.streams]
         if self._overlay_visible.get("polity_borders"):
@@ -521,7 +629,7 @@ class RegionView(QWidget):
         return _RegionProjector(
             self._geometry, x0, y0, size, transform, self._equivalent_zoom(size, float(self.width())),
             self._on_land, view_zoom=self._zoom,
-            px_per_km=self._px_per_rad(size) / EARTH_RADIUS_KM if self._local is not None else None,
+            px_per_km=self._px_per_rad(size) / EARTH_RADIUS_KM if self._feature_local is not None else None,
         )
 
     def _land_reach(self) -> float:
@@ -531,6 +639,8 @@ class RegionView(QWidget):
         if f is None:
             return 0.0
         store = self._store
+        if self._settlement is not None:
+            return land_reach(f, self._settlement_land_texels)
         upsample = store.local_params.upsample if self._local is not None else store.region_params.upsample
         return land_reach(f, upsample.water_spread_texels)
 
@@ -562,15 +672,19 @@ class RegionView(QWidget):
         """The world-map zoom showing this cell's ground at its on-screen scale.
 
         Overlays size markers and lines by zoom; world zoom 1 spans 2π of longitude across the width.
+        A settlement map sizes them as its local map does at the same view zoom: ~70× the
+        local scale would draw borders and markers tens of pixels wide.  (Physical widths,
+        such as river channels, use :meth:`_px_per_rad` itself.)
         """
-        return self._px_per_rad(size) / (W / (2.0 * np.pi))
+        px_per_rad = self._px_per_rad(size)
+        if self._settlement is not None and self._geometry is not None:
+            px_per_rad *= _side_rad(self._geometry) / _side_rad(self._settlement.chain.owner.fields.geometry)
+        return px_per_rad / (W / (2.0 * np.pi))
 
     def _px_per_rad(self, size: float) -> float:
         """Screen pixels per radian of ground across the cell, as drawn now."""
         assert self._geometry is not None
-        ends = self._geometry.local_to_ecef(np.array([0.0, 1.0]), np.array([0.5, 0.5]))
-        side_rad = float(np.arccos(np.clip(np.dot(ends[0], ends[1]), -1.0, 1.0)))
-        return size * self._zoom / max(side_rad, 1e-9)
+        return size * self._zoom / max(_side_rad(self._geometry), 1e-9)
 
     def _view_transform(self) -> QTransform:
         """Zoom about the footprint centre, then pan — applied after the rotation."""
@@ -647,7 +761,16 @@ class RegionView(QWidget):
             pos = event.position()
             press, self._press_pos = self._press_pos, None
             clicked = press is not None and math.hypot(pos.x() - press[0], pos.y() - press[1]) < self._CLICK_SLOP
-            if clicked and self._local_pick and self._local is None and self._hex_click_callback is not None:
+            if not clicked:
+                return
+            # A settlement under the click opens its map; otherwise, picking, the hex's local map.
+            if self._settlement_click_callback is not None:
+                self._mouse = (float(pos.x()), float(pos.y()))
+                ref = self.settlement_at_cursor()
+                if ref is not None:
+                    self._settlement_click_callback(ref)
+                    return
+            if self._local_pick and self._local is None and self._hex_click_callback is not None:
                 texel = self.texel_at_screen(float(pos.x()), float(pos.y()))
                 if texel is not None:
                     self._hex_click_callback(texel[0])
@@ -687,7 +810,7 @@ class RegionView(QWidget):
         for item in (self.fort_under_cursor(), self.city_under_cursor(texel)):
             if item is not None:
                 parts.append(item)
-        if self._local is None:
+        if self._feature_local is None:
             parts.extend(self.towns_in_hex(texel[0]) if texel is not None else [])
         else:
             for item in (self.town_under_cursor(), self.village_under_cursor()):
@@ -719,12 +842,14 @@ class RegionView(QWidget):
         if not cities:
             return None
         proj = self._overlay_projector()
-        footprints = self._local.city_footprints if self._local is not None else None
-        if self._local is not None and footprints is not None:
-            index = np.asarray(self._local.city_index, dtype=np.int64)
-            c = int(footprints.owner[texel]) if texel is not None else -1
+        local = self._feature_local
+        footprints = local.city_footprints if local is not None else None
+        if local is not None and footprints is not None:
+            index = np.asarray(local.city_index, dtype=np.int64)
+            # A settlement map's texels aren't the local map's: only markers there.
+            c = int(footprints.owner[texel]) if texel is not None and self._local is not None else -1
             if c < 0:
-                sx, sy, keep = proj.points(np.asarray(self._local.city_positions, dtype=np.float64))
+                sx, sy, keep = proj.points(np.asarray(local.city_positions, dtype=np.float64))
                 found = self._nearest_marker(sx, sy, keep, np.full(len(index), city_floor_radius(proj, walled=True)))
                 c = -1 if found is None else found
             if c < 0:
@@ -759,7 +884,7 @@ class RegionView(QWidget):
 
     def town_under_cursor(self) -> Optional[str]:
         """``"<kind> · <people>"`` for a local map's town dot under the cursor, if any."""
-        if self._local is None or not self._cursor_ready() or not self._overlay_visible.get("towns"):
+        if self._feature_local is None or not self._cursor_ready() or not self._overlay_visible.get("towns"):
             return None
         towns = self._refined_features().get("towns")
         if towns is None or len(towns) == 0:
@@ -772,7 +897,7 @@ class RegionView(QWidget):
 
     def towns_in_hex(self, hex_idx: int) -> list[str]:
         """``["Towns in hex: N (people)", "<count> <kind>, …"]`` for a region hexagon; empty if none."""
-        if self._local is not None or self._globe is None or self._fields is None or self._geometry is None:
+        if self._feature_local is not None or self._globe is None or self._fields is None or self._geometry is None:
             return []
         towns = self._globe.get_feature("towns")
         if towns is None or len(towns) == 0:
@@ -790,9 +915,10 @@ class RegionView(QWidget):
 
     def village_under_cursor(self) -> Optional[str]:
         """``"<kind> · <people>"`` for the village dot under the cursor, if any."""
-        if self._local is None or self._cell_layout is None or self._mouse is None or self._geometry is None:
+        local = self._feature_local
+        if local is None or self._cell_layout is None or self._mouse is None or self._geometry is None:
             return None
-        v = self._local.villages
+        v = local.villages
         if len(v) == 0:
             return None
         x0, y0, size, transform = self._cell_layout
@@ -869,6 +995,14 @@ class RegionView(QWidget):
         painter.save()
         self._clip_to_outline(painter, x0, y0, size)
         painter.setPen(Qt.PenStyle.NoPen)
+        if self._settlement is not None:
+            # One square texture covering the frame.
+            brush = QBrush(self._hex_images[0])
+            brush.setTransform(QTransform(size / tex_size, 0.0, 0.0, size / tex_size, x0, y0))
+            painter.setBrush(brush)
+            painter.drawRect(QRectF(x0, y0, size, size))
+            painter.restore()
+            return
         for i, (s, t) in enumerate(self._grid.centers):
             cx = x0 + s * size
             cy = y0 + (1.0 - t) * size       # local +t is up; _up_angle makes that true north
@@ -910,6 +1044,12 @@ class RegionView(QWidget):
             cy = y0 + (1.0 - t) * size
             painter.drawPolygon(self._hex_polygon(cx, cy, r_px))
         painter.restore()
+
+
+def _side_rad(geometry: RegionGeometry) -> float:
+    """Ground angle (radians) across a frame's ``[0, 1]`` s-axis, through its middle."""
+    ends = geometry.local_to_ecef(np.array([0.0, 1.0]), np.array([0.5, 0.5]))
+    return float(np.arccos(np.clip(np.dot(ends[0], ends[1]), -1.0, 1.0)))
 
 
 def _cosmetic_pen(color: QColor) -> QPen:

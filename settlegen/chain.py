@@ -1,4 +1,4 @@
-"""The chain from a town or city to the local maps its settlement map refines.
+"""The chain from a city, town or village to the local maps its settlement map refines.
 
 :func:`ensure_local_maps` takes a settlement to every local map its frame needs,
 asking a :class:`localmap.store.MapStore` for each — so a region or local map is
@@ -8,7 +8,9 @@ one store):
 1. the settlement's region (it refines the settlement there, if not yet);
 2. its owning local map — the regional hex nearest its region position
    (:func:`localmap.settlements.owning_hex`) — which refines it locally: its
-   position is final from here on;
+   position is final from here on.  A village has no world record: it is one of
+   a local map's villages, named by that map (``SettlementRef.map``) and its
+   index there, valid while that map's params don't change;
 3. the frame: a square centred where that local map draws the settlement, of side
    ``2 · (footprint radius + garden ring + margin)``;
 4. every other local map whose ground the frame reaches (each regional hexagon,
@@ -21,7 +23,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Optional
 
 import numpy as np
 from shapely.geometry import Polygon, box
@@ -43,10 +45,16 @@ _EDGE_SAMPLES = 64
 
 @dataclass(frozen=True)
 class SettlementRef:
-    """A city (index into the ``settlements`` feature) or a town (index into ``towns``)."""
+    """A city (index into the ``settlements`` feature), a town (index into ``towns``)
+    or a village (index into ``LocalMap.villages`` of local map ``map``)."""
 
-    kind: Literal["city", "town"]
+    kind: Literal["city", "town", "village"]
     index: int
+    map: Optional[tuple[int, int]] = None      # (region_id, hex_index): villages only
+
+    def __post_init__(self) -> None:
+        if (self.kind == "village") != (self.map is not None):
+            raise ValueError("a village, and only a village, names its local map")
 
 
 def site_position(globe: "World", ref: SettlementRef) -> np.ndarray:
@@ -77,13 +85,17 @@ def population(globe: "World", ref: SettlementRef) -> float:
 
 
 def is_local_refined(globe: "World", ref: SettlementRef) -> bool:
+    if ref.kind == "village":
+        return True                       # born on its local map
     if ref.kind == "city":
         return bool(globe.get_feature("settlements")[ref.index].local_refined)
     return bool(globe.get_feature("towns").local_refined[ref.index])
 
 
 def region_of(globe: "World", ref: SettlementRef) -> int:
-    """The region that refines the settlement: the cell of its stage site."""
+    """The region that refines the settlement: the cell of its stage site (a village: its map's region)."""
+    if ref.map is not None:
+        return int(ref.map[0])
     return int(ecef_to_cell(site_position(globe, ref)[None], globe.antimeridian)[0])
 
 
@@ -106,6 +118,8 @@ class SettlementMaps:
 
 def drawn_position(local: LocalMap, ref: SettlementRef) -> np.ndarray:
     """Where ``local`` draws the settlement (its position, moved just off a river channel)."""
+    if ref.kind == "village":
+        return np.asarray(local.villages.positions[ref.index], dtype=np.float64)
     index, positions = (local.city_index, local.city_positions) if ref.kind == "city" else \
         (local.town_index, local.town_positions)
     hit = np.flatnonzero(np.asarray(index) == ref.index)
@@ -115,12 +129,13 @@ def drawn_position(local: LocalMap, ref: SettlementRef) -> np.ndarray:
 
 
 def footprint_radius_km(globe: "World", local: LocalMap, ref: SettlementRef, density_per_ha: float) -> float:
-    """A city's local footprint as a disc; a town's people at the same built-up density."""
+    """A city's local footprint as a disc; a town's or village's people at the same built-up density."""
     if ref.kind == "city" and local.city_footprints is not None:
         k = int(np.flatnonzero(np.asarray(local.city_index) == ref.index)[0])
         area = float(local.city_footprints.area_km2[k])
     else:
-        area = population(globe, ref) / (max(float(density_per_ha), 1e-9) / _KM2_PER_HA)
+        people = float(local.villages.population[ref.index]) if ref.kind == "village" else population(globe, ref)
+        area = people / (max(float(density_per_ha), 1e-9) / _KM2_PER_HA)
     return math.sqrt(max(area, 0.0) / math.pi)
 
 
@@ -172,14 +187,19 @@ def ensure_local_maps(store: "MapStore", ref: SettlementRef, margin_km: float = 
     if globe is None:
         raise ValueError("the store has no globe")
     builds_before = len(store.builds)
-    region_id = region_of(globe, ref)
-    region = store.region(region_id)
-    hexes, valid = owning_hex(region.fields, region_position(globe, ref)[None])
-    if not valid[0]:
-        raise ValueError(f"{ref.kind} {ref.index} lies on the far side of region {region_id}")
-    owner = store.local(region_id, int(hexes[0]))
-    if not is_local_refined(globe, ref):
-        raise RuntimeError(f"{ref.kind} {ref.index} was not refined by its local map ({region_id}, {hexes[0]})")
+    if ref.map is not None:
+        owner = store.local(*ref.map)
+        if not 0 <= ref.index < len(owner.villages):
+            raise ValueError(f"local map {ref.map} has no village {ref.index}")
+    else:
+        region_id = region_of(globe, ref)
+        region = store.region(region_id)
+        hexes, valid = owning_hex(region.fields, region_position(globe, ref)[None])
+        if not valid[0]:
+            raise ValueError(f"{ref.kind} {ref.index} lies on the far side of region {region_id}")
+        owner = store.local(region_id, int(hexes[0]))
+        if not is_local_refined(globe, ref):
+            raise RuntimeError(f"{ref.kind} {ref.index} was not refined by its local map ({region_id}, {hexes[0]})")
 
     local_params = store.local_params
     center = drawn_position(owner, ref)

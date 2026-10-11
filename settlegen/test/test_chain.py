@@ -75,3 +75,16 @@ def test_the_frame_reaches_exactly_the_maps_whose_ground_it_covers(globe, towns)
 def test_the_region_is_the_site_cell(globe, towns):  # noqa: F811
     ref = _a_town(globe, towns)
     assert region_of(globe, ref) == REGION_ID
+
+
+def test_build_settlement_map_refines_the_frame_from_its_maps(globe, towns):  # noqa: F811
+    from settlegen.builder import build_settlement_map
+    from settlegen.params import SettlementMapParams
+    from settlegen.upsample import SettlementUpsampleParams
+
+    store = small_store(globe)
+    ref = _a_town(globe, towns)
+    built = build_settlement_map(store, ref, SettlementMapParams(upsample=SettlementUpsampleParams(texel_m=200.0)))
+    assert built.ref == ref
+    assert built.fields.tex_size == int(np.ceil(built.chain.side_km * 1000.0 / 200.0))
+    assert built.fields.region_id == built.chain.keys[0][0]
