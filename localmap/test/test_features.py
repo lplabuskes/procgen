@@ -141,9 +141,18 @@ def test_far_sea_legs_are_dropped(local, region, road_input, globe):
 
 
 def test_river_legs_are_rerouted_along_the_local_river(local, region, region_rivers, globe, rivers):
-    """A regional river leg, given as the straight line across the local river's
-    ends, is re-traced along that river, not as a road."""
-    path = max((np.asarray(p, dtype=np.float64) for p, _, _ in rivers.paths), key=len)
+    """A regional river leg, given as the straight line across the ends of the
+    local river's longest dry run, is re-traced along that river, not as a road
+    (where the river runs through a lake the boat crosses it straight)."""
+    runs = []
+    for positions, _, in_water in rivers.paths:
+        pts = np.asarray(positions, dtype=np.float64)
+        dry = ~np.asarray(in_water, dtype=bool)[:len(pts) - 1]
+        edges = np.flatnonzero(dry)
+        for run in np.split(edges, np.flatnonzero(np.diff(edges) > 1) + 1):
+            if run.size:
+                runs.append(pts[run[0]:run[-1] + 2])
+    path = max(runs, key=len)
     line = np.stack([path[0], path[-1]])
     leg = RegionRoads(region_id=local.region_id, segments=[], water_polylines=[line],
                       water_flows=[np.array([4.0])], water_pins=[(False, False)])

@@ -14,7 +14,7 @@ from settlegen.chain import SettlementRef
 from settlegen.frame import Frame
 from settlegen.geometry import SettlementGeometry
 from settlegen.params import SettlementMapParams
-from settlegen.roads import RoadLine, _chain, _landings, _Piece, _split_at_coast, crossings, gates
+from settlegen.roads import RoadLine, _chain, _landings, _Piece, _quays, _split_at_coast, crossings, gates
 from settlegen.test.conftest import lake_hex, lake_local, region  # noqa: F401
 from settlegen.upsample import SettlementUpsampleParams
 from settlegen.water import RiverLine, SiteWater
@@ -35,6 +35,16 @@ def test_roads_cut_at_a_seam_join_whichever_way_they_run():
     p = out[0]
     np.testing.assert_allclose(p.pos[:, 1], [0, 0.001, 0.0012, 0.002])
     assert len(p.flows) == 3 and not p.cut_start and not p.cut_end
+
+
+def test_a_water_leg_keeps_its_port_pins_across_a_seam():
+    a = _piece([[0, 0, 1], [0, 0.001, 1]], 0, cut_end=True)
+    a.pin_start = True
+    b = _piece([[0, 0.002, 1], [0, 0.0012, 1]], 1, cut_end=True)
+    out = _chain([a, b], gap=0.001)
+    assert len(out) == 1 and out[0].pin_start and not out[0].pin_end
+    flipped = _chain([b, a], gap=0.001)[0]
+    assert flipped.pin_start != flipped.pin_end
 
 
 def test_roads_on_one_map_or_too_far_apart_stay_apart():
@@ -82,6 +92,17 @@ def test_a_sea_leg_lands_where_its_road_meets_the_shore(frame):
     end = frame.to_xy(polylines[0][-1:])[0]
     np.testing.assert_allclose(end, landing.xy, atol=1e-3)
     assert all(np.allclose(a, landing.xy) for a, _, _ in legs)
+
+
+def test_a_river_leg_leaves_its_port_at_a_quay_on_the_channel(frame):
+    channels = MultiPolygon([box(300.0, -2000.0, 500.0, 2000.0)])
+    leg = RoadLine(xy=np.array([[0.0, 0.0], [200.0, 0.0], [400.0, 0.0], [400.0, 1500.0]]), flows=np.full(3, 6.0))
+    unpinned = RoadLine(xy=np.array([[-100.0, 0.0], [400.0, 10.0]]), flows=np.array([1.0]))
+    out = _quays([leg, unpinned], [(True, False), (False, False)], _water(), channels, frame)
+    assert len(out) == 1
+    quay = out[0]
+    np.testing.assert_allclose(quay.xy, [300.0, 0.0], atol=1e-6)
+    assert quay.water == "river" and quay.flow == 6.0 and quay.direction[0] > 0.99
 
 
 def test_gates_lie_on_the_footprint_edge_and_face_out():

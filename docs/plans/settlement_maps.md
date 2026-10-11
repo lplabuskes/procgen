@@ -516,10 +516,15 @@ place of the owning local map's.
   ruggedness otherwise sends roads down the flat bed), the along-river
   discount moves to a 60 m bank band, road ends inside a channel move to its
   nearest bank, and the corridor widens to clear the widest channel.
-- **Landings**: a sea leg's coast end is on the region's ~9 km raster, often
-  outside the frame, so the road that reached it lands where it passes nearest
-  the traced shore (sea or lake) and is cut there. Two port hops sharing a coast
-  point (chained city → coast → city by the region) are split there into one road.
+- **River and lake legs** (main's `RegionRoads.water_polylines`, from the
+  world's `trade_route_layers`, merged 2026-10-10): chained across seams like
+  roads, keeping their port pins, and re-routed over the site's still water and
+  river channels (`region.roads._water_cost`).
+- **Landings**: where a leg pinned at a port first reaches water — a quay on
+  its sea, lake or river (`Landing.water`). A sea leg is still straight from a
+  coast end on the region's ~9 km raster, so the road that reached it lands
+  where it passes nearest the traced shore and is cut there. Two port hops
+  sharing a coast point (chained city → coast → city) are split there into one road.
 - **Crossings**: planar segment intersection in frame metres (shapely), not
   `crossing_pairs` — the frame is flat, so they're the same.
   A bridge if the channel is ≥ `bridge_width_m` (20 m) wide or the
@@ -528,11 +533,14 @@ place of the owning local map's.
   re-traced onto one way share one gate and crossing, with their flows summed.
   **The footprint is provisional** until 4c: a disc of the local footprint's
   area, minus still water.
-Seed 4, 15 frames: every gate on the footprint edge; landings at the lake/sea
-ports (cities 13, 3); city 16's road crosses its river once instead of
-running down the channel (5 false bridges before). Water + roads ≤0.1 s per site.
-Seen upstream, not fixed: city 152 (a port) has no road reaching its frame on
-its local map, and its sea legs start 26 km away.
+Seed 4, 15 frames: every gate on the footprint edge; quays at the river ports
+(cities 16, 25, 3), the lake port (13) and sea ports (152, 27, 15); city 16's
+road crosses its river once instead of running down the channel (5 false
+bridges before). Water + roads ≤0.1 s per site. After the merge city 152 has
+its roads. Seen upstream, not fixed: river/lake legs pinned at cities 7–37 km
+from any regional river or coast (seed 4 cities 36, 220, 14 — refined off
+their water, or the world's water face not drawn near) cross that land
+overland; with no water in the frame they get no quay.
 
 Next: Phase 4c (footprint, buildable area).
 

@@ -7,10 +7,15 @@
   it pays the world's ford cost, each step in it costs as much as climbing a
   ``channel_climb`` slope (roads cross the short way), and the world's
   along-river discount goes to a ``bank_m`` band beside it (roads keep to the banks).
-- **Landings**: a sea leg's coast end is the region's (on its ~9 km raster), so
-  the road that reached it lands where it passes nearest the traced shore in
-  the frame (sea or lake), and is cut there; a leg with no road lands at the
-  shore nearest its coast end, if that is near the frame.
+- **River and lake legs** (the world's water trade off the open sea) are the
+  local maps' too, chained the same way, re-routed over the site's still water
+  and river channels (:func:`region.roads._water_cost`), each pinned to the land
+  at its port as the tiers above pin it.
+- **Landings**: where a leg pinned at a port first reaches water (a quay on its
+  sea, lake or river).  A sea leg is straight from a coast end on the region's
+  ~9 km raster, so the road that reached it lands where it passes nearest the
+  traced shore in the frame, and is cut there; a sea leg with no road (its port
+  is on the water) lands at the shore nearest its start, if near the frame.
 - **Crossings**: every point a road crosses a dry river or stream channel's
   centreline, a bridge where the channel is at least ``bridge_width_m`` wide or
   the settlement is a city, else a ford.
@@ -37,7 +42,9 @@ from localmap.builder import LocalMap
 from localmap.roads import LocalRoadParams
 from region.corridor import Raster, corridor_reach, node_spacing_rad, raster_frame, sample_raster
 from region.display import snap_to_land
-from region.roads import RegionRoads, RouteSegment, _road_cost, _stretches, route_polyline
+from region.roads import (
+    RegionRoads, RouteSegment, _road_cost, _segments, _stretches, _water_cost, route_polyline,
+)
 from region.upsample import EARTH_RADIUS_KM, RegionFields
 from settlegen.frame import Frame
 from settlegen.source import LocalMapsSource
@@ -75,6 +82,8 @@ class SettlementRoadParams(LocalRoadParams):
     # ruggedness of the street-scale relief would otherwise send roads down the flat river bed.
     channel_climb: float = _f(1.0, label="Channel step cost (as slope)", min=0.0, max=5.0, step=0.1)
     bank_m: float = _f(60.0, label="River bank band (m)", min=0.0, max=500.0, step=5.0)
+    water_corridor_parent_texels: float = _f(
+        1.5, label="Water corridor half-width (local texels)", min=0.25, max=6.0, step=0.25)
 
 
 @dataclass
@@ -97,12 +106,12 @@ class Gate:
 
 @dataclass
 class Landing:
-    """Where a sea leg meets the shore."""
+    """Where a water leg leaves the land: a quay."""
 
     xy: np.ndarray            # (2,)
-    direction: np.ndarray     # (2,) unit, towards the leg's far end
+    direction: np.ndarray     # (2,) unit, onto the water
     flow: float
-    water: Literal["sea", "lake"]
+    water: Literal["sea", "lake", "river"]
 
 
 @dataclass
@@ -119,10 +128,11 @@ class Crossing:
 
 @dataclass
 class SiteRoads:
-    """The site's roads.  ``roads`` are the re-traced roads on the sphere, with the
-    sea legs from their landings (for drawing in the world's form)."""
+    """The site's roads.  ``roads`` are the re-traced roads and river and lake legs
+    on the sphere, with the sea legs from their landings (for drawing in the world's form)."""
 
     lines: list[RoadLine]
+    water: list[RoadLine]                               # river and lake legs
     sea: list[tuple[np.ndarray, np.ndarray, float]]     # (a xy, b xy, flow): a at the landing if it has one
     landings: list[Landing]
     crossings: list[Crossing]
@@ -142,15 +152,22 @@ class _Piece:
     cut_start: bool           # its first vertex is where the map's ground ends
     cut_end: bool
     map_index: int
+    pin_start: bool = False   # a water leg's end pinned to the land at a port
+    pin_end: bool = False
 
     def reversed(self) -> "_Piece":
-        return _Piece(self.pos[::-1].copy(), self.flows[::-1].copy(), self.cut_end, self.cut_start, self.map_index)
+        return _Piece(self.pos[::-1].copy(), self.flows[::-1].copy(), self.cut_end, self.cut_start, self.map_index,
+                      self.pin_end, self.pin_start)
 
 
-def _pieces(maps: Sequence[LocalMap], source: LocalMapsSource) -> list[_Piece]:
+def _pieces(maps: Sequence[LocalMap], source: LocalMapsSource, water: bool = False) -> list[_Piece]:
+    """Each map's roads (``water``: river and lake legs) on the ground that map owns."""
     out = []
     for i, m in enumerate(maps):
-        for verts, flows in zip(m.roads.polylines, m.roads.polyline_flows):
+        r = m.roads
+        paths = zip(r.water_polylines, r.water_flows, r.water_pins) if water else \
+            zip(r.polylines, r.polyline_flows, [(False, False)] * len(r.polylines))
+        for verts, flows, pins in paths:
             pos = np.asarray(verts, dtype=np.float64).reshape(-1, 3)
             if len(pos) < 2:
                 continue
@@ -164,6 +181,7 @@ def _pieces(maps: Sequence[LocalMap], source: LocalMapsSource) -> list[_Piece]:
                 out.append(_Piece(
                     pos=pos[a:b + 1], flows=np.asarray(flows, dtype=np.float64)[a:b],
                     cut_start=a > 0, cut_end=b < len(pos) - 1, map_index=i,
+                    pin_start=a == 0 and bool(pins[0]), pin_end=b == len(pos) - 1 and bool(pins[1]),
                 ))
     return out
 
@@ -201,6 +219,7 @@ def _chain(pieces: list[_Piece], gap: float) -> list[_Piece]:
             pos=np.concatenate([head.pos, tail.pos]),
             flows=np.concatenate([head.flows, [max(float(head.flows[-1]), float(tail.flows[0]))], tail.flows]),
             cut_start=head.cut_start, cut_end=tail.cut_end, map_index=tail.map_index,
+            pin_start=head.pin_start, pin_end=tail.pin_end,
         ))
         joined = True
     return pieces
@@ -222,15 +241,19 @@ def _sea_legs(maps: Sequence[LocalMap]) -> list[RouteSegment]:
 
 
 def parent_roads(maps: Sequence[LocalMap], antimeridian: float, road_raster_texels: float) -> RegionRoads:
-    """The local maps' roads over the ground each owns, chained across seams, and their sea legs."""
+    """The local maps' roads and river and lake legs over the ground each owns,
+    chained across seams, and their sea legs."""
     source = LocalMapsSource([m.fields for m in maps], antimeridian)
     f0 = maps[0].fields
     gap = _SEAM_GAP_NODES * float(road_raster_texels) * f0.grid.texel_spacing_rad(f0.tex_size)
     pieces = _chain(_pieces(maps, source), gap)
+    waters = _chain(_pieces(maps, source, water=True), gap)
     sea = _sea_legs(maps)
     return RegionRoads(
         region_id=f0.region_id, segments=list(sea), sea=sea,
         polylines=[p.pos for p in pieces], polyline_flows=[p.flows for p in pieces],
+        water_polylines=[p.pos for p in waters], water_flows=[p.flows for p in waters],
+        water_pins=[(p.pin_start, p.pin_end) for p in waters],
     )
 
 
@@ -340,10 +363,49 @@ def _landings(
             on_pt = Point(land_xy)
             sea_d = water.sea.distance(on_pt) if not water.sea.is_empty else np.inf
             lake_d = water.lakes.distance(on_pt) if not water.lakes.is_empty else np.inf
-            kind: Literal["sea", "lake"] = "sea" if sea_d <= lake_d else "lake"
+            kind: Literal["sea", "lake", "river"] = "sea" if sea_d <= lake_d else "lake"
             landings.append(Landing(
                 xy=land_xy, direction=heading / norm if norm > 0 else np.zeros(2), flow=float(f), water=kind))
     return landings, legs, polylines
+
+
+def _quays(
+    legs: list[RoadLine], pins: list[tuple[bool, bool]], water: SiteWater, channels: MultiPolygon, frame: Frame,
+) -> list[Landing]:
+    """Where each river or lake leg pinned at a port in the frame first reaches water."""
+    still = water.sea.union(water.lakes)
+    wet = still.union(channels)
+    frame_box = frame.box()
+    out = []
+    for leg, pin in zip(legs, pins):
+        for pinned, xy, flows in ((pin[0], leg.xy, leg.flows), (pin[1], leg.xy[::-1], leg.flows[::-1])):
+            if not pinned or not frame_box.contains(Point(xy[0])) or wet.contains(Point(xy[0])):
+                continue
+            hit = next((k for k in range(1, len(xy)) if wet.contains(Point(xy[k]))), None)
+            if hit is None:
+                continue
+            prev, first_wet = xy[hit - 1], xy[hit]
+            entry = _points(LineString([prev, first_wet]).intersection(wet.boundary))
+            at = min(entry, key=lambda p: float(np.linalg.norm(p - prev))) if entry else first_wet
+            heading = first_wet - prev
+            heading = heading / max(float(np.linalg.norm(heading)), 1e-12)
+            on = Point(at + heading)
+            kind: Literal["sea", "lake", "river"] = (
+                "sea" if water.sea.contains(on) else "lake" if water.lakes.contains(on) else "river")
+            out.append(Landing(xy=np.asarray(at, dtype=np.float64), direction=heading, flow=float(flows[hit - 1]),
+                               water=kind))
+    return out
+
+
+def _merge_landings(landings: list[Landing], merge_m: float) -> list[Landing]:
+    out: list[Landing] = []
+    for landing in landings:
+        same = next((q for q in out if np.linalg.norm(q.xy - landing.xy) < merge_m), None)
+        if same is None:
+            out.append(landing)
+        else:
+            same.flow += landing.flow
+    return out
 
 
 # ── crossings and gates ──────────────────────────────────────────────────────
@@ -484,7 +546,8 @@ def _route(
     params: SettlementRoadParams, land: Optional["LandCostParams"], danger_scale: float, land_reach: float,
 ) -> RegionRoads:
     """:func:`localmap.roads.build_local_roads` one tier down, with the rivers as
-    channels (:func:`_channel_nodes`) rather than lines."""
+    channels (:func:`_channel_nodes`) rather than lines: roads keep out of them,
+    river and lake legs sail them."""
     from worldgen.cost.builder import LandCostParams
     land = land or LandCostParams()
     lo, step, n = raster_frame(fields, params.raster_texels, params.margin)
@@ -493,19 +556,28 @@ def _route(
     node_m = node_rad * EARTH_RADIUS_KM * 1000.0
     # The local roads follow a river's centre line: the corridor reaches past its widest channel's bank.
     widest = max((float(line.width_m.max()) for line in water.lines if len(line.width_m)), default=0.0)
-    radius_nodes = max(
-        float(params.corridor_parent_texels) * parent.grid.texel_spacing_rad(parent.tex_size) / node_rad,
-        (0.5 * widest + float(params.bank_m)) / node_m + 1.5, 1.5)
-    lines, polys = [], []
-    for verts, flows in zip(roads.polylines, roads.polyline_flows):
-        verts = np.asarray(verts, dtype=np.float64)
-        s, t, valid = fields.geometry.ecef_to_local(verts)
-        if len(verts) >= 2 and (valid & (s >= lo) & (s <= hi) & (t >= lo) & (t <= hi)).any():
-            lines.append((s, t))
-            polys.append((verts, np.asarray(flows, dtype=np.float64)))
-    if not polys:
-        return RegionRoads(region_id=fields.region_id, segments=[])
+    parent_rad = parent.grid.texel_spacing_rad(parent.tex_size)
+    clear = (0.5 * widest + float(params.bank_m)) / node_m + 1.5
+    radius_nodes = max(float(params.corridor_parent_texels) * parent_rad / node_rad, clear, 1.5)
+    water_radius = max(float(params.water_corridor_parent_texels) * parent_rad / node_rad, clear, 1.5)
+
+    def nearby(polylines, flow_lists, extra):  # type: ignore[no-untyped-def]
+        lines, kept = [], []
+        for verts, flows, more in zip(polylines, flow_lists, extra):
+            verts = np.asarray(verts, dtype=np.float64)
+            s, t, valid = fields.geometry.ecef_to_local(verts)
+            if len(verts) >= 2 and (valid & (s >= lo) & (s <= hi) & (t >= lo) & (t <= hi)).any():
+                lines.append((s, t))
+                kept.append((verts, np.asarray(flows, dtype=np.float64), more))
+        return lines, kept
+
+    lines, polys = nearby(roads.polylines, roads.polyline_flows, [None] * len(roads.polylines))
+    water_lines, waters = nearby(roads.water_polylines, roads.water_flows, roads.water_pins)
+    out = RegionRoads(region_id=fields.region_id, segments=[])
+    if not polys and not waters:
+        return out
     reach = corridor_reach(lines, lo, step, n, radius_nodes + 2.0)
+    reach |= corridor_reach(water_lines, lo, step, n, water_radius + 2.0)
     raster = sample_raster(fields, globe, lo, step, n, reach, keys=("biome", "forest_density", "danger"))
     channel, bank = _channel_nodes(raster, frame, water, float(params.bank_m), node_m)
     face_km = float(np.sqrt(np.mean(globe.mesh.face_areas))) * EARTH_RADIUS_KM
@@ -516,8 +588,8 @@ def _route(
     inner = box(*((np.array([lo, lo, hi, hi]) - 0.5) * frame.side_m)).buffer(-node_m)
     channels = channel_polygons(water.lines)          # past the frame, as far as the raster
     banks = channels.boundary.intersection(inner) if not channels.is_empty else None
-    polylines, polyline_flows = [], []
-    for verts, flows in polys:
+    smoothing = int(params.smoothing_iterations)
+    for verts, flows, _ in polys:
         verts = verts.copy()
         verts[[0, -1]] = snap_to_land(fields, verts[[0, -1]], land_reach)
         s, t, _ = fields.geometry.ecef_to_local(verts)
@@ -529,15 +601,30 @@ def _route(
                 for k, end in ((0, 0), (1, -1)):
                     if channels.contains(Point(xy[k])):
                         on = nearest_points(banks, Point(xy[k]))[0]
-                        out = np.array([on.x, on.y]) - xy[k]
-                        out *= 1.0 + 0.5 * node_m / max(float(np.linalg.norm(out)), 1e-9)
-                        pts[end] = frame.to_ecef(xy[k] + out)[0]
-            for path, edge_flows in route_polyline(
-                fields, raster, pts, st.flows, radius_nodes, edge_cost, int(params.smoothing_iterations),
+                        shift = np.array([on.x, on.y]) - xy[k]
+                        shift *= 1.0 + 0.5 * node_m / max(float(np.linalg.norm(shift)), 1e-9)
+                        pts[end] = frame.to_ecef(xy[k] + shift)[0]
+            for path, edge_flows, _ in route_polyline(
+                fields, raster, pts, st.flows, radius_nodes, edge_cost, smoothing,
             ):
-                polylines.append(path)
-                polyline_flows.append(np.asarray(edge_flows, dtype=np.float64))
-    return RegionRoads(region_id=fields.region_id, segments=[], polylines=polylines, polyline_flows=polyline_flows)
+                out.polylines.append(path)
+                out.polyline_flows.append(np.asarray(edge_flows, dtype=np.float64))
+    if waters:
+        wet = raster.sampled & (raster.water | (channel > 0.0))
+        water_cost = _water_cost(wet, float(params.water_land_cost))
+        for verts, flows, pin in waters:
+            # Pinned ends are ports on land: keep them off the site's water.
+            verts = verts.copy()
+            for k, end in enumerate((0, -1)):
+                if pin[k]:
+                    verts[end] = snap_to_land(fields, verts[[end]], land_reach)[0]
+            for path, edge_flows, pins in route_polyline(
+                fields, raster, verts, flows, water_radius, water_cost, smoothing, wet=wet, pin=pin,
+            ):
+                out.water_polylines.append(path)
+                out.water_flows.append(np.asarray(edge_flows, dtype=np.float64))
+                out.water_pins.append(pins)
+    return out
 
 
 def build_site_roads(
@@ -556,29 +643,39 @@ def build_site_roads(
     parent.polylines = polylines
     routed = _route(fields, maps[0].fields, parent, globe, frame, water, params, land, danger_scale,
                     4.0 * fields.grid.texel_spacing_rad(fields.tex_size))
-    lines = []
-    for p, f in zip(routed.polylines, routed.polyline_flows):
-        xy = frame.to_xy(p)
-        # A stub from a city to itself (a route's two ends snapped together).
-        if len(xy) >= 2 and float(np.linalg.norm(np.diff(xy, axis=0), axis=1).sum()) > texel_m:
-            lines.append(RoadLine(xy=xy, flows=np.asarray(f, dtype=np.float64)))
+
+    def as_lines(polylines: list[np.ndarray], flow_lists: list[np.ndarray]) -> list[RoadLine]:
+        out = []
+        for p, f in zip(polylines, flow_lists):
+            xy = frame.to_xy(p)
+            # A stub from a city to itself (a route's two ends snapped together).
+            if len(xy) >= 2 and float(np.linalg.norm(np.diff(xy, axis=0), axis=1).sum()) > texel_m:
+                out.append(RoadLine(xy=xy, flows=np.asarray(f, dtype=np.float64)))
+        return out
+
+    lines = as_lines(routed.polylines, routed.polyline_flows)
     _land_at(lines, landings, merge_m)
+    kept = [k for k, p in enumerate(routed.water_polylines) if len(as_lines([p], [routed.water_flows[k]]))]
+    water_legs = [as_lines([routed.water_polylines[k]], [routed.water_flows[k]])[0] for k in kept]
+    quays = _quays(water_legs, [routed.water_pins[k] for k in kept], water, channel_polygons(water.lines), frame)
+    landings = _merge_landings(landings + quays, merge_m)
 
     sea_ecef: list[RouteSegment] = [
         (frame.to_ecef(a)[0].astype(np.float32), frame.to_ecef(b)[0].astype(np.float32), f) for a, b, f in legs]
-    segments: list[RouteSegment] = list(sea_ecef)
-    on_sphere = []
+    roads = RegionRoads(region_id=fields.region_id, segments=list(sea_ecef), sea=sea_ecef)
     for line in lines:
         pos = frame.to_ecef(line.xy)
-        on_sphere.append(pos)
-        segments.extend((pos[k].astype(np.float32), pos[k + 1].astype(np.float32), float(line.flows[k]))
-                        for k in range(len(pos) - 1))
-    roads = RegionRoads(
-        region_id=fields.region_id, segments=segments, polylines=on_sphere,
-        polyline_flows=[line.flows for line in lines], sea=sea_ecef,
-    )
+        roads.polylines.append(pos)
+        roads.polyline_flows.append(line.flows)
+        roads.segments.extend(_segments(pos, line.flows))
+    for k, line in zip(kept, water_legs):
+        pos = frame.to_ecef(line.xy)
+        roads.water_polylines.append(pos)
+        roads.water_flows.append(line.flows)
+        roads.water_pins.append(routed.water_pins[k])
+        roads.segments.extend(_segments(pos, line.flows))
     return SiteRoads(
-        lines=lines, sea=legs, landings=landings,
+        lines=lines, water=water_legs, sea=legs, landings=landings,
         crossings=crossings(lines, water, float(params.bridge_width_m), always_bridge, merge_m),
         gates=gates(lines, footprint, merge_m), roads=roads,
     )
