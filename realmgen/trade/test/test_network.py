@@ -380,6 +380,26 @@ class TestComputeTradeNetwork:
         assert result.landing_flow[2] > 0.0
         assert result.landing_flow[0] == 0.0     # the settlement is a real port
 
+    def test_port_ok_closes_a_port_the_shore_cannot_reach(self):
+        mesh, land_ec, land_p, sea_ec, sea_p = self._strait()
+        # Directed adjacency edges in order: 0→1, 1→0, 1→2, 2→1; the port 0→1 is shut.
+        result = compute_trade_network(
+            mesh, [_settlement(0, tier=0), _settlement(2, tier=0)], [(2, 5.0, 0)],
+            land_ec, land_p, sea_ec, sea_p,
+            port_cost=1.0, flow_decay=0.0, port_ok=np.array([False, False, True, True]),
+        )
+        assert result.pair_flow.sum() == 0.0
+        assert not any(result.settlement_links)
+
+    def test_settlement_links_name_the_water_each_port_uses(self):
+        mesh, land_ec, land_p, sea_ec, sea_p = self._strait()
+        result = compute_trade_network(
+            mesh, [_settlement(0, tier=0), _settlement(2, tier=0)], [(2, 5.0, 0)],
+            land_ec, land_p, sea_ec, sea_p, port_cost=1.0, flow_decay=0.0,
+        )
+        assert [[g for g, _ in links] for links in result.settlement_links] == [[1], [1]]
+        assert all(f > 0.0 for links in result.settlement_links for _, f in links)
+
     def test_river_port_ships_down_the_river(self):
         """Faces 0-3 are a navigable river (land and water) reaching the sea at 4.
         A city at 1 ships downstream by water; nowhere else may goods board."""
@@ -437,6 +457,9 @@ class TestComputeTradeNetwork:
         assert layer(1, 2) == layer(2, 3) == layer(3, 4) == {ROUTE_WATER}
         assert layer(4, 5) == {ROUTE_TRANSFER}
         assert layer(1, 1) == {ROUTE_TRANSFER}       # boarding at the river port
+        # The river city's link is the water edge out of its switch; the far port's is the sea.
+        assert {g for g, _ in result.settlement_links[0]} == {2}
+        assert {g for g, _ in result.settlement_links[1]} == {4}
 
     def test_deterministic(self):
         mesh = _line_mesh(8)

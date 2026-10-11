@@ -75,6 +75,9 @@ class Settlement:
     region_position: np.ndarray = field(default_factory=lambda: np.zeros(0))  # (3,)
     refined: bool = False           # re-sited by its region
     local_refined: bool = False     # re-sited by its local map
+    # Per land↔water link its trade uses, strongest first: the tags of the water
+    # that serves it (``realmgen.trade.water_links``).  Every siting tier keeps it there.
+    water_links: list = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.position = np.asarray(self.position, dtype=np.float64)

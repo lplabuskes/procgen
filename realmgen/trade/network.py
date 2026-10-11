@@ -85,6 +85,9 @@ class TradeResult:
     goods_flow: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.float64))
     # (len(routes),) int8 — each route hop's graph layer (``ROUTE_LAND`` / ``_WATER`` / ``_TRANSFER``).
     route_layers: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int8))
+    # Per settlement, its land↔water links: ``(water face, flow)`` per port onto a
+    # water face, or per water edge out of its face's river switch.
+    settlement_links: list = field(default_factory=list)
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -101,13 +104,16 @@ def _collect_hybrid_edges(
     river_switch_cost: float,
     ports: np.ndarray | None = None,
     landing_cost: float = np.inf,
+    port_ok: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return ``(rows, cols, data)`` arrays for the base (2N, 2N) hybrid graph (no virtual source).
 
     ``ports`` (``(N,)`` bool) limits land↔water transitions (port edges and river
     switches) to those faces; elsewhere they cost ``landing_cost`` (``inf`` = none).
-    ``None`` allows them everywhere.  Edges come land, sea, river switches, then port
-    edges, each by face then adjacency order.
+    ``None`` allows them everywhere.  ``port_ok`` (per directed adjacency edge, in
+    ``face_adjacency`` order) limits port edges to links the land face's texels
+    reach (:func:`realmgen.trade.water_links.port_links`).  Edges come land, sea,
+    river switches, then port edges, each by face then adjacency order.
     """
     land_p = np.asarray(land_passable, dtype=bool)
     sea_p = np.asarray(sea_passable, dtype=bool)
@@ -129,6 +135,8 @@ def _collect_hybrid_edges(
     # faces, then ports from land-only faces onto sea-only neighbours.
     amph = np.flatnonzero(amphibious)
     coastal = land_p[src] & ~sea_p[src] & sea_p[dst] & ~land_p[dst]
+    if port_ok is not None:
+        coastal &= np.asarray(port_ok, dtype=bool)
     ti = np.concatenate([amph, src[coastal]])
     tj = np.concatenate([amph, dst[coastal]])
     base = np.concatenate([np.full(amph.size, max(float(river_switch_cost), 0.0)),
@@ -142,6 +150,38 @@ def _collect_hybrid_edges(
     cols = np.concatenate([land[1], sea[1], np.stack([n + tj, ti], axis=1).ravel()])
     data = np.concatenate([land[2], sea[2], np.repeat(tc, 2)])
     return rows, cols, data
+
+
+def _settlement_links(
+    edge_a: np.ndarray, edge_b: np.ndarray, flow: np.ndarray, n: int, settlement_nodes: List[int],
+) -> list[list[tuple[int, float]]]:
+    """Per settlement, ``(water face, flow)`` of each land↔water link at its face.
+
+    A port ``f → n + g`` links to ``g``; a river switch ``f → n + f`` links to the
+    water edges ``n + f — n + g`` its face's water node carries.
+    """
+    at: dict[int, list[int]] = {}
+    for k, f in enumerate(settlement_nodes):
+        at.setdefault(int(f), []).append(k)
+    links: list[list[tuple[int, float]]] = [[] for _ in settlement_nodes]
+    switched: set[int] = set()
+    for a, b, fl in zip(edge_a.tolist(), edge_b.tolist(), flow.tolist()):
+        lo, hi = min(a, b), max(a, b)
+        if fl <= 0.0 or lo >= n or hi < n or lo not in at:
+            continue
+        if hi - n == lo:
+            switched.add(lo)
+        else:
+            for k in at[lo]:
+                links[k].append((hi - n, fl))
+    for a, b, fl in zip(edge_a.tolist(), edge_b.tolist(), flow.tolist()):
+        if fl <= 0.0 or min(a, b) < n:
+            continue
+        for f, g in ((a - n, b - n), (b - n, a - n)):
+            if f in switched:
+                for k in at[f]:
+                    links[k].append((g, fl))
+    return links
 
 
 @njit(cache=True)
@@ -309,6 +349,7 @@ def compute_trade_network(
     hub_display_quantile: float = 0.90,
     min_display_flow: float | None = None,
     rarity_weights: dict | None = None,
+    port_ok: np.ndarray | None = None,
 ) -> TradeResult:
     """Accumulate trade flow in two phases.
 
@@ -346,6 +387,8 @@ def compute_trade_network(
             is a display hub.
         min_display_flow: minimum edge flow for the display route list (default 0).
         rarity_weights: defaults to :data:`GOOD_RARITY_WEIGHTS`; unknown IDs get 1.0.
+        port_ok: per directed adjacency edge, the ports allowed (see
+            :func:`_collect_hybrid_edges`); ``None`` allows every coastal pair.
 
     Returns:
         :class:`TradeResult`; ``pair_flow`` is ``(S, S)``, index-aligned with ``settlements``.
@@ -387,7 +430,7 @@ def compute_trade_network(
         n, mesh.face_adjacency,
         land_edge_costs, np.asarray(land_passable, dtype=bool),
         sea_edge_costs, np.asarray(sea_passable, dtype=bool),
-        port_cost, river_switch_cost, ports, landing_cost,
+        port_cost, river_switch_cost, ports, landing_cost, port_ok,
     )
     if data.size:
         graph = csr_matrix((data, (rows.astype(np.int32), cols.astype(np.int32))), shape=(size, size))
@@ -506,6 +549,8 @@ def compute_trade_network(
 
     threshold = float(min_display_flow) if min_display_flow is not None else 0.0
 
+    links = _settlement_links(edge_a, edge_b, edge_flow, n, settlement_nodes)
+
     routes = []
     layers = []
     for a, b, flow in zip(edge_a.tolist(), edge_b.tolist(), edge_flow.tolist()):
@@ -525,4 +570,5 @@ def compute_trade_network(
         deposit_credit=deposit_credit,
         goods_flow=goods_flow,
         route_layers=np.array(layers, dtype=np.int8),
+        settlement_links=links,
     )

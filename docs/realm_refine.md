@@ -78,6 +78,18 @@ Terms add (river mouth > bare shore; harbour > inland river). Jitter stops
 uniform inland faces all picking the same grid spot (a visible lattice at region
 scale).
 
+**Water links.** A city with `Settlement.water_links` (the water its trade
+uses; [realm_population.md](realm_population.md#ports)) is sited only on
+candidates meeting them (`water_link_mask`): within the river snap distance of
+the tagged river (`SiteField.near_river`), or on ocean / lake coast — all of
+them where some candidate does. A face's water node can join waters that don't
+meet inside it; then the city goes where they come closest to meeting, by class:
+**confluence** of tagged rivers > tagged river's **mouth** on tagged coast >
+tagged **coast** > one tagged **river**, within the class the highest river flow
+(`SiteField.river_flows`, each river's largest), then the strongest links. A
+mouth or coast puts the city on the sea the other rivers reach. Seeds 4/31/35:
+two cities (seed 35: city 4 → river 87's mouth, city 143 → coast).
+
 **Spacing.** Largest first; sites within `city_min_spacing_km` of a sited city
 are rejected (all crowded → least crowded). Seeds 4/31/35 have no pair < 150 km
 either way — it's a guard for unlucky coasts.

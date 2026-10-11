@@ -8,7 +8,7 @@ so a settlement on an owned texel lies inside its face.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 from scipy.spatial import KDTree
@@ -190,12 +190,21 @@ class SiteField:
         spacing = _texel_spacing(self._positions[0]) if self.n else 0.0
         river_pts = densify_polylines([entry[0] for entry in rivers], 0.5 * spacing)
         self._river_tree = KDTree(river_pts) if river_pts is not None else None
+        lines = [np.asarray(entry[0], dtype=np.float64) for entry in rivers]
+        # (R,) each river's largest flow, ranking the water a city's links can share.
+        self.river_flows = np.array([float(np.max(e[1])) if len(e[1]) else 0.0 for e in rivers], dtype=np.float64)
+        # Each river on its own, for cities tagged with one (``Settlement.water_links``).
+        self.river_proximity = RiverProximity(lambda r: [lines[r]] if 0 <= r < len(lines) else [], 0.5 * spacing)
         self._confluence_tree = _build_confluence_tree(rivers, search_radius=confluence_search_radius)
         # Hydrology ``StreamNetwork`` channel texels; only town siting passes one.
         self._stream = np.zeros(self._ocean.shape, dtype=bool)
         if streams is not None and len(streams):
             self._stream.reshape(-1)[streams.nodes[streams.channel]] = True
         self._cache: dict[int, FaceSites] = {}
+
+    def near_river(self, face: FaceSites, idx: np.ndarray, r: int) -> np.ndarray:
+        """``(len(idx),)`` True where ``face``'s texels ``idx`` are within the river snap distance of river ``r``."""
+        return self.river_proximity.near(r, face.positions[idx], self._river_factor * face.spacing)
 
     def owner(self, points: np.ndarray) -> np.ndarray:
         """Nearest-face-centroid owner of each of ``points`` ``(P, 3)``."""
@@ -257,3 +266,25 @@ class SiteField:
                 fertility=np.where(land[k], fert[k], 0.0),
                 spacing=float(spacing[k]),
             )
+
+
+class RiverProximity:
+    """Per world river, a KD-tree of its course, built on demand.
+
+    ``runs(r)`` gives river ``r``'s polylines (a tier's own drawing of it).
+    """
+
+    def __init__(self, runs: Callable[[int], list[np.ndarray]], step: float) -> None:
+        self._runs = runs
+        self._step = float(step)
+        self._trees: dict[int, Optional[KDTree]] = {}
+
+    def near(self, r: int, points: np.ndarray, radius: float) -> np.ndarray:
+        """``(P,)`` True where ``points`` lie within ``radius`` (chord) of river ``r``."""
+        if r not in self._trees:
+            pts = densify_polylines(self._runs(r), self._step)
+            self._trees[r] = KDTree(pts) if pts is not None else None
+        tree = self._trees[r]
+        if tree is None or len(points) == 0:
+            return np.zeros(len(points), dtype=bool)
+        return np.asarray(tree.query(points, distance_upper_bound=radius)[0] < radius)

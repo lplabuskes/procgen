@@ -4,6 +4,7 @@ import pytest
 
 from realmgen.placement.types import SITE_KIND_LAKE_COAST, SITE_KIND_OCEAN_COAST
 from realmgen.test.conftest import _settlement
+from realmgen.trade.water_links import TAG_OCEAN
 from region.cities import refine_region_cities
 from region.geometry import ecef_to_cell
 from region.rivers import build_region_rivers
@@ -120,3 +121,28 @@ def test_route_ends_follow_their_city():
     out = move_points(pts, (old, new))
     np.testing.assert_array_equal(out, [new[0], pts[1], new[1]])
     np.testing.assert_array_equal(move_points(pts, None), pts)
+
+
+def test_a_city_tagged_with_the_ocean_reaches_it_past_its_reach(fields, rivers, sites, synthetic_globe):
+    reach = global_texel_rad(synthetic_globe)
+    best = None
+    for face in np.unique(sites.face[sites.coast_ocean]):
+        in_face = np.flatnonzero(sites.face == face)
+        coast = in_face[sites.coast_ocean[in_face]]
+        d = np.linalg.norm(sites.positions[in_face][:, None] - sites.positions[coast][None], axis=2).min(axis=1)
+        far = in_face[d > 1.5 * reach]
+        if far.size and ecef_to_cell(sites.positions[far[:1]], synthetic_globe.antimeridian)[0] == REGION_ID:
+            best = (int(face), int(far[0]))
+            break
+    if best is None:
+        pytest.skip("no ocean face with ground beyond a reach of its coast")
+    face, i = best
+    city = _settlement(face_id=face, pop=10_000.0, position=sites.positions[i].copy())
+    city.water_links = [(TAG_OCEAN,)]
+    synthetic_globe.add_feature("settlements", [city])
+    try:
+        refine_region_cities(fields, rivers, synthetic_globe)
+    finally:
+        synthetic_globe.remove_feature("settlements")
+    at = np.flatnonzero(np.all(sites.positions == city.position, axis=1))
+    assert at.size == 1 and sites.coast_ocean[at[0]] and sites.face[at[0]] == face

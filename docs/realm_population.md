@@ -69,6 +69,35 @@ mouths, so the only other land/water crossing on the map is a river mouth. The
 polity sea-authority graph (`build_base_hybrid_graph`) still allows transitions
 everywhere.
 
+**Water a face's texels reach** (`realmgen/trade/water_links.py`). A face is
+~220 km across: bordering a water face, or a navigable river crossing it, does
+not put water near a city in it. `build_water_access` reads per face the world
+rivers whose course it owns and whether it owns coast (a land texel 4-adjacent
+to ocean / lake; `SiteField` ownership). Then:
+
+- a **port** (land-only face → water-only neighbour) needs coast of that
+  water's kind (`port_links` → `compute_trade_network(port_ok=…)`);
+- a **river face's water edge** needs a river shared with the neighbour (it
+  flows on into it) or, onto a water-only face, coast of its kind
+  (`mask_sea_edges` sets the rest to `inf`).
+
+Before this ~a third of water-trading cities (seed 4: 49/152) had a port onto a
+sea face their own face had no shore on — trade loaded ships tens of km inland.
+
+**Water links.** `TradeResult.settlement_links` lists each settlement's
+land↔water links (`(water face, flow)`: a port's water face, or each water edge
+out of its face's river switch). `settlement_water_links` turns them into
+`Settlement.water_links`: per link, strongest first, the tags of the water that
+serves it — a world river (index into `rivers`), `TAG_OCEAN` or `TAG_LAKE` (by
+kind) — links on the same water merged. Every siting tier keeps the city on it
+([realm_refine.md](realm_refine.md#city-siting-settlementspy)). Saved with the
+settlements.
+
+Seed 4: 130 water-linked cities sit a median 4.3 km (max 6.2) from their
+strongest link's water on the region map and 0.34 km (max 0.5) on the local map,
+where before cities' water legs crossed up to 37 km of land. Population stays in
+band; sovereigns rise (seed 4 53 → 64, seed 31 35 → 54), largest domains unchanged.
+
 To avoid stranding settlement-less coasts, relaxation passes give every other
 coastal/river face a fallback *landing* at `landing_cost` (≈2.4× port). Where
 `landing_flow` reaches `port_spawn_quantile` of positive face flows (median = the
