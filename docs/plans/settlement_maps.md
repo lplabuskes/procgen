@@ -43,9 +43,8 @@ is derived from.
 | Footprint | 19k city ≈ 8 texels (~1 km²); 540k ≈ 225 (~27 km²) | the same areas at ~4,400 / ~120,000 texels |
 
 Frame side = `2 · (footprint radius + city_garden_ring_km + margin_km)`, where
-footprint radius = √(area / π) from `CityFootprints.area_km2` (towns: their
-population at `CityParams.density_per_ha`, as cities — towns have no local
-footprint, see Decision 4). `city_garden_ring_km` is `FarmlandParams`'
+footprint radius = √(area / π) of its people at the settlement tier's own
+density (`settlegen.footprint.base_density_per_ha`, Decision 4). `city_garden_ring_km` is `FarmlandParams`'
 (1.5 km). Raster cost at 700² is fine for the corridor router (~0.5 M cells).
 
 ## Decisions
@@ -74,20 +73,15 @@ footprint, see Decision 4). `city_garden_ring_km` is `FarmlandParams`'
    ring) share their noise where they overlap. They won't match exactly: each
    frame conserves the local texels its edge cuts over its own in-frame part
    (Decision 1). Layout streams are seeded per (world, settlement kind, index).
-4. **Built-up area is conserved (cities).** The local `city_footprints` is the
-   coarse outline: the fine footprint follows the built-up share each local
-   texel had (1 or 0, blurred to fractions at the edge). Totals match
-   `area_km2` to the texel. Use the owning
-   hex's local map: footprint jitter is seeded per (world, region, hex), so a
-   city near a hex edge has a different footprint on its neighbour's map.
-   **Revised 2026-10-11:** the share per local texel holds approximately
-   (seed 4: 2–5% mean error, 8% where the fine water differs most), not
-   exactly — exact per-texel quotas forced claims into every edge texel
-   whatever its priority, giving 40–145 specks per city and the local texels'
-   squares in the outline. See Phase 4c in Status.
-   **Towns have no local footprint** (`build_local_map` footprints cities
-   only; towns get farmland), so a town's built-up area is claimed fresh at
-   `density_per_ha` with nothing to conserve against.
+4. **The settlement tier owns the footprint (revised 2026-10-11, user
+   decision).** Settlement maps are not beholden to the local tier's coarse
+   footprint: every settlement (city, town, village) claims its built-up
+   ground fresh from its own terrain, water and roads, at its own density
+   (derived from size, walls and how hemmed in its site is, with a lognormal
+   jitter per settlement). Local maps keep their footprint as an independent
+   preview (user choice: the two can differ in shape and area). Replaces the
+   earlier rule — conserve each local texel's built-up share — which tied
+   settlement shapes to 365 m local texels.
 5. **Nothing new is persisted.** Every tier is deterministic; a settlement map
    rebuilds from the world in a few seconds. The chain caches in memory (LRU,
    like `RegionView`'s local cache).
@@ -322,14 +316,9 @@ within a corridor; the 15 m re-trace closes the gap).
   ford cost to cross (`river_ford_strength`), so crossings are where they chose
   to.
 - **Footprint**: a polygon (possibly several pieces, e.g. either side of a
-  river). Claimed on the terrain raster under Decision 4 by the local
-  `city_footprints` rule (distance × roughness) plus a slope penalty, never in
-  a channel (cities span rivers), then traced and simplified. Conservation
-  becomes: the polygon's area inside each local texel equals that texel's
-  built-up share. Across a seam each local texel's share is that of its own
-  map's footprint (every map claims the city around its drawn position, with
-  its own jitter), so the total matches `area_km2` only to within the seam's
-  ragged edge, not exactly.
+  river), claimed fresh on the terrain raster at the settlement's own density
+  (Decision 4), never in a channel (cities span rivers), then traced and
+  simplified. See Status, Phase 4c.
 - **Anchor candidates**, scored, not chosen: local high ground inside the
   footprint (citadel/keep), road convergence (market), waterfront on the
   harbour or river side (port/quay), sacred site (any — Phase 6 picks).
@@ -341,8 +330,7 @@ within a corridor; the 15 m re-trace closes the gap).
 
 Test: on the Phase 0 cities, every gate lies on the footprint boundary and on
 a re-traced road; every polygon valid (closed, no self-intersection);
-footprint area within one fine texel of `area_km2` (frames
-inside one hex; across a seam, within the seam tolerance); rivers and roads
+footprint area matches `population / density`; rivers and roads
 continuous across the seam;
 harbour/port settlements have ≥ 1 waterfront candidate on the shore they
 were sited on.
@@ -552,28 +540,29 @@ of the 30 largest seed-4 cities, 17 have water trade, every one now with
 water at the city. Ports the finer channel covers (the local map drew them on
 its bank) land at the nearest bank: 17 of 17 have a landing.
 
-**Phase 4c done 2026-10-11** (footprint, buildable): `settlegen/footprint.py`
-→ `SettlementSite.footprint` and `.buildable` (polygons); gates now sit on
-the real footprint.
-- **City**: the owning local map's footprint (its own map's only: since
-  Option C it claims the whole city, over-hang past its hexagon included;
-  mixing maps counted a seam city twice, 1.37× and 0.72× for seed-4 cities 38
-  and 368) as a 0/1 share per local texel, blurred over half a local texel;
-  the local area claimed over the whole frame by priority = blurred share +
-  edge noise (100 m, weighted 4s(1−s) so only along the edge) − slope penalty;
-  never water or a channel. Traced by marching squares on the lightly smoothed
-  claim (level matched to the claimed area), simplified, the water cut out
-  exactly. Decision 4 revised: shares hold approximately (above).
-- **Town / village**: `people / density` claimed fresh by the same priority,
-  nearness to the centre standing in for the share.
-- **Buildable**: the frame less the sea, lakes, channels and ground steeper than
-  `buildable_max_slope` (0.3 km/km).
-- **Gates**: only where a road leaves the footprint for good (the inner end
-  of an outside stretch running on to the road's end); a road across a
-  bridge between two parts of a city has no gates there.
-Seed 4, 13 frames: area within 0.3% of the local footprint's (small cities
-2–3%), 1–7 pieces per city, no overlap with water, every polygon valid,
-0.1–0.25 s per footprint. The viewer draws the site footprint (neutral
+**Phase 4c done 2026-10-11** (footprint, buildable; reworked the same day
+under the revised Decision 4): `settlegen/footprint.py` →
+`SettlementSite.footprint`, `.density_per_ha` and `.buildable` (polygons).
+- **Density** (`base_density_per_ha`): 70/ha at 1,000 people × (pop / 1,000)^0.2,
+  ×1.3 walled, × lognormal jitter σ 0.3 per settlement, 10–450/ha. The chain
+  sizes the frame from it (`SettlementMaps.population`, `.density_per_ha`);
+  the site then squeezes it by (buildable share around the footprint)^-0.5, at
+  most ×2 — so the frame always holds the footprint.
+- **Claim**: `population / density` of dry ground by priority — nearness
+  (0.5 at the radius), a pull along the roads (ribbon growth; roads are now
+  built before the footprint, gates after), edge noise (100 m, weighted
+  4s(1−s)), a penalty on the slope smoothed over 40 m. Never water or a
+  channel. Detached pieces under 3% go back to the main body, grown at its
+  edge. Traced by marching squares (level matched to the claimed area),
+  simplified, the water cut out exactly.
+- **Buildable**: the frame less the sea, lakes, channels and ground steeper
+  than `buildable_max_slope` (0.3 km/km).
+- **Gates**: only where a road leaves the footprint for good.
+Seed 4: villages ~50–90/ha, towns 90–185/ha, cities 95–450/ha (the largest,
+hemmed in by sea, at the cap); area within 1% of `population / density` for
+cities (villages 2–8% under: tracing a few hundred texels rounds them off);
+1–3 pieces per city (halves either side of a river or inlet), no overlap with
+water, every polygon valid. The viewer draws the site footprint (neutral
 built-up colour: some tier colours are blue, read as water) in place of the
 local map's for the settlement itself.
 

@@ -12,7 +12,9 @@ one store):
    a local map's villages, named by that map (``SettlementRef.map``) and its
    index there, valid while that map's params don't change;
 3. the frame: a square centred where that local map draws the settlement, of side
-   ``2 · (footprint radius + garden ring + margin)``;
+   ``2 · (footprint radius + garden ring + margin)``, the radius the settlement
+   tier's own (its people at :func:`settlegen.footprint.base_density_per_ha`;
+   the local map's footprint is only a preview there);
 4. every other local map whose ground the frame reaches (each regional hexagon,
    within its own region's cell, the frame overlaps), with their regions.
 
@@ -32,11 +34,13 @@ from localmap.builder import LocalMap
 from localmap.settlements import owning_hex
 from region.geometry import RegionGeometry, ecef_to_cell
 from region.grid import RegionHexGrid
+from settlegen.footprint import base_density_per_ha
 from settlegen.upsample import km_per_local_unit
 
 if TYPE_CHECKING:
     from core.world import World
     from localmap.store import MapStore
+    from settlegen.footprint import SettlementFootprintParams
 
 _KM2_PER_HA = 0.01
 # Points per frame edge when mapping the frame into another region's frame (≤10 km: ~150 m apart).
@@ -107,7 +111,9 @@ class SettlementMaps:
     keys: list[tuple[int, int]]          # (region_id, hex_index), owning map first
     maps: list[LocalMap]                 # in ``keys`` order
     center: np.ndarray                   # (3,) where the owning local map draws the settlement
-    radius_km: float                     # footprint radius
+    radius_km: float                     # footprint radius at ``density_per_ha``
+    population: float
+    density_per_ha: float                # before the site's squeeze (settlegen.footprint)
     side_km: float                       # frame side
     built: list[tuple[str, object]] = field(default_factory=list)   # what this call had the store build
 
@@ -128,15 +134,17 @@ def drawn_position(local: LocalMap, ref: SettlementRef) -> np.ndarray:
     return np.asarray(positions[hit[0]], dtype=np.float64)
 
 
-def footprint_radius_km(globe: "World", local: LocalMap, ref: SettlementRef, density_per_ha: float) -> float:
-    """A city's local footprint as a disc; a town's or village's people at the same built-up density."""
-    if ref.kind == "city" and local.city_footprints is not None:
-        k = int(np.flatnonzero(np.asarray(local.city_index) == ref.index)[0])
-        area = float(local.city_footprints.area_km2[k])
-    else:
-        people = float(local.villages.population[ref.index]) if ref.kind == "village" else population(globe, ref)
-        area = people / (max(float(density_per_ha), 1e-9) / _KM2_PER_HA)
-    return math.sqrt(max(area, 0.0) / math.pi)
+def settlement_population(globe: "World", local: LocalMap, ref: SettlementRef) -> float:
+    """Its people (a village's: its local map's)."""
+    if ref.kind == "village":
+        return float(local.villages.population[ref.index])
+    return population(globe, ref)
+
+
+def footprint_radius_km(population: float, density_per_ha: float) -> float:
+    """The radius of a disc of ``population`` people at ``density_per_ha``."""
+    area = max(float(population), 0.0) / (max(float(density_per_ha), 1e-9) / _KM2_PER_HA)
+    return math.sqrt(area / math.pi)
 
 
 def frame_side_km(radius_km: float, garden_ring_km: float, margin_km: float) -> float:
@@ -181,7 +189,10 @@ def frame_keys(
     return keys
 
 
-def ensure_local_maps(store: "MapStore", ref: SettlementRef, margin_km: float = 0.5) -> SettlementMaps:
+def ensure_local_maps(
+    store: "MapStore", ref: SettlementRef, margin_km: float = 0.5,
+    footprint: Optional["SettlementFootprintParams"] = None,
+) -> SettlementMaps:
     """Every local map ``ref``'s frame needs, from ``store``.  See the module docstring."""
     globe = store.globe
     if globe is None:
@@ -203,11 +214,14 @@ def ensure_local_maps(store: "MapStore", ref: SettlementRef, margin_km: float = 
 
     local_params = store.local_params
     center = drawn_position(owner, ref)
-    radius = footprint_radius_km(globe, owner, ref, local_params.cities.density_per_ha)
+    people = settlement_population(globe, owner, ref)
+    density = base_density_per_ha(globe, ref, people, footprint)
+    radius = footprint_radius_km(people, density)
     side = frame_side_km(radius, local_params.farmland.city_garden_ring_km, margin_km)
     keys = frame_keys(globe, owner, center, side, int(store.region_params.upsample.n_cols))
     maps = [owner] + [store.local(*key) for key in keys[1:]]
     return SettlementMaps(
-        ref=ref, keys=keys, maps=maps, center=center, radius_km=radius, side_km=side,
+        ref=ref, keys=keys, maps=maps, center=center, radius_km=radius, population=people,
+        density_per_ha=density, side_km=side,
         built=list(store.builds[builds_before:]),
     )

@@ -44,7 +44,7 @@ def build_settlement_map(
     globe = store.globe
     if globe is None:
         raise ValueError("the store has no globe")
-    chain = ensure_local_maps(store, ref, float(params.upsample.margin_km))
+    chain = ensure_local_maps(store, ref, float(params.upsample.margin_km), params.footprint)
     fields = build_settlement_fields(
         globe, [m.fields for m in chain.maps], chain.center, chain.side_km, params.upsample)
     realm, world = store.realm_params, store.world_params

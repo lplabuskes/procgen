@@ -1,25 +1,33 @@
 """A settlement's footprint and buildable ground, as polygons.
 
-The **footprint** is the built-up ground, claimed on the terrain raster and
-traced to polygons (plan Decision 4):
+The settlement tier is the authority for the footprint: it claims every
+settlement's built-up ground fresh from its own terrain, water and roads, and
+owes nothing to the local map's coarse footprint (which stays a preview there).
 
-- **A city** has a local footprint (:mod:`localmap.cities`): each local texel's
-  built-up share, 1 or 0, from the owning local map (:func:`city_shares`).  The
-  share is blurred over ``edge_smoothing_local_texels`` and the local
-  footprint's area is claimed by priority over the whole frame.  So the total
-  matches the local area to a fine texel, and each local texel's share holds
-  approximately, not exactly (seed 4: off 2–4% on average, 8% where the fine
-  water differs most; :meth:`Footprint.share_error`): exact quotas per local
-  texel forced claims into every edge texel whatever its priority, leaving
-  specks and the local texels' squares in the outline.
-- **A town or village** has none: it claims ``people / density`` fresh, by
-  the same priority, nearness to its centre standing in for the share.
+**Density** (people per hectare of built-up ground, :func:`base_density_per_ha`)
+is derived, with a random spread:
 
-Priority: the blurred share, plus spatially correlated noise along the edge
-for a ragged outline (``edge_roughness``), less a penalty on ground
-steeper than ``slope_free``.  Never water or a river channel: a city spans its
-rivers.  The claimed texels are traced (marching squares on the lightly
-smoothed claim) and the water cut out exactly.
+- size: ``density_per_ha`` at ``density_reference_population`` people, scaled
+  by ``(population / reference) ** density_size_exponent`` — bigger places are
+  denser;
+- walls pack people in (``walled_density_mult``);
+- a lognormal jitter of ``density_jitter`` per settlement;
+- the site, once its terrain is known (:func:`build_footprint`): ground hemmed in
+  by water or steep slopes packs denser, by ``(buildable share) ** -constraint_exponent``
+  of the ground around the unconstrained footprint, at most ``constraint_max_mult``.
+
+The frame is sized before the terrain exists (:mod:`settlegen.chain`), from
+everything but the site; the site only raises density, so the footprint fits.
+
+**The claim**: ``population / density`` of dry ground, by priority — nearness to
+the centre, a pull towards the roads (ribbon growth along them,
+``road_pull`` within ``road_pull_m``), spatially correlated noise along the
+edge for a ragged outline (``edge_roughness``), less a penalty on ground steeper
+than ``slope_free`` (the slope smoothed over ``slope_smoothing_m``).  Never water
+or a river channel: a city spans its rivers.  Detached pieces under
+``min_piece_fraction`` of it go back to the main body, grown at its edge by priority.
+The claimed texels are traced (marching squares on the lightly smoothed claim,
+the level matched to the claimed area), simplified, and the water cut out exactly.
 
 The **buildable** ground is the frame less the water, the channels and ground
 steeper than ``buildable_max_slope``.
@@ -34,11 +42,10 @@ from typing import TYPE_CHECKING, Optional, Sequence
 
 import numpy as np
 import shapely
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import binary_dilation, distance_transform_edt, gaussian_filter, label
 from shapely.geometry import MultiPolygon
 
 from core.params import param_field as _f, paramclass
-from localmap.builder import LocalMap
 from region.resources import refined_slope
 from region.upsample import RegionFields
 from settlegen.contour import regions_below
@@ -46,56 +53,79 @@ from settlegen.frame import Frame
 from settlegen.water import SiteWater, _as_multipolygon, channel_polygons
 
 if TYPE_CHECKING:
+    from core.world import World
     from settlegen.chain import SettlementRef
 
-_KM2_PER_HA = 0.01
+_M2_PER_HA = 10_000.0
 # Smallest piece of buildable ground kept, in fine texels.
 _MIN_PIECE_TEXELS = 4.0
+# RNG stream tags under the settlement's seed.
+_DENSITY_STREAM, _CLAIM_STREAM = 1, 2
 
 
 @paramclass
 class SettlementFootprintParams:
-    """Tuning for the footprint and buildable ground."""
+    """Tuning for the density, footprint and buildable ground."""
 
-    # σ of the blur that turns the local footprint's 0/1 shares into a smooth edge.
-    edge_smoothing_local_texels: float = _f(
-        0.5, label="Footprint edge smoothing (local texels)", min=0.0, max=2.0, step=0.05)
+    density_per_ha: float = _f(70.0, label="Built-up density at the reference size (people/ha)",
+                               min=5.0, max=500.0, step=5.0)
+    density_reference_population: float = _f(1000.0, label="Density reference population",
+                                             min=100.0, max=100_000.0, step=100.0)
+    density_size_exponent: float = _f(0.2, label="Density size exponent", min=0.0, max=1.0, step=0.05)
+    walled_density_mult: float = _f(1.3, label="Walled density (×)", min=1.0, max=3.0, step=0.05)
+    density_jitter: float = _f(0.3, label="Density jitter (lognormal σ)", min=0.0, max=1.0, step=0.05)
+    constraint_exponent: float = _f(0.5, label="Hemmed-in density exponent", min=0.0, max=2.0, step=0.05)
+    constraint_max_mult: float = _f(2.0, label="Hemmed-in density max (×)", min=1.0, max=5.0, step=0.1)
+    min_density_per_ha: float = _f(10.0, label="Min density (people/ha)", min=1.0, max=100.0, step=1.0)
+    max_density_per_ha: float = _f(450.0, label="Max density (people/ha)", min=50.0, max=2000.0, step=10.0)
+    road_pull: float = _f(0.3, label="Road pull", min=0.0, max=2.0, step=0.05)
+    road_pull_m: float = _f(120.0, label="Road pull reach (m)", min=10.0, max=1000.0, step=10.0)
     edge_roughness: float = _f(1.0, label="Footprint edge roughness", min=0.0, max=3.0, step=0.05)
     # Correlation length of the edge noise.
     roughness_m: float = _f(100.0, label="Edge roughness scale (m)", min=5.0, max=500.0, step=5.0)
     slope_free: float = _f(0.05, label="Footprint slope free (km/km)", min=0.0, max=1.0, step=0.01)
+    # The slope the penalty reads, smoothed: hillsides, not the street-scale bumps.
+    slope_smoothing_m: float = _f(40.0, label="Footprint slope smoothing (m)", min=0.0, max=300.0, step=5.0)
+    # Detached pieces smaller than this share of the footprint go back to its main body.
+    min_piece_fraction: float = _f(0.03, label="Smallest footprint piece (share)", min=0.0, max=0.5, step=0.01)
     slope_weight: float = _f(4.0, label="Footprint slope penalty", min=0.0, max=50.0, step=0.5)
     buildable_max_slope: float = _f(0.3, label="Buildable max slope (km/km)", min=0.01, max=2.0, step=0.01)
 
 
 @dataclass
 class Footprint:
-    """The claim on the raster (for checks) and its polygon."""
+    """The claim on the raster (for checks), its polygon and the density it was claimed at."""
 
     polygon: MultiPolygon
     claimed: np.ndarray       # (T, T) bool
     target: int               # fine texels the claim was due
-    # Cities: the local share under each fine texel and that local texel's flat index (-1 off the map).
-    share: Optional[np.ndarray] = None
-    texel: Optional[np.ndarray] = None
-
-    def share_error(self, full: float = 0.8) -> tuple[float, float]:
-        """``(mean, max)`` over the local texels in the frame (at least ``full`` of
-        the fullest one's fine texels) of ``|claimed share − local share|``; zeros for a town."""
-        if self.share is None or self.texel is None:
-            return 0.0, 0.0
-        _, label = np.unique(self.texel.reshape(-1), return_inverse=True)
-        n = np.bincount(label)
-        got = np.bincount(label, self.claimed.reshape(-1)) / n
-        want = np.bincount(label, self.share.reshape(-1)) / n
-        err = np.abs(got - want)[n >= full * n.max()]
-        return (float(err.mean()), float(err.max())) if err.size else (0.0, 0.0)
+    density_per_ha: float     # with the site's squeeze
+    constraint: float         # the site's squeeze (×, ≥ 1)
 
 
-def _seed(globe_seed: int, ref: "SettlementRef") -> list[int]:
+def _seed(globe_seed: int, ref: "SettlementRef", stream: int) -> list[int]:
     kind = zlib.crc32(ref.kind.encode())
     where = list(ref.map) if ref.map is not None else []
-    return [int(globe_seed) & 0xFFFFFFFF, kind, int(ref.index), *where]
+    return [int(globe_seed) & 0xFFFFFFFF, kind, int(ref.index), *where, stream]
+
+
+def base_density_per_ha(
+    globe: "World", ref: "SettlementRef", population: float, params: Optional[SettlementFootprintParams] = None,
+) -> float:
+    """The settlement's density before its site is known: size, walls and jitter."""
+    params = params or SettlementFootprintParams()
+    size = max(float(population), 1.0) / max(float(params.density_reference_population), 1.0)
+    density = float(params.density_per_ha) * size ** float(params.density_size_exponent)
+    walled = False
+    if ref.kind == "city":
+        walled = bool(globe.get_feature("settlements")[ref.index].has_walls)
+    elif ref.kind == "town":
+        walled = bool(globe.get_feature("towns").has_walls[ref.index])
+    if walled:
+        density *= float(params.walled_density_mult)
+    rng = np.random.default_rng(_seed(int(globe.seed or 0), ref, _DENSITY_STREAM))
+    density *= float(np.exp(float(params.density_jitter) * rng.standard_normal()))
+    return float(np.clip(density, params.min_density_per_ha, params.max_density_per_ha))
 
 
 def wet_texels(fields: RegionFields, frame: Frame, water: SiteWater) -> np.ndarray:
@@ -123,14 +153,25 @@ def _noise(shape: tuple[int, int], sigma_texels: float, rng: np.random.Generator
     return n / max(float(n.std()), 1e-12)
 
 
-def _priority(base: np.ndarray, slope: np.ndarray, frame: Frame, params: SettlementFootprintParams,
-              rng: np.random.Generator) -> np.ndarray:
-    texel_m = frame.side_m / base.shape[0]
-    noise = _noise(base.shape, float(params.roughness_m) / texel_m, rng)
-    # Only along the edge: none deep inside (share 1) or far out (share 0).
-    edge = 4.0 * np.clip(base, 0.0, 1.0) * (1.0 - np.clip(base, 0.0, 1.0))
-    steep = np.maximum(slope - float(params.slope_free), 0.0)
-    return base + 0.25 * float(params.edge_roughness) * edge * noise - float(params.slope_weight) * steep
+def _road_distance_m(roads: Sequence[np.ndarray], frame: Frame, tex_size: int) -> Optional[np.ndarray]:
+    """``(T, T)`` distance (m) from each texel to the nearest road; None without roads."""
+    texel_m = frame.side_m / tex_size
+    on_road = np.zeros((tex_size, tex_size), dtype=bool)
+    for xy in roads:
+        xy = np.asarray(xy, dtype=np.float64)
+        if len(xy) < 2:
+            continue
+        seg = np.linalg.norm(np.diff(xy, axis=0), axis=1)
+        n = np.maximum(np.ceil(seg / (0.5 * texel_m)).astype(int), 1)
+        pts = np.concatenate([xy[k] + np.linspace(0.0, 1.0, n[k], endpoint=False)[:, None] * (xy[k + 1] - xy[k])
+                              for k in range(len(seg))] + [xy[-1:]])
+        cols = np.floor((pts[:, 0] + frame.half) / texel_m).astype(int)
+        rows = np.floor((frame.half - pts[:, 1]) / texel_m).astype(int)
+        ok = (rows >= 0) & (rows < tex_size) & (cols >= 0) & (cols < tex_size)
+        on_road[rows[ok], cols[ok]] = True
+    if not on_road.any():
+        return None
+    return np.asarray(distance_transform_edt(~on_road)) * texel_m
 
 
 def _claim(priority: np.ndarray, allowed: np.ndarray, n: int) -> np.ndarray:
@@ -141,6 +182,35 @@ def _claim(priority: np.ndarray, allowed: np.ndarray, n: int) -> np.ndarray:
     if n:
         claimed[np.argpartition(-flat, n - 1)[:n]] = True
     return claimed.reshape(priority.shape)
+
+
+def _consolidate(claimed: np.ndarray, priority: np.ndarray, allowed: np.ndarray, min_texels: float) -> np.ndarray:
+    """``claimed`` less its detached pieces under ``min_texels``, their texels re-claimed
+    on the edge of what is left, by priority (the largest piece always stays)."""
+    labelled = label(claimed, structure=np.ones((3, 3), dtype=bool))
+    labels, n = np.asarray(labelled[0], dtype=np.int64), int(labelled[1])  # type: ignore[index]
+    if n <= 1:
+        return claimed
+    sizes = np.bincount(labels.reshape(-1), minlength=n + 1)
+    small = sizes < min_texels
+    small[0] = False
+    small[int(np.argmax(sizes[1:])) + 1] = False
+    if not small.any():
+        return claimed
+    out = claimed & ~small[labels]
+    owed = int(claimed.sum() - out.sum())
+    for _ in range(10_000):
+        if owed <= 0:
+            break
+        frontier = binary_dilation(out, structure=np.ones((3, 3), dtype=bool)) & allowed & ~out
+        idx = np.flatnonzero(frontier.reshape(-1))
+        if idx.size == 0:
+            break
+        # A ring at a time, so the body grows evenly by priority.
+        take = idx[np.argsort(-priority.reshape(-1)[idx], kind="stable")[:min(owed, max(idx.size // 4, 1))]]
+        out.reshape(-1)[take] = True
+        owed -= take.size
+    return out
 
 
 def _trace(claimed: np.ndarray, frame: Frame, wet_poly: MultiPolygon) -> MultiPolygon:
@@ -160,62 +230,52 @@ def _trace(claimed: np.ndarray, frame: Frame, wet_poly: MultiPolygon) -> MultiPo
     return _as_multipolygon(poly)
 
 
-def city_shares(fields: RegionFields, owner: LocalMap, city: int) -> Optional[tuple[np.ndarray, np.ndarray]]:
-    """``((T, T) share, (T, T) local texel)``: the 0/1 built-up share for world city
-    ``city`` of the owning local map's texel under each fine texel, and that
-    texel's flat index (``-1`` off the map); None if the map has no footprint for it.
-
-    The owning map's alone: it claims the whole city, over-hang past its parent
-    hexagon included, where each neighbour claims it again around its own drawn
-    position (their footprints are jittered per map), so mixing maps would count
-    the city twice across a seam.
-    """
-    if owner.city_footprints is None:
-        return None
-    hit = np.flatnonzero(np.asarray(owner.city_index) == city)
-    if hit.size == 0:
-        return None
-    local = owner.fields
-    t = fields.tex_size
-    s, u, valid = local.geometry.ecef_to_local(fields.positions.reshape(-1, 3).astype(np.float64))
-    hexes, rows, cols, inside = local.grid.texels_at(s, u, local.tex_size)
-    inside &= valid
-    texel = np.where(inside, np.ravel_multi_index((hexes, rows, cols), local.in_hex.shape), -1)
-    owned = owner.city_footprints.owner.reshape(-1) == int(hit[0])
-    share = np.where(inside, owned[np.maximum(texel, 0)], False).astype(np.float64)
-    return share.reshape(t, t), texel.reshape(t, t)
-
-
 def build_footprint(
-    fields: RegionFields, frame: Frame, maps: Sequence[LocalMap], water: SiteWater, ref: "SettlementRef",
-    area_km2: float, globe_seed: int, params: Optional[SettlementFootprintParams] = None,
+    fields: RegionFields, frame: Frame, water: SiteWater, ref: "SettlementRef", population: float,
+    density_per_ha: float, globe_seed: int, roads: Sequence[np.ndarray] = (),
+    params: Optional[SettlementFootprintParams] = None,
 ) -> Footprint:
-    """The settlement's footprint.  See the module docstring.  ``area_km2`` is its
-    built-up area (a city's: its local footprint's)."""
+    """The settlement's footprint.  See the module docstring.  ``density_per_ha`` is
+    :func:`base_density_per_ha`; ``roads`` are the site's road polylines in frame metres."""
     params = params or SettlementFootprintParams()
     t = fields.tex_size
-    rng = np.random.default_rng(_seed(globe_seed, ref))
+    texel_m = frame.side_m / t
     wet = wet_texels(fields, frame, water)
     slope = site_slope(fields, frame)
-    texel_m = frame.side_m / t
-    wet_poly = _as_multipolygon(shapely.union_all([water.sea, water.lakes, water.channels]))
+    xy = frame.texel_xy(t)
+    dist = np.hypot(xy[..., 0], xy[..., 1])
 
-    target = int(round(float(area_km2) * 1e6 / texel_m ** 2))
-    shares = city_shares(fields, maps[0], ref.index) if ref.kind == "city" else None
-    if shares is not None:
-        share, texel = shares
-        local_m = np.sqrt(maps[0].fields.texel_area_km2) * 1000.0
-        sigma = float(params.edge_smoothing_local_texels) * local_m / texel_m
-        base = gaussian_filter(share, sigma, mode="constant") if sigma > 0 else share
-    else:
-        share = texel = None
-        # Nearness to the centre on the same scale as a city's blurred share (0.5 at the radius).
-        xy = frame.texel_xy(t)
-        radius_m = max(np.sqrt(max(float(area_km2), 0.0) / np.pi) * 1000.0, texel_m)
-        base = np.clip(1.0 - np.hypot(xy[..., 0], xy[..., 1]) / (2.0 * radius_m), 0.0, 1.0)
-    claimed = _claim(_priority(base, slope, frame, params, rng), ~wet, target)
+    # The site's squeeze: the buildable share of the ground the unconstrained footprint would reach.
+    def radius_m(density: float) -> float:
+        return max(np.sqrt(float(population) / max(density, 1e-9) * _M2_PER_HA / np.pi), texel_m)
+
+    near = dist <= 1.5 * radius_m(density_per_ha)
+    ok = ~wet & (slope <= float(params.buildable_max_slope))
+    share = float(ok[near].mean()) if near.any() else 1.0
+    constraint = float(np.clip(max(share, 1e-3) ** -float(params.constraint_exponent),
+                               1.0, float(params.constraint_max_mult)))
+    density = float(np.clip(density_per_ha * constraint, params.min_density_per_ha, params.max_density_per_ha))
+    r = radius_m(density)
+    target = int(round(float(population) / density * _M2_PER_HA / texel_m ** 2))
+
+    # Nearness, 0.5 at the radius; the roads pull growth along them out to twice that.
+    base = np.clip(1.0 - dist / (2.0 * r), 0.0, 1.0)
+    road_d = _road_distance_m(roads, frame, t)
+    if road_d is not None and params.road_pull > 0:
+        base = base + float(params.road_pull) * np.exp(-road_d / float(params.road_pull_m)) * (base > 0)
+    rng = np.random.default_rng(_seed(globe_seed, ref, _CLAIM_STREAM))
+    noise = _noise(base.shape, float(params.roughness_m) / texel_m, rng)
+    # Only along the edge: none deep inside or far out.
+    edge = 4.0 * np.clip(base, 0.0, 1.0) * (1.0 - np.clip(base, 0.0, 1.0))
+    hills = gaussian_filter(slope, float(params.slope_smoothing_m) / texel_m) if params.slope_smoothing_m > 0 \
+        else slope
+    steep = np.maximum(hills - float(params.slope_free), 0.0)
+    priority = base + 0.25 * float(params.edge_roughness) * edge * noise - float(params.slope_weight) * steep
+    claimed = _consolidate(_claim(priority, ~wet, target), priority, ~wet,
+                           max(float(params.min_piece_fraction) * target, 1.0))
+    wet_poly = _as_multipolygon(shapely.union_all([water.sea, water.lakes, water.channels]))
     return Footprint(polygon=_trace(claimed, frame, wet_poly), claimed=claimed, target=target,
-                     share=share, texel=texel)
+                     density_per_ha=density, constraint=constraint)
 
 
 def buildable_ground(

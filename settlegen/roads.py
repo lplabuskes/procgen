@@ -648,16 +648,16 @@ def _route(
 
 def build_site_roads(
     globe: "World", fields: RegionFields, frame: Frame, maps: Sequence[LocalMap], water: SiteWater,
-    footprint: MultiPolygon, params: Optional[SettlementRoadParams] = None, *, always_bridge: bool = False,
+    params: Optional[SettlementRoadParams] = None, *, always_bridge: bool = False,
     local_road_raster_texels: float = 2.0, land: Optional["LandCostParams"] = None, danger_scale: float = 2.0,
 ) -> SiteRoads:
     """The site's roads.  See the module docstring.  ``local_road_raster_texels`` is the
-    local maps' road raster spacing (how far apart their vertices are, for joining at seams)."""
+    local maps' road raster spacing (how far apart their vertices are, for joining at seams).
+    No gates yet: the footprint follows the roads (:func:`set_gates`)."""
     params = params or SettlementRoadParams()
     parent = parent_roads(maps, globe.antimeridian, local_road_raster_texels)
     texel_m = frame.side_m / fields.tex_size
-    # Two things nearer than a road-raster node are one.
-    merge_m = float(params.raster_texels) * texel_m
+    merge_m = merge_distance_m(params, frame, fields)
     landings, legs, polylines = _landings(parent, water, frame, float(params.landing_reach_km) * 1000.0, merge_m)
     parent.polylines = polylines
     routed = _route(fields, maps[0].fields, parent, globe, frame, water, params, land, danger_scale,
@@ -696,5 +696,17 @@ def build_site_roads(
     return SiteRoads(
         lines=lines, water=water_legs, sea=legs, landings=landings,
         crossings=crossings(lines, water, float(params.bridge_width_m), always_bridge, merge_m),
-        gates=gates(lines, footprint, merge_m), roads=roads,
+        gates=[], roads=roads,
     )
+
+
+def merge_distance_m(params: SettlementRoadParams, frame: Frame, fields: RegionFields) -> float:
+    """Two things nearer than a road-raster node are one."""
+    return float(params.raster_texels) * frame.side_m / fields.tex_size
+
+
+def set_gates(
+    roads: SiteRoads, footprint: MultiPolygon, params: SettlementRoadParams, frame: Frame, fields: RegionFields,
+) -> None:
+    """``roads.gates`` on ``footprint`` (:func:`gates`)."""
+    roads.gates = gates(roads.lines, footprint, merge_distance_m(params, frame, fields))
