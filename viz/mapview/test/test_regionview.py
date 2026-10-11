@@ -231,6 +231,31 @@ def test_new_params_refine_the_region_again(app, synthetic_globe):  # noqa: F811
         synthetic_globe.remove_feature("towns")
 
 
+def test_the_view_builds_through_build_region_map(app, synthetic_globe):  # noqa: F811
+    """The viewer and the Qt-free builder build the same region (and re-site towns alike)."""
+    from region.builder import build_region_map
+    from region.test.test_builder import land_towns
+
+    towns = land_towns(synthetic_globe)
+    synthetic_globe.add_feature("towns", towns)
+    try:
+        view = RegionView()
+        view.set_region(RegionGeometry(40, synthetic_globe.antimeridian), synthetic_globe)
+        positions = towns.positions.copy()
+        towns.reset_refinement()
+        built = build_region_map(synthetic_globe, 40)
+        np.testing.assert_array_equal(towns.positions, positions)
+        assert view._rivers is not None and view._roads is not None
+        assert len(view._rivers.paths) == len(built.rivers.paths)
+        for (a, _, _), (b, _, _) in zip(view._rivers.paths, built.rivers.paths):
+            np.testing.assert_array_equal(a, b)
+        assert len(view._roads.segments) == len(built.roads.segments)
+        for a, b in zip(view._roads.segments, built.roads.segments):
+            np.testing.assert_array_equal(a[0], b[0])
+    finally:
+        synthetic_globe.remove_feature("towns")
+
+
 class _WidthProjector:
     def __init__(self, view_zoom=1.0, px_per_km=None, regional=False):
         self.view_zoom = view_zoom

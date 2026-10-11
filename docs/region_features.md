@@ -13,10 +13,13 @@ down ([local.md](local.md), [local_settlements.md](local_settlements.md)).
 - `region/roads.py` — `RegionRoadParams`, `RegionRoads`, `build_region_roads`, `route_polyline`, `move_points`
 - `region/towns.py` — `RegionSettlementParams`, `refine_region_towns`, `refine_towns`, `tier_sites`, `REGION_TIER` / `LOCAL_TIER`
 - `region/cities.py` — `refine_region_cities`, `refine_cities`
+- `region/builder.py` — `RegionMap`, `build_region_map`, `refine_region_features`, `land_reach`: the whole region tier, Qt-free (as `localmap/builder.py` one tier down); `RegionView` builds through it
 
-Order on entering a region ([viz_regionview.md](viz_regionview.md)): rivers →
-cities → roads (ending on the re-sited cities) → deltas → towns (which read the
-roads).
+Order on entering a region (`refine_region_features`;
+[viz_regionview.md](viz_regionview.md)): rivers → cities → roads (ending on the
+re-sited cities) → deltas → towns (which read the roads). The region's streams
+are built on demand for its local maps (`RegionMap.streams`, cached per
+`RegionStreamParams`).
 
 ## Corridor routing (`region/corridor.py`)
 

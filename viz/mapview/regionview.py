@@ -22,18 +22,16 @@ from region.display import build_layer_texture, snap_to_land
 from realmgen.refine.barriers import pack_river_segments
 from viz.mapview.legend import draw_legend, legend_size
 from viz.mapview.overlays import city_floor_radius, draw_overlays, fort_markers, settlement_markers, town_markers
+from region.builder import RegionMap, land_reach, refine_region_features
 from region.geometry import RegionGeometry
 from region.grid import RegionHexGrid
 from region.params import RegionParams
-from region.rivers import RegionRivers, RiverPath, build_region_rivers, snap_deltas
-from region.roads import RegionRoads, build_region_roads
-from region.streams import RegionStreamParams, build_region_streams
-from region.cities import refine_region_cities
-from region.towns import refine_region_towns
+from region.rivers import RegionRivers, RiverPath
+from region.roads import RegionRoads
+from region.streams import RegionStreamParams
 from realmgen.placement.types import TIER_NAMES, format_population, population_display_tier
 from realmgen.towns.types import TOWN_KIND_NAMES, Towns
 from region.upsample import RegionFields, build_region_fields
-from region.wetlands import add_riparian_wetland
 from worldgen.hydrology.discharge import EARTH_RADIUS_KM
 from worldgen.resources.minerals import mineral_workings
 
@@ -81,12 +79,11 @@ class RegionView(QWidget):
         self._region_params = RegionParams()
         self._realm_params: Optional["RealmParams"] = None
         self._world_params: Optional["GlobeParams"] = None
-        # Re-routed over this region's relief; built with the region (town refinement needs them).
+        # The region's rivers, roads, deltas and streams (region mode only).
+        self._region_map: Optional[RegionMap] = None
+        # What is drawn: the region map's, or in local mode the local map's.
         self._rivers: Optional[RegionRivers] = None
         self._roads: Optional[RegionRoads] = None
-        # (params, streams) below the world's network; built lazily for local maps only.
-        self._streams: Optional[tuple[RegionStreamParams, list[RiverPath]]] = None
-        # World deltas moved onto the re-routed rivers' mouths.
         self._deltas: Optional[np.ndarray] = None
         # (rivers, fields, packed segments, borders) — the drawn rivers' segments, which the
         # Polities fill and border lines snap to, and those lines (None until first drawn).
@@ -138,8 +135,8 @@ class RegionView(QWidget):
         self._local = None
         self._hover_hex = None
         self._fields = None
+        self._region_map = None
         self._rivers = None
-        self._streams = None
         self._roads = None
         self._deltas = None
         self._hex_images = []
@@ -164,47 +161,24 @@ class RegionView(QWidget):
         this region's cities and towns.  Settlements are refined in the world's
         features, so they persist (and are saved) after the region is left."""
         assert self._fields is not None and self._globe is not None
-        f, globe, rp = self._fields, self._globe, self._region_params
-        self._rivers = build_region_rivers(f, globe, rp.rivers)
-        add_riparian_wetland(f, self._rivers, rp.upsample)
-        self._streams = None
         realm, world = self._realm_params, self._world_params
-        factor = realm.refine.river_threshold_factor if realm is not None else 1.5
-        refine_region_cities(f, self._rivers, globe, factor, rp.settlements)
-        cities = globe.get_feature("settlements") or []
-        moved = (np.array([c.site_position for c in cities]).reshape(-1, 3),
-                 np.array([c.position for c in cities]).reshape(-1, 3))
-        self._roads = build_region_roads(
-            f, globe, self._rivers, rp.roads,
+        m = self._region_map = refine_region_features(
+            self._globe, self._fields, self._region_params,
             land=world.cost.land if world is not None else None,
             danger_scale=float(realm.danger.movement_scale) if realm is not None else 2.0,
-            land_reach=self._land_reach(), moved=moved,
+            town_params=realm.towns if realm is not None else None,
+            population_params=realm.population if realm is not None else None,
+            river_threshold_factor=realm.refine.river_threshold_factor if realm is not None else 1.5,
         )
-        deltas = globe.get_feature("deltas")
-        self._deltas = None
-        if deltas is not None and len(deltas):
-            # A re-routed stem ends up to two corridors from its world mouth.
-            texel = float(np.sqrt(np.mean(globe.mesh.face_areas))) / max(
-                globe.mesh.face_textures["elevation"].shape[2] - 1, 1)
-            reach = 2.0 * float(rp.rivers.corridor_global_texels) * texel + 2.0 * self._land_reach()
-            self._deltas = snap_deltas(np.asarray(deltas), self._rivers, reach)
-        refine_region_towns(
-            f, self._rivers, globe,
-            realm.towns if realm is not None else None,
-            realm.population if realm is not None else None,
-            factor, rp.settlements, roads=self._roads,
-        )
+        self._rivers, self._roads, self._deltas = m.rivers, m.roads, m.deltas
 
     # ── local maps ───────────────────────────────────────────────────────────
 
     def _region_streams(self, params: RegionStreamParams) -> list[RiverPath]:
         """This region's streams for its local maps, cached until the region or ``params`` change."""
-        if self._fields is None or self._globe is None or self._rivers is None:
+        if self._region_map is None or self._globe is None:
             return []
-        if self._streams is None or self._streams[0] != params:
-            built = build_region_streams(self._fields, self._globe, self._rivers, params)
-            self._streams = (dataclasses.replace(params), built)
-        return self._streams[1]
+        return self._region_map.streams(self._globe, params)
 
     def set_local(self, parent: "RegionView", hex_index: int, keep_view: bool = False) -> None:
         """Show the local map of ``parent``'s regional hex ``hex_index`` (cached per region fields).
@@ -335,8 +309,8 @@ class RegionView(QWidget):
         self._fields = None
         self._local = None
         self._hover_hex = None
+        self._region_map = None
         self._rivers = None
-        self._streams = None
         self._roads = None
         self._deltas = None
         self._hex_images = []
@@ -622,7 +596,7 @@ class RegionView(QWidget):
         if f is None:
             return 0.0
         upsample = self._local_params.upsample if self._local is not None else self._region_params.upsample
-        return (int(upsample.water_spread_texels) + 2) * f.grid.texel_spacing_rad(f.tex_size)
+        return land_reach(f, upsample.water_spread_texels)
 
     def _on_land(self, key: str, ecef: np.ndarray) -> np.ndarray:
         """``ecef`` moved off the refined water (``snap_to_land``), cached per feature."""

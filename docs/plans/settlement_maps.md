@@ -20,6 +20,9 @@ Two halves, split by an inspectable contract:
   Reads only `SettlementSite` (so it can be tested on hand-built sites). Seeded,
   mostly generated rather than derived.
 
+Both are **vector data** (Decision 8): the only raster is the terrain the site
+is derived from.
+
 ## Scope
 
 - **Cities** (`settlements` feature) **and towns** (`towns` feature) — both
@@ -86,6 +89,26 @@ footprint, see Decision 4). `city_garden_ring_km` is `FarmlandParams`'
 6. **Params are advanced-only.** `SettlementMapParams` hangs off `AppParams`
    like `LocalParams`; nothing is added to `BASIC_PARAMS` without asking.
 7. **Visuals are debug-mode first.** Ask before adding to the main view.
+8. **Vector, not raster (decided 2026-10-10).** The refined terrain (elevation,
+   water masks) is the one raster: the field everything else is derived from
+   and queried against (height, slope, wet/dry at a point or along a line).
+   Everything `SettlementSite` and `SettlementLayout` hold is geometry in the
+   frame's planar coordinates — metres from the frame centre along its axes
+   (flat to well under 0.1% at ≤10 km), north given by
+   `SettlementGeometry.up_direction()`:
+   - points: gates, landings, crossings, anchor candidates, villages, wells;
+   - polylines: shorelines (contours of the water masks), river and stream
+     centrelines with width, roads, streets, wall lines;
+   - polygons: water bodies, river channels (centrelines buffered to bankfull
+     width), the footprint, the buildable area, fields and garden ring,
+     districts, blocks, lots, building footprints.
+   Where an algorithm is easier on a grid (claiming the footprint by cost
+   distance, tracing a contour), it runs on the terrain raster internally and
+   its result is traced and simplified to vector before it leaves the module.
+   Needs a polygon library (clip, buffer, union, difference, area) — see open
+   question in Status.
+9. **No names.** A general-purpose name generator comes later; nothing here
+   names streets, districts or landmarks.
 
 ## Interface assumptions (verify, flag if wrong)
 
@@ -279,9 +302,11 @@ its own map's domain (`in_map`) and joined at the seams before re-tracing (the
 neighbours re-trace the same regional rivers and roads, so their ends meet
 within a corridor; the 15 m re-trace closes the gap).
 
-- **Water**: ocean/lake masks and shoreline from the fields; rivers re-traced
-  from the local maps' within ~one local texel (A5), with `channel_width_km`
-  and banks from `localmap/banks.py`; local streams too.
+- **Water**: shorelines traced from the refined water masks (polylines) and
+  water bodies as polygons; rivers re-traced from the local maps' within ~one
+  local texel (A5) as centrelines with `channel_width_km`, and their channels
+  as polygons (centreline buffered by half the width — `localmap/banks.py`'s
+  model, in vector); local streams too.
 - **Roads**: each local road reaching the frame re-traced to the footprint
   edge → **gates** (position, bearing, flow); sea legs → **landings**.
 - **Crossings**: road × river by segment intersection
@@ -291,22 +316,27 @@ within a corridor; the 15 m re-trace closes the gap).
   width ≥ a param or the settlement is a city). The local roads already pay a
   ford cost to cross (`river_ford_strength`), so crossings are where they chose
   to.
-- **Footprint**: re-claimed at 15 m under Decision 4, by the local
-  `city_footprints` rule (distance × roughness) plus a slope penalty; never in
-  a channel; cities span rivers. Across a seam each local texel's built-up
-  share is that of its own map's footprint (every map claims the city around
-  its drawn position, with its own jitter), so the total matches `area_km2`
-  only to within the seam's ragged edge, not exactly.
+- **Footprint**: a polygon (possibly several pieces, e.g. either side of a
+  river). Claimed on the terrain raster under Decision 4 by the local
+  `city_footprints` rule (distance × roughness) plus a slope penalty, never in
+  a channel (cities span rivers), then traced and simplified. Conservation
+  becomes: the polygon's area inside each local texel equals that texel's
+  built-up share. Across a seam each local texel's share is that of its own
+  map's footprint (every map claims the city around its drawn position, with
+  its own jitter), so the total matches `area_km2` only to within the seam's
+  ragged edge, not exactly.
 - **Anchor candidates**, scored, not chosen: local high ground inside the
   footprint (citadel/keep), road convergence (market), waterfront on the
   harbour or river side (port/quay), sacred site (any — Phase 6 picks).
-- **Hinterland**: villages, fields and garden ring from the local maps
-  clipped to the frame (each to its own domain), for drawing and for the gate
-  weights.
-- `buildable` mask: dry, not covered by a channel, slope below a param.
+- **Hinterland**: villages (points), fields and garden ring (the local
+  farmland texels outlined into polygons) from the local maps clipped to the
+  frame (each to its own domain), for drawing and for the gate weights.
+- **Buildable** polygon: the frame minus water bodies, river channels and
+  ground steeper than a param (the slope contour of the terrain raster).
 
 Test: on the Phase 0 cities, every gate lies on the footprint boundary and on
-a re-traced road; footprint area within one fine texel of `area_km2` (frames
+a re-traced road; every polygon valid (closed, no self-intersection);
+footprint area within one fine texel of `area_km2` (frames
 inside one hex; across a seam, within the seam tolerance); rivers and roads
 continuous across the seam;
 harbour/port settlements have ≥ 1 waterfront candidate on the shore they
@@ -344,20 +374,24 @@ contract:
 2. Old core = the footprint area implied by `founding_age` stub's earlier
    population; wall line around it from `wall_strength` (none / palisade /
    stone; towers by strength). Outer suburbs outside it.
-3. Arterials: gate → market, shortest over `buildable` with slope cost; bridges
-   at the chosen crossings.
+3. Arterials: gate → market, shortest within the buildable polygon with slope
+   cost (routed on the terrain raster, kept as polylines); bridges at the
+   chosen crossings.
 4. Districts: market, quay, citadel around their anchors; industry districts
    from `industries`, noxious trades (tanneries, dyers, butchers) downwind and
    downstream; elite near the citadel and upwind; poor outside the walls.
-5. Minor streets and lots inside blocks (organic vs grid by `planned`);
-   wells, shrines, graveyards, small squares scattered by density.
-6. Names: placeholder generator, seeded.
+5. Minor streets and lots inside blocks (organic vs grid by `planned`) — blocks
+   are the polygons between streets, lots subdivide them; wells, shrines,
+   graveyards, small squares scattered by density.
+6. No names (Decision 9).
 
 ### 7. Viewer
 
 Debug mode only: in the local view, clicking a town or city opens its
-settlement map (back button returns), built through the chain. Layers: fields,
-water, roads/gates, footprint, anchor candidates; layout once Phase 6 lands.
+settlement map (back button returns), built through the chain. The terrain
+draws as a raster (hillshade, water); everything else is drawn from its
+vectors: water bodies and channels, roads/gates, footprint, buildable area,
+anchor candidates; layout once Phase 6 lands.
 Hover: profile fields.
 
 ### 8. Tooling and docs
@@ -398,4 +432,14 @@ local map's edge). Phase 3's field modules exist in `settlegen/` with tests.
 - Cost is the chain, not the frame: regions ~7 s, local maps ~4 s each,
   settlement fields ≤0.3 s.
 
-Next: Phase 1 (Qt-free region map).
+**Phase 1 done 2026-10-10**: `region/builder.py` (`RegionMap`,
+`build_region_map`, `refine_region_features`, `land_reach`); `RegionView`
+builds through it. Seed 4, regions 28 and 16: rivers, roads, deltas, streams,
+biome and every city and town position bit-identical to the viewer before the
+change (25,620 arrays). Tests: `region/test/test_builder.py`, and
+`test_the_view_builds_through_build_region_map` in the viewer tests.
+
+Next: Phase 2 (the chain).
+
+Polygon library for Decision 8: **shapely** (approved 2026-10-10; in
+`requirements.txt`).

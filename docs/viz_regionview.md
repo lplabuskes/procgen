@@ -29,16 +29,18 @@ back from a local map shows the region untouched.
 
 **`set_region(geometry, globe)`** refines synchronously (~1.0–1.4 s at defaults,
 ⅓ resource/danger): `build_region_fields` (world `GlobeParams.resources`,
-`PopulationParams.fertility_exponent`), then `_refine_features` (~0.8 s):
-`build_region_rivers` → `refine_region_cities` → `build_region_roads` (world
-`cost.land` params, realm danger `movement_scale`, `moved` = cities' site →
-refined positions) → `snap_deltas` → `refine_region_towns` (realm town and
-population params, `refine.river_threshold_factor`). No globe → bare scaffolding.
+`PopulationParams.fertility_exponent`), then `_refine_features` (~0.8 s), which
+calls the Qt-free `region.builder.refine_region_features` and keeps its
+`RegionMap`: `build_region_rivers` → `refine_region_cities` →
+`build_region_roads` (world `cost.land` params, realm danger `movement_scale`,
+`moved` = cities' site → refined positions) → `snap_deltas` →
+`refine_region_towns` (realm town and population params,
+`refine.river_threshold_factor`). No globe → bare scaffolding.
 
 **`set_local(region_view, hex)`** → `build_local_map` from the region view's
-fields, rivers, roads, deltas, the region's streams (`build_region_streams`,
-~0.35 s, built on the region's first local map and kept until the region, its
-rivers or `LocalParams.streams` change) and world tuning — or from an LRU cache
+fields, rivers, roads, deltas, the region's streams (`RegionMap.streams` →
+`build_region_streams`, ~0.35 s, built on the region's first local map and kept
+until the region, its rivers or `LocalParams.streams` change) and world tuning — or from an LRU cache
 (`LOCAL_CACHE_SIZE` = 6, ~0.02 s) valid while the region's fields are the same
 object and local params unchanged. Draws `Villages.rural_density` (countryside
 net of villages) as `rural_density`.

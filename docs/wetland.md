@@ -92,7 +92,7 @@ reclassification:
   elevation − elevation) / wetland_relief_scale_m)` — hollows wetter, rises drier;
 - **stamp** at the tier's `wetland_threshold`.
 
-After the tier's rivers are routed (`RegionView._refine_features`,
+After the tier's rivers are routed (`region.builder.refine_region_features`,
 `build_local_map`, and the debug/measure scripts), `add_riparian_wetland` adds
 `wetland_riparian_gain · (1 − d / width) · flatness` along every path and stream,
 `width = max(wetland_riparian_width_km · (flow / ref) ** exponent, min_width_texels ·

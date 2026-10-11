@@ -35,17 +35,12 @@ from localmap.cities import CityParams
 from localmap.farmland import FarmlandParams
 from localmap.upsample import with_region_detail
 from realmgen.placement.types import SITE_KIND_CONFLUENCE, SITE_KIND_RIVER
-from region.cities import refine_region_cities
+from region.builder import RegionMap, build_region_map
 from region.geometry import RegionGeometry, ecef_to_cell
 from region.grid import RegionHexGrid
 from region.params import RegionParams
 from region.resources import refined_slope
-from region.rivers import RegionRivers, RiverPath, build_region_rivers, snap_deltas
-from region.roads import RegionRoads, build_region_roads
-from region.streams import build_region_streams
-from region.towns import refine_region_towns
-from region.upsample import RegionFields, build_region_fields
-from region.wetlands import add_riparian_wetland
+from region.upsample import RegionFields
 from settlegen import (
     LocalMapsSource, SettlementUpsampleParams, build_settlement_fields, settlement_conservation_report,
     with_local_detail,
@@ -59,18 +54,6 @@ if TYPE_CHECKING:
 _KM2_PER_HA = 0.01
 
 
-# ── the viewer's build path (Phase 1 will move this into region/builder.py) ──
-
-
-@dataclass
-class RegionBuild:
-    fields: RegionFields
-    rivers: RegionRivers
-    roads: RegionRoads
-    deltas: Optional[np.ndarray]
-    streams: list[RiverPath]
-
-
 @dataclass
 class Chain:
     """Regions and local maps built so far for one world, in build order."""
@@ -78,39 +61,18 @@ class Chain:
     world: "World"
     region_params: RegionParams
     local_params: LocalParams
-    regions: dict[int, RegionBuild] = field(default_factory=dict)
+    regions: dict[int, RegionMap] = field(default_factory=dict)
     locals: dict[tuple[int, int], LocalMap] = field(default_factory=dict)
     seconds: dict[str, float] = field(default_factory=dict)
 
     def _time(self, key: str, t0: float) -> None:
         self.seconds[key] = self.seconds.get(key, 0.0) + time.perf_counter() - t0
 
-    def region(self, region_id: int) -> RegionBuild:
-        """``RegionView.set_region`` + ``_refine_features`` + ``_region_streams``."""
-        if region_id in self.regions:
-            return self.regions[region_id]
-        t0 = time.perf_counter()
-        world, rp = self.world, self.region_params
-        f = build_region_fields(world, region_id, rp.upsample)
-        rivers = build_region_rivers(f, world, rp.rivers)
-        add_riparian_wetland(f, rivers, rp.upsample)
-        refine_region_cities(f, rivers, world, 1.5, rp.settlements)
-        cities = world.get_feature("settlements") or []
-        moved = (np.array([c.site_position for c in cities]).reshape(-1, 3),
-                 np.array([c.position for c in cities]).reshape(-1, 3))
-        land_reach = (int(rp.upsample.water_spread_texels) + 2) * f.grid.texel_spacing_rad(f.tex_size)
-        roads = build_region_roads(f, world, rivers, rp.roads, land_reach=land_reach, moved=moved)
-        deltas = world.get_feature("deltas")
-        snapped = None
-        if deltas is not None and len(deltas):
-            texel = float(np.sqrt(np.mean(world.mesh.face_areas))) / max(
-                world.mesh.face_textures["elevation"].shape[2] - 1, 1)
-            reach = 2.0 * float(rp.rivers.corridor_global_texels) * texel + 2.0 * land_reach
-            snapped = snap_deltas(np.asarray(deltas), rivers, reach)
-        refine_region_towns(f, rivers, world, None, None, 1.5, rp.settlements, roads=roads)
-        streams = build_region_streams(f, world, rivers, self.local_params.streams)
-        self.regions[region_id] = RegionBuild(f, rivers, roads, snapped, streams)
-        self._time("region", t0)
+    def region(self, region_id: int) -> RegionMap:
+        if region_id not in self.regions:
+            t0 = time.perf_counter()
+            self.regions[region_id] = build_region_map(self.world, region_id, self.region_params)
+            self._time("region", t0)
         return self.regions[region_id]
 
     def local(self, region_id: int, hex_index: int) -> LocalMap:
@@ -121,7 +83,8 @@ class Chain:
         t0 = time.perf_counter()
         self.locals[key] = build_local_map(
             self.world, r.fields, hex_index, self.local_params,
-            region_rivers=r.rivers, region_roads=r.roads, region_deltas=r.deltas, region_streams=r.streams,
+            region_rivers=r.rivers, region_roads=r.roads, region_deltas=r.deltas,
+            region_streams=r.streams(self.world, self.local_params.streams),
         )
         self._time("local", t0)
         return self.locals[key]
