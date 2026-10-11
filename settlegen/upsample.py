@@ -16,6 +16,10 @@ the map uses.  The small-lake flag is the exception: it follows the refined lake
 Defaults: ``texel_m = 15`` against the local map's ~365 m — a ~24× refinement,
 ~4–5 octaves of detail.  No new small lakes (the frame has no hex grid; the
 local tier already draws lakes down to ~10 km²); cut-off sea is reconnected.
+Land narrower than ``min_land_m`` between waters (a spit, a sliver of an islet:
+on a flat shore the refined relief sits within centimetres of the water and
+pokes through in one-texel ridges) goes to the water nearest it
+(:func:`clear_thin_land`).  The masks aren't conserved, only the elevation.
 
 The noise stream is shared by every settlement map of a world, so overlapping
 frames share their relief (up to each one's conservation of the texels its
@@ -28,6 +32,7 @@ import math
 from typing import TYPE_CHECKING, Optional, Sequence
 
 import numpy as np
+from scipy.ndimage import binary_opening, distance_transform_edt
 
 from core.params import param_field as _f, paramclass
 from localmap.upsample import LocalUpsampleParams
@@ -63,6 +68,7 @@ class SettlementUpsampleParams(LocalUpsampleParams):
     max_relief_km: float = _f(0.03, label="Max detail relief (km)", min=0.0, max=1.0, step=0.005)
     # About one local texel (~365 m / 15 m).
     water_spread_texels: int = _f(24, label="Shoreline spread (texels)", min=0, max=128)
+    min_land_m: float = _f(75.0, label="Narrowest land between waters (m)", min=0.0, max=500.0, step=5.0)
 
 
 # The detail fields the settlement tier takes from the local tier: those it doesn't redeclare.
@@ -82,6 +88,42 @@ def km_per_local_unit(local: RegionFields) -> float:
     """Ground km per unit of a local map's ``(s, t)`` (the map is one unit across)."""
     texel_units = 2.0 * local.grid.radius / local.tex_size
     return local.grid.texel_spacing_rad(local.tex_size) * EARTH_RADIUS_KM / texel_units
+
+
+def clear_thin_land(textures: dict, texel_m: float, min_land_m: float) -> None:
+    """In place: land (neither sea nor lake) the opening by a disc ``min_land_m``
+    across removes goes to its nearest water's mask.  The frame's edge doesn't
+    erode it (the land is extended past it)."""
+    ocean, lake = textures.get("ocean_mask"), textures.get("lake_mask")
+    if ocean is None:
+        return
+    r = int(np.ceil((float(min_land_m) / float(texel_m) - 1.0) / 2.0))
+    if r < 1:
+        return
+    sea = ocean[0, ..., 0] > 0.5
+    wet_lake = lake[0, ..., 0] > 0.5 if lake is not None else np.zeros_like(sea)
+    wet = sea | wet_lake
+    if not wet.any() or wet.all():
+        return
+    yy, xx = np.mgrid[-r:r + 1, -r:r + 1]
+    disc = xx ** 2 + yy ** 2 <= r * r + r
+    land = np.pad(~wet, r, mode="edge")
+    opened = np.asarray(binary_opening(land, disc), dtype=bool)
+    thin = (land & ~opened)[r:-r, r:-r]
+    if not thin.any():
+        return
+    near = np.asarray(distance_transform_edt(~wet, return_distances=False, return_indices=True))
+    to_sea = sea[near[0], near[1]]
+    new_sea = sea | (thin & to_sea)
+    textures["ocean_mask"] = new_sea[None, ..., None].astype(ocean.dtype)
+    if lake is not None:
+        textures["lake_mask"] = (wet_lake | (thin & ~to_sea))[None, ..., None].astype(lake.dtype)
+        filled = textures.get("filled_height")
+        if filled is not None:
+            # The lake's surface carried onto the land it takes.
+            f = filled[0, ..., 0]
+            textures["filled_height"] = np.where(thin & ~to_sea, f[near[0], near[1]], f)[None, ..., None].astype(
+                filled.dtype)
 
 
 def build_settlement_fields(
@@ -125,6 +167,7 @@ def build_settlement_fields(
     )
     textures, loc = terrain.textures, terrain.located
     shape = (1, tex_size, tex_size)
+    clear_thin_land(textures, float(side_km) * 1000.0 / tex_size, float(params.min_land_m))
     if source.has(SMALL_LAKE_KEY) and "lake_mask" in textures:
         near_small = source.coarse(SMALL_LAKE_KEY, loc)[:, 0].reshape(shape) > 0.0
         textures[SMALL_LAKE_KEY] = ((textures["lake_mask"][..., 0] > 0.5) & near_small)[..., None].astype(np.uint8)

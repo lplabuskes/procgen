@@ -48,7 +48,7 @@ from region.roads import (
 from region.upsample import EARTH_RADIUS_KM, RegionFields
 from settlegen.frame import Frame
 from settlegen.source import LocalMapsSource
-from settlegen.water import SiteWater, channel_polygons
+from settlegen.water import SiteWater
 
 if TYPE_CHECKING:
     from core.world import World
@@ -522,8 +522,9 @@ def _channel_nodes(
     raster: Raster, frame: Frame, water: SiteWater, bank_m: float, node_m: float,
 ) -> tuple[np.ndarray, np.ndarray]:
     """``(channel flow, bank flow)`` per raster node: the flow of the nearest dry
-    channel segment on nodes in its channel (at least ~a node wide, so no road
-    slips through between nodes) or in the ``bank_m`` band beside it; 0 elsewhere."""
+    channel segment on nodes in its channel (the drawn channel, and at least ~a
+    node wide about the line, so no road slips through between nodes) or in the
+    ``bank_m`` band beside it; 0 elsewhere."""
     size = raster.n ** 2
     channel, bank = np.zeros(size), np.zeros(size)
     segs, flows, half = [], [], []
@@ -539,7 +540,10 @@ def _channel_nodes(
     nodes = np.flatnonzero(raster.sampled)
     xy = frame.to_xy(raster.positions[nodes])
     tree = shapely.STRtree(np.asarray(shapely.linestrings(seg)))
-    near_node, near_seg = tree.query(shapely.points(xy), predicate="dwithin", distance=float(half_w.max() + bank_m))
+    # The drawn channel wanders and widens round its islands, up to about this past the line's width.
+    slack = float(half_w.max())
+    near_node, near_seg = tree.query(shapely.points(xy), predicate="dwithin",
+                                     distance=float(2.0 * half_w.max() + bank_m + slack))
     if near_node.size == 0:
         return channel, bank
     a, b = seg[near_seg, 0], seg[near_seg, 1]
@@ -553,6 +557,11 @@ def _channel_nodes(
     first[1:] = near_node[order][1:] != near_node[order][:-1]
     pick = order[first]
     node, d, f = nodes[near_node[pick]], edge[pick], flow[near_seg[pick]]
+    if not water.channels.is_empty:
+        # The channel as drawn: in it is in it, its bank is beside it.
+        pts = shapely.points(xy[near_node[pick]])
+        drawn = np.asarray(shapely.distance(water.channels, pts))
+        d = np.minimum(d, np.where(shapely.contains(water.channels, pts), -1.0, drawn))
     inside = d <= 0.0
     beside = ~inside & (d <= bank_m)
     channel[node[inside]] = np.maximum(f[inside], 1e-9)
@@ -605,7 +614,7 @@ def _route(
     # Ends inside a channel go to its nearest bank in the raster: a road that started
     # and ended in one would stay in it rather than pay to ford it again.
     inner = box(*((np.array([lo, lo, hi, hi]) - 0.5) * frame.side_m)).buffer(-node_m)
-    channels = channel_polygons(water.lines)          # past the frame, as far as the raster
+    channels = water.channels                  # past the frame, as far as the lines
     banks = channels.boundary.intersection(inner) if not channels.is_empty else None
     smoothing = int(params.smoothing_iterations)
     for verts, flows, _ in polys:
@@ -676,7 +685,7 @@ def build_site_roads(
     _land_at(lines, landings, merge_m)
     kept = [k for k, p in enumerate(routed.water_polylines) if len(as_lines([p], [routed.water_flows[k]]))]
     water_legs = [as_lines([routed.water_polylines[k]], [routed.water_flows[k]])[0] for k in kept]
-    quays = _quays(water_legs, [routed.water_pins[k] for k in kept], water, channel_polygons(water.lines), frame)
+    quays = _quays(water_legs, [routed.water_pins[k] for k in kept], water, water.channels, frame)
     landings = _merge_landings(landings + quays, merge_m)
 
     sea_ecef: list[RouteSegment] = [

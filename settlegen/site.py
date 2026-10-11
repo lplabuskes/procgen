@@ -39,7 +39,8 @@ class SettlementSite:
     frame: Frame
     water: SiteWater
     footprint: MultiPolygon
-    density_per_ha: float     # people per hectare of footprint
+    density_per_ha: float     # people per hectare of densely built footprint
+    sparse: MultiPolygon      # the footprint's sparsely built part (its filled holes)
     buildable: MultiPolygon
     roads: SiteRoads
     anchors: AnchorCandidates
@@ -75,7 +76,7 @@ def build_site(
         mining=_is_mining(globe, chain), params=farmland, farming_share=_farming_share(chain),
     )
     return SettlementSite(
-        frame=frame, water=water, footprint=built.polygon, density_per_ha=built.density_per_ha,
+        frame=frame, water=water, footprint=built.polygon, density_per_ha=built.density_per_ha, sparse=built.sparse,
         buildable=buildable_ground(fields, frame, water, footprint), roads=site_roads,
         anchors=build_anchor_candidates(fields, frame, water, site_roads, built.polygon, anchors),
         hinterland=hinterland,

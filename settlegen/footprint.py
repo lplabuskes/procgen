@@ -20,13 +20,24 @@ The frame is sized before the terrain exists (:mod:`settlegen.chain`), from
 everything but the site; the site only raises density, so the footprint fits.
 
 **The claim**: ``population / density`` of dry ground, by priority — nearness to
-the centre, a pull towards the roads (ribbon growth along them,
+the centre (by the way there, each metre of water counting ``crossing_cost``
+metres: ground across a wide river is farther than ground beside the centre,
+an island in a narrow arm close), a pull towards the roads (ribbon growth along them,
 ``road_pull`` within ``road_pull_m``) and the water (a river or harbour
-town grows to its waterfront, ``water_pull`` within ``water_pull_m``), spatially correlated noise along the
+town grows to its waterfront, ``water_pull`` within ``water_pull_m``), spatially correlated noise along the claim's
 edge for a ragged outline (``edge_roughness``), less a penalty on ground steeper
 than ``slope_free`` (the slope smoothed over ``slope_smoothing_m``).  Never water
-or a river channel: a city spans its rivers.  Detached pieces under
+or a river channel: a city spans its rivers.  Islands (dry ground the water
+cuts off from the frame's largest) smaller than ``island_min_ha`` are never
+built on; larger ones are ground like any other.  Detached pieces under
 ``min_piece_fraction`` of it go back to the main body, grown at its edge by priority.
+**Holes and notches** the claim leaves — ground it encloses (with the water), at
+least ``hole_min_enclosed`` of their edge on the claim, and the concavities a
+closing by a disc ``compact`` × the footprint's radius fills — are built up too, more sparsely
+(``hole_density_mult``: gardens, orchards, yards behind the street fronts;
+``Footprint.holes`` / ``.sparse``, kept for the layout, not drawn apart), and the
+claim shrinks by the people they hold, a few rounds until it settles.  An
+island no claim touches stays out.
 The claimed texels are traced (marching squares on the lightly smoothed claim,
 the level matched to the claimed area), simplified, and the water cut out exactly.
 
@@ -43,7 +54,11 @@ from typing import TYPE_CHECKING, Optional, Sequence
 
 import numpy as np
 import shapely
-from scipy.ndimage import binary_dilation, distance_transform_edt, gaussian_filter, label
+from scipy.ndimage import (
+    binary_closing, binary_dilation, binary_fill_holes, distance_transform_edt, gaussian_filter, label, zoom,
+)
+from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import dijkstra
 from shapely.geometry import MultiPolygon
 
 from core.params import param_field as _f, paramclass
@@ -51,7 +66,7 @@ from region.resources import refined_slope
 from region.upsample import RegionFields
 from settlegen.contour import regions_below
 from settlegen.frame import Frame
-from settlegen.water import SiteWater, _as_multipolygon, channel_polygons
+from settlegen.water import SiteWater, _as_multipolygon
 
 if TYPE_CHECKING:
     from core.world import World
@@ -60,6 +75,8 @@ if TYPE_CHECKING:
 _M2_PER_HA = 10_000.0
 # Smallest piece of buildable ground kept, in fine texels.
 _MIN_PIECE_TEXELS = 4.0
+# How far (in priority) either side of the claim's edge its noise reaches.
+_EDGE_BAND = 0.5
 # RNG stream tags under the settlement's seed.
 _DENSITY_STREAM, _CLAIM_STREAM = 1, 2
 
@@ -81,26 +98,36 @@ class SettlementFootprintParams:
     max_density_per_ha: float = _f(450.0, label="Max density (people/ha)", min=50.0, max=2000.0, step=10.0)
     road_pull: float = _f(0.3, label="Road pull", min=0.0, max=2.0, step=0.05)
     road_pull_m: float = _f(120.0, label="Road pull reach (m)", min=10.0, max=1000.0, step=10.0)
-    water_pull: float = _f(0.3, label="Waterfront pull", min=0.0, max=2.0, step=0.05)
+    water_pull: float = _f(0.2, label="Waterfront pull", min=0.0, max=2.0, step=0.05)
     water_pull_m: float = _f(150.0, label="Waterfront pull reach (m)", min=10.0, max=1000.0, step=10.0)
-    edge_roughness: float = _f(1.0, label="Footprint edge roughness", min=0.0, max=3.0, step=0.05)
+    edge_roughness: float = _f(0.5, label="Footprint edge roughness", min=0.0, max=3.0, step=0.05)
     # Correlation length of the edge noise.
     roughness_m: float = _f(100.0, label="Edge roughness scale (m)", min=5.0, max=500.0, step=5.0)
     slope_free: float = _f(0.05, label="Footprint slope free (km/km)", min=0.0, max=1.0, step=0.01)
     # The slope the penalty reads, smoothed: hillsides, not the street-scale bumps.
-    slope_smoothing_m: float = _f(40.0, label="Footprint slope smoothing (m)", min=0.0, max=300.0, step=5.0)
+    slope_smoothing_m: float = _f(120.0, label="Footprint slope smoothing (m)", min=0.0, max=500.0, step=5.0)
     # Detached pieces smaller than this share of the footprint go back to its main body.
     min_piece_fraction: float = _f(0.03, label="Smallest footprint piece (share)", min=0.0, max=0.5, step=0.01)
-    slope_weight: float = _f(4.0, label="Footprint slope penalty", min=0.0, max=50.0, step=0.5)
+    slope_weight: float = _f(2.0, label="Footprint slope penalty", min=0.0, max=50.0, step=0.5)
+    hole_density_mult: float = _f(0.3, label="Enclosed-hole density (×)", min=0.0, max=1.0, step=0.05)
+    hole_min_enclosed: float = _f(0.25, label="Hole edge on the footprint (share)", min=0.0, max=1.0, step=0.05)
+    # Concavities narrower than a disc this share of the footprint's radius are filled (sparsely built).
+    compact: float = _f(0.15, label="Footprint concavity fill (× radius)", min=0.0, max=1.0, step=0.01)
+    # Each metre of water on the way from the centre counts this many metres of distance.
+    crossing_cost: float = _f(3.0, label="Water crossing cost (× distance)", min=1.0, max=20.0, step=0.5)
+    island_min_ha: float = _f(2.0, label="Smallest island built on (ha)", min=0.0, max=100.0, step=0.5)
     buildable_max_slope: float = _f(0.3, label="Buildable max slope (km/km)", min=0.01, max=2.0, step=0.01)
 
 
 @dataclass
 class Footprint:
-    """The claim on the raster (for checks), its polygon and the density it was claimed at."""
+    """The claim on the raster (for checks), its polygon (with the filled holes; ``sparse``
+    is their part of it) and the density it was claimed at."""
 
     polygon: MultiPolygon
-    claimed: np.ndarray       # (T, T) bool
+    sparse: MultiPolygon
+    claimed: np.ndarray       # (T, T) bool, densely built
+    holes: np.ndarray         # (T, T) bool, the filled holes
     target: int               # fine texels the claim was due
     density_per_ha: float     # with the site's squeeze
     constraint: float         # the site's squeeze (×, ≥ 1)
@@ -216,6 +243,91 @@ def _consolidate(claimed: np.ndarray, priority: np.ndarray, allowed: np.ndarray,
     return out
 
 
+def _disc(r: int) -> np.ndarray:
+    yy, xx = np.mgrid[-r:r + 1, -r:r + 1]
+    return xx ** 2 + yy ** 2 <= r * r + r
+
+
+def _crossing_extra(wet: np.ndarray, texel_m: float, centre: tuple[float, float], cost: float,
+                    step: int = 3) -> np.ndarray:
+    """``(T, T)`` extra distance (m) the water adds on the way from ``centre``
+    (fractional row, col): the cost-distance with each metre of ``wet`` counting
+    ``cost`` metres, less the same with water free — so the grid's octagonal
+    distances cancel, and the extra adds to a true straight-line distance.  On a
+    grid ``step`` texels coarser (8-neighbour), bilinear back up."""
+    t = wet.shape[0]
+    n = -(-t // step)
+    pad = np.pad(wet.astype(np.float64), (0, n * step - t), mode="edge")
+    frac = pad.reshape(n, step, n, step).mean(axis=(1, 3))
+    idx = np.arange(n * n).reshape(n, n)
+    r = int(np.clip(round((centre[0] - 0.5 * (step - 1)) / step), 0, n - 1))
+    c = int(np.clip(round((centre[1] - 0.5 * (step - 1)) / step), 0, n - 1))
+
+    def distance(weight: np.ndarray) -> np.ndarray:
+        src, dst, length = [], [], []
+        for dr, dc in ((0, 1), (1, 0), (1, 1), (1, -1)):
+            r0, r1 = max(0, -dr), n - max(0, dr)
+            c0, c1 = max(0, -dc), n - max(0, dc)
+            a = idx[r0:r1, c0:c1]
+            b = idx[r0 + dr:r1 + dr, c0 + dc:c1 + dc]
+            w = 0.5 * (weight[r0:r1, c0:c1] + weight[r0 + dr:r1 + dr, c0 + dc:c1 + dc]) * np.hypot(dr, dc)
+            src.append(a.reshape(-1))
+            dst.append(b.reshape(-1))
+            length.append(w.reshape(-1))
+        e = np.concatenate(length) * step * texel_m
+        graph = coo_matrix((e, (np.concatenate(src), np.concatenate(dst))), shape=(n * n, n * n)).tocsr()
+        return np.asarray(dijkstra(graph, directed=False, indices=idx[r, c])).reshape(n, n)
+
+    d = distance(1.0 + (float(cost) - 1.0) * frac) - distance(np.ones_like(frac))      # per metre, per cell
+    up = np.asarray(zoom(d, step, order=1, mode="nearest", grid_mode=True))[:t, :t]
+    return np.pad(up, ((0, t - up.shape[0]), (0, t - up.shape[1])), mode="edge")
+
+
+def _small_islands(wet: np.ndarray, min_texels: float) -> np.ndarray:
+    """Dry pieces (4-connected) other than the largest, under ``min_texels``."""
+    labelled = label(~wet)
+    labels, n = np.asarray(labelled[0], dtype=np.int64), int(labelled[1])  # type: ignore[index]
+    if n <= 1:
+        return np.zeros_like(wet)
+    sizes = np.bincount(labels.reshape(-1), minlength=n + 1)
+    small = sizes < min_texels
+    small[0] = False
+    small[int(np.argmax(sizes[1:])) + 1] = False
+    return small[labels]
+
+
+def _notches(claimed: np.ndarray, wet: np.ndarray, r: int) -> np.ndarray:
+    """Dry ground a closing of ``claimed`` by a radius-``r`` disc fills (the frame's edge doesn't close)."""
+    if r < 1 or not claimed.any():
+        return np.zeros_like(claimed)
+    pad = np.pad(claimed, r)
+    closed = np.asarray(binary_closing(pad, _disc(r)), dtype=bool)[r:-r, r:-r]
+    return closed & ~claimed & ~wet
+
+
+def _holes(claimed: np.ndarray, wet: np.ndarray, min_enclosed: float) -> np.ndarray:
+    """Dry ground ``claimed`` and ``wet`` enclose, in pieces at least ``min_enclosed``
+    of whose edge is on the claim (so not an island out in the water)."""
+    pocket = np.asarray(binary_fill_holes(claimed | wet), dtype=bool) & ~claimed & ~wet
+    if not pocket.any():
+        return pocket
+    labelled = label(pocket)
+    labels, n = np.asarray(labelled[0], dtype=np.int64), int(labelled[1])  # type: ignore[index]
+    ring = np.asarray(binary_dilation(pocket), dtype=bool) & ~pocket
+    # Each ring texel goes to the pieces it borders (4-neighbours); counted per piece.
+    on_claim = np.zeros(int(n) + 1)
+    edge = np.zeros(int(n) + 1)
+    padded = np.pad(labels, 1)
+    rows, cols = np.nonzero(ring)
+    for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+        who = padded[rows + 1 + dr, cols + 1 + dc]
+        np.add.at(edge, who, 1.0)
+        np.add.at(on_claim, who, claimed[rows, cols].astype(float))
+    keep = on_claim >= float(min_enclosed) * np.maximum(edge, 1.0)
+    keep[0] = False
+    return keep[labels]
+
+
 def _trace(claimed: np.ndarray, frame: Frame, wet_poly: MultiPolygon) -> MultiPolygon:
     """The claimed texels as polygons: contoured on the claim lightly smoothed, water cut out."""
     if not claimed.any():
@@ -262,8 +374,17 @@ def build_footprint(
     r = radius_m(density)
     target = int(round(float(population) / density * _M2_PER_HA / texel_m ** 2))
 
-    # Nearness, 0.5 at the radius; the roads pull growth along them out to twice that.
-    base = np.clip(1.0 - dist / (2.0 * r), 0.0, 1.0)
+    # Nearness by the way there (water dear), 0.5 at the radius; the roads pull growth
+    # along them out to twice that.  Small islands are out.
+    allowed = ~wet & ~_small_islands(wet, float(params.island_min_ha) * _M2_PER_HA / texel_m ** 2)
+    if wet.any() and float(params.crossing_cost) > 1.0:
+        mid = frame.half / texel_m - 0.5                  # the frame's centre, in texels
+        centre = (mid, mid)
+        way = dist + _crossing_extra(wet, texel_m, centre, float(params.crossing_cost))
+    else:
+        way = dist
+    nearness = 1.0 - way / (2.0 * r)
+    base = np.clip(nearness, 0.0, 1.0)
     reach = base > 0
     road_d = _road_distance_m(roads, frame, t)
     if road_d is not None and params.road_pull > 0:
@@ -273,16 +394,36 @@ def build_footprint(
         base = base + float(params.water_pull) * np.exp(-water_d / float(params.water_pull_m)) * reach
     rng = np.random.default_rng(_seed(globe_seed, ref, _CLAIM_STREAM))
     noise = _noise(base.shape, float(params.roughness_m) / texel_m, rng)
-    # Only along the edge: none deep inside or far out.
-    edge = 4.0 * np.clip(base, 0.0, 1.0) * (1.0 - np.clip(base, 0.0, 1.0))
     hills = gaussian_filter(slope, float(params.slope_smoothing_m) / texel_m) if params.slope_smoothing_m > 0 \
         else slope
     steep = np.maximum(hills - float(params.slope_free), 0.0)
-    priority = base + 0.25 * float(params.edge_roughness) * edge * noise - float(params.slope_weight) * steep
-    claimed = _consolidate(_claim(priority, ~wet, target), priority, ~wet,
-                           max(float(params.min_piece_fraction) * target, 1.0))
+    # Past twice the radius, still nearest first (no ties for a regrown body to break by row).
+    smooth = base - float(params.slope_weight) * steep + np.minimum(nearness, 0.0)
+    # The noise only along the edge, wherever the claim's edge falls (water can push it
+    # far out): none deep inside or far out.
+    k = min(target, int(allowed.sum()))
+    level = float(np.partition(np.where(allowed, smooth, -np.inf).reshape(-1), -k)[-k]) if k > 0 else 0.5
+    edge = np.clip(1.0 - np.abs(smooth - level) / _EDGE_BAND, 0.0, 1.0)
+    priority = smooth + 0.25 * float(params.edge_roughness) * edge * noise
+    # Holes are built up sparsely: the dense claim gives up the people they hold.
+    mult = float(params.hole_density_mult)
+    r_close = int(round(float(params.compact) * r / texel_m))
+    n = target
+    claimed = holes = np.zeros_like(wet)
+    for _ in range(5):
+        claimed = _consolidate(_claim(priority, allowed, n), priority, allowed,
+                               max(float(params.min_piece_fraction) * n, 1.0))
+        holes = (_holes(claimed, wet, float(params.hole_min_enclosed))
+                 | _notches(claimed, wet, r_close)) & allowed
+        due = max(target - int(round(mult * holes.sum())), 1)
+        if due == n:
+            break
+        n = due
     wet_poly = _as_multipolygon(shapely.union_all([water.sea, water.lakes, water.channels]))
-    return Footprint(polygon=_trace(claimed, frame, wet_poly), claimed=claimed, target=target,
+    polygon = _trace(claimed | holes, frame, wet_poly)
+    sparse = _as_multipolygon(shapely.make_valid(_trace(holes, frame, wet_poly).intersection(polygon))) \
+        if holes.any() else MultiPolygon()
+    return Footprint(polygon=polygon, sparse=sparse, claimed=claimed, holes=holes, target=target,
                      density_per_ha=density, constraint=constraint)
 
 
@@ -295,7 +436,7 @@ def buildable_ground(
     texel_m = frame.side_m / fields.tex_size
     steep = regions_below(float(params.buildable_max_slope) - slope, frame.texel_xy(fields.tex_size), frame.box())
     # The slope contour simplified, the water cut out exactly.
-    blocked = shapely.union_all([water.sea, water.lakes, channel_polygons(water.lines, frame.box()),
+    blocked = shapely.union_all([water.sea, water.lakes, water.channels,
                                  shapely.make_valid(steep.simplify(0.25 * texel_m))])
     ground = frame.box().difference(blocked)
     pieces = [g for g in getattr(ground, "geoms", [ground])

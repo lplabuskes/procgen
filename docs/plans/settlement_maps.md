@@ -617,6 +617,72 @@ screen pixels gates, bridges, fords and landings (Trade Routes). Under
 candidates and Buildable ground toggles, off by default. See
 docs/viz_regionview.md.
 
+**Site fixes 2026-10-11** (user review, seed 2065362318 city 6):
+- **Thin land** between waters (`SettlementUpsampleParams.min_land_m`, 75 m;
+  `clear_thin_land`) goes to the nearest water's mask. On a delta flat the
+  relief sits within ~0.2 m of the sea, so one-texel ridges of interpolated
+  relief poked through as spikes and slivers of islets. Masks only: elevation
+  stays conserved. Shores within 1 m of the water are placed by the smoothed
+  mask, not the forced sign (no texel staircase on flat shores).
+- **Natural channels** (`water.natural_channels`, replacing the plain buffer
+  for `SiteWater.channels`, which now reaches as far as the lines): width
+  wanders (lognormal σ 0.15) and the banks shift (0.1 × width) over 4 widths;
+  rivers ≥ 60 m wide get ~0.6 islands per km (lens-shaped, 0.5 × width broad
+  ±40%, 3.5 × that long), the channel widened round each so both arms keep
+  the width. A channel runs into the sea or lake it meets (in-water stretches
+  widened too, the still water cut out, land between the two under 75 m
+  closed), and shorelines skip the mouth. `channel_polygons` (the plain
+  outline) remains the hinterland's crossing barrier.
+- **Footprint holes** (`hole_density_mult` 0.3, `hole_min_enclosed` 0.25):
+  dry ground the claim encloses (with the water) is built up sparsely
+  (`Footprint.sparse` / `.holes`, `SettlementSite.sparse`), and the dense claim
+  gives up the people it holds. Seed 4: no holes left; sparse ground 1–10%
+  of the footprint.
+- **Viewer**: the Elevation layer on a settlement map is the frame's own relief
+  (`settlegen/display.py`: a muted ramp over the land's 2nd–98th percentile,
+  hillshade exaggerated ≤ 8× to show the typical slope; legend in metres). Sea,
+  lakes and channels are drawn as vectors in one water colour; sparse ground
+  as a lighter tint over the built-up fill. The exaggeration makes the ~1 m
+  local-map hex seams faintly visible as lines (e.g. seed 4 city 13).
+
+**Site fixes, round 2, 2026-10-11** (user review, same city):
+- **River ends**: a re-traced line that starts inside the frame, hooks out past
+  its edge and back (the router, pinned at its raster's edge) is cut where it
+  leaves; an end left inside within 600 m of the edge, heading out, is carried
+  past it (`water._tidy_ends`). Channels now reach the edge at full width.
+- **Islands**: long and narrow (0.3 × width broad, 7 × that long), blunt
+  upstream and tapering downstream, on one line along the channel's middle;
+  the channel widens by only half the breadth, tapered over twice the length
+  (no bulging banks). Only islands are holes in the channel union (the bank
+  quads left slivers on tight bends). Roads read the drawn channel
+  (`roads._channel_nodes`), not only the centreline width.
+- **Islands can be built on**: dry pieces cut off from the frame's main land
+  under `island_min_ha` (2 ha) are never claimed; nearness is the straight
+  distance plus what the water on the way adds (`crossing_cost` 3: each metre
+  of water counts three; `footprint._crossing_extra`, Dijkstra on a 3×
+  coarser grid, less the same with water free so the grid's octagons cancel).
+  An island across a narrow arm is close; the far bank of a wide river is not.
+  Seed 4: the islands in frames are 1.2–2.8 km out, none built on yet.
+- **Compactness**: concavities narrower than a disc 0.15 × the footprint's
+  radius are filled (`compact`), counted with the holes (sparse, 0.3 density;
+  tracked as `Footprint.holes` / `.sparse`, no longer drawn apart); the edge
+  noise centres on the claim's actual edge (water can push it past twice the
+  radius, where it used to vanish and leave arcs) and is halved
+  (`edge_roughness` 0.5); slope smoothed over 120 m at weight 2; waterfront
+  pull 0.2. Past twice the radius the priority still falls with distance (the
+  body's regrowth used to break ties by row, drawing stripes).
+
+**River banks, round 3, 2026-10-11** (user review, same city): the 700 m river
+followed a course bending at ~400 m radius, so its offset inner banks ballooned
+into round lobes; and the band stopped in a flat cap square to its last segment
+(a kink at the frame's edge, short of an aslant shore at the mouth), leaving
+right-angled corners and land spikes. Now the channel's course is the line
+smoothed over `course_smoothing` (1) widths, and an end that meets still water,
+the frame's edge or another line runs on two widths (`water._runs_on`): along
+the line, or into still water turned halfway towards the water's middle. The
+band is then cut by the frame, the water or the other channel, not stopped. A
+source stays put.
+
 Phase 4 is done. Next: Phase 5 (settlement profile).
 
 Polygon library for Decision 8: **shapely** (approved 2026-10-10; in

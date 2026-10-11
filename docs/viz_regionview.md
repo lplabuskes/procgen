@@ -53,11 +53,14 @@ rivers or `LocalParams.streams` change) and world tuning. Draws `Villages.rural_
 net of villages) as `rural_density`.
 
 **Settlement maps** (`set_settlement`): a third mode for `settlegen`'s
-settlement maps — the refined terrain on the square frame (one texture) with
-the vector site over it (`_draw_site`, in cell-layout pixels): hinterland
-fields and market gardens (toggled with whoever farms them, as on local maps),
-the footprint (with its own overlay: Settlements, Towns or Villages; a neutral
-built-up colour), river channels and shorelines (Rivers); the site's roads and
+settlement maps — the refined terrain on the square frame (one texture; the
+Elevation layer as the frame's own relief, `settlegen.display.relief_rgba`, with
+its legend in metres) with the vector site over it (`_draw_site`, in
+cell-layout pixels): hinterland fields and market gardens (toggled with whoever
+farms them, as on local maps), the footprint (with its own overlay: Settlements,
+Towns or Villages; a neutral built-up colour, its sparse part not drawn apart),
+the sea and lakes (always) and river channels (Rivers) in one water
+colour, and shorelines (Rivers); the site's roads and
 river/lake legs as trade routes; and its point features in screen pixels
 (`_draw_site_markers`, Trade Routes): gates (a red bar across the road),
 bridges (light bars), fords (blue dots), landings (cyan diamonds). With

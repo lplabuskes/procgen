@@ -7,7 +7,7 @@ import pytest
 from region.upsample import SMALL_LAKE_KEY
 from settlegen.source import LocalMapsSource
 from settlegen.test.conftest import FRAME_TEXELS, settlement_params
-from settlegen.upsample import build_settlement_fields, settlement_conservation_report
+from settlegen.upsample import build_settlement_fields, clear_thin_land, settlement_conservation_report
 
 
 @pytest.fixture(scope="module")
@@ -78,3 +78,19 @@ def test_every_anchor_is_a_conserved_local_texel(seam, lake_local, neighbour_loc
     assert domain[seam.parent_anchors.reshape(-1)].all()
     owners = LocalMapsSource(maps, globe.antimeridian).owners()
     assert domain[owners[domain]].all()
+
+
+def test_thin_land_between_waters_goes_to_the_nearest_water():
+    sea = np.zeros((40, 40), dtype=np.uint8)
+    sea[:, :20] = 1
+    sea[5:35, 25:35] = 1                        # a bay, cut off from the sea by a 5-texel strip
+    sea[10, 10] = 0                             # a one-texel islet
+    lake = np.zeros((40, 40), dtype=np.uint8)
+    textures = {"ocean_mask": sea[None, ..., None], "lake_mask": lake[None, ..., None]}
+    clear_thin_land(textures, 15.0, 75.0)       # five texels: the strip stays
+    out = textures["ocean_mask"][0, ..., 0]
+    assert out[10, 10] == 1 and not out[20, 22]
+    clear_thin_land(textures, 15.0, 120.0)      # eight: it goes
+    assert textures["ocean_mask"][0, ..., 0][20, 22] == 1
+    # Wide land, even at the frame's edge, stays.
+    assert not textures["ocean_mask"][0, ..., 0][:, 36:].any()

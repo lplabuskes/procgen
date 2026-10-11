@@ -33,7 +33,9 @@ from realmgen.towns.types import TOWN_KIND_NAMES, Towns
 from region.upsample import RegionFields
 from settlegen.builder import SettlementMap
 from settlegen.chain import SettlementRef
+from settlegen.display import WATER_RGB, relief_legend, relief_rgba
 from worldgen.hydrology.discharge import EARTH_RADIUS_KM
+from worldgen.geology.display import ELEVATION_RECIPE
 from worldgen.resources.minerals import mineral_workings
 
 if TYPE_CHECKING:
@@ -91,6 +93,8 @@ class RegionView(QWidget):
         self._layer: Optional[str] = None
         self._spec: Optional[SchemeSpec] = None
         self._legend: Optional[tuple[str, list]] = None
+        # A settlement map's own legend for its layer (its relief), over the world's.
+        self._site_legend: Optional[tuple[str, list]] = None
         self._overlay_visible: dict[str, bool] = {}
         self._hex_images: list[QImage] = []
         # A local map's farmland, one image per hexagon (empty: none shown).
@@ -436,12 +440,18 @@ class RegionView(QWidget):
     def _rebuild_images(self) -> None:
         """Convert each hexagon's refined texture to a QImage for painting."""
         self._hex_images = []
+        self._site_legend = None
         if self._fields is None or self._spec is None:
             return
-        rgba = build_layer_texture(                                 # (M, T, T, 4)
-            self._fields, self._spec, self._globe.mesh if self._globe is not None else None,
-            river_segments=self._river_segments(),
-        )
+        if self._settlement is not None and self._spec.recipe is ELEVATION_RECIPE:
+            # Street scale: the frame's own relief, not the world's kilometres.
+            rgba = relief_rgba(self._fields)
+            self._site_legend = ("gradient", relief_legend(self._fields))
+        else:
+            rgba = build_layer_texture(                             # (M, T, T, 4)
+                self._fields, self._spec, self._globe.mesh if self._globe is not None else None,
+                river_segments=self._river_segments(),
+            )
         data = np.ascontiguousarray((rgba * 255.0).clip(0, 255).astype(np.uint8))
         m, h, w, _ = data.shape
         for i in range(m):
@@ -485,7 +495,8 @@ class RegionView(QWidget):
         W, H = float(self.width()), float(self.height())
         margin = 16.0
         legend_gap = 12.0
-        legend = self._legend if self._legend is not None and len(self._legend[1]) >= 2 else None
+        legend = self._site_legend or self._legend
+        legend = legend if legend is not None and len(legend[1]) >= 2 else None
         legend_w, legend_h = (
             legend_size(painter, legend[0], legend[1], H - 2.0 * margin) if legend else (0, 0)
         )
@@ -1081,13 +1092,18 @@ class RegionView(QWidget):
             painter.setPen(_cosmetic_pen(_FOOTPRINT_PEN))
             painter.setBrush(_BUILT_FILL)          # not the tier colour: some tiers are blue, as water
             painter.drawPath(_site_path(site.footprint, to_px))
+        # The sea and lakes as their smooth outlines (over the raster's texels); the channels
+        # in the same colour with the rivers overlay, so a river runs into its sea unbroken.
+        water = site.water
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(_WATER_FILL)
+        still = water.sea.union(water.lakes)
+        if not still.is_empty:
+            painter.drawPath(_site_path(still, to_px))
         if not self._overlay_visible.get("rivers", True):
             painter.restore()
             return
-        water = site.water
         if not water.channels.is_empty:
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(_CHANNEL_FILL)
             painter.drawPath(_site_path(water.channels, to_px))
         if not water.shorelines.is_empty:
             painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -1162,7 +1178,7 @@ class RegionView(QWidget):
         painter.restore()
 
 
-_CHANNEL_FILL = QColor(100, 180, 255, 220)      # the rivers overlay's colour
+_WATER_FILL = QColor.fromRgbF(*WATER_RGB)          # sea, lakes and channels (settlegen.display)
 _SHORE_PEN = QColor(40, 80, 140, 220)
 _FOOTPRINT_PEN = QColor(25, 22, 18, 235)        # as the local map's city footprints
 _BUILT_FILL = QColor(170, 140, 110, 215)

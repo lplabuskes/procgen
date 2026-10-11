@@ -9,7 +9,8 @@ from region.test.test_resources import globe  # noqa: F401  (fixture)
 from settlegen.chain import SettlementRef
 from realmgen.towns.types import Towns
 from settlegen.footprint import (
-    SettlementFootprintParams, _claim, base_density_per_ha, build_footprint, buildable_ground, site_slope, wet_texels,
+    SettlementFootprintParams, _claim, _crossing_extra, _holes, _notches, _small_islands, base_density_per_ha,
+    build_footprint, buildable_ground, site_slope, wet_texels,
 )
 from settlegen.frame import Frame
 from settlegen.test.conftest import inner_center, lake_hex, lake_local, region, settlement_params, side_km  # noqa: F401
@@ -25,6 +26,46 @@ def test_the_claim_takes_the_best_allowed_texels():
     assert claimed.sum() == 3 and not claimed[3, 3]
     assert claimed[3, :3].all()
     assert _claim(priority, allowed, 99).sum() == 15
+
+
+def test_holes_are_the_dry_ground_the_claim_encloses_not_islands_out_in_the_water():
+    claimed = np.zeros((9, 9), dtype=bool)
+    claimed[1:6, 1:6] = True
+    claimed[3, 3] = False                     # a hole in the claim
+    wet = np.zeros((9, 9), dtype=bool)
+    wet[6:9, 0:9] = True
+    wet[7, 7] = False                         # an island, enclosed by water alone
+    claimed[5, 2] = False                     # a notch on the shore: claim and water enclose it
+    holes = _holes(claimed, wet, 0.25)
+    assert holes[3, 3] and holes[5, 2] and not holes[7, 7]
+    assert holes.sum() == 2
+
+
+def test_ground_across_water_is_farther_by_the_crossing():
+    wet = np.zeros((60, 60), dtype=bool)
+    wet[:, 30:36] = True                                # a channel 6 texels (60 m) wide
+    extra = _crossing_extra(wet, 10.0, (30.0, 15.0), 3.0)
+    assert np.abs(extra[:, :25]).max() < 15.0           # this side: nothing to cross
+    # The far side: the channel's 60 m counted three times, give or take the coarse grid.
+    assert abs(float(np.median(extra[:, 40:])) - 120.0) < 40.0
+
+
+def test_only_islands_big_enough_are_built_on():
+    wet = np.zeros((40, 40), dtype=bool)
+    wet[:, 10:30] = True
+    wet[5:8, 15:18] = False                             # 9 texels
+    wet[20:30, 15:25] = False                           # 100
+    small = _small_islands(wet, 50.0)
+    assert small[6, 16] and not small[25, 20] and not small[0, 0] and not small[0, 35]
+
+
+def test_notches_narrower_than_the_disc_are_filled():
+    claimed = np.zeros((40, 40), dtype=bool)
+    claimed[5:35, 5:35] = True
+    claimed[5:25, 18:21] = False                        # a 3-texel notch from the top edge
+    wet = np.zeros_like(claimed)
+    filled = _notches(claimed, wet, 3)
+    assert filled[10:20, 18:21].all() and not filled[:5].any()
 
 
 @pytest.fixture(scope="module")
@@ -88,9 +129,14 @@ def test_a_footprint_claims_its_people_at_its_density_off_the_water_around_its_c
     px = (frame.side_m / fields.tex_size) ** 2
     assert fp.target == round(_people(site, 60) / fp.density_per_ha * 10_000.0 / px)
     wet = wet_texels(fields, frame, water)
-    assert fp.claimed.sum() == fp.target and not (fp.claimed & wet).any()
+    # The people: densely claimed, and the filled holes at their lower density.
+    held = fp.claimed.sum() + SettlementFootprintParams().hole_density_mult * fp.holes.sum()
+    assert abs(held - fp.target) <= 1 and not ((fp.claimed | fp.holes) & wet).any()
     assert fp.polygon.is_valid and not fp.polygon.is_empty
-    assert abs(fp.polygon.area - fp.target * px) < 0.05 * fp.target * px
+    built = (fp.claimed | fp.holes).sum() * px
+    # (A ~60-texel claim on a 32-texel frame: the tracing rounds its small pieces at the shore.)
+    assert abs(fp.polygon.area - built) < 0.1 * built
+    assert fp.sparse.area <= fp.polygon.area * (1 + 1e-9)
     still = shapely.union_all([water.sea, water.lakes])
     assert fp.polygon.intersection(still).area < 1e-6 * fp.polygon.area
     # Nearest first: what it claimed is nearer its centre than the dry ground it left.

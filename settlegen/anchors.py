@@ -34,7 +34,7 @@ from region.upsample import RegionFields
 from settlegen.footprint import site_slope
 from settlegen.frame import Frame
 from settlegen.roads import SiteRoads
-from settlegen.water import SiteWater, channel_polygons
+from settlegen.water import SiteWater
 
 AnchorKind = Literal["citadel", "market", "waterfront", "sacred"]
 ANCHOR_KINDS: tuple[AnchorKind, ...] = ("citadel", "market", "waterfront", "sacred")
@@ -178,8 +178,7 @@ def build_anchor_candidates(
     by_kind["market"] = _pick("market", pts, score, details, params)
 
     # ── waterfront: the footprint's edge along the water ──
-    channels = channel_polygons(water.lines, frame.box())
-    wet = shapely.union_all([water.sea, water.lakes, channels])
+    wet = shapely.union_all([water.sea, water.lakes, water.channels])
     if not wet.is_empty:
         edge = footprint.boundary.intersection(wet.buffer(float(params.waterfront_reach_m)))
         pts = _along(edge, spacing)

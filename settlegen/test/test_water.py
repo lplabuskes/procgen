@@ -1,6 +1,8 @@
 """A site's water: polygons from the refined masks, rivers chained across map seams."""
 import numpy as np
 import pytest
+import shapely
+from shapely.geometry import MultiPolygon, box
 
 from localmap.test.test_store import REGION_ID, small_store
 from region.geometry import ecef_to_cell
@@ -11,7 +13,9 @@ from settlegen.builder import build_settlement_map
 from settlegen.chain import SettlementRef
 from settlegen.params import SettlementMapParams
 from settlegen.upsample import SettlementUpsampleParams
-from settlegen.water import _chain, _Piece
+from settlegen.water import (
+    RiverLine, SettlementRiverParams, _chain, _Piece, _tidy_ends, natural_channels, shorelines,
+)
 
 
 def _piece(points, map_index, ids, starts=True, ends=True):
@@ -90,3 +94,105 @@ def test_lake_polygons_follow_the_refined_mask(globe, lake_local, inner_center, 
     assert (inside == lake).mean() > 0.995
     shore = shorelines(lakes, frame)
     assert shore.length > 0.0
+
+
+def _river(width, length=6000.0, wet_tail=0):
+    xy = np.column_stack([np.linspace(0.0, length, 61), np.zeros(61)])
+    in_water = np.zeros(60, dtype=bool)
+    if wet_tail:
+        in_water[-wet_tail:] = True
+    return RiverLine(xy=xy, flows=np.ones(60), width_m=np.full(60, float(width)), in_water=in_water, minor=False)
+
+
+def test_a_wide_river_gets_islands_inside_a_channel_widened_round_them():
+    params = SettlementRiverParams(islands_per_km=2.0, width_wander=0.0, bank_wander=0.0)
+    line = _river(200.0)
+    channel = natural_channels([line], MultiPolygon(), params)
+    assert channel.is_valid
+    islands = [ring for poly in channel.geoms for ring in poly.interiors]
+    assert islands
+    # Beside each island both arms keep about the river's width.
+    for ring in islands:
+        isle = shapely.Polygon(ring)
+        c = isle.centroid
+        across = shapely.LineString([(c.x, -1000.0), (c.x, 1000.0)]).intersection(channel)
+        assert across.length > 0.8 * 200.0
+    assert natural_channels([line], MultiPolygon(), params).equals(channel)      # the same every time
+    assert not any(p.interiors for p in natural_channels([_river(30.0)], MultiPolygon(), params).geoms)
+
+
+class _Frame:
+    """Stands in for a frame: its box."""
+
+    def box(self):
+        return box(-9000.0, -9000.0, 9000.0, 9000.0)
+
+
+def test_a_channel_runs_into_its_sea_with_no_shore_across_its_mouth():
+    frame = _Frame()
+    # The river's last stretch is under the sea in the parent, which starts at x = 5000 here.
+    line = _river(100.0, wet_tail=12)
+    sea = MultiPolygon([box(5000.0, -3000.0, 9000.0, 3000.0)])
+    params = SettlementRiverParams(islands_per_km=0.0)
+    channel = natural_channels([line], sea, params)
+    assert channel.intersection(sea).area < 1e-6 * channel.area
+    assert channel.distance(sea) < 1e-6
+    shore = shorelines(sea, frame, channel)  # type: ignore[arg-type]
+    mouth = box(4990.0, -30.0, 5010.0, 30.0)
+    assert shore.intersection(mouth).length < 1e-6
+    assert shorelines(sea, frame).intersection(mouth).length > 0  # type: ignore[arg-type]
+
+
+def test_islands_are_long_narrow_and_along_the_river():
+    params = SettlementRiverParams(islands_per_km=2.0, width_wander=0.0, bank_wander=0.0)
+    channel = natural_channels([_river(200.0)], MultiPolygon(), params)
+    for ring in (r for poly in channel.geoms for r in poly.interiors):
+        x0, y0, x1, y1 = shapely.Polygon(ring).bounds
+        assert x1 - x0 > 3.0 * (y1 - y0)         # the river runs along x
+        assert abs(0.5 * (y0 + y1)) < 0.1 * 200.0  # in the channel's middle
+
+
+def _line(xy):
+    xy = np.asarray(xy, dtype=float)
+    k = len(xy) - 1
+    return RiverLine(xy=xy, flows=np.ones(k), width_m=np.full(k, 50.0), in_water=np.zeros(k, bool), minor=False)
+
+
+def test_an_end_hooking_back_in_at_the_frames_edge_is_cut_where_it_leaves():
+    # Starts inside, runs out past x = 1000 and turns back in.
+    hooked = _line([[900.0, 0.0], [980.0, 0.0], [1050.0, 30.0], [980.0, 80.0], [500.0, 100.0], [-1200.0, 100.0]])
+    out = _tidy_ends(hooked, 1000.0)
+    assert np.allclose(out.xy[0], [1050.0, 30.0]) and len(out.flows) == len(out.xy) - 1
+    assert np.allclose(out.xy[-1], [-1200.0, 100.0])
+
+
+def test_an_end_left_just_inside_is_carried_out_past_the_edge():
+    short = _line([[-200.0, 0.0], [700.0, 0.0], [950.0, 0.0]])
+    out = _tidy_ends(short, 1000.0)
+    assert out.xy[-1][0] > 1000.0 and len(out.width_m) == len(out.xy) - 1
+    assert np.allclose(out.xy[0], [-200.0, 0.0])                 # far from the edge: left alone
+
+
+def test_a_river_ending_short_of_the_sea_runs_on_into_it_and_a_source_does_not():
+    # Ends 60 m short of a sea whose shore runs aslant (x = 5000 + y / 2).
+    line = _river(100.0, length=4940.0)
+    sea = MultiPolygon([shapely.Polygon([(5000.0, 0.0), (6500.0, 3000.0), (9000.0, 3000.0), (9000.0, -3000.0),
+                                         (3500.0, -3000.0)])])
+    params = SettlementRiverParams(islands_per_km=0.0, width_wander=0.0, bank_wander=0.0)
+    channel = natural_channels([line], sea, params)
+    # No land left between the channel and the sea across its mouth.
+    mouth = shapely.box(4800.0, -30.0, 5100.0, 30.0).difference(sea)
+    assert mouth.difference(channel).area < 0.01 * mouth.area
+    # The source (x = 0, far from anything) stops there.
+    assert channel.bounds[0] > -60.0
+
+
+def test_a_wide_rivers_course_is_smoothed_over_its_width():
+    # A sharp zig-zag in a 300 m wide river: the smoothed channel has no ballooned lobe.
+    xy = np.array([[0.0, 0.0], [1000.0, 0.0], [1150.0, 300.0], [1300.0, 0.0], [3000.0, 0.0]])
+    line = RiverLine(xy=xy, flows=np.ones(4), width_m=np.full(4, 300.0), in_water=np.zeros(4, bool), minor=False)
+    params = SettlementRiverParams(islands_per_km=0.0, width_wander=0.0, bank_wander=0.0)
+    smooth = natural_channels([line], MultiPolygon(), params)
+    raw = natural_channels([line], MultiPolygon(), SettlementRiverParams(
+        islands_per_km=0.0, width_wander=0.0, bank_wander=0.0, course_smoothing=0.0))
+    assert smooth.bounds[3] < raw.bounds[3] - 50.0
