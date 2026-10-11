@@ -625,21 +625,33 @@ def stream_stems(streams: StreamNetwork, river_texels: Optional[list]) -> tuple[
     is numbered on from the rivers, ``len(river_texels) + k``, so one id space covers
     both (a stem's last node is its confluence: the stem it joins keeps it).
     """
+    stems, ids = _stems_and_ids(streams, river_texels)
+    paths = []
+    for path in stems:
+        nodes = np.asarray(path, dtype=np.int64)
+        smooth = laplacian_smooth_sphere(list(streams.positions[nodes]), iterations=8, alpha=0.5)
+        flows = np.maximum.accumulate(streams.flow[nodes[:-1]].astype(np.float64))
+        paths.append((np.stack(smooth).astype(np.float32), flows.astype(np.float32)))
+    return paths, ids
+
+
+def stream_stem_ids(streams: StreamNetwork, river_texels: Optional[list]) -> np.ndarray:
+    """:func:`stream_stems`' ``ids`` alone (without smoothing the stems' polylines)."""
+    return _stems_and_ids(streams, river_texels)[1]
+
+
+def _stems_and_ids(streams: StreamNetwork, river_texels: Optional[list]) -> tuple[list, np.ndarray]:
+    """The stems' node paths and :func:`stream_stems`' ``ids``."""
     ids = stream_river_ids(streams, river_texels)
     base = len(river_texels or [])
     channel = streams.channel & (ids < 0)
     if not channel.any():
         return [], ids
     stems = main_stem_paths(streams.receiver, streams.flow.astype(np.float64), channel, streams.stop, min_nodes=2)
-    paths = []
     for k, path in enumerate(stems):
-        nodes = np.asarray(path, dtype=np.int64)
-        ids[nodes[:-1]] = base + k
-        smooth = laplacian_smooth_sphere(list(streams.positions[nodes]), iterations=8, alpha=0.5)
-        flows = np.maximum.accumulate(streams.flow[nodes[:-1]].astype(np.float64))
-        paths.append((np.stack(smooth).astype(np.float32), flows.astype(np.float32)))
+        ids[np.asarray(path, dtype=np.int64)[:-1]] = base + k
     # A stem's end on a sink is its own.
     for k, path in enumerate(stems):
         if ids[path[-1]] < 0:
             ids[path[-1]] = base + k
-    return paths, ids
+    return stems, ids

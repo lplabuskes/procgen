@@ -4,8 +4,8 @@ Features are stored as ECEF unit vectors; each view supplies an
 :class:`OverlayProjector` mapping them to its screen, so styling lives here once.
 
 Marker sizes, line widths and arrow lengths scale with ``projector.zoom`` (the
-world-map-equivalent zoom).  Rivers instead use ``view_zoom``, or their physical
-width on a local map (``px_per_km``).
+world-map-equivalent zoom).  Rivers and polity borders instead use ``view_zoom`` (rivers at their physical
+width on a local map, ``px_per_km``).
 """
 from __future__ import annotations
 
@@ -606,6 +606,9 @@ def _discharge_scale(globe: "World") -> float:
 _MIN_PHYSICAL_RIVER_PX = 1.0
 # Region-view rivers are drawn this much heavier than the world map's.
 _REGION_RIVER_SCALE = 1.5
+# Polity borders are drawn this much heavier on region / local maps than on the world map's.
+_REGION_BORDER_SCALE = 1.25
+_LOCAL_BORDER_SCALE = 1.5
 
 
 def _river_widths(flows: np.ndarray, max_flow: float, proj: OverlayProjector, discharge_scale: float) -> np.ndarray:
@@ -741,6 +744,15 @@ def _draw_polity_borders(painter: QPainter, globe: "World", proj: OverlayProject
             return 1.2, 140
         return 0.7, 75
 
+    # Each map level on its own zoom, a little heavier per level down.
+    if proj.px_per_km is not None:
+        level_scale = _LOCAL_BORDER_SCALE
+    elif proj.regional:
+        level_scale = _REGION_BORDER_SCALE
+    else:
+        level_scale = 1.0
+    zoom_scale = proj.view_zoom ** 0.3 * level_scale
+
     # Deeper (fainter) borders first so sovereign borders render on top.
     for depth in sorted(borders_by_depth.keys(), reverse=True):
         segs: np.ndarray = borders_by_depth[depth]
@@ -751,7 +763,7 @@ def _draw_polity_borders(painter: QPainter, globe: "World", proj: OverlayProject
             continue
         width, alpha = _style(depth)
         pen = QPen(QColor(0, 0, 0, alpha))
-        pen.setWidthF(width * proj.zoom ** 0.3)
+        pen.setWidthF(width * zoom_scale)
         painter.setPen(pen)
         for i in np.flatnonzero(keep):
             _line(painter, float(sx0[i]), float(sy0[i]), float(sx1[i]), float(sy1[i]))

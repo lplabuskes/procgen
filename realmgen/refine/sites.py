@@ -43,23 +43,39 @@ def _box_mean(values: np.ndarray, weights: np.ndarray) -> np.ndarray:
 
 def densify_polylines(polylines, max_step: float) -> Optional[np.ndarray]:
     """All vertices of ``polylines`` plus interpolated points so no gap exceeds
-    ``max_step`` (chord). ``None`` when there are no points."""
-    chunks: list[np.ndarray] = []
-    for pts in polylines:
-        pts = np.asarray(pts, dtype=np.float64)
-        if pts.ndim != 2 or pts.shape[0] == 0:
-            continue
-        chunks.append(pts)
-        if pts.shape[0] < 2 or max_step <= 0:
-            continue
-        a, b = pts[:-1], pts[1:]
-        n_sub = np.ceil(np.linalg.norm(b - a, axis=1) / max_step).astype(np.int64)
-        for k in np.flatnonzero(n_sub > 1):
-            t = (np.arange(1, n_sub[k]) / n_sub[k])[:, None]
-            chunks.append(a[k] + t * (b[k] - a[k]))
-    if not chunks:
+    ``max_step`` (chord). ``None`` when there are no points.
+
+    Per polyline: its vertices, then each split segment's interior points
+    ``1/n … (n-1)/n`` in turn.  Vectorised over all polylines at once.
+    """
+    lines = [p for p in (np.asarray(x, dtype=np.float64) for x in polylines) if p.ndim == 2 and p.shape[0] > 0]
+    if not lines:
         return None
-    return np.concatenate(chunks, axis=0)
+    sizes = np.array([len(p) for p in lines], dtype=np.int64)
+    pts = np.concatenate(lines, axis=0)
+    if max_step <= 0 or len(pts) < 2:
+        return pts
+    line_of = np.repeat(np.arange(len(lines)), sizes)
+    # Segments between consecutive vertices of one polyline.
+    seg_ok = line_of[:-1] == line_of[1:]
+    a, b = pts[:-1], pts[1:]
+    n_sub = np.ceil(np.linalg.norm(b - a, axis=1) / max_step).astype(np.int64)
+    count = np.where(seg_ok & (n_sub > 1), n_sub - 1, 0)
+    if not count.any():
+        return pts
+    # Output rows: each polyline's vertices, then its interior points.
+    interior = np.bincount(line_of[:-1], weights=count, minlength=len(lines)).astype(np.int64)
+    start = np.cumsum(sizes + interior) - (sizes + interior)
+    out = np.empty((int((sizes + interior).sum()), 3))
+    out[start[line_of] + (np.arange(len(pts)) - np.repeat(np.cumsum(sizes) - sizes, sizes))] = pts
+    split = np.flatnonzero(count)
+    seg = np.repeat(split, count[split])
+    step = np.arange(len(seg)) - np.repeat(np.cumsum(count[split]) - count[split], count[split]) + 1
+    t = (step / n_sub[seg])[:, None]
+    # Rank of each interior point within its polyline's interior block.
+    rank = np.arange(len(seg)) - (np.cumsum(interior) - interior)[line_of[seg]]
+    out[start[line_of[seg]] + sizes[line_of[seg]] + rank] = a[seg] + t * (b[seg] - a[seg])
+    return out
 
 
 def _build_confluence_tree(rivers, search_radius: float = 0.01) -> Optional[KDTree]:

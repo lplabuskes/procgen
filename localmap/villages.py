@@ -28,7 +28,7 @@ from realmgen.towns.placement import SPACING_EXPONENT, draw_town_sizes
 from region.resources import refined_slope
 from region.rivers import RegionRivers
 from region.roads import RegionRoads
-from region.towns import _neighbour_any, _river_points
+from region.towns import _near, _neighbour_any, _river_points
 from region.upsample import EARTH_RADIUS_KM, RegionFields
 
 VILLAGE_FARM, VILLAGE_RIVER, VILLAGE_COAST, VILLAGE_ROAD, VILLAGE_MINING = range(5)
@@ -135,14 +135,14 @@ def place_villages(
     if rivers is not None and len(cand_pos):
         river_pts = _river_points(rivers, 0.5 * spacing, streams=True)
         if river_pts is not None:
-            near_river = KDTree(river_pts).query(cand_pos, workers=-1)[0] < _chord(p.water_reach_km)
+            near_river = _near(KDTree(river_pts), cand_pos, _chord(p.water_reach_km))
         if len(rivers.confluences):
-            confluence = KDTree(rivers.confluences).query(cand_pos, workers=-1)[0] < _chord(p.water_reach_km)
+            confluence = _near(KDTree(rivers.confluences), cand_pos, _chord(p.water_reach_km))
     near_road = np.zeros(len(cand_pos), dtype=bool)
     if roads is not None and roads.polylines and len(cand_pos):
         road_pts = densify_polylines(roads.polylines, 0.5 * spacing)
         if road_pts is not None:
-            near_road = KDTree(road_pts).query(cand_pos, workers=-1)[0] < _chord(p.road_reach_km)
+            near_road = _near(KDTree(road_pts), cand_pos, _chord(p.road_reach_km))
     slope = refined_slope(tex["elevation"][..., 0], np.sqrt(local.texel_area_km2))[dry]
     slope_n = np.clip(slope / max(float(p.slope_saturation), 1e-9), 0.0, 1.0)
 

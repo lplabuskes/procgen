@@ -673,8 +673,8 @@ class RegionView(QWidget):
 
         Overlays size markers and lines by zoom; world zoom 1 spans 2π of longitude across the width.
         A settlement map sizes them as its local map does at the same view zoom: ~70× the
-        local scale would draw borders and markers tens of pixels wide.  (Physical widths,
-        such as river channels, use :meth:`_px_per_rad` itself.)
+        local scale would draw town, city and fort markers several times too big.  (Polity
+        borders go by ``view_zoom``; physical widths, such as river channels, by :meth:`_px_per_rad`.)
         """
         px_per_rad = self._px_per_rad(size)
         if self._settlement is not None and self._geometry is not None:

@@ -146,6 +146,13 @@ def smooth_land(elevation: np.ndarray, water: np.ndarray, sigma_nodes: float) ->
     return np.where(land, out, e)
 
 
+def _label_max(values: np.ndarray, labels: np.ndarray, k: int) -> np.ndarray:
+    """``(k,)`` maximum of ``values`` over each label ``1..k`` (``ndimage.maximum``, without its sort)."""
+    out = np.full(k + 1, -np.inf)
+    np.maximum.at(out, labels, np.asarray(values, dtype=np.float64))
+    return out[1:]
+
+
 def basin_lake_levels(
     elevation: np.ndarray, outlet: np.ndarray, n: int, *,
     runoff: Optional[np.ndarray] = None, evaporation: Optional[np.ndarray] = None,
@@ -172,10 +179,10 @@ def basin_lake_levels(
         return out
     labels = labels.ravel()
     ids = np.arange(1, k + 1)
-    spill = np.asarray(ndimage.maximum(filled, labels, ids), dtype=np.float64)
+    spill = _label_max(filled, labels, k)
     level = spill.copy()
     if runoff is not None and evaporation is not None:
-        inflow = np.asarray(ndimage.maximum(accumulate(parent, order, np.where(outlet, 0.0, runoff)), labels, ids))
+        inflow = _label_max(accumulate(parent, order, np.where(outlet, 0.0, runoff)), labels, k)
         loss = np.asarray(ndimage.sum(evaporation, labels, ids))
         nodes_of = ndimage.value_indices(labels.reshape(n, n), ignore_value=0) if np.any(inflow < loss) else {}
         for i in np.flatnonzero(inflow < loss):
@@ -188,7 +195,7 @@ def basin_lake_levels(
     node_level = np.where(labels > 0, level[np.maximum(labels, 1) - 1], -np.inf)
     wet = node_level > elevation
     # Breached: too shallow or too small.
-    depth = np.asarray(ndimage.maximum(np.where(wet, node_level - elevation, 0.0), labels, ids))
+    depth = _label_max(np.where(wet, node_level - elevation, 0.0), labels, k)
     size = np.bincount(labels[wet], minlength=k + 1)[1:]
     keep = (depth >= float(min_depth)) & (size >= int(min_nodes)) & (depth > 0.0)
     if max_nodes > 0:

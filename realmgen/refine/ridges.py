@@ -26,7 +26,7 @@ from realmgen.refine.borders import _chain_edges, _icosphere_lattice, _lattice_l
 from realmgen.refine.fill import WATER
 from worldgen.geology.channels import ELEVATION, OCEAN_MASK
 from worldgen.hydrology.channels import DRAINAGE_LANDING, FILLED_HEIGHT, LAKE_MASK
-from worldgen.hydrology.rivers import stream_stems
+from worldgen.hydrology.rivers import stream_stem_ids
 from worldgen.hydrology.types import StreamNetwork, laplacian_smooth_sphere
 
 # The basin of texels draining to the sea / an endorheic sink before any channel.
@@ -48,7 +48,7 @@ def basin_texels(mesh, streams: StreamNetwork, river_texels: Optional[list],
     ``stem_ids`` its ids, already computed), ``COASTAL`` without one; and its height
     (km), 0 for the coastal basin."""
     landing = np.rint(np.asarray(DRAINAGE_LANDING.read(mesh), dtype=np.float64).reshape(-1)).astype(np.int64)
-    ids = stream_stems(streams, river_texels)[1] if stem_ids is None else stem_ids
+    ids = stream_stem_ids(streams, river_texels) if stem_ids is None else stem_ids
     basin = np.full(landing.size, COASTAL, dtype=np.int64)
     if len(streams):
         order = np.argsort(streams.nodes, kind="stable")

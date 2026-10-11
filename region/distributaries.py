@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
-from scipy.ndimage import distance_transform_edt
+from scipy.spatial import KDTree
 
 from core.params import field, param_field as _f, paramclass
 from region.corridor import (
@@ -214,16 +214,25 @@ def _route_branch(
     s = raster.lo + raster.step * cols
     t = raster.lo + raster.step * rows
 
-    near = np.exp(-np.asarray(distance_transform_edt(~occupied.reshape(n, n))).reshape(-1) / 2.0)
-    gr, gc = np.divmod(np.arange(n * n), n)
-    leaving = np.hypot(gr - sr, gc - sc) <= 3.0           # free to leave its parent
-    cost = base_cost * (1.0 + float(params.separation) * np.where(leaving, 0.0, near))
-    # Off every other channel but the node it leaves from.
-    cost = np.where(blocked, cost * CROSS_COST, cost)
-    cost[start] = base_cost[start]
+    # Node costs on the corridor only (the same nodes on every call); the distance to the
+    # nearest channel node is the exact Euclidean transform of ~occupied, read where needed.
+    occ_tree = KDTree(np.column_stack(np.divmod(np.flatnonzero(occupied), n)))
+    memo: dict[str, np.ndarray] = {}
+
+    def node_cost(sub: np.ndarray) -> np.ndarray:
+        if "sub" not in memo or memo["sub"] is not sub:
+            gr, gc = np.divmod(sub, n)
+            near = np.exp(-occ_tree.query(np.column_stack([gr, gc]), workers=-1)[0] / 2.0)
+            leaving = np.hypot(gr - sr, gc - sc) <= 3.0           # free to leave its parent
+            cost = base_cost[sub] * (1.0 + float(params.separation) * np.where(leaving, 0.0, near))
+            # Off every other channel but the node it leaves from.
+            cost = np.where(blocked[sub], cost * CROSS_COST, cost)
+            cost[sub == start] = base_cost[start]
+            memo["sub"], memo["cost"] = sub, cost
+        return memo["cost"]
 
     def edge_cost(sub: np.ndarray, a: np.ndarray, b: np.ndarray, step: np.ndarray) -> np.ndarray:
-        c = cost[sub]
+        c = node_cost(sub)
         ok = raster.sampled[sub]
         out = step * 0.5 * (c[a] + c[b])
         return np.where(ok[a] & ok[b], out, np.inf)
@@ -239,8 +248,9 @@ def _route_branch(
 
 def _fan_branches(
     fields: RegionFields, globe: "World", rivers: "RegionRivers", fan, fan_index: int,
-    lo: float, step: float, n: int, params: "RegionRiverParams",
+    lo: float, step: float, n: int, params: "RegionRiverParams", river_masks: dict,
 ) -> list["RiverPath"]:
+    """``fan``'s distributaries.  ``river_masks`` holds ``rivers``' raster masks, shared across fans."""
     from region.rivers import _hidden_nodes, _to_path, meet_line
 
     dp: DistributaryParams = params.distributaries
@@ -319,15 +329,17 @@ def _fan_branches(
     main_b = bearing(int(stem[-1]))
     share = (1.0 - float(dp.main_share)) / max(len(mouths), 1)
     channels = [_Channel(nodes=stem, mouth_share=float(dp.main_share), parent=-1, children=[])]
-    occupied = np.zeros(n * n, dtype=bool)
-    # Occupied plus the corners of its diagonal steps (no branch slips across between nodes).
-    blocked = np.zeros(n * n, dtype=bool)
-    for pos, _, _ in rivers.paths:
-        nodes = _path_nodes(raster, fields, pos)
-        on = nodes >= 0
-        occupied[nodes[on]] = True
-        blocked[diagonal_corners(n, nodes, on[:-1] & on[1:])] = True
-    blocked |= occupied
+    if "occupied" not in river_masks:          # the same for every fan on this raster frame
+        occupied = np.zeros(n * n, dtype=bool)
+        # Occupied plus the corners of its diagonal steps (no branch slips across between nodes).
+        blocked = np.zeros(n * n, dtype=bool)
+        for pos, _, _ in rivers.paths:
+            nodes = _path_nodes(raster, fields, pos)
+            on = nodes >= 0
+            occupied[nodes[on]] = True
+            blocked[diagonal_corners(n, nodes, on[:-1] & on[1:])] = True
+        river_masks["occupied"], river_masks["blocked"] = occupied, blocked | occupied
+    occupied, blocked = river_masks["occupied"].copy(), river_masks["blocked"].copy()
     base_cost = _node_cost(raster, plain, dp)
     junctions: list[int] = []
     for side in (-1.0, 1.0):
@@ -399,8 +411,9 @@ def add_distributaries(
     s, t, valid = fields.geometry.ecef_to_local(apexes)
     here = valid & (s >= lo) & (s <= hi) & (t >= lo) & (t <= hi)
     branches: list["RiverPath"] = []
+    river_masks: dict = {}
     for i in np.flatnonzero(here):
-        branches.extend(_fan_branches(fields, globe, rivers, fans[int(i)], int(i), lo, step, n, params))
+        branches.extend(_fan_branches(fields, globe, rivers, fans[int(i)], int(i), lo, step, n, params, river_masks))
     if not branches:
         return rivers
     ends = np.array([b[0][-1] for b in branches], dtype=np.float64).reshape(-1, 3)

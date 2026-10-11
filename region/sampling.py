@@ -21,6 +21,11 @@ except ImportError:  # pragma: no cover - numba is an optional accelerator
     def njit(func=None, **_):  # type: ignore[misc]
         return func if func is not None else (lambda f: f)
 
+try:
+    from region import _kernels
+except ImportError:  # pragma: no cover - numba is an optional accelerator
+    _kernels = None  # type: ignore[assignment]
+
 if TYPE_CHECKING:
     from core.mesh import PolygonMesh
 
@@ -48,6 +53,10 @@ def bilinear_read(texture: np.ndarray, plan: tuple[np.ndarray, np.ndarray, np.nd
     """``(P, C)`` float64 bilinear read of an ``(N, H, W, C)`` texture along a :func:`bilinear_plan`."""
     corners, fx, fy = plan
     flat = texture.reshape(-1, texture.shape[3])
+    if _kernels is not None:
+        if flat.dtype == np.float16:            # numba has no float16: decode its bits
+            return _kernels.bilinear_read_f16(flat.view(np.uint16), corners, fx, fy)
+        return _kernels.bilinear_read(flat, corners, fx, fy)
     t00, t01, t10, t11 = (flat[k].astype(np.float64) for k in corners)
     top = t00 * (1.0 - fx) + t01 * fx
     bot = t10 * (1.0 - fx) + t11 * fx
@@ -189,20 +198,39 @@ def settle_owners(owner: np.ndarray) -> np.ndarray:
     return rep
 
 
+def anchor_plan(anchors: np.ndarray, n_anchors: int) -> tuple[np.ndarray, np.ndarray]:
+    """``(order, indptr)``: each anchor's texels, in index order, for repeated :func:`anchor_means`.
+
+    ``order`` is ``np.argsort(anchors, kind="stable")``, by counting sort.
+    """
+    anchors = np.asarray(anchors, dtype=np.int64)
+    indptr = np.zeros(int(n_anchors) + 1, dtype=np.int64)
+    np.cumsum(np.bincount(anchors, minlength=n_anchors), out=indptr[1:])
+    if _kernels is None:
+        return np.argsort(anchors, kind="stable"), indptr
+    return _kernels.counting_order(anchors, indptr), indptr
+
+
 def anchor_means(
     values: np.ndarray, anchors: np.ndarray, weights: np.ndarray, n_anchors: int,
-    counts: Optional[np.ndarray] = None,
+    counts: Optional[np.ndarray] = None, plan: Optional[tuple[np.ndarray, np.ndarray]] = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Per-anchor weighted mean of ``(P, C)`` values → ``((n_anchors, C), counts)``.
 
     ``weights`` is the ``(P,)`` inclusion weight (0 for over-hang).  Anchors with
     no weight get mean and count 0; callers must leave those uncorrected.
-    ``counts`` may be passed if already known.
+    ``counts`` may be passed if already known; ``plan`` (:func:`anchor_plan` of
+    ``anchors``) sums the anchors in parallel, each in the same order.
     """
     vals = np.asarray(values, dtype=np.float64)
     if vals.ndim == 1:
         vals = vals[:, None]
     w = np.asarray(weights, dtype=np.float64)
+    if plan is not None and _kernels is not None:
+        sums, plan_counts = _kernels.planned_anchor_sums(vals, w, plan[0], plan[1])
+        counts = plan_counts if counts is None else counts
+        safe = np.maximum(counts, 1e-12)[:, None]
+        return sums / safe, counts
     if counts is None:
         counts = np.bincount(anchors, weights=w, minlength=n_anchors)
     sums = _weighted_anchor_sums(vals, np.asarray(anchors, dtype=np.int64), w, int(n_anchors))
@@ -219,3 +247,17 @@ def _weighted_anchor_sums(vals, anchors, w, n_anchors):  # pragma: no cover - co
         for k in range(vals.shape[1]):
             sums[a, k] += w[p] * vals[p, k]
     return sums
+
+
+def stencil_read(weights: np.ndarray, idx: np.ndarray, values: np.ndarray) -> np.ndarray:
+    """``(P, C)`` ``Σ_k weights[p, k] · values[idx[p, k]]``, bit-identical to
+    ``np.einsum("pk,pkc->pc", weights, values[idx])`` without the ``(P, K, C)`` gather.
+
+    For ``C > 1`` einsum accumulates ``k`` in order with fused multiply-adds, which
+    :func:`region._kernels.stencil_read` repeats; its one-channel loop is SIMD-laned, so stays on einsum.
+    """
+    vals = np.asarray(values, dtype=np.float64)
+    if _kernels is None or vals.shape[1] == 1:
+        return np.einsum("pk,pkc->pc", weights, vals[idx])
+    return _kernels.stencil_read(np.ascontiguousarray(weights, dtype=np.float64),
+                                 np.ascontiguousarray(idx, dtype=np.int64), np.ascontiguousarray(vals))

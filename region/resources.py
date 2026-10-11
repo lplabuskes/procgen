@@ -20,13 +20,22 @@ line up with the terrain.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 from scipy.spatial import KDTree
 
-from region.sampling import anchor_means
+from region.sampling import anchor_means, anchor_plan
+
+try:
+    from numba import njit
+    _HAVE_NUMBA = True
+except ImportError:  # pragma: no cover - numba is an optional accelerator
+    _HAVE_NUMBA = False
+
+    def njit(func=None, **_):  # type: ignore[misc]
+        return func if func is not None else (lambda f: f)
 from region.smooth import FaceFanField
 
 if TYPE_CHECKING:
@@ -49,9 +58,9 @@ class RefineContext:
 
     source: "ParentSource"
     located: "Located"
-    anchors: np.ndarray
+    anchors: np.ndarray          # (P,) each texel's anchor as a group label (Located.groups)
     weights: np.ndarray          # in-hexagon inclusion weight
-    n_anchors: int
+    n_anchors: int               # number of labels
     shape: tuple[int, int, int]
     positions: np.ndarray        # (P, 3)
     elevation: np.ndarray        # refined, km
@@ -63,6 +72,13 @@ class RefineContext:
     mine_points: Optional[np.ndarray] = None   # (K, 3) worked deposits
     # (temperature, precipitation) as averaged for the biome; None to average here.
     climate_avg: Optional[tuple[np.ndarray, np.ndarray]] = None
+    _plan: Optional[tuple[np.ndarray, np.ndarray]] = field(default=None, init=False, repr=False)
+
+    def means(self, values: np.ndarray, weights: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """:func:`anchor_means` over this map's anchors (their :func:`anchor_plan` built once)."""
+        if self._plan is None:
+            self._plan = anchor_plan(self.anchors, self.n_anchors)
+        return anchor_means(values, self.anchors, weights, self.n_anchors, plan=self._plan)
 
     def has(self, key: str) -> bool:
         return self.source.has(key)
@@ -87,7 +103,7 @@ class RefineContext:
         down.  Needed for targets near 1, which the rounds only approach geometrically.
         """
         w = self.weights * mask
-        means, counts = anchor_means(values, self.anchors, w, self.n_anchors)
+        means, counts = self.means(values, w)
         m = means[self.anchors, 0]
         t = np.clip(targets, 0.0, 1.0)
         ok = counts[self.anchors] > 0.0
@@ -104,7 +120,7 @@ class RefineContext:
         Groups with no ``mask`` texel, or a ~0 mean, are left alone.
         """
         w = self.weights * mask
-        means, counts = anchor_means(values, self.anchors, w, self.n_anchors)
+        means, counts = self.means(values, w)
         m = means[self.anchors, 0]
         ok = (counts[self.anchors] > 0.0) & (np.abs(m) > 1e-12)
         return values * np.where(ok, targets / np.where(ok, m, 1.0), 1.0)
@@ -126,6 +142,8 @@ def _spread_into(values: np.ndarray, where: np.ndarray, shape: tuple[int, int, i
     """Fill NaN ``values`` inside ``where`` from known 4-neighbours, a ring per pass; flat ``(P,)``."""
     v = values.reshape(shape).copy()
     inside = where.reshape(shape)
+    if _HAVE_NUMBA:
+        return _spread_njit(np.ascontiguousarray(v, dtype=np.float64), np.ascontiguousarray(inside), passes).reshape(-1)
     for _ in range(passes):
         todo = np.isnan(v) & inside
         if not todo.any():
@@ -139,9 +157,40 @@ def _spread_into(values: np.ndarray, where: np.ndarray, shape: tuple[int, int, i
     return v.reshape(-1)
 
 
+@njit(cache=True)
+def _spread_njit(v, inside, passes):  # pragma: no cover - compiled
+    """:func:`_spread_into`'s passes visiting only the texels left to fill (same sums, same order)."""
+    m, h, w = v.shape
+    for _ in range(passes):
+        nxt = v.copy()
+        todo = False
+        for i in range(m):
+            for r in range(h):
+                for c in range(w):
+                    if not (inside[i, r, c] and np.isnan(v[i, r, c])):
+                        continue
+                    todo = True
+                    # Neighbours above, below, left, right (NaN past the texture's edge).
+                    total, count = 0.0, 0
+                    for k in range(4):
+                        rr = r - 1 if k == 0 else (r + 1 if k == 1 else r)
+                        cc = c - 1 if k == 2 else (c + 1 if k == 3 else c)
+                        x = v[i, rr, cc] if 0 <= rr < h and 0 <= cc < w else np.nan
+                        term = x if np.isfinite(x) else 0.0
+                        total = term if k == 0 else total + term
+                        if np.isfinite(x):
+                            count += 1
+                    if count > 0:
+                        nxt[i, r, c] = total / max(count, 1)
+        if not todo:
+            break
+        v = nxt
+    return v
+
+
 def _or_fallback(ctx: RefineContext, w: np.ndarray, fallback: np.ndarray) -> np.ndarray:
     """``w``, with every anchor group that has no weight in it replaced by ``fallback``."""
-    mass, _ = anchor_means(w, ctx.anchors, ctx.weights, ctx.n_anchors)
+    mass, _ = ctx.means(w, ctx.weights)
     return np.where(mass[ctx.anchors, 0] > 0.0, w, fallback)
 
 
@@ -256,9 +305,12 @@ def refine_resources(
             # Land weighted by a Gaussian about the nearest worked deposit; with
             # no such land, miners stay with the farmers.
             if ctx.mine_points is not None and len(ctx.mine_points):
-                d, _ = KDTree(ctx.mine_points).query(ctx.positions, workers=-1)
                 camp_rad = float(params.mining_camp_km) / _EARTH_RADIUS_KM
-                q = np.where(ctx.land & (ctx.weights > 0), (np.asarray(d) / camp_rad) ** 2, np.inf)
+                # Distances only where they are read: drawn land.
+                use = ctx.land & (ctx.weights > 0)
+                q = np.full(len(use), np.inf)
+                d, _ = KDTree(ctx.mine_points).query(ctx.positions[use], workers=-1)
+                q[use] = (np.asarray(d) / camp_rad) ** 2
                 # Relative to each anchor's closest land, so distant deposits don't underflow.
                 q_min = np.full(ctx.n_anchors, np.inf)
                 np.minimum.at(q_min, ctx.anchors, q)
@@ -289,7 +341,7 @@ def refine_resources(
         score = _box_filter(score.reshape(*shape, 1), int(params.biome_smoothing)).reshape(-1)
         nudged = base * np.exp(float(params.danger_terrain_gain) * score)
         if targets is None:
-            means, _ = anchor_means(base, ctx.anchors, ctx.weights, ctx.n_anchors)
+            means, _ = ctx.means(base, ctx.weights)
             targets = means[ctx.anchors, 0]
         nudged = ctx.conserve_mean(nudged, targets, np.ones(len(base), dtype=bool))
         out["danger"] = texture(nudged)

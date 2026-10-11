@@ -12,14 +12,14 @@ At each child texel, a refinement (:func:`region.upsample.refine_fields`) needs:
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 from scipy.spatial import KDTree
 
 from region.resources import _danger_field, refined_slope
-from region.sampling import GlobalSampler, bilinear_plan, bilinear_read, settle_owners
+from region.sampling import GlobalSampler, bilinear_plan, bilinear_read, settle_owners, stencil_read
 from worldgen.resources.terrain import global_slope
 
 if TYPE_CHECKING:
@@ -52,6 +52,22 @@ class Located:
 
     anchors: np.ndarray          # (P,) flat parent texel index
     data: tuple
+    # Derived arrays reused by every refinement step on these points (see groups()).
+    memo: dict = field(default_factory=dict, init=False, repr=False, compare=False)
+
+    def groups(self) -> tuple[np.ndarray, int]:
+        """``((P,) labels, n)``: the anchors renumbered ``0..n-1`` in order, for per-anchor sums.
+
+        The parent has millions of texels and a map touches a few thousand, so
+        grouping by label keeps those sums (``np.bincount``) map-sized.
+        """
+        if "groups" not in self.memo:
+            mark = np.zeros(int(self.anchors.max(initial=-1)) + 1, dtype=np.int64)
+            mark[self.anchors] = 1
+            used = np.flatnonzero(mark)
+            mark[used] = np.arange(len(used))
+            self.memo["groups"] = (mark[self.anchors], len(used))
+        return self.memo["groups"]
 
 
 class ParentSource:
@@ -99,7 +115,7 @@ class ParentSource:
         """``(P, C)`` smooth read of an ``(n_anchors, C)`` per-anchor field (see :meth:`stencil`)."""
         idx, w = stencil if stencil is not None else self.stencil(loc)
         values = np.asarray(per_anchor, dtype=np.float64).reshape(self.n_anchors, -1)
-        return np.einsum("pk,pkc->pc", w, values[idx])
+        return stencil_read(w, idx, values)
 
     def slope(self, loc: Located) -> np.ndarray:
         """``(P,)`` surface slope (km/km) of the parent's elevation."""

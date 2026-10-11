@@ -92,8 +92,17 @@ def _near_pairs(
 def covered_texels(local: RegionFields, channels: Channels) -> np.ndarray:
     """``(M, T, T)`` True where a texel's centre lies under a channel."""
     covered = np.zeros(local.in_hex.shape, dtype=bool)
-    pt, _, edge, _ = _near_pairs(channels, local.positions.reshape(-1, 3), 0.0)
-    covered.reshape(-1)[pt[edge < 0.0]] = True
+    if len(channels) == 0:
+        return covered
+    pos = local.positions.reshape(-1, 3)
+    # Only texels within the widest reach of some segment midpoint can be under one
+    # (padded: _near_pairs keeps points at exactly its reach).
+    mid = 0.5 * (channels.a + channels.b)
+    reach = 0.5 * np.linalg.norm(channels.b - channels.a, axis=1) + channels.half_width
+    near = np.flatnonzero(np.isfinite(KDTree(mid).query(
+        pos, distance_upper_bound=1.001 * float(reach.max()) + 1e-12, workers=-1)[0]))
+    pt, _, edge, _ = _near_pairs(channels, pos[near], 0.0)
+    covered.reshape(-1)[near[pt[edge < 0.0]]] = True
     return covered
 
 
