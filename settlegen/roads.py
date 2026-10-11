@@ -19,8 +19,8 @@
 - **Crossings**: every point a road crosses a dry river or stream channel's
   centreline, a bridge where the channel is at least ``bridge_width_m`` wide or
   the settlement is a city, else a ford.
-- **Gates**: every point a road crosses the footprint's edge, facing out along
-  the road (:func:`gates`).
+- **Gates**: where a road leaves the footprint for good, facing out along the
+  road (:func:`gates`).
 
 Two routes re-traced onto one way (the local maps draw them overlapping too)
 cross a river, or leave the footprint, once: their flows are summed.
@@ -59,8 +59,6 @@ if TYPE_CHECKING:
 _SEAM_GAP_NODES = 2.5
 # Points closer than this (m) along one road are one gate / crossing.
 _SAME_POINT_M = 2.0
-# How far (m) past a gate its outward side is tested.
-_STEP_M = 0.5
 
 
 @paramclass
@@ -372,22 +370,32 @@ def _landings(
 def _quays(
     legs: list[RoadLine], pins: list[tuple[bool, bool]], water: SiteWater, channels: MultiPolygon, frame: Frame,
 ) -> list[Landing]:
-    """Where each river or lake leg pinned at a port in the frame first reaches water."""
+    """Where each river or lake leg pinned at a port in the frame first reaches
+    water (the nearest bank, for a port on the water)."""
     still = water.sea.union(water.lakes)
     wet = still.union(channels)
     frame_box = frame.box()
     out = []
     for leg, pin in zip(legs, pins):
         for pinned, xy, flows in ((pin[0], leg.xy, leg.flows), (pin[1], leg.xy[::-1], leg.flows[::-1])):
-            if not pinned or not frame_box.contains(Point(xy[0])) or wet.contains(Point(xy[0])):
+            if not pinned or not frame_box.contains(Point(xy[0])):
                 continue
-            hit = next((k for k in range(1, len(xy)) if wet.contains(Point(xy[k]))), None)
-            if hit is None:
-                continue
-            prev, first_wet = xy[hit - 1], xy[hit]
-            entry = _points(LineString([prev, first_wet]).intersection(wet.boundary))
-            at = min(entry, key=lambda p: float(np.linalg.norm(p - prev))) if entry else first_wet
-            heading = first_wet - prev
+            if wet.contains(Point(xy[0])):
+                # The port is drawn on water here (the finer channel covers the
+                # local map's bank): its quay is the nearest bank.
+                bank = nearest_points(wet.boundary, Point(xy[0]))[0]
+                at, heading = np.array([bank.x, bank.y]), xy[0] - np.array([bank.x, bank.y])
+                if float(np.linalg.norm(heading)) < 1e-9:
+                    heading = xy[1] - xy[0]
+                hit = 1
+            else:
+                hit = next((k for k in range(1, len(xy)) if wet.contains(Point(xy[k]))), None)
+                if hit is None:
+                    continue
+                prev, first_wet = xy[hit - 1], xy[hit]
+                entry = _points(LineString([prev, first_wet]).intersection(wet.boundary))
+                at = min(entry, key=lambda p: float(np.linalg.norm(p - prev))) if entry else first_wet
+                heading = first_wet - prev
             heading = heading / max(float(np.linalg.norm(heading)), 1e-12)
             on = Point(at + heading)
             kind: Literal["sea", "lake", "river"] = (
@@ -467,24 +475,35 @@ def crossings(
 
 
 def gates(lines: list[RoadLine], footprint: MultiPolygon, merge_m: float) -> list[Gate]:
-    """Every point a road crosses ``footprint``'s edge, facing out along the road;
-    roads that share a way leave by one gate, flows summed."""
+    """Where each road leaves ``footprint`` for good, facing out along the road: the
+    inner end of each stretch outside it that runs on to the road's end (a stretch
+    between two parts of the footprint — a bridge, a bay — is no gate).  Roads that
+    share a way leave by one gate, flows summed."""
     if footprint.is_empty:
         return []
     edge = footprint.boundary
     out: list[Gate] = []
     for i, road in enumerate(lines):
-        for p in _dedupe(_points(LineString(road.xy).intersection(edge))):
+        ends = (road.xy[0], road.xy[-1])
+        outside = LineString(road.xy).difference(footprint)
+        for part in getattr(outside, "geoms", [outside]):
+            if part.is_empty or not isinstance(part, LineString):
+                continue
+            c = np.asarray(part.coords)
+            first_on, last_on = (edge.distance(Point(c[k])) < 1e-6 for k in (0, -1))
+            leads_out = [any(np.linalg.norm(c[k] - e) < 1e-6 for e in ends) for k in (0, -1)]
+            if first_on and leads_out[1] and not last_on:
+                p, ahead = c[0], c[1]
+            elif last_on and leads_out[0] and not first_on:
+                p, ahead = c[-1], c[-2]
+            else:
+                continue
             k = _nearest_edge(road.xy, p[None])
             same = [g for g in out if np.linalg.norm(g.xy - p) < merge_m]
             if same:
                 same[0].flow += float(road.flows[k])
                 continue
-            along = road.xy[k + 1] - road.xy[k]
-            along = along / max(float(np.linalg.norm(along)), 1e-12)
-            # Outwards: the way along the road that leaves the footprint.
-            if footprint.contains(Point(p + _STEP_M * along)):
-                along = -along
+            along = (ahead - p) / max(float(np.linalg.norm(ahead - p)), 1e-12)
             out.append(Gate(xy=p, direction=along, flow=float(road.flows[k]), road=i))
     return out
 

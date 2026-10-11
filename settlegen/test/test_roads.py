@@ -105,6 +105,14 @@ def test_a_river_leg_leaves_its_port_at_a_quay_on_the_channel(frame):
     assert quay.water == "river" and quay.flow == 6.0 and quay.direction[0] > 0.99
 
 
+def test_a_port_drawn_on_the_water_has_its_quay_on_the_nearest_bank(frame):
+    channels = MultiPolygon([box(-100.0, -2000.0, 300.0, 2000.0)])
+    leg = RoadLine(xy=np.array([[0.0, 0.0], [100.0, 500.0], [100.0, 1500.0]]), flows=np.full(2, 2.0))
+    out = _quays([leg], [(True, False)], _water(), channels, frame)
+    assert len(out) == 1
+    np.testing.assert_allclose(out[0].xy, [-100.0, 0.0], atol=1e-6)
+
+
 def test_gates_lie_on_the_footprint_edge_and_face_out():
     footprint = MultiPolygon([Point(0.0, 0.0).buffer(500.0, quad_segs=32)])
     through = RoadLine(xy=np.array([[-1000.0, 10.0], [1000.0, 10.0]]), flows=np.array([4.0]))
@@ -117,6 +125,14 @@ def test_gates_lie_on_the_footprint_edge_and_face_out():
         assert not footprint.contains(Point(g.xy + 1.0 * g.direction))
     south = [g for g in out if g.xy[1] < -400.0]
     assert len(south) == 1 and south[0].flow == 3.0
+
+
+def test_a_road_across_a_gap_in_the_footprint_leaves_only_at_its_outer_edges():
+    # Two halves of a city either side of a river, the road through both.
+    footprint = MultiPolygon([box(-600.0, -300.0, -50.0, 300.0), box(50.0, -300.0, 600.0, 300.0)])
+    road = RoadLine(xy=np.array([[-1000.0, 0.0], [1000.0, 0.0]]), flows=np.array([1.0]))
+    out = gates([road], footprint, merge_m=45.0)
+    assert sorted(float(g.xy[0]) for g in out) == [-600.0, 600.0]
 
 
 def test_crossings_are_bridged_by_width_or_for_cities():

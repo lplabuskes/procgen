@@ -576,6 +576,10 @@ class RegionView(QWidget):
                 )
             if local.city_footprints is not None:
                 out["cities"] = (local.city_index, local.city_positions, local.city_footprints)
+                ref = self._settlement.ref if self._settlement is not None else None
+                if ref is not None and ref.kind == "city":
+                    # This city is drawn as the site's footprint (_draw_site); others as on the local map.
+                    out["cities"] = _without_city(*out["cities"], ref.index)
         if self._settlement is not None:
             out["rivers"] = []              # drawn as the site's channel polygons (_draw_site)
         elif self._rivers is not None:
@@ -1038,7 +1042,8 @@ class RegionView(QWidget):
 
     def _draw_site(self, painter: QPainter, x0: float, y0: float, size: float) -> None:
         """A settlement map's vector site over its terrain, in cell-layout pixels (under the
-        screen-space overlays): river channels and shorelines, with the rivers overlay."""
+        screen-space overlays): its footprint, with its own overlay (cities, towns or
+        villages); river channels and shorelines, with the rivers overlay."""
         assert self._settlement is not None
         site = self._settlement.site
         side = site.frame.side_m
@@ -1047,10 +1052,17 @@ class RegionView(QWidget):
             xy = np.asarray(xy, dtype=np.float64).reshape(-1, 2)
             return np.column_stack([x0 + (xy[:, 0] / side + 0.5) * size, y0 + (0.5 - xy[:, 1] / side) * size])
 
-        if not self._overlay_visible.get("rivers", True):
-            return
         painter.save()
         self._clip_to_outline(painter, x0, y0, size)
+        ref = self._settlement.ref
+        overlay = {"city": "settlements", "town": "towns", "village": "villages"}[ref.kind]
+        if self._overlay_visible.get(overlay, True) and not site.footprint.is_empty:
+            painter.setPen(_cosmetic_pen(_FOOTPRINT_PEN))
+            painter.setBrush(_BUILT_FILL)          # not the tier colour: some tiers are blue, as water
+            painter.drawPath(_site_path(site.footprint, to_px))
+        if not self._overlay_visible.get("rivers", True):
+            painter.restore()
+            return
         water = site.water
         if not water.channels.is_empty:
             painter.setPen(Qt.PenStyle.NoPen)
@@ -1081,6 +1093,24 @@ class RegionView(QWidget):
 
 _CHANNEL_FILL = QColor(100, 180, 255, 220)      # the rivers overlay's colour
 _SHORE_PEN = QColor(40, 80, 140, 220)
+_FOOTPRINT_PEN = QColor(25, 22, 18, 235)        # as the local map's city footprints
+_BUILT_FILL = QColor(170, 140, 110, 215)
+
+
+def _without_city(city_index: np.ndarray, positions: np.ndarray, footprints, city: int):  # type: ignore[no-untyped-def]
+    """A local map's ``(city_index, positions, footprints)`` less world city ``city``."""
+    keep = np.flatnonzero(np.asarray(city_index) != city)
+    if len(keep) == len(city_index):
+        return city_index, positions, footprints
+    renumber = np.full(len(city_index), -1, dtype=np.int64)
+    renumber[keep] = np.arange(len(keep))
+    texels = np.flatnonzero(renumber[footprints.city] >= 0)
+    owner = np.where(footprints.owner >= 0, renumber[np.maximum(footprints.owner, 0)], -1).astype(np.int32)
+    trimmed = dataclasses.replace(
+        footprints, owner=owner, city=renumber[footprints.city[texels]], corners=footprints.corners[texels],
+        area_km2=footprints.area_km2[keep],
+    )
+    return np.asarray(city_index)[keep], np.asarray(positions)[keep], trimmed
 
 
 def _site_path(geom, to_px) -> QPainterPath:  # type: ignore[no-untyped-def]

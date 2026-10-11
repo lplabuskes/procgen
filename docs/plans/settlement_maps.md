@@ -75,11 +75,16 @@ footprint, see Decision 4). `city_garden_ring_km` is `FarmlandParams`'
    frame conserves the local texels its edge cuts over its own in-frame part
    (Decision 1). Layout streams are seeded per (world, settlement kind, index).
 4. **Built-up area is conserved (cities).** The local `city_footprints` is the
-   coarse outline: the fine footprint claims, inside each local texel, the
-   built-up share that texel had (1 or 0 now; fractional at the footprint edge
-   after re-claiming). Totals match `area_km2` to the texel. Use the owning
+   coarse outline: the fine footprint follows the built-up share each local
+   texel had (1 or 0, blurred to fractions at the edge). Totals match
+   `area_km2` to the texel. Use the owning
    hex's local map: footprint jitter is seeded per (world, region, hex), so a
    city near a hex edge has a different footprint on its neighbour's map.
+   **Revised 2026-10-11:** the share per local texel holds approximately
+   (seed 4: 2–5% mean error, 8% where the fine water differs most), not
+   exactly — exact per-texel quotas forced claims into every edge texel
+   whatever its priority, giving 40–145 specks per city and the local texels'
+   squares in the outline. See Phase 4c in Status.
    **Towns have no local footprint** (`build_local_map` footprints cities
    only; towns get farmland), so a town's built-up area is claimed fresh at
    `density_per_ha` with nothing to conserve against.
@@ -542,7 +547,42 @@ from any regional river or coast (seed 4 cities 36, 220, 14 — refined off
 their water, or the world's water face not drawn near) cross that land
 overland; with no water in the frame they get no quay.
 
-Next: Phase 4c (footprint, buildable area).
+**Merged main 2026-10-11** (water links; cities re-sited onto their water):
+of the 30 largest seed-4 cities, 17 have water trade, every one now with
+water at the city. Ports the finer channel covers (the local map drew them on
+its bank) land at the nearest bank: 17 of 17 have a landing.
+
+**Phase 4c done 2026-10-11** (footprint, buildable): `settlegen/footprint.py`
+→ `SettlementSite.footprint` and `.buildable` (polygons); gates now sit on
+the real footprint.
+- **City**: the owning local map's footprint (its own map's only: since
+  Option C it claims the whole city, over-hang past its hexagon included;
+  mixing maps counted a seam city twice, 1.37× and 0.72× for seed-4 cities 38
+  and 368) as a 0/1 share per local texel, blurred over half a local texel;
+  the local area claimed over the whole frame by priority = blurred share +
+  edge noise (100 m, weighted 4s(1−s) so only along the edge) − slope penalty;
+  never water or a channel. Traced by marching squares on the lightly smoothed
+  claim (level matched to the claimed area), simplified, the water cut out
+  exactly. Decision 4 revised: shares hold approximately (above).
+- **Town / village**: `people / density` claimed fresh by the same priority,
+  nearness to the centre standing in for the share.
+- **Buildable**: the frame less the sea, lakes, channels and ground steeper than
+  `buildable_max_slope` (0.3 km/km).
+- **Gates**: only where a road leaves the footprint for good (the inner end
+  of an outside stretch running on to the road's end); a road across a
+  bridge between two parts of a city has no gates there.
+Seed 4, 13 frames: area within 0.3% of the local footprint's (small cities
+2–3%), 1–7 pieces per city, no overlap with water, every polygon valid,
+0.1–0.25 s per footprint. The viewer draws the site footprint (neutral
+built-up colour: some tier colours are blue, read as water) in place of the
+local map's for the settlement itself.
+
+Open, seen in 4c: a ~1 m elevation step along the edge between two of one
+local map's own hexes (seed 4 city 15, a straight horizontal line, 6× the
+typical step between rows) — the Option C seam, inside a local map. Small next
+to 17–66 m of relief but visible in hillshade, and it nudges the slope penalty.
+
+Next: Phase 4d (anchor candidates, hinterland).
 
 Polygon library for Decision 8: **shapely** (approved 2026-10-10; in
 `requirements.txt`).

@@ -2,28 +2,28 @@
 
 :func:`build_site` derives it from the settlement map's terrain and local maps:
 the frame (:mod:`settlegen.frame`), the water (:mod:`settlegen.water`), the
-footprint, and the roads with their gates, landings and crossings
-(:mod:`settlegen.roads`).  The footprint is for now a disc of the local
-footprint's area (towns and villages: their people at the built-up density) on
-dry ground; the buildable ground, anchor candidates and the hinterland follow
-(plan phase 4).  Qt-free.
+footprint and buildable ground (:mod:`settlegen.footprint`), and the roads with
+their gates, landings and crossings (:mod:`settlegen.roads`).  Anchor
+candidates and the hinterland follow (plan phase 4).  Qt-free.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional, Sequence
+from typing import TYPE_CHECKING, Optional
 
-from shapely.geometry import MultiPolygon, Point
+from shapely.geometry import MultiPolygon
 
-from localmap.builder import LocalMap
 from region.upsample import RegionFields
+from settlegen.footprint import SettlementFootprintParams, build_footprint, buildable_ground
 from settlegen.frame import Frame
 from settlegen.geometry import SettlementGeometry
 from settlegen.roads import SettlementRoadParams, SiteRoads, build_site_roads
-from settlegen.water import SettlementRiverParams, SiteWater, _as_multipolygon, build_site_water
+from settlegen.water import SettlementRiverParams, SiteWater, build_site_water
 
 if TYPE_CHECKING:
     from core.world import World
+    from settlegen.chain import SettlementMaps
     from worldgen.cost.builder import LandCostParams
 
 
@@ -34,30 +34,29 @@ class SettlementSite:
     frame: Frame
     water: SiteWater
     footprint: MultiPolygon
+    buildable: MultiPolygon
     roads: SiteRoads
 
 
-def disc_footprint(radius_m: float, water: SiteWater, frame: Frame) -> MultiPolygon:
-    """A disc of ``radius_m`` at the frame's centre, less the still water (a city spans its rivers)."""
-    disc = Point(0.0, 0.0).buffer(float(radius_m), quad_segs=32).intersection(frame.box())
-    still = water.sea.union(water.lakes)
-    return _as_multipolygon(disc.difference(still) if not still.is_empty else disc)
-
-
 def build_site(
-    globe: "World", fields: RegionFields, side_km: float, radius_km: float, maps: Sequence[LocalMap],
-    rivers: Optional[SettlementRiverParams] = None, roads: Optional[SettlementRoadParams] = None, *,
-    city: bool = False, local_road_raster_texels: float = 2.0, land: Optional["LandCostParams"] = None,
-    danger_scale: float = 2.0,
+    globe: "World", fields: RegionFields, chain: "SettlementMaps", rivers: Optional[SettlementRiverParams] = None,
+    roads: Optional[SettlementRoadParams] = None, footprint: Optional[SettlementFootprintParams] = None, *,
+    local_road_raster_texels: float = 2.0, land: Optional["LandCostParams"] = None, danger_scale: float = 2.0,
 ) -> SettlementSite:
-    """The site of the settlement map with terrain ``fields`` over ``maps`` (owning map first)."""
+    """The site of ``chain``'s settlement map, with terrain ``fields``."""
     geometry = fields.geometry
     assert isinstance(geometry, SettlementGeometry)
-    frame = Frame(geometry, float(side_km) * 1000.0)
+    frame = Frame(geometry, float(chain.side_km) * 1000.0)
+    maps = chain.maps
     water = build_site_water(globe, fields, frame, maps, rivers)
-    footprint = disc_footprint(float(radius_km) * 1000.0, water, frame)
+    built = build_footprint(
+        fields, frame, maps, water, chain.ref, math.pi * float(chain.radius_km) ** 2, int(globe.seed or 0), footprint,
+    )
     site_roads = build_site_roads(
-        globe, fields, frame, maps, water, footprint, roads, always_bridge=city,
+        globe, fields, frame, maps, water, built.polygon, roads, always_bridge=chain.ref.kind == "city",
         local_road_raster_texels=local_road_raster_texels, land=land, danger_scale=danger_scale,
     )
-    return SettlementSite(frame=frame, water=water, footprint=footprint, roads=site_roads)
+    return SettlementSite(
+        frame=frame, water=water, footprint=built.polygon, buildable=buildable_ground(fields, frame, water, footprint),
+        roads=site_roads,
+    )
