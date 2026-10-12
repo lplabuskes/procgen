@@ -109,10 +109,18 @@ lake at its Priority-Flood `filled_height`); only the shoreline moves.
 - The parent's small lakes and its other lakes flood apart too (and keep
   `small_lake_mask`), so a refined tier's lakes carry down a tier.
 
-**Detail fades under water.** Lakes are shallow (median ~40 m) vs ~15–30 m of
-sub-grid relief; zero-mean noise would poke lake beds into the air and dither the
-mask into confetti. Amplitude is scaled by water depth over
-`water_relief_depth_km` (0.1 km), keeping bumps smaller than the water above.
+**Detail is capped under water.** Lakes are shallow (median ~40 m) against a
+spectrum hundreds of metres tall in rugged country; zero-mean noise would poke
+lake beds into the air and fray lakes into lace and islands. Under water the
+detail is capped at `water_relief_fraction` (0.5) × the depth, against its
+summed octave amplitude (`_shallow_water_damping`), so no bump reaches the
+surface. And lake anchors take the **exact constant** conservation correction,
+not the smooth one: the smooth correction carries the large offsets of rugged
+shore anchors into the lake and lifts its bed through the surface near the shore
+(a step under water is invisible). Seeds 4/31/35, the lake / river / roughest
+regions (`measure_lakes_rivers.py`): islands per lake 0.33 before the spectrum →
+2.30 with it → 0.41 with both; local maps 1.0 → 2.0 → 1.1. (A cap on dips of
+land near water made it worse: conservation pulled those anchors down.)
 Deep ocean (median 3.4 km) keeps full detail (painted over anyway).
 `debug_region.py` prints flooded/dried percentages.
 
@@ -354,7 +362,7 @@ refined/coarse elevation and slope, land masks.
 | `octaves`, `lacunarity`, `nyquist_safety` | 4, 2.0, 0.5 | detail band |
 | `orographic_gain` | 0.5 /km | precipitation |
 | `lapse_rate_c_per_km` | 6.5 | temperature (`DERIVED`: the app copies the climate's) |
-| `water_relief_depth_km`, `refine_water_masks`, `water_spread_texels` | 0.1, True, 4 | water |
+| `water_relief_fraction`, `refine_water_masks`, `water_spread_texels` | 0.5, True, 4 | water |
 | `biome_smoothing` | 5 | biome / crop / danger-score box average |
 | `coast_band` | 0.25 | coast band (parent water fraction) |
 | `coast_persistence_smooth`, `coast_persistence_rugged`, `coast_wander_smooth`, `coast_wander_rugged` | 0.25, 0.8, 0.03, 0.5 | coast detail style |

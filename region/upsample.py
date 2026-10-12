@@ -99,10 +99,11 @@ class RegionUpsampleParams:
         0.5, label="Orographic precip gain (/km)", min=0.0, max=3.0, step=0.05
     )
     lapse_rate_c_per_km: float = _f(6.5, label="Lapse rate (°C/km)", min=0.0, max=15.0)
-    # Detail fades over this depth so shallow lake beds stay submerged (median
-    # lake depth ~40 m); 0 disables the fade.
-    water_relief_depth_km: float = _f(
-        0.1, label="Underwater detail fade (km)", min=0.0, max=2.0, step=0.05
+    # Under water the detail is capped at this share of the depth (against its summed
+    # octave amplitude), so no bump reaches the surface: lake beds stay submerged and
+    # lakes keep their bodies rather than fraying into islands.  0 disables the cap.
+    water_relief_fraction: float = _f(
+        0.5, label="Underwater detail cap (× depth)", min=0.0, max=2.0, step=0.05
     )
     # Off: masks are copied from the anchor texel and the coast stays blocky.
     refine_water_masks: bool = _f(True, label="Refine shoreline", min=0, max=1)
@@ -433,17 +434,24 @@ def _box_filter(texture: np.ndarray, size: int) -> np.ndarray:
     return (total / float(size * size)).astype(texture.dtype)
 
 
-def _shallow_water_damping(depth: np.ndarray, params: RegionUpsampleParams) -> np.ndarray:
-    """Fade the detail out as the water above the ground shallows (1 = full detail).
+def _shallow_water_damping(
+    depth: np.ndarray, amplitude: np.ndarray, params: RegionUpsampleParams
+) -> np.ndarray:
+    """The detail's multiplier under water (1 = full detail; dry ground, ``depth`` inf, keeps 1).
 
-    Lake beds sit ~40 m below their surface against ~15–30 m of sub-grid relief,
-    so unscaled noise would turn shallow lakes into confetti.  Scaling by depth
-    keeps bumps below the surface so only the shoreline moves.
+    Lake beds sit ~40 m below their surface; the spectrum stands hundreds of metres
+    tall in rugged country, so unscaled it pokes through as islands and frays lakes
+    into lace.  Capping it at ``water_relief_fraction`` × the depth keeps every bump
+    below the surface, so only the shoreline moves.
     """
-    scale = float(params.water_relief_depth_km)
-    if scale <= 0.0:
+    frac = float(params.water_relief_fraction)
+    depth = np.asarray(depth, dtype=np.float64)
+    if frac <= 0.0:
         return np.ones_like(depth)
-    return np.clip(depth / scale, 0.0, 1.0)
+    amp = np.broadcast_to(np.asarray(amplitude, dtype=np.float64), depth.shape)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        cap = np.where(amp > 0.0, frac * np.maximum(depth, 0.0) / amp, 1.0)
+    return np.where(np.isinf(depth), 1.0, np.clip(cap, 0.0, 1.0))
 
 
 # ── water masks ──────────────────────────────────────────────────────────────
@@ -1062,23 +1070,31 @@ def refine_terrain(
     # ── elevation ────────────────────────────────────────────────────────────
     elev_coarse = source.coarse("elevation", loc)                            # (P, 1)
     style = coast_style(source, loc, params)
-    damping = _shallow_water_damping(water.depth(elev_coarse[:, 0]), params)
+    depth = water.depth(elev_coarse[:, 0])
     # The spectrum: each octave at its ruggedness- and wavelength-set amplitude.
     octaves = _octave_noise(flat_pos, seed ^ _SEED_SALT_ELEVATION, freqs)          # (K, P)
     amplitudes = spectrum_amplitudes(
         EARTH_RADIUS_KM / freqs, parent_ruggedness(source, loc), hurst_exponent(source, loc, params), params)
-    detail = (amplitudes * octaves).sum(axis=0) * damping
+    detail = (amplitudes * octaves).sum(axis=0) * _shallow_water_damping(depth, amplitudes.sum(axis=0), params)
     # Near water: the coast style's persistence, at an amplitude that moves the shore
     # ~``wander`` wavelengths whatever the gradient; the underwater fade is lifted
     # over the sea (islands) but kept for lakes.
     if style is not None:
-        coast_amplitude = np.clip(
-            style.wander * feature_length_km * slope, 0.0, float(params.octave_cap_km),
-        ) * np.where(water.lake, damping, 1.0)
+        coast_amplitude = np.clip(style.wander * feature_length_km * slope, 0.0, float(params.octave_cap_km))
+        coast_amplitude = coast_amplitude * np.where(
+            water.lake, _shallow_water_damping(depth, coast_amplitude, params), 1.0)
         coast_detail = _weighted_octaves(octaves, style.persistence) * coast_amplitude
         detail = detail + (coast_detail - detail) * style.near
     elevation = elev_coarse + detail[:, None]
-    elevation = conserve_smooth(elevation, source, loc, source.anchor_values("elevation", loc), weights)
+    targets = source.anchor_values("elevation", loc)
+    raw = elevation
+    elevation = conserve_smooth(raw, source, loc, targets, weights)
+    if water.lake.any():
+        # Lake beds take their own parent texel's constant correction: the smooth one
+        # carries rugged shore texels' offsets into the lake and lifts its bed through
+        # the surface near the shore (islands).  The step it leaves is under water.
+        flat = conserve_additive(raw, anchors, targets, weights, n_anchors)
+        elevation = np.where(water.lake[:, None], flat, elevation)
     if style is not None and params.reshape_coast:
         elevation = _reshape_coasts(
             elevation, water, style, source, loc, flat_pos, seed, weights, slope,

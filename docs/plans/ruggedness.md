@@ -340,3 +340,28 @@ some cost input restores differently on load.
 **All five phases done.** Still open: rivers and lakes against the rough relief
 beyond the breach fix (Decision 10), hydrology refining ruggedness, and the
 character (Hurst) channel.
+
+**Hydrology → ruggedness and a water check (2026-10-11).**
+- *Floodplain term* in the ruggedness stage (per texel, along stream-network
+  channels at river flow, by √flow × flatness of the globe's slope, width growing
+  with flow): ruggedness on big rivers' texels goes to ~0, mid rivers ~0.1; land
+  mean unchanged.
+- *`scripts/measure_lakes_rivers.py`* (seeds 4/31/35; lake / river / roughest
+  regions and their most-lake / most-river hexes), three states:
+
+  | | pre-spectrum | spectrum | + floodplain + lake fixes |
+  |---|---|---|---|
+  | region islands / lake | 0.33 | 2.30 | 0.41 |
+  | region shore development | 5.30 | 6.48 | 5.51 |
+  | local islands / lake | 1.00 | 2.02 | 1.09 |
+  | region river climb (m / 100 km) | 47 | 545 | 531 |
+  | region river length uphill > 2 m | 24% | 41% | 41% |
+  | local river climb (m / 100 km) | 175 | 1,691 | 1,571 |
+
+- *Lakes fixed*: underwater detail capped at `water_relief_fraction` × depth
+  (replaces the 100 m fade, `water_relief_depth_km`), and lake anchors take the
+  exact constant conservation correction instead of the smooth one, which carried
+  rugged shores' offsets into the lake bed (73% of the remaining islands were
+  lake beds lifted that way).
+- *Rivers not fixed*: re-routed rivers cross the spectrum's bumps (they seek
+  valleys but nothing makes them descend). Needs carving — see the open question.

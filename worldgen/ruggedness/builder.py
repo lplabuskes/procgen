@@ -7,12 +7,16 @@ This stage, once climate, rivers, deltas and wetlands exist, adds:
   a ramp on annual mean temperature;
 - **delta** — subtracted at river mouths by ``sqrt(flow / largest flow)``, spread
   over a few faces: sediment-fed coasts and their plains are smooth;
-- **wetland** — subtracted by the face's Wetland share: standing water means flat ground.
+- **wetland** — subtracted by the face's Wetland share: standing water means flat ground;
+- **floodplain** — subtracted per texel along the rivers (:func:`floodplain_strength`):
+  big, gently falling rivers lay down flat alluvial valleys, a few to tens of km
+  wide — far below a face, so this term works on the texture.
 
-The terms are diffused over the face graph (the seed already is), added to the
-seed, clipped to [0, 1] and rasterised seam-free; ``RUGGEDNESS`` / ``RUGGEDNESS_FACE``
-are rewritten in place.  Runs after the wetland stage and before resources,
-danger and cost, so every later consumer reads the final field.  The region and
+The face terms are diffused over the face graph (the seed already is), added to
+the seed, clipped to [0, 1] and rasterised seam-free; the floodplain comes off the
+texture; ``RUGGEDNESS`` / ``RUGGEDNESS_FACE`` (its face means) are rewritten in
+place.  Runs after the wetland stage and before resources, danger and cost, so
+every later consumer reads the final field.  The region and
 local tiers style their shores by it (``region/upsample.py``).
 """
 from __future__ import annotations
@@ -20,6 +24,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Mapping, Optional
 
 import numpy as np
+from scipy.spatial import KDTree
 
 from core.display import DisplayRegistry
 from core.params import param_field as _f, paramclass
@@ -28,7 +33,8 @@ from core.world import World
 from worldgen.climate.channels import TEMPERATURE_ANNUAL
 from worldgen.geology.channels import ELEVATION, RUGGEDNESS, RUGGEDNESS_FACE
 from worldgen.geology.ruggedness import decayed_max, diffuse, ruggedness_texture
-from worldgen.hydrology.channels import RIVER_OBJECTS
+from worldgen.hydrology.channels import RIVER_OBJECTS, STREAMS
+from worldgen.resources.terrain import global_slope
 from worldgen.wetland.channels import WETLAND_FRACTION
 
 if TYPE_CHECKING:
@@ -46,6 +52,19 @@ class RuggednessRefineParams:
     delta_decay_hops: float = _f(1.5, label="Delta decay (faces)", min=0.1, max=10.0, step=0.1)
     # Subtracted × the face's Wetland share.
     wetland_weight: float = _f(0.4, label="Wetland weight", min=0.0, max=1.0, step=0.05)
+    # Floodplains: the stream network's channel texels at ≥ floodplain_min_flow (the
+    # rivers) smooth the texels around them by weight × strength × exp(−distance / width),
+    # strength = sqrt(flow / floodplain_full_flow) (≤ 1) × flatness, flatness =
+    # 1 / (1 + (slope / floodplain_slope)²) on the globe's slope at the river (gorges
+    # through a range stay rough); width = floodplain_width_km × (flow / min flow) ** exponent.
+    floodplain_weight: float = _f(0.35, label="Floodplain weight", min=0.0, max=1.0, step=0.05)
+    floodplain_min_flow: float = _f(500.0, label="Floodplain min river flow", min=1.0, max=100_000.0, step=50.0)
+    floodplain_full_flow: float = _f(20_000.0, label="Floodplain full-strength flow", min=1.0, max=1_000_000.0,
+                                     step=500.0)
+    floodplain_width_km: float = _f(6.0, label="Floodplain width at min flow (km)", min=0.5, max=100.0, step=0.5)
+    floodplain_width_exponent: float = _f(0.4, label="Floodplain width exponent", min=0.0, max=1.0, step=0.05)
+    floodplain_slope: float = _f(0.001, label="Floodplain flatness slope (km/km)", min=0.0001, max=0.05,
+                                 step=0.0005)
     # Neighbour-mean diffusion of the refinement terms (the seed is diffused already).
     smoothing_passes: int = _f(2, label="Smoothing passes", min=0, max=20)
     smoothing_alpha: float = _f(0.5, label="Smoothing strength", min=0.0, max=1.0, step=0.05)
@@ -89,6 +108,53 @@ def refine_ruggedness(
         return np.clip(seed_values, 0.0, 1.0), terms
     delta = diffuse(np.sum(list(terms.values()), axis=0), adjacency, p.smoothing_passes, float(p.smoothing_alpha))
     return np.clip(seed_values + delta, 0.0, 1.0), terms
+
+
+_EARTH_RADIUS_KM = 6371.0
+# Floodplain reach, in widths: exp(-3) ≈ 5% beyond it.
+_FLOODPLAIN_REACH = 3.0
+
+
+def floodplain_strength(mesh: "PolygonMesh", streams, params: RuggednessRefineParams) -> np.ndarray:
+    """``(N, H, W)`` in [0, 1]: how much each texel is a river's floodplain (see the params).
+
+    ``streams`` is the hydrology stage's :class:`~worldgen.hydrology.types.StreamNetwork`
+    (its nodes are texel centres of the elevation texture).
+    """
+    p = params
+    elev = ELEVATION.read(mesh)
+    n, h, w = elev.shape[0], elev.shape[1], elev.shape[2]
+    out = np.zeros(n * h * w, dtype=np.float64)
+    if streams is None or len(streams) == 0:
+        return out.reshape(n, h, w)
+    flow = np.asarray(streams.flow, dtype=np.float64)
+    src = np.flatnonzero(np.asarray(streams.channel) & (flow >= float(p.floodplain_min_flow)))
+    if src.size == 0:
+        return out.reshape(n, h, w)
+    flow = flow[src]
+    nodes = np.asarray(streams.nodes, dtype=np.int64)[src]
+    slope = global_slope(mesh, elev)[..., 0].reshape(-1)[np.clip(nodes, 0, n * h * w - 1)]
+    flat = 1.0 / (1.0 + (slope / max(float(p.floodplain_slope), 1e-9)) ** 2)
+    strength = np.minimum(np.sqrt(flow / max(float(p.floodplain_full_flow), 1e-9)), 1.0) * flat
+    width_rad = (float(p.floodplain_width_km) * (flow / max(float(p.floodplain_min_flow), 1e-9))
+                 ** float(p.floodplain_width_exponent)) / _EARTH_RADIUS_KM
+    keep = strength > 1e-3
+    if not keep.any():
+        return out.reshape(n, h, w)
+    pos = np.asarray(streams.positions, dtype=np.float64)[src][keep]
+    strength, width_rad = strength[keep], width_rad[keep]
+    texels = np.asarray(mesh.face_texture_positions(h, w), dtype=np.float64).reshape(-1, 3)
+    texels /= np.maximum(np.linalg.norm(texels, axis=1, keepdims=True), 1e-12)
+    tree = KDTree(texels)
+    hits = tree.query_ball_point(pos, _FLOODPLAIN_REACH * width_rad)
+    counts = np.fromiter((len(x) for x in hits), dtype=np.int64, count=len(hits))
+    if counts.sum() == 0:
+        return out.reshape(n, h, w)
+    which = np.repeat(np.arange(len(hits)), counts)
+    idx = np.concatenate([np.asarray(x, dtype=np.int64) for x in hits if x])
+    d = np.linalg.norm(texels[idx] - pos[which], axis=1)          # chord ≈ angle at these scales
+    np.maximum.at(out, idx, strength[which] * np.exp(-d / width_rad[which]))
+    return out.reshape(n, h, w)
 
 
 def river_mouth_strength(rivers, n_faces: int) -> np.ndarray:
@@ -135,6 +201,9 @@ class RuggednessBuilder(Stage):
             temperature_annual=t_annual, mouth_strength=mouths, wetland_fraction=wetland,
         )
         tex = ruggedness_texture(mesh, rho, ELEVATION.read(mesh).shape[1])
+        if float(self.params.floodplain_weight) > 0.0 and STREAMS.present(ctx.world):
+            plain = floodplain_strength(mesh, STREAMS.read(ctx.world), self.params)
+            tex = np.clip(tex - float(self.params.floodplain_weight) * plain[..., None], 0.0, 1.0).astype(np.float32)
         RUGGEDNESS.write(mesh, tex)
         # Per face: the texture's face means, as load restores them, so a saved world reads alike.
         RUGGEDNESS_FACE.write(mesh, tex[..., 0].mean(axis=(1, 2)).astype(np.float64))

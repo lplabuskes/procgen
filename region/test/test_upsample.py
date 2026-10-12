@@ -195,14 +195,16 @@ def test_lakes_fall_back_to_the_anchor_without_a_fill_height(synthetic_globe):
     )
 
 
-def test_shallow_water_damping_only_touches_submerged_ground():
+def test_shallow_water_damping_caps_detail_below_the_surface():
     from region.upsample import _shallow_water_damping
-    params = _params(water_relief_depth_km=0.1)
+    params = _params(water_relief_fraction=0.5)
     depth = np.array([np.inf, 1.0, 0.1, 0.05, 0.0, -0.2])   # inf = dry land
-    damping = _shallow_water_damping(depth, params)
-    assert damping.tolist() == [1.0, 1.0, 1.0, 0.5, 0.0, 0.0]
+    damping = _shallow_water_damping(depth, np.full(6, 0.1), params)
+    assert damping.tolist() == [1.0, 1.0, 0.5, 0.25, 0.0, 0.0]
+    # The cap is relative: taller detail is damped harder at the same depth.
+    assert _shallow_water_damping(np.array([0.1]), np.array([1.0]), params)[0] == pytest.approx(0.05)
     # Disabled, every texel gets the full amplitude again.
-    assert np.all(_shallow_water_damping(depth, _params(water_relief_depth_km=0.0)) == 1.0)
+    assert np.all(_shallow_water_damping(depth, np.full(6, 0.1), _params(water_relief_fraction=0.0)) == 1.0)
 
 
 def test_shallow_lake_beds_do_not_dither(synthetic_globe):
@@ -212,7 +214,7 @@ def test_shallow_lake_beds_do_not_dither(synthetic_globe):
         anchor = _anchor_mask(f, synthetic_globe, "lake_mask")
         return float((anchor & ~(f.textures["lake_mask"].reshape(-1) > 0.5)).mean())
 
-    assert dried() < dried(water_relief_depth_km=0.0)
+    assert dried() < dried(water_relief_fraction=0.0)
 
 
 def test_ocean_and_lake_never_overlap(fields):
