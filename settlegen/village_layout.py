@@ -35,6 +35,7 @@ import numpy as np
 import shapely
 import shapely.ops
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon
+from shapely.geometry.base import BaseGeometry
 
 from settlegen.docks import Docks, build_docks
 from settlegen.layout import (
@@ -196,19 +197,41 @@ def harbour_rows(
     return rows + [g for g in lanes if g.length > 1.0]
 
 
-def back_lanes(streets: Sequence[LineString], depth: float, street_m: float) -> list[LineString]:
-    """Lanes parallel to ``streets`` one plot-pair back on each side, and short links to them."""
+def back_lanes(
+    streets: Sequence[LineString], depth: float, street_m: float, others: Sequence[LineString] = (),
+    keep_out: Optional[BaseGeometry] = None,
+) -> list[LineString]:
+    """Lanes parallel to ``streets`` one plot-pair back on each side, and short links to them.
+
+    Arms meeting end to end are offset as one line (no lanes crossing at the bend).
+    A lane stops short of every other street (``others``, the other arms and the lanes
+    already made) and of ``keep_out`` (a green); a link that would cross one is dropped."""
     gap = 2.0 * depth + street_m + 1.0
+    # Stubs (the router's short spurs at the middle) would stop the arms merging there.
+    merged = shapely.line_merge(shapely.union_all([g for g in streets if g.length > 4.0 * depth]))
+    arms = [g for g in shapely.get_parts(merged) if isinstance(g, LineString)]
     out: list[LineString] = []
-    for st in streets:
+    for st in arms:
+        near: list[BaseGeometry] = [g for g in [*arms, *others] if g is not st]
+        if keep_out is not None and not keep_out.is_empty:
+            near.append(keep_out.boundary)
+        barrier = shapely.union_all(near) if near else LineString()
+        cut = barrier.buffer(0.9 * gap) if not barrier.is_empty else None
         for side in (gap, -gap):
             off = st.offset_curve(side, quad_segs=8, join_style="round")
-            for g in shapely.get_parts(off):
-                if isinstance(g, LineString) and g.length > 4.0 * depth:
-                    out.append(g)
-                    for end in (np.asarray(g.coords[0]), np.asarray(g.coords[-1])):
-                        q = shapely.ops.nearest_points(st, Point(float(end[0]), float(end[1])))[0]
-                        out.append(LineString([end, (q.x, q.y)]))
+            if cut is not None:
+                off = off.difference(cut)
+            for g in shapely.get_parts(shapely.line_merge(off)):
+                if not isinstance(g, LineString) or g.length <= 4.0 * depth:
+                    continue
+                out.append(g)
+                for end in (np.asarray(g.coords[0]), np.asarray(g.coords[-1])):
+                    q = shapely.ops.nearest_points(st, Point(float(end[0]), float(end[1])))[0]
+                    link = LineString([end, (q.x, q.y)])
+                    if link.length > 1.5 * gap or (not barrier.is_empty and link.crosses(barrier)) or \
+                            (keep_out is not None and link.crosses(keep_out)):
+                        continue
+                    out.append(link)
     return out
 
 
@@ -307,7 +330,8 @@ def village_layout(
     for _ in range(2):
         if not arms or len(tofts) >= 0.9 * households:
             break
-        extra = [g for g in back_lanes(arms, depth, street_m)
+        others = [g for g in streets if not any(g is a for a in arms)]
+        extra = [g for g in back_lanes(arms, depth, street_m, others, green)
                  if allowed.intersection(g.buffer(depth)).area > 2.0 * frontage * depth]
         if not extra:
             break

@@ -835,5 +835,24 @@ plot-pair behind their arms (offset curves, up to twice). Seed 536582844 local
 map 50/115, villages 0–39: 39 of 40 place ≥ 85% of their households (was 25 of
 40 before the back lanes), the one short (73%) a cluster.
 
+**Layout round 4, 2026-10-11** (user review of round 3: harbour, street v9 and
+cluster villages good; town 716 and city 32 fine, towns and cities to be dug
+into further before calling them done; **toft packing** — crowding and overlap
+where arms meet — deferred to the user's todo):
+
+- **Back lanes no longer cross** (street v6, green v5). Arms meeting end to end
+  are offset as one line (the router's short spur at the middle no longer stops
+  them merging), a lane stops 0.9 × its spacing short of every other street and
+  of the green, and a link that would cross one is dropped. Seed 536582844 map
+  50/115: no mid-street crossings left outside harbour villages (whose jetty
+  lane crosses its rows by design); 39 of 40 still place ≥ 85% of households.
+- **Walls take in sparse ground** (seed 4 city 13's north-west in-cut): the core
+  blob is cut from the whole footprint, not the footprint less its sparse
+  ground, so gardens on the core's edge are walled in, not walled round.
+
+**Phase 7 done 2026-10-11** (user call): the viewer as built — main view, Back,
+site/hinterland/layout drawn, layout hover + summary line, debug-only anchor and
+buildable toggles — is accepted; the full profile in the hover is not pursued.
+
 Polygon library for Decision 8: **shapely** (approved 2026-10-10; in
 `requirements.txt`).

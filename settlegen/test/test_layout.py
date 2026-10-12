@@ -15,6 +15,7 @@ from settlegen.layout import (
 from settlegen.profile import Industry, PolityRelation, SettlementProfile
 from settlegen.roads import Gate, RoadLine, SiteRoads
 from settlegen.site import SettlementSite
+from settlegen.village_layout import back_lanes
 from settlegen.water import RiverLine, SiteWater
 
 HALF = 1000.0
@@ -257,3 +258,34 @@ def test_a_fishing_village_packs_rows_along_the_shore_about_its_jetty():
     # Compact about the jetty: no farmstead far beyond the rows' reach (no 2 km shore street).
     far = max(np.linalg.norm(np.asarray(b.polygon.centroid.coords[0]) - jetty) for b in lay.blocks)
     assert far < 500.0
+
+
+def test_back_lanes_of_a_bent_street_do_not_cross():
+    # Two arms meeting at an angle at the middle, plus the router's short spur there: the
+    # lanes behind them run on round the bend as one each side, crossing nothing.
+    arms = [LineString([(0, 0), (-300, -300)]), LineString([(0, 0), (60, 80), (260, 300)]),
+            LineString([(0, 0), (-8, 8)])]
+    lanes = back_lanes(arms, 25.0, 6.0)
+    long = [g for g in lanes if g.length > 100.0]
+    assert len(long) == 2
+    every = [*arms[:2], *lanes]
+    assert not any(a.crosses(b) for i, a in enumerate(every) for b in every[i + 1:])
+
+
+def test_back_lanes_stay_off_the_green():
+    green = shapely.Point(0, 0).buffer(60.0)
+    # An arm leaving the green and bending as it goes: its lanes must not hook round onto it.
+    arm = LineString([(60, 0), (90, 40), (300, 120)])
+    lanes = back_lanes([arm], 25.0, 6.0, keep_out=green)
+    assert lanes
+    assert not any(g.intersects(green) for g in lanes)
+
+
+def test_walls_take_in_sparse_ground_not_round_it():
+    # A garden patch straddling the core's edge: the wall runs on through it, not in round its edge.
+    patch = box(150, -330, 330, -130)
+    site = dataclasses.replace(_site(), sparse=MultiPolygon([patch]))
+    lay = build_layout(site, _profile(), _slope(), (1, 2, 3))
+    assert lay.walls is not None
+    assert lay.core.intersection(patch).area > 0.1 * patch.area
+    assert lay.walls.line.intersection(patch.boundary.buffer(2.0)).length < 20.0

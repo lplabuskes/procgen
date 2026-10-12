@@ -812,8 +812,8 @@ def build_layout(
         float(params.core_share) + float(params.core_wall_gain) * float(profile.wall_strength)
         + float(params.core_young_gain) * young + (0.25 if town else 0.0), 0.05, 1.0))
     centre = market if "citadel" not in anchors else 0.6 * market + 0.4 * anchors["citadel"]
-    core = core_polygon(_multi(footprint.difference(site.sparse)) if not site.sparse.is_empty else footprint,
-                        centre, share, rng, float(params.core_wobble))
+    # Sparse ground (gardens, orchards) inside the line is walled in with the rest, not walled round.
+    core = core_polygon(footprint, centre, share, rng, float(params.core_wobble))
     if not citadel.is_empty:
         core = _multi(shapely.union_all([core, citadel]))
     walls: Optional[Walls] = None
