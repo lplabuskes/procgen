@@ -1,4 +1,4 @@
-"""A local map styles and reshapes its shores from the coast field its region passes down."""
+"""A local map styles and reshapes its shores from the ruggedness its region passes down."""
 import numpy as np
 import pytest
 
@@ -10,11 +10,11 @@ from region.upsample import SEA_LEVEL_KM, RegionUpsampleParams, build_region_fie
 @pytest.fixture(scope="module")
 def styled_region(globe):
     tex = globe.mesh.face_textures
-    tex["coast_smoothness"] = np.full(tex["elevation"].shape, 0.2, dtype=np.float32)
+    tex["ruggedness"] = np.full(tex["elevation"].shape, 0.8, dtype=np.float32)
     try:
         return build_region_fields(globe, REGION_ID, RegionUpsampleParams(n_cols=6, tex_size=TEX_SIZE))
     finally:
-        tex.pop("coast_smoothness")
+        tex.pop("ruggedness")
 
 
 @pytest.fixture(scope="module")
@@ -27,7 +27,7 @@ def shore_hex(styled_region) -> int:
 def test_reshaped_local_map_still_refines_its_region(globe, styled_region, shore_hex):
     on = build_local_fields(globe, styled_region, shore_hex, local_params())
     off = build_local_fields(globe, styled_region, shore_hex, local_params(reshape_coast=False))
-    assert np.allclose(on.textures["coast_smoothness"], 0.2)
+    assert np.allclose(on.textures["ruggedness"], 0.8)
     assert not np.array_equal(on.textures["elevation"], off.textures["elevation"])
     assert local_conservation_report(on, styled_region)["elevation"]["max"] < 1e-3
     elev = on.textures["elevation"].reshape(-1)

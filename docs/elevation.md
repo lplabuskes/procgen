@@ -18,7 +18,7 @@
 - `noise` — `noise_amplitude`, `noise_coast_sigma`
 - `face_erosion` — hydraulic/thermal knobs (hidden)
 - `volcanism` — `n_hotspots`, `volcanic_decay_rate`, `volcanic_max_hops`, `volcanic_elevation_scale`, `volcanic_elevation_scale_oceanic`
-- `ruggedness` — `base` (the master knob) and the seed's term weights ([below](#ruggednesspy))
+- `ruggedness` — the seed: `base` (the master knob, in `BASIC_PARAMS` as `globe.elevation.ruggedness.base`) and the term weights ([below](#ruggednesspy))
 
 Mesh params are not here (mesh is pre-built); river params are in
 `HydrologyParams`. The seed goes to `ElevationBuilder(params, *, seed)`; each draw
@@ -40,7 +40,7 @@ Attributes: `mesh`, `plate_ids`, `plate_omegas`, `face_velocities`,
 
 - Textures: `"elevation"` (`(N, H, W, 1)` float32, km), `"ocean_mask"` (`(N, H, W, 1)` uint8), `"ruggedness"` (`(N, H, W, 1)` float32 in [0, 1]).
 - Per face: `plate_id`, `plate_type`, `boundary_type`, `surface_speed`, `volcanic_activity`, `elevation` (tectonic + erosion + volcanic value *before noise* — read by resource placement), `is_ocean` (> half texels ocean).
-- Per face: `ruggedness` (seed index in [0, 1]; on load, the texture's face means).
+- Per face: `ruggedness` (seed index in [0, 1]). The ruggedness stage rewrites both later and restores the per-face values on load ([ruggedness.md](ruggedness.md)).
 - Feature `"volcanoes"`: unit-sphere positions of above-sea-level activity peaks.
 
 ## `elevation.py`
@@ -55,7 +55,7 @@ sinks → accumulate → erode/deposit), then thermal (talus).
 
 **`rasterize_face_values(mesh, face_values, tex_size, support_spacings=2.0)`** →
 `(N, H, W, K)` float32; shared by every stage rasterising a per-face field
-(elevation, temperature, humidity, fertility, forest, coast smoothness). Each
+(elevation, temperature, humidity, fertility, forest, ruggedness). Each
 texel = Wendland-C² weighted mean of face values whose centroids lie within
 `support_spacings` mean centroid spacings (a face's centre keeps ~½ its own
 value). A function of position alone → faces agree on seams/over-hangs, gradient
@@ -91,7 +91,8 @@ to set the sub-grid relief the region, local and settlement tiers draw, and to
 replace the slope / elevation-span proxies elsewhere
 ([plans/ruggedness.md](plans/ruggedness.md)). An index, not a physical quantity:
 terms add, and relief will map from it logarithmically, so `base` shifts sub-grid
-relief by a uniform factor. Later stages refine it in place.
+relief by a uniform factor. The ruggedness stage refines it in place
+([ruggedness.md](ruggedness.md)).
 
 `ruggedness_seed(mesh, params, seed, *, plate_types, boundary_data, rate_norm,
 volcanism, elevation)` sums, per face:
@@ -118,8 +119,9 @@ face elevation ≈ 0.68; collision belts brightest, plate interiors darkest.
 `elevation_legend_entries`, `OCEAN_COLOR`, `LAND_COLOR`, `BOUNDARY_COLORS`,
 `_plate_palette`, and water-aware helpers reused by other stages
 (`apply_water_masks`, `ocean_gradient_scheme`, `water_gradient_scheme`,
-`ocean_categorical_scheme`, `is_water_meta`).
+`ocean_categorical_scheme`, `is_water_meta`); `RUGGEDNESS_RECIPE`,
+`ruggedness_color`, `ruggedness_legend_entries` (registered by the ruggedness stage).
 
 **Elevation** always; `--debug`: Plates, Plate Type, Speed, Boundary, Volcanic
-Activity, **Ruggedness** (`RUGGEDNESS_RECIPE`, water flat, hillshaded; + hover), **Volcanoes** overlay (unchecked), `[px: … km]` hover
+Activity, **Volcanoes** overlay (unchecked), `[px: … km]` hover
 (`refined=("elevation",)`).

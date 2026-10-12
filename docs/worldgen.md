@@ -15,13 +15,13 @@ Pipeline([elevation, climate, hydrology, delta, climate.lake_feedback_stage(), c
 ```
 Built world = `self.globe` (alias of `Pipeline.world`). Builders exposed as
 `elevation_builder`, `climate_builder`, `hydrology_builder`, `delta_builder`,
-`coast_builder`, `resources_builder`, `danger_builder`, `cost_builder`. Only
-`ElevationBuilder` takes the world seed directly; danger and coast draw from
-`ctx.rng` ([danger.md](danger.md), [coast.md](coast.md)).
+`ruggedness_builder`, `resources_builder`, `danger_builder`, `cost_builder`. Only
+`ElevationBuilder` takes the world seed directly; danger draws from
+`ctx.rng` ([danger.md](danger.md)).
 
 **Display** via inherited `Pipeline.apply_display(window, debug=...)`.
 - Default: schemes **Elevation**, **Biome**; overlay **Rivers**.
-- `--debug` adds schemes Plates, Plate Type, Speed, Boundary, Volcanic Activity, Annual/Summer/Winter Temperature, Annual Precipitation, Humidity, Fertility, Forest Density, Dominant Crop, Delta, Coast Smoothness, Danger, Land Cost, Sea Cost; overlays Volcanoes, Winds (×4), Currents, River Deltas, Minerals, Rare Resources, Danger Sources; per-stage hover fragments.
+- `--debug` adds schemes Plates, Plate Type, Speed, Boundary, Volcanic Activity, Annual/Summer/Winter Temperature, Annual Precipitation, Humidity, Fertility, Forest Density, Dominant Crop, Delta, Ruggedness, Danger, Land Cost, Sea Cost; overlays Volcanoes, Winds (×4), Currents, River Deltas, Minerals, Rare Resources, Danger Sources; per-stage hover fragments.
 
 **`save_globe(pipeline, path)`** / **`load_globe(path) → (GlobePipeline, World)`**:
 physical-only persistence over `core/persistence.py` (scripts cache the globe and

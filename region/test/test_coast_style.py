@@ -23,16 +23,16 @@ def _params(**overrides) -> RegionUpsampleParams:
     return RegionUpsampleParams(**base)
 
 
-def _build(globe, smoothness, **overrides):
-    """Region fields with a uniform ``coast_smoothness`` on the globe (None: no field)."""
+def _build(globe, ruggedness, **overrides):
+    """Region fields with a uniform ``ruggedness`` on the globe (None: no field)."""
     tex = globe.mesh.face_textures
     shape = tex["elevation"].shape
-    if smoothness is not None:
-        tex["coast_smoothness"] = np.full(shape, smoothness, dtype=np.float32)
+    if ruggedness is not None:
+        tex["ruggedness"] = np.full(shape, ruggedness, dtype=np.float32)
     try:
         return build_region_fields(globe, REGION_ID, _params(**overrides))
     finally:
-        tex.pop("coast_smoothness", None)
+        tex.pop("ruggedness", None)
 
 
 def _shore_edges(fields) -> int:
@@ -103,12 +103,12 @@ def test_constant_persistence_matches_plain_fbm():
     assert np.allclose(plain, varying)
 
 
-# ── refine_fields with a coast field ─────────────────────────────────────────
+# ── refine_fields with a ruggedness field ─────────────────────────────────────────
 
 
-@pytest.mark.parametrize("smoothness", [0.0, 1.0])
-def test_conservation_and_the_water_invariants_hold(synthetic_globe, smoothness):
-    fields = _build(synthetic_globe, smoothness)
+@pytest.mark.parametrize("ruggedness", [0.0, 1.0])
+def test_conservation_and_the_water_invariants_hold(synthetic_globe, ruggedness):
+    fields = _build(synthetic_globe, ruggedness)
     assert conservation_report(fields, synthetic_globe)["elevation"]["max"] < 1e-3
     elev = fields.textures["elevation"].reshape(-1)
     ocean = fields.textures["ocean_mask"].reshape(-1) > 0.5
@@ -120,8 +120,8 @@ def test_conservation_and_the_water_invariants_hold(synthetic_globe, smoothness)
 
 def test_the_field_is_passed_down(synthetic_globe):
     fields = _build(synthetic_globe, 0.3)
-    assert np.allclose(fields.textures["coast_smoothness"], 0.3)
-    assert "coast_smoothness" not in _build(synthetic_globe, None).textures
+    assert np.allclose(fields.textures["ruggedness"], 0.3)
+    assert "ruggedness" not in _build(synthetic_globe, None).textures
 
 
 def test_without_a_field_nothing_changes(synthetic_globe):
@@ -131,7 +131,7 @@ def test_without_a_field_nothing_changes(synthetic_globe):
 
 
 def test_smooth_shores_are_shorter_than_rugged_ones(synthetic_globe):
-    assert _shore_edges(_build(synthetic_globe, 1.0)) < _shore_edges(_build(synthetic_globe, 0.0))
+    assert _shore_edges(_build(synthetic_globe, 0.0)) < _shore_edges(_build(synthetic_globe, 1.0))
 
 
 def test_reshaping_moves_the_shore_and_only_near_water(synthetic_globe):

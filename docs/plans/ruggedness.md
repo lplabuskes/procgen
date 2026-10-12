@@ -243,3 +243,14 @@ stays a candidate. Nothing reads the field yet. The basic knob
 (`globe.elevation.ruggedness.base`) joins `BASIC_PARAMS` in Phase 2, replacing
 `globe.coast.base_ruggedness`, so there is never more than one basic ruggedness
 knob, and never one that does nothing.
+
+**Phase 2 done (2026-10-11).** `worldgen/coast/` → `worldgen/ruggedness/`
+(`RuggednessBuilder`, `globe.ruggedness` = `RuggednessRefineParams`): glacial,
+river-mouth and wetland terms added to the seed in place; `coast_smoothness`
+and its channels, display and tests are gone. The region tier's coast style reads
+`ruggedness` (rugged 1 = old smoothness 0) and copies it down every tier, ready
+for Phase 3. The Ruggedness debug layer moved to the stage, with a refined hover
+on region and local views. `globe.elevation.ruggedness.base` replaced
+`globe.coast.base_ruggedness` in `BASIC_PARAMS`. Coastal land is ~0.2 smoother
+than the old coast field (seed 4 p5–p95 0.14–0.74 vs 0.31–0.90): plains coasts
+draw smoother. Left as is for review; `coast_*_smooth` params absorb it if wanted.

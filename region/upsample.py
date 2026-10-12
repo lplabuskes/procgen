@@ -15,7 +15,7 @@ biome boundaries into speckle; deriving both from the relief makes them follow
 ridges and valleys instead.
 
 - **Elevation** — slope-proportional fBm with a floor, faded under shallow water;
-  near water the coast smoothness restyles it (:func:`coast_style`).  Additive.
+  near water the parent's ruggedness restyles it (:func:`coast_style`).  Additive.
 - **Temperature** — lapse-rate correction on the refined relief.  Additive.
 - **Precipitation** — orographic response to the relief.  Multiplicative.
 - **Biome** — reclassified from the refined climate with the global classifier.
@@ -136,11 +136,11 @@ class RegionUpsampleParams:
     lacunarity: float = _f(2.0, label="Detail lacunarity", min=1.1, max=4.0)
     persistence: float = _f(0.5, label="Detail persistence", min=0.1, max=0.95)
     nyquist_safety: float = _f(0.5, label="Nyquist safety factor", min=0.1, max=1.0)
-    # ── coast style (from ``coast_smoothness``).  Coasts are nearly flat at the
+    # ── coast style (from ``ruggedness``).  Coasts are nearly flat at the
     # parent's scale, so near water the amplitude is ``wander × detail wavelength ×
     # parent slope`` and the shore moves ~``wander`` wavelengths whatever the
-    # gradient.  Smooth (1): little wander, low persistence; rugged (0): far
-    # wander, high persistence, and skerries (no underwater fade over the sea).
+    # gradient.  Smooth (ruggedness 0): little wander, low persistence; rugged (1):
+    # far wander, high persistence, and skerries (no underwater fade over the sea).
     # Fades out where the parent water fraction is within ``coast_band`` of 0 or 1.
     coast_band: float = _f(0.25, label="Coast style band (water fraction)", min=0.01, max=0.5, step=0.01)
     coast_persistence_smooth: float = _f(0.25, label="Smooth-coast persistence", min=0.05, max=0.95, step=0.05)
@@ -313,10 +313,10 @@ def _varying_persistence_fbm(
 
 @dataclass
 class CoastStyle:
-    """Per-texel detail style near water, from the parent's coast smoothness."""
+    """Per-texel detail style near water, from the parent's ruggedness."""
 
     near: np.ndarray         # (P,) blend weight: 1 at the shore, 0 away from it
-    smooth: np.ndarray       # (P,) the parent's coast smoothness
+    rugged: np.ndarray       # (P,) the parent's ruggedness
     persistence: np.ndarray  # (P,) fBm persistence
     wander: np.ndarray       # (P,) shoreline wander, in detail wavelengths
 
@@ -324,12 +324,12 @@ class CoastStyle:
 def coast_style(
     source: ParentSource, loc: Located, params: RegionUpsampleParams
 ) -> Optional[CoastStyle]:
-    """The near-shore detail style, or None without ``coast_smoothness`` (plain fBm).
+    """The near-shore detail style, or None without ``ruggedness`` (plain fBm).
 
     ``near`` is a tent on the parent's bilinear water fraction, zero within
     ``coast_band`` of all-land or all-water.
     """
-    if not source.has("coast_smoothness"):
+    if not source.has("ruggedness"):
         return None
     water = np.zeros(len(loc.anchors), dtype=np.float64)
     for key in ("ocean_mask", "lake_mask"):
@@ -337,16 +337,16 @@ def coast_style(
             water += source.coarse(key, loc)[:, 0]
     water = np.clip(water, 0.0, 1.0)
     near = np.clip(np.minimum(water, 1.0 - water) / max(float(params.coast_band), 1e-6), 0.0, 1.0)
-    smooth = np.clip(source.coarse("coast_smoothness", loc)[:, 0], 0.0, 1.0)
+    rugged = np.clip(source.coarse("ruggedness", loc)[:, 0], 0.0, 1.0)
     p_rugged, p_smooth = float(params.coast_persistence_rugged), float(params.coast_persistence_smooth)
     w_rugged, w_smooth = float(params.coast_wander_rugged), float(params.coast_wander_smooth)
-    coast_persistence = p_rugged + (p_smooth - p_rugged) * smooth
+    coast_persistence = p_smooth + (p_rugged - p_smooth) * rugged
     base = float(params.persistence)
     return CoastStyle(
         near=near,
-        smooth=smooth,
+        rugged=rugged,
         persistence=base + (coast_persistence - base) * near,
-        wander=w_rugged + (w_smooth - w_rugged) * smooth,
+        wander=w_smooth + (w_rugged - w_smooth) * rugged,
     )
 
 
@@ -833,9 +833,9 @@ def _reshape_coasts(
     if blur > 1:
         size = blur | 1
         wide = _box_filter(_box_filter(e.reshape(m, tex_size, tex_size, 1), size), size).reshape(-1)
-    goal = wide + (e - wide) * (1.0 - style.smooth)
+    goal = wide + (e - wide) * style.rugged
     w_rugged, w_smooth = float(params.coast_target_wander_rugged), float(params.coast_target_wander_smooth)
-    wander = w_rugged + (w_smooth - w_rugged) * style.smooth
+    wander = w_smooth + (w_rugged - w_smooth) * style.rugged
     if np.any(wander > 0.0):
         # The scales conservation removes from the elevation itself.
         freqs = np.array([0.5 * base_frequency, base_frequency])
@@ -938,7 +938,7 @@ def _add_small_lakes(
 class Terrain:
     """:func:`refine_terrain`'s result, with what the rest of :func:`refine_fields` reads."""
 
-    textures: dict[str, np.ndarray]   # elevation, water masks, filled_height, coast_smoothness, delta
+    textures: dict[str, np.ndarray]   # elevation, water masks, filled_height, ruggedness, delta
     located: Located
     detail_octaves: int
     water: "_AnchorWater"
@@ -1025,8 +1025,8 @@ def refine_terrain(
     textures["elevation"] = elevation.reshape(m, tex_size, tex_size, 1).astype(np.float32)
 
     # Copied (bilinear, not conserved) so the tier below styles its shores alike.
-    if style is not None:
-        textures["coast_smoothness"] = source.coarse("coast_smoothness", loc).reshape(
+    if source.has("ruggedness"):
+        textures["ruggedness"] = np.clip(source.coarse("ruggedness", loc), 0.0, 1.0).reshape(
             m, tex_size, tex_size, 1
         ).astype(np.float32)
 

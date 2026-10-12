@@ -49,7 +49,7 @@ def test_downsampling_recovers_the_local_elevation(inner, lake_local, globe):
 def test_the_rest_is_the_settlements_local_value(inner, lake_local, inner_center, globe):
     at = LocalMapsSource([lake_local], globe.antimeridian)
     loc = at.locate(inner_center[None])
-    refined = {"elevation", "ocean_mask", "lake_mask", "filled_height", "coast_smoothness", "delta", SMALL_LAKE_KEY}
+    refined = {"elevation", "ocean_mask", "lake_mask", "filled_height", "ruggedness", "delta", SMALL_LAKE_KEY}
     constant = set(lake_local.textures) - refined
     assert {"temperature", "precipitation", "biome", "fertility", "danger"} <= constant
     for key in constant:

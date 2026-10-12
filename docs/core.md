@@ -79,7 +79,7 @@ narrowed to the smallest int dtype, which zlib compresses far better than float
 bits. Non-finite textures fall back to verbatim. Encoding is idempotent
 (re-saving a loaded world reproduces it exactly). Current steps: elevation and
 filled height (relative to elevation) 0.1 m; temperature 0.05 °C; precipitation
-0.1% / humidity 0.25% (log); coast smoothness 1/255; delta, wetland, fertility,
+0.1% / humidity 0.25% (log); ruggedness 1/255; delta, wetland, fertility,
 forest density 0.001.
 
 - `save_world(world, params, stages, path)`

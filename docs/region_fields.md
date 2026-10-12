@@ -51,13 +51,13 @@ shared relief signal puts moisture/temperature bands on the contours.
 
 | field | detail | conserved |
 |---|---|---|
-| `elevation` | slope-proportional fBm — **the only noise source**; restyled/reshaped near water by coast smoothness | additively, smooth; shore edit keeps every parent mean |
+| `elevation` | slope-proportional fBm — **the only noise source**; restyled/reshaped near water by ruggedness | additively, smooth; shore edit keeps every parent mean |
 | `temperature` | lapse rate on refined relief (sub-sea-level ground counts as sea level) | additively, smooth |
 | `precipitation` | orographic: × `1 + orographic_gain · anomaly` (per km, clipped ±0.9) | multiplicatively, smooth |
 | `biome` | reclassified from **area-averaged** refined climate | derived |
 | `ocean_mask`, `lake_mask`, `filled_height` | re-flooded to the parent's water surface over refined relief, plus the tier's [small lakes](#small-lakes-regionlakespy) | surface exact; shoreline refined |
 | `small_lake_mask` | the part of `lake_mask` below the globe's resolution (`SMALL_LAKE_KEY`), the parent's re-flooded + this tier's | no |
-| `coast_smoothness` | bilinear copy of parent's (if any) | no — a style for the tier below |
+| `ruggedness` | bilinear copy of parent's (if any), clipped [0, 1] | no — a style for the tier below |
 | `delta` | bilinear copy of parent's delta plain ([delta.md](delta.md)), clipped [0, 1] | no — guides distributaries |
 | `wetland` | parent's score ± sub-grid relief, stamped into `biome` at the tier's lower threshold; riparian marsh added once rivers are routed ([wetland.md](wetland.md)) | no — derived |
 | `forest_density` | treeline on refined elevation | multiplicatively, over land |
@@ -220,8 +220,8 @@ Harbours (`tier_sites.coast_lake`) stay on the globe's lakes.
 
 ## Coast style
 
-The globe's `coast_smoothness` ([coast.md](coast.md)) gives each shore a style
-from 1 (long sweeping) to 0 (crenellated). Without it, neither step applies. Both
+The globe's `ruggedness` ([ruggedness.md](ruggedness.md)) gives each shore a style
+from 0 (long sweeping) to 1 (crenellated). Without it, neither step applies. Both
 act only in a **shore band**: a tent on the parent's bilinear water fraction, 1
 where parent texels are mixed, 0 within `coast_band` (0.25) of all-land/all-water
 (~one parent texel either side).
@@ -234,8 +234,8 @@ the coarse read beforehand does nothing); zero-mean-per-texel noise can only
 fringe it by 1–3 texels. Hence two steps.
 
 **1. Detail style (`coast_style`).** In the band, fBm persistence moves from
-`persistence` toward `coast_persistence_smooth` (0.25) / `_rugged` (0.8) per
-texel (`_varying_persistence_fbm`). Amplitude becomes `wander × detail wavelength
+`persistence` toward `coast_persistence_smooth` (0.25, ruggedness 0) / `_rugged`
+(0.8, ruggedness 1) per texel (`_varying_persistence_fbm`). Amplitude becomes `wander × detail wavelength
 × parent slope`, `wander` from `coast_wander_smooth` (0.03) to `_rugged` (0.5), so
 the shore moves ~that many wavelengths regardless of gradient (the
 slope-saturated amplitude would swamp a flat coast). Over sea, the underwater
@@ -246,7 +246,7 @@ conserved, a *target* shore is drawn and elevation edited to match:
 
 - **Target**: conserved elevation box-blurred twice over `coast_blur_texels`
   (1.5) parent texels (curves through the staircase), plus fine detail (elevation
-  − blur) × (1 − smoothness). Rugged shores add "bays": fBm one octave below the
+  − blur) × ruggedness. Rugged shores add "bays": fBm one octave below the
   detail band and the next (scales conservation removes), amplitude `target
   wander × 2 wavelengths × parent slope`, wander from
   `coast_target_wander_smooth` (0) to `_rugged` (0.5).

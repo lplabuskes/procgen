@@ -90,7 +90,7 @@ python3 scripts/measure_relief.py         [seeds…|--random N|--hexes N|--towns
 
 ## Architecture
 
-Pipeline: mesh → deregularize → dual → **elevation/tectonics** → **climate** → **hydrology** → **delta** → **climate lake-feedback** → **wetland** → **coast** → **resources** → **danger** → **cost** → *(optional)* **realmgen**
+Pipeline: mesh → deregularize → dual → **elevation/tectonics** → **climate** → **hydrology** → **delta** → **climate lake-feedback** → **wetland** → **ruggedness** → **resources** → **danger** → **cost** → *(optional)* **realmgen**
 
 Top-level orchestrator: `GlobePipeline` in `worldgen/builder.py`. Each stage is a `Stage` that reads from and writes to a `BuildContext`. Realmgen is a separate `RealmPipeline` with sub-stages: scoring → placement → population (incl. trade) → polity → refine → towns. Both pipelines are wired together in `main.py` (`AppPipeline` + `AppParams`). The region, local and settlement tiers (`region/`, `localmap/`, `settlegen/`) are view-side: built on demand when a region, hex or settlement is opened, never part of the world build.
 
@@ -111,7 +111,7 @@ Stage reference docs (read the relevant one before working on a stage):
 - [docs/hydrology.md](docs/hydrology.md) — `worldgen/hydrology/`
 - [docs/delta.md](docs/delta.md) — `worldgen/delta/` (river deltas: deposited plains shaped bird's-foot / arcuate / cuspate by river vs wave power, rivers carried across them, fertility / apex consumers; marshes are the wetland stage's)
 - [docs/wetland.md](docs/wetland.md) — `worldgen/wetland/`, `region/wetlands.py` (wetness score from slope, rain/PET and height above nearest drainage; the Wetland biome on the globe, refined with lower thresholds and riparian marsh on region/local maps)
-- [docs/coast.md](docs/coast.md) — `worldgen/coast/` (coast smoothness: the shore style the region/local tiers draw)
+- [docs/ruggedness.md](docs/ruggedness.md) — `worldgen/ruggedness/` (the elevation stage's ruggedness seed refined by cold, river mouths and wetlands; the region/local tiers style shores by it)
 - [docs/resources.md](docs/resources.md) — `worldgen/resources/`
 - [docs/danger.md](docs/danger.md) — `worldgen/danger/`
 - [docs/cost.md](docs/cost.md) — `worldgen/cost/`
