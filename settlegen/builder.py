@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
@@ -42,16 +43,28 @@ class SettlementMap:
 
 def build_settlement_map(
     store: "MapStore", ref: SettlementRef, params: Optional[SettlementMapParams] = None,
+    timings: Optional[dict[str, float]] = None,
 ) -> SettlementMap:
     """Build ``ref``'s settlement map from ``store``'s local maps.  ``params.upsample``
-    is expected to carry the local tier's shared detail (:func:`settlegen.upsample.with_local_detail`)."""
+    is expected to carry the local tier's shared detail (:func:`settlegen.upsample.with_local_detail`).
+    ``timings``, if given, gets each step's wall-clock seconds (chain, terrain, site, profile, layout)."""
     params = params or SettlementMapParams()
     globe = store.globe
     if globe is None:
         raise ValueError("the store has no globe")
+    clock = [time.perf_counter()]
+
+    def lap(name: str) -> None:
+        now = time.perf_counter()
+        if timings is not None:
+            timings[name] = now - clock[0]
+        clock[0] = now
+
     chain = ensure_local_maps(store, ref, float(params.upsample.margin_km), params.footprint)
+    lap("chain")
     fields = build_settlement_fields(
         globe, [m.fields for m in chain.maps], chain.center, chain.side_km, params.upsample)
+    lap("terrain")
     realm, world = store.realm_params, store.world_params
     site = build_site(
         globe, fields, chain, params.rivers, params.roads, params.footprint, params.anchors,
@@ -60,6 +73,9 @@ def build_settlement_map(
         land=world.cost.land if world is not None else None,
         danger_scale=float(realm.danger.movement_scale) if realm is not None else 2.0,
     )
+    lap("site")
     profile = build_profile(globe, fields, site.frame, chain, params.profile)
+    lap("profile")
     layout = build_layout(site, profile, site_slope(fields, site.frame), settlement_key(globe, ref), params.layout)
+    lap("layout")
     return SettlementMap(chain=chain, fields=fields, site=site, profile=profile, layout=layout)

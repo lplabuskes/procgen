@@ -41,6 +41,7 @@ Shared helpers for all `measure_*.py` scripts live in `scripts/_common.py`:
 - `get_realm_world(seed, rebuild, cache_dir=CACHE_DIR)` — the same with the realm stage run on it (settlements, towns, rural density, routes, danger) — what the region/local tiers read
 - `avg(rows, key)` — NaN-safe mean over a list of result dicts
 - `realm_params(overrides)` / `add_set_arg(parser)` — `RealmParams` with `--set a.b.c=value` overrides (`measure_borders`, `measure_polities`, `debug_borders`)
+- `get_map_store(seed, rebuild)` / `settlement_map_params(store)` — a `MapStore` on the realm world set up as the viewer's (local maps with the region's shared detail), and default `SettlementMapParams` for it — what settlement maps build through
 - `CACHE_DIR` — default world cache path (`saved_worlds/`)
 
 
@@ -62,6 +63,8 @@ python3 scripts/debug_local.py            [seed|--region R|--hex H|--layer L|--r
 python3 scripts/measure_villages.py       [seeds…|--random N|--hexes N|--rebuild-cache]
 python3 scripts/measure_wetlands.py       [seeds…|--random N|--rebuild-cache]
 python3 scripts/measure_borders.py        [seeds…|--random N|--detail|--rebuild-cache|--set P=V]
+python3 scripts/debug_settlement.py       [seed|--city K|--town K|--village R:H:I|--largest|--zoom Z|--anchors|--buildable]
+python3 scripts/measure_settlements.py    [seeds…|--random N|--cities N|--towns N|--villages N|--detail|--rebuild-cache]
 ```
 
 - `measure_seam_quality.py` — mean/median/RMS/max elevation jump (km) across ~350k matched boundary pixel pairs per seed.
@@ -78,6 +81,8 @@ python3 scripts/measure_borders.py        [seeds…|--random N|--detail|--rebuil
 - `debug_local.py` — local-map check. Renders one regional hex's local map side by side — left the region's fields upsampled only, right the real local map with its rivers, roads, towns, cities and villages — and prints the added relief, shoreline movement, the **conservation report** against the region (per regional texel; float32 noise), and the **village budget report** (rural + villages per global texel ∩ map; exact) with village counts, sizes, spacing and kinds. Defaults to the hex of the densest land; `--layer "Rural Density"` shows the countryside net of villages. Writes `scripts/results/local_<seed>_<region>_<hex>_<layer>.png`. See [docs/local.md](docs/local.md) and [docs/local_settlements.md](docs/local_settlements.md).
 - `measure_villages.py` — village statistics on local maps of hexes sampled across the rural-density range (face-density quantiles 0.5–1.0): villages per 100 km² vs the budget's prediction, size, nearest-neighbour spacing, share of rural people in villages (target `village_fraction`), share stranded in no-village budgets, kinds, conservation residual. Default seeds 4/31/35 (~85 s). Results appended to `scripts/results/village_results.json`.
 - `measure_borders.py` — how physical polity borders are: seatless land pieces (exclaves) per sovereign / direct governor (across-lake, overseas, land-cut), share of sovereign border length on a big river (overall and of the length within 60 km of one), the same for ridge lines (`realmgen/refine/ridges.py`, relief ≥ `--ridge-relief`). Default seeds 4/31/35. Results appended to `scripts/results/border_results.json`.
+- `debug_settlement.py` — settlement-map check. Builds one settlement map through the chain and renders it with the viewer offscreen (relief, water, roads, footprint, fields, layout; `--anchors`/`--buildable` add the debug overlays); prints the frame, per-step timings, the **conservation report** against the local maps (per local texel; float32 noise), the site (water, gates, bridges/fords, landings, footprint vs `population / density`, anchors, hinterland), the profile and the layout. Defaults to seed 4's largest city. Writes `scripts/results/settlement_<seed>_<kind><index>.png`. See [docs/settlement_maps.md](docs/settlement_maps.md).
+- `measure_settlements.py` — settlement maps across seeds: each seed's largest cities, towns at population quantiles 0.5–1 and villages of the largest city's local map; build time per step (the chain dominates when maps aren't held), conservation max, footprint error, pieces, sparse share, gates, crossings, landings, anchor counts, blocks/plots/piers, wall length. Default seeds 4/31/35 (~4 min). Results appended to `scripts/results/settlement_results.json`.
 - `measure_wetlands.py` — global Wetland biome: share of land (whole-texel target ~4–6%; Earth ~6–9% finer-grained), share per climate biome, rain-fed share, largest connected complexes vs West Siberia / Pantanal / Sudd. Re-scores the cached physical world with current `WetlandParams` (no rebuild needed). Results appended to `scripts/results/wetland_results.json`.
 
 
@@ -85,7 +90,7 @@ python3 scripts/measure_borders.py        [seeds…|--random N|--detail|--rebuil
 
 Pipeline: mesh → deregularize → dual → **elevation/tectonics** → **climate** → **hydrology** → **delta** → **climate lake-feedback** → **wetland** → **coast** → **resources** → **danger** → **cost** → *(optional)* **realmgen**
 
-Top-level orchestrator: `GlobePipeline` in `worldgen/builder.py`. Each stage is a `Stage` that reads from and writes to a `BuildContext`. Realmgen is a separate `RealmPipeline` with sub-stages: scoring → placement → population (incl. trade) → polity → refine → towns. Both pipelines are wired together in `main.py` (`AppPipeline` + `AppParams`). The region and local tiers (`region/`, `localmap/`) are view-side: built on demand when a region or hex is opened, never part of the world build.
+Top-level orchestrator: `GlobePipeline` in `worldgen/builder.py`. Each stage is a `Stage` that reads from and writes to a `BuildContext`. Realmgen is a separate `RealmPipeline` with sub-stages: scoring → placement → population (incl. trade) → polity → refine → towns. Both pipelines are wired together in `main.py` (`AppPipeline` + `AppParams`). The region, local and settlement tiers (`region/`, `localmap/`, `settlegen/`) are view-side: built on demand when a region, hex or settlement is opened, never part of the world build.
 
 Stage reference docs (read the relevant one before working on a stage):
 
@@ -97,6 +102,7 @@ Stage reference docs (read the relevant one before working on a stage):
 - [docs/region_features.md](docs/region_features.md) — `region/corridor.py`, `rivers.py`, `distributaries.py`, `streams.py`, `roads.py`, `towns.py`, `cities.py`: rivers (with delta distributaries), roads, towns and cities re-sited on refined terrain; the region's own streams for the local maps
 - [docs/local.md](docs/local.md) — `localmap/` local maps (one regional hex refined onto its own hex grid: geometry, fields, rivers, roads)
 - [docs/local_settlements.md](docs/local_settlements.md) — local-map towns and cities, city footprints, farmland, villages
+- [docs/settlement_maps.md](docs/settlement_maps.md) — `settlegen/` settlement maps (one town, city or village at ~15 m: the chain to its local maps, conserved terrain, site as vectors — water, roads, footprint, anchors, fields — profile, layout by tier)
 - [docs/worldgen.md](docs/worldgen.md) — `worldgen/builder.py`, `main.py`, pipeline stage contract
 - [docs/elevation.md](docs/elevation.md) — `worldgen/geology/`
 - [docs/climate.md](docs/climate.md) — `worldgen/climate/`

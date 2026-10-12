@@ -8,6 +8,8 @@ This doc: frame, fields, rivers, roads. Rest of the tier:
 - [local_settlements.md](local_settlements.md) — towns and cities re-sited locally, river banks, city footprints, farmland, villages
 - [viz_regionview.md](viz_regionview.md) — the viewer (`RegionView` shows local maps too)
 
+One tier down: [settlement_maps.md](settlement_maps.md) — one town, city or village refined from its local map(s) at street scale.
+
 ## Files
 - `localmap/geometry.py` — `LocalGeometry`: parent hex's texture square mapped affinely onto `[0, 1]²`
 - `localmap/grid.py` — `LocalHexGrid`: `RegionHexGrid` kept to the parent hexagon; `texture_in_map`

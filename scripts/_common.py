@@ -68,6 +68,29 @@ def get_realm_world(seed: int, rebuild: bool, cache_dir: Path = CACHE_DIR) -> Wo
     return world
 
 
+def get_map_store(seed: int, rebuild: bool = False, cache_dir: Path = CACHE_DIR):  # type: ignore[no-untyped-def]
+    """A :class:`localmap.store.MapStore` on :func:`get_realm_world`, its local maps
+    carrying the region tier's shared detail as the viewer's do — what the settlement
+    chain (:mod:`settlegen.chain`) builds through."""
+    import dataclasses
+    from localmap.store import MapStore
+    from localmap.upsample import with_region_detail
+    store = MapStore(get_realm_world(seed, rebuild, cache_dir), region_capacity=4, local_capacity=8)
+    local = store.local_params
+    store.set_local_params(dataclasses.replace(
+        local, upsample=with_region_detail(local.upsample, store.region_params.upsample)))
+    return store
+
+
+def settlement_map_params(store):  # type: ignore[no-untyped-def]
+    """Default ``SettlementMapParams`` with ``store``'s local tier's shared detail, as the viewer passes them."""
+    import dataclasses
+    from settlegen.params import SettlementMapParams
+    from settlegen.upsample import with_local_detail
+    params = SettlementMapParams()
+    return dataclasses.replace(params, upsample=with_local_detail(params.upsample, store.local_params.upsample))
+
+
 def realm_params(overrides: list[str]):  # type: ignore[no-untyped-def]
     """``RealmParams`` with ``a.b.c=value`` overrides (value parsed as the field's type)."""
     from realmgen.builder import RealmParams

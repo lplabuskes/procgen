@@ -885,5 +885,24 @@ off the land it crosses (city 195's island ends in a ~90 m straight edge).
 site/hinterland/layout drawn, layout hover + summary line, debug-only anchor and
 buildable toggles — is accepted; the full profile in the hover is not pursued.
 
+**Phase 6 done 2026-10-11** (user call). Deferred: toft packing where village
+arms meet (user's todo); towns and cities may get more review. Not built (the
+first cut's gaps): a ring street inside the walls, wall gates for minor streets,
+houses within plots, block pieces under 12% of the goal dropped.
+
+**Phase 8 done 2026-10-11.** `docs/settlement_maps.md` (linked from
+`docs/local.md`, CLAUDE.md); `scripts/debug_settlement.py` (renders through the
+viewer offscreen, prints frame, timings, conservation, site, profile, layout);
+`scripts/measure_settlements.py` → `scripts/results/settlement_results.json`;
+`build_settlement_map(..., timings=)`; `_common.get_map_store` /
+`settlement_map_params` (the spike's store setup, shared). First run, seeds
+4/31/35 (18 cities, 9 towns, 9 villages): conservation max 7.9e-9 km; dense
+footprint 2–5% under `population / density` (villages up to 8.5%); after the
+chain cities 2.3 s, towns/villages 0.3 s, the chain 3–7 s per map not held.
+Seen, not fixed: **no town had a gate** (every town's site has 0 roads crossing
+its footprint, even waypoint towns — roads in their frames, or towns off them?),
+cities 0–4 gates (mean 1.6; seed 4 city 38 none); no fords anywhere (cities
+bridge by rule; towns had no crossings).
+
 Polygon library for Decision 8: **shapely** (approved 2026-10-10; in
 `requirements.txt`).

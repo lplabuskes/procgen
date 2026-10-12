@@ -24,7 +24,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import math
 import time
 from typing import TYPE_CHECKING, Optional
@@ -32,7 +31,6 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 
 from localmap.store import MapStore
-from localmap.upsample import with_region_detail
 from realmgen.placement.types import SITE_KIND_CONFLUENCE, SITE_KIND_RIVER
 from region.geometry import RegionGeometry, ecef_to_cell
 from region.grid import RegionHexGrid
@@ -43,18 +41,14 @@ from settlegen import (
     with_local_detail,
 )
 from settlegen.chain import SettlementRef, position, ensure_local_maps, population
-from _common import get_realm_world
+from _common import get_map_store
 
 if TYPE_CHECKING:
     from core.world import World
 
 
 def make_store(seed: int) -> MapStore:
-    store = MapStore(get_realm_world(seed, False), region_capacity=4, local_capacity=8)
-    local = store.local_params
-    store.set_local_params(dataclasses.replace(
-        local, upsample=with_region_detail(local.upsample, store.region_params.upsample)))
-    return store
+    return get_map_store(seed)
 
 
 def seam_report(fields: RegionFields, source: LocalMapsSource) -> Optional[tuple[float, float, int, float, float]]:

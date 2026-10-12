@@ -78,9 +78,10 @@ layout (`_layout_cache`). While the layout shows, the screen-space overlays are
 clipped out of the footprint (its arterials carry the roads there). A village's
 footprint is not filled (its tofts and streets are the village); a green,
 quays (stone) and piers (timber, over the water) draw with it. Hover on a
-settlement map (`settlement_hover`): what of the layout is under the cursor
+settlement map (`settlement_hover`): the settlement (`settlement_name`: `City 13`,
+`Village 3 (local map 50/115)`), then what of the layout is under the cursor
 (`settlegen.layout.describe_at`), the height in metres, sea/lake/biome — not the
-world face's readouts; the status line is `settlegen.layout.summary`.
+world face's readouts; the status line is the name and `settlegen.layout.summary`.
 Cartographic overlay sizes follow the local map's scale (`_equivalent_zoom`).
 `settlement_at_cursor` / `set_settlement_click_callback`: the settlement under a
 click at the scale on screen (region: towns, city markers; local or settlement
