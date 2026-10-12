@@ -429,7 +429,7 @@ class RegionView(QWidget):
         if self._settlement is not None:
             c = self._settlement.chain
             return (
-                f"Settlement map · {layout_summary(self._settlement.layout, self._settlement.profile)} · "
+                f"{self.settlement_name()} · {layout_summary(self._settlement.layout, self._settlement.profile)} · "
                 f"{c.side_km:.1f} km frame at ~{math.sqrt(f.texel_area_km2) * 1000:.0f} m"
             )
         if self._local is not None:
@@ -571,7 +571,9 @@ class RegionView(QWidget):
                     xy = np.asarray(xy, dtype=np.float64).reshape(-1, 2)
                     return np.column_stack([x0 + (xy[:, 0] / side + 0.5) * size, y0 + (0.5 - xy[:, 1] / side) * size])
 
-                cell = cell.subtracted(transform.map(_site_path(settlement.site.footprint, to_px)))
+                built = settlement.layout.footprint if settlement.layout.footprint is not None \
+                    else settlement.site.footprint
+                cell = cell.subtracted(transform.map(_site_path(built, to_px)))
             painter.setClipPath(cell, Qt.ClipOperation.IntersectClip)
             draw_overlays(
                 painter, self._globe, self._overlay_visible, self._overlay_projector(),
@@ -855,12 +857,20 @@ class RegionView(QWidget):
         side = self._settlement.site.frame.side_m
         return np.array([((p.x() - x0) / size - 0.5) * side, (0.5 - (p.y() - y0) / size) * side])
 
+    def settlement_name(self) -> str:
+        """Which settlement is on screen: ``City 13``, ``Town 716``, ``Village 3 (local map 50/115)``."""
+        if self._settlement is None:
+            return ""
+        ref = self._settlement.ref
+        name = f"{ref.kind.capitalize()} {ref.index}"
+        return f"{name} (local map {ref.map[0]}/{ref.map[1]})" if ref.map is not None else name
+
     def settlement_hover(self, texel: Optional[tuple[int, int, int]]) -> list[str]:
-        """Status fragments over a settlement map: what of the layout is under the cursor,
-        then the ground — height in metres, and sea, lake or biome."""
+        """Status fragments over a settlement map: the settlement, what of its layout is under
+        the cursor, then the ground — height in metres, and sea, lake or biome."""
         if self._settlement is None:
             return []
-        parts: list[str] = []
+        parts: list[str] = [self.settlement_name()]
         xy = self._cursor_frame_xy()
         settlement = self._settlement
         if xy is not None and self._overlay_visible.get(_KIND_OVERLAY[settlement.ref.kind], True):
@@ -1147,7 +1157,8 @@ class RegionView(QWidget):
                 painter.setPen(_cosmetic_pen(_FOOTPRINT_PEN))
                 # Not the tier colour: some tiers are blue, as water.  Under a layout, the streets' colour.
                 painter.setBrush(_STREET_FILL if layout.blocks else _BUILT_FILL)
-                painter.drawPath(_site_path(site.footprint, to_px))
+                painter.drawPath(_site_path(layout.footprint if layout.footprint is not None else site.footprint,
+                                            to_px))
             if layout.blocks:
                 self._draw_layout(painter, layout, x0, y0, size, side)
         # The sea and lakes as their smooth outlines (over the raster's texels); the channels

@@ -338,7 +338,8 @@ def test_clicking_a_town_on_a_local_map_opens_its_settlement_map(app, globe, set
     view = window._settlement_view
     assert window._stack.currentWidget() is view and view.settlement_map is not None
     assert view.settlement_map.ref == ref
-    assert "Settlement map" in view.status_text()
+    assert view.status_text().startswith(f"Town {ref.index} · ")
+    assert view.settlement_hover(None)[0] == f"Town {ref.index}"
     assert window._back_btn.text() == "← Local map"
     # Its local map was already open: nothing else built unless the frame reaches past it.
     assert len(window._store.builds) - builds == len(view.settlement_map.chain.keys) - 1

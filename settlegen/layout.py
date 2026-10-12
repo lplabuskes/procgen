@@ -49,6 +49,7 @@ a village are different places, not one plan at three sizes.  Villages:
 from __future__ import annotations
 
 import math
+import dataclasses
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional, Sequence
 
@@ -107,6 +108,8 @@ class SettlementLayoutParams:
     wall_m: float = _f(5.0, label="Wall width (m)", min=1.0, max=30.0, step=0.5)
     wall_water_m: float = _f(15.0, label="No wall within (m) of water", min=0.0, max=200.0, step=1.0)
     tower_spacing_m: float = _f(70.0, label="Tower spacing at strength 1 (m)", min=10.0, max=500.0, step=5.0)
+    # Walls are dear: the line spans notches narrower than this × the core's radius.
+    wall_closing: float = _f(0.35, label="Wall spans notches (× core radius)", min=0.0, max=1.0, step=0.05)
     # Open grounds scale with people, within _PLAZA_M2 / _CITADEL_M2 / _PRECINCT_M2.
     plaza_m2_per_person: float = _f(0.08, label="Market plaza (m² per person)", min=0.0, max=2.0, step=0.01)
     citadel_m2_per_person: float = _f(0.15, label="Citadel (m² per person)", min=0.0, max=5.0, step=0.01)
@@ -196,6 +199,8 @@ class SettlementLayout:
     piers: list[Polygon] = field(default_factory=list)
     green: MultiPolygon = field(default_factory=MultiPolygon)        # a village green
     fill_footprint: bool = True              # the footprint is streets between the blocks (not a village)
+    # The built-up ground when the layout grew the site's footprint (walls taking in gardens).
+    footprint: Optional[MultiPolygon] = None
 
     @staticmethod
     def empty() -> "SettlementLayout":
@@ -816,6 +821,19 @@ def build_layout(
     core = core_polygon(footprint, centre, share, rng, float(params.core_wobble))
     if not citadel.is_empty:
         core = _multi(shapely.union_all([core, citadel]))
+    grown: Optional[MultiPolygon] = None
+    if profile.walls and not core.is_empty and float(params.wall_closing) > 0.0:
+        # The wall takes the short way across a notch in the core's edge (and round the
+        # citadel); dry ground it takes in beyond the footprint is walled gardens.
+        r = float(params.wall_closing) * math.sqrt(core.area / math.pi)
+        dry = site.frame.box().difference(site.water.bodies)
+        closed = _multi(core.buffer(r, quad_segs=16).buffer(-r, quad_segs=16).intersection(dry))
+        biggest = max([g.area for g in closed.geoms] or [0.0])
+        core = _multi(shapely.union_all([core, *(g for g in closed.geoms if g.area >= 0.05 * biggest)]))
+        added = _multi(core.difference(footprint))
+        if added.area > 1.0:
+            footprint = grown = _multi(footprint.union(added))
+            site = dataclasses.replace(site, footprint=footprint, sparse=_multi(site.sparse.union(added)))
     walls: Optional[Walls] = None
     if profile.walls and not core.is_empty:
         kind = "stone" if profile.wall_strength >= float(params.stone_wall_strength) else "palisade"
@@ -921,7 +939,7 @@ def build_layout(
     return SettlementLayout(
         anchors=anchors, core=core, walls=walls, citadel=citadel, plaza=plaza, precinct=precinct,
         arterials=arterials, bridges=bridges, streets=streets, blocks=out_blocks, points=points,
-        arterial_m=float(params.arterial_m), quays=docks.quays, piers=docks.piers,
+        arterial_m=float(params.arterial_m), quays=docks.quays, piers=docks.piers, footprint=grown,
     )
 
 
@@ -1000,7 +1018,8 @@ def describe_at(layout: SettlementLayout, site: "SettlementSite", xy: np.ndarray
         return label if block.district in OPEN_DISTRICTS or not len(block.lots) else f"{label} · yard"
     if not site.water.channels.is_empty and site.water.channels.contains(pt):
         return "River"                   # the sea and lakes the ground's own readout names
-    if layout.fill_footprint and site.footprint.contains(pt):
+    built = layout.footprint if layout.footprint is not None else site.footprint
+    if layout.fill_footprint and built.contains(pt):
         return "Street"
     return None
 

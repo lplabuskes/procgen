@@ -850,6 +850,24 @@ where arms meet — deferred to the user's todo):
   blob is cut from the whole footprint, not the footprint less its sparse
   ground, so gardens on the core's edge are walled in, not walled round.
 
+**Layout round 5, 2026-10-11** (user review, seed 797951276):
+
+- **Walls span notches** (city 6, region 28 hex 27: a south-west dent; walls
+  are dear). The core is closed (`wall_closing` 0.35 × its radius: buffer out
+  and back, on dry ground in the frame) before the wall is drawn round it; dry
+  ground it takes in beyond the site's footprint joins the layout's own
+  `SettlementLayout.footprint` as sparse ground (walled gardens, or whatever
+  district claims it — city 6's went to the elite quarter by the citadel). The
+  viewer draws and clips roads to that footprint. The site's footprint is not
+  changed.
+- **Islands keep clear of confluences** (city 3, region 17 hex 122: an island
+  on the junction): a confluence partway along a line was not one of its ends,
+  so islands only kept clear of ends. Now also of every other line, by the
+  river's width plus half the other's. The confluence's shape itself is
+  unchanged (user: "maybe it's fine").
+- **Hover/status name the settlement** (`City 13`, `Village 3 (local map
+  50/115)`), lost when the layout summary replaced it.
+
 **Phase 7 done 2026-10-11** (user call): the viewer as built — main view, Back,
 site/hinterland/layout drawn, layout hover + summary line, debug-only anchor and
 buildable toggles — is accepted; the full profile in the hover is not pursued.

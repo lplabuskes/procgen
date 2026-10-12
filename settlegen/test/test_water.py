@@ -152,6 +152,22 @@ def test_islands_are_long_narrow_and_along_the_river():
         assert abs(0.5 * (y0 + y1)) < 0.1 * 200.0  # in the channel's middle
 
 
+def test_islands_keep_clear_of_a_confluence_partway_along():
+    params = SettlementRiverParams(islands_per_km=5.0, width_wander=0.0, bank_wander=0.0)
+    main = _river(200.0)
+    alone = [shapely.Polygon(r) for p in natural_channels([main], MultiPolygon(), params).geoms for r in p.interiors]
+    assert len(alone) >= 2
+    # A tributary joining from the side right where the river alone has an island.
+    x = alone[0].centroid.x
+    trib = RiverLine(xy=np.array([[x, 3000.0], [x, 0.0]]), flows=np.ones(1), width_m=np.full(1, 80.0),
+                     in_water=np.zeros(1, bool), minor=False)
+    channel = natural_channels([main, trib], MultiPolygon(), params)
+    rings = [shapely.Polygon(r) for p in channel.geoms for r in p.interiors]
+    assert rings                                   # islands elsewhere along it still
+    junction = shapely.Point(x, 0.0)
+    assert all(isle.distance(junction) > 200.0 for isle in rings)
+
+
 def _line(xy):
     xy = np.asarray(xy, dtype=float)
     k = len(xy) - 1

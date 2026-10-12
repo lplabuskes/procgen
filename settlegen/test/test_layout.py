@@ -289,3 +289,19 @@ def test_walls_take_in_sparse_ground_not_round_it():
     assert lay.walls is not None
     assert lay.core.intersection(patch).area > 0.1 * patch.area
     assert lay.walls.line.intersection(patch.boundary.buffer(2.0)).length < 20.0
+
+
+def test_walls_span_a_notch_in_the_edge_and_take_in_its_ground():
+    # A slot cut into the footprint's west edge: the wall runs across its mouth, and the
+    # ground it takes in joins the layout's own footprint (the site's is left as it was).
+    site = _site()
+    notch = box(-400, -250, -280, -150)
+    site = dataclasses.replace(site, footprint=MultiPolygon(list(shapely.get_parts(site.footprint.difference(notch)))))
+    lay = build_layout(site, _profile(), _slope(), (1, 2, 3))
+    assert lay.walls is not None and lay.footprint is not None
+    assert lay.footprint.contains(site.footprint.buffer(-1e-6))
+    assert lay.footprint.intersection(notch).area > 0.8 * notch.area
+    assert lay.walls.line.intersection(notch.buffer(-15.0)).length < 1.0     # across its mouth, not round it
+    off = build_layout(site, _profile(), _slope(), (1, 2, 3), SettlementLayoutParams(wall_closing=0.0))
+    assert off.footprint is None and off.walls is not None
+    assert off.walls.line.intersection(notch.buffer(1.0)).length > 100.0

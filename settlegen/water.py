@@ -366,8 +366,11 @@ def _end_heading(xy: np.ndarray, reach: float) -> np.ndarray:
 def _line_channel(
     line: RiverLine, params: SettlementRiverParams,
     extend: tuple[Optional[np.ndarray], Optional[np.ndarray]] = (None, None),
+    avoid: Sequence[tuple[LineString, float]] = (),
 ) -> tuple[list[Polygon], list[Polygon]]:
-    """``(bank quads, islands)`` of one line's channel.  See :func:`natural_channels`."""
+    """``(bank quads, islands)`` of one line's channel.  ``avoid``: the other lines and
+    their widths, which islands keep clear of (a confluence partway along this line).
+    See :func:`natural_channels`."""
     xy = np.asarray(line.xy, dtype=np.float64)
     seg = np.linalg.norm(np.diff(xy, axis=0), axis=1)
     keep = np.r_[True, seg > 1e-9]
@@ -448,6 +451,10 @@ def _line_channel(
         ends = np.flatnonzero(span)[[0, -1]]
         if float(np.dot(tangent[ends[0]], tangent[ends[1]])) < np.cos(np.radians(60.0)):
             continue              # not on a sharp bend
+        # Clear of a channel joining (or leaving) partway along: half a width past both banks.
+        stretch = LineString(p[span]) if span.sum() >= 2 else Point(p[i])
+        if any(other.distance(stretch) < w[i] + 0.5 * ow for other, ow in avoid):
+            continue
         taken.append((lo, hi))
         # The channel widens by a share of the island's breadth, tapered over twice its
         # length, so the banks swell gently rather than bulge.
@@ -513,7 +520,7 @@ def natural_channels(
     ``island_min_width_m`` wide get ``islands_per_km`` islands (Poisson): long and
     narrow, ``island_width`` × the width broad and ``island_length`` × that long
     (±30%), blunt upstream and tapering downstream, along the channel's middle,
-    clear of the line's ends and sharp bends; the channel widens round each by
+    clear of the line's ends, sharp bends and other lines (a width plus half theirs); the channel widens round each by
     ``island_widening`` × its breadth, tapered over twice its length.  Unclipped: as far as the lines reach.
     In-water stretches are widened too, so a channel meets its sea or lake whole, and
     land between the two narrower than ``min_land_m`` goes under the channel.  The
@@ -525,7 +532,8 @@ def natural_channels(
     quads, islands = [], []
     others = [LineString(line.xy) for line in lines]
     for k, line in enumerate(lines):
-        q, i = _line_channel(line, params, _runs_on(line, k, lines, others, still, half))
+        avoid = [(others[j], float(np.max(lines[j].width_m))) for j in range(len(lines)) if j != k]
+        q, i = _line_channel(line, params, _runs_on(line, k, lines, others, still, half), avoid)
         quads.extend(q)
         islands.extend(i)
     if not quads:
