@@ -7,10 +7,10 @@ import pytest
 from core.mesh import Mesh
 from worldgen.coast.builder import (
     CoastParams,
-    _decayed_max,
     coast_smoothness,
     river_mouth_strength,
 )
+from worldgen.geology.ruggedness import decayed_max
 
 
 @pytest.fixture(scope="module")
@@ -90,7 +90,7 @@ def test_diffusion_spreads_a_spike(mesh):
 
 def test_decayed_max_decays_per_hop():
     adjacency = [[1], [0, 2], [1, 3], [2]]               # a path
-    out = _decayed_max(adjacency, np.array([1.0, 0.0, 0.0, 0.0]), decay_hops=1.0)
+    out = decayed_max(adjacency, np.array([1.0, 0.0, 0.0, 0.0]), decay_hops=1.0)
     assert np.allclose(out, np.exp(-np.arange(4.0)))
 
 

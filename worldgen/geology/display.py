@@ -7,7 +7,7 @@ import numpy as np
 
 from core.display import TextureRecipe
 
-from viz.color_stops import interp_stops, interp_stops_scalar, gradient_scheme, categorical_scheme
+from viz.color_stops import categorical_scheme, gradient_scheme, gradient_texture, interp_stops, interp_stops_scalar
 
 
 OCEAN_COLOR = (0.25, 0.55, 0.85, 1.0)
@@ -160,3 +160,32 @@ def _render_elevation(tex: Mapping[str, np.ndarray]) -> np.ndarray:
 
 # The "Elevation" layer, for the world map and (from refined data) regions alike.
 ELEVATION_RECIPE = TextureRecipe(_render_elevation, sources=("elevation",), relief=True)
+
+
+# ── Ruggedness (debug) ───────────────────────────────────────────────────────
+# Smooth (pale green) → rolling (olive) → rugged (brown) → alpine (slate).
+_RUGGEDNESS_STOPS = [
+    (0.00, (0.80, 0.88, 0.62, 1.0)),
+    (0.35, (0.58, 0.62, 0.32, 1.0)),
+    (0.65, (0.52, 0.36, 0.20, 1.0)),
+    (1.00, (0.28, 0.27, 0.33, 1.0)),
+]
+
+ruggedness_color = ocean_gradient_scheme("ruggedness", _RUGGEDNESS_STOPS, default=0.3)
+
+
+def ruggedness_legend_entries() -> list[tuple[str, tuple]]:
+    labels = ["smooth", "rolling", "rugged", "alpine"]
+    return [(lbl, c) for lbl, (_, c) in zip(labels, _RUGGEDNESS_STOPS)]
+
+
+def _render_ruggedness(tex: Mapping[str, np.ndarray]) -> np.ndarray:
+    rugged = np.clip(np.asarray(tex["ruggedness"], dtype=np.float32), 0.0, 1.0)
+    return apply_water_masks(
+        gradient_texture(rugged, _RUGGEDNESS_STOPS),
+        ocean_mask_tex=tex.get("ocean_mask"), lake_mask_tex=tex.get("lake_mask"),
+    )
+
+
+# Drawn on land with water flat; hillshaded where the view has relief.
+RUGGEDNESS_RECIPE = TextureRecipe(_render_ruggedness, sources=("ruggedness",), relief=True)

@@ -25,3 +25,10 @@ VOLCANIC_ACTIVITY = MetaChannel("volcanic_activity", dtype=np.float64)
 ELEVATION = TextureChannel("elevation", n_channels=1, codec=TextureCodec(step=1e-4))
 # Single-channel ocean fraction in [0, 1], (N, H, W, 1).
 OCEAN_MASK = TextureChannel("ocean_mask", n_channels=1)
+
+# ── Ruggedness (worldgen/geology/ruggedness.py) ──────────────────────────────
+# Sub-grid roughness index in [0, 1] (0 smooth, 1 alpine): seeded from tectonics
+# here, refined in place by later stages; steers the finer tiers' relief.
+RUGGEDNESS_FACE = MetaChannel("ruggedness", dtype=np.float64, default=0.3)
+# The same field rasterised continuously across face edges, (N, H, W, 1).
+RUGGEDNESS = TextureChannel("ruggedness", n_channels=1, codec=TextureCodec(step=1 / 255))

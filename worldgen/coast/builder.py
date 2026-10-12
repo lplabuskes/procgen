@@ -19,6 +19,7 @@ from utils.simplex import fbm_sum, make_perm
 from worldgen.climate.channels import TEMPERATURE_ANNUAL
 from worldgen.coast.channels import COAST_SMOOTHNESS, COAST_SMOOTHNESS_FACE
 from worldgen.geology.channels import BOUNDARY_TYPE, ELEVATION, VOLCANIC_ACTIVITY
+from worldgen.geology.ruggedness import decayed_max, diffuse
 from worldgen.hydrology.channels import RIVER_OBJECTS
 from worldgen.resources.terrain import face_hops_from_seeds
 
@@ -50,34 +51,6 @@ class CoastParams:
     # Neighbour-mean diffusion over the face graph before rasterising.
     smoothing_passes: int = _f(3, label="Smoothing passes", min=0, max=20)
     smoothing_alpha: float = _f(0.5, label="Smoothing strength", min=0.0, max=1.0, step=0.05)
-
-
-def _decayed_max(
-    adjacency: list, strength: np.ndarray, decay_hops: float, max_hops: int = _MAX_HOPS
-) -> np.ndarray:
-    """``max over sources s of strength[s] · exp(-hops(s, ·) / decay_hops)``, by max-plus relaxation."""
-    factor = float(np.exp(-1.0 / max(decay_hops, 1e-6)))
-    value = np.asarray(strength, dtype=np.float64).copy()
-    for _ in range(max_hops):
-        nxt = value.copy()
-        for i, nbrs in enumerate(adjacency):
-            if nbrs:
-                nxt[i] = max(nxt[i], factor * float(value[nbrs].max()))
-        if np.array_equal(nxt, value):
-            break
-        value = nxt
-    return value
-
-
-def _diffuse(values: np.ndarray, adjacency: list, passes: int, alpha: float) -> np.ndarray:
-    out = np.asarray(values, dtype=np.float64).copy()
-    for _ in range(max(int(passes), 0)):
-        nxt = out.copy()
-        for i, nbrs in enumerate(adjacency):
-            if nbrs:
-                nxt[i] += alpha * (out[nbrs].mean() - out[i])
-        out = nxt
-    return out
 
 
 def _ramp(x: np.ndarray, zero_at: float, one_at: float) -> np.ndarray:
@@ -120,13 +93,13 @@ def coast_smoothness(
             np.asarray(temperature_annual, dtype=np.float64), float(p.glacial_warm_c), float(p.glacial_cold_c)
         )
     if mouth_strength is not None and np.any(mouth_strength > 0):
-        terms["delta"] = -float(p.delta_weight) * _decayed_max(
+        terms["delta"] = -float(p.delta_weight) * decayed_max(
             adjacency, mouth_strength, float(p.delta_decay_hops)
         )
 
     ruggedness = np.full(n, float(p.base_ruggedness)) + sum(terms.values())
     smooth = np.clip(1.0 - ruggedness, 0.0, 1.0)
-    smooth = np.clip(_diffuse(smooth, adjacency, p.smoothing_passes, float(p.smoothing_alpha)), 0.0, 1.0)
+    smooth = np.clip(diffuse(smooth, adjacency, p.smoothing_passes, float(p.smoothing_alpha)), 0.0, 1.0)
     return smooth, terms
 
 

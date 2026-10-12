@@ -29,6 +29,8 @@ from worldgen.geology.channels import (
     IS_OCEAN,
     OCEAN_MASK,
     PLATE_TYPE,
+    RUGGEDNESS,
+    RUGGEDNESS_FACE,
     VOLCANIC_ACTIVITY,
 )
 from worldgen.geology.display import (
@@ -38,7 +40,10 @@ from worldgen.geology.display import (
     _elevation_color,
     _plate_palette,
     ELEVATION_RECIPE,
+    RUGGEDNESS_RECIPE,
     elevation_legend_entries,
+    ruggedness_color,
+    ruggedness_legend_entries,
 )
 from worldgen.geology.tectonics import (
     assign_plate_types,
@@ -48,6 +53,7 @@ from worldgen.geology.tectonics import (
     generate_plates,
     relax_plates,
 )
+from worldgen.geology.ruggedness import RuggednessParams, ruggedness_seed, ruggedness_texture
 from worldgen.geology.volcanism import compute_volcanism, generate_volcano_positions
 
 _SPEED_STOPS = [
@@ -120,6 +126,7 @@ class ElevationParams:
         default_factory=FaceErosionParams, metadata={"label": "Face Erosion", "hidden": True}
     )
     volcanism: VolcanismParams = field(default_factory=VolcanismParams, metadata={"label": "Volcanism"})
+    ruggedness: RuggednessParams = field(default_factory=RuggednessParams, metadata={"label": "Ruggedness"})
 
 
 class _ElevationBuilt(Protocol):
@@ -256,6 +263,15 @@ class ElevationBuilder(Stage):
         VOLCANIC_ACTIVITY.write(dual, volcanism)
         ELEVATION_FACE.write(dual, elevations)
 
+        _report("Seeding ruggedness…")
+        ruggedness, _ = ruggedness_seed(
+            dual, p.ruggedness, self._seed("ruggedness"),
+            plate_types=plate_types, boundary_data=boundary_data,
+            rate_norm=p.elevation.elevation_rate_norm, volcanism=volcanism, elevation=elevations,
+        )
+        RUGGEDNESS_FACE.write(dual, ruggedness)
+        RUGGEDNESS.write(dual, ruggedness_texture(dual, ruggedness, p.elevation.elevation_tex_size))
+
         _report("Generating elevation textures…")
         elevation_textures = compute_elevation_textures(
             dual, elevations, tex_size=p.elevation.elevation_tex_size
@@ -339,6 +355,18 @@ class ElevationBuilder(Stage):
         reg.add_scheme("Speed", _speed_color)
         reg.add_scheme("Boundary", lambda meta: BOUNDARY_COLORS[meta["boundary_type"]])
         reg.add_scheme("Volcanic Activity", _volcanic_color)
+        if "ruggedness" in mesh.face_textures:
+            mesh.set_face_textures("ruggedness_rgba", RUGGEDNESS_RECIPE(mesh.face_textures))
+            reg.add_scheme(
+                "Ruggedness", ruggedness_color, texture="ruggedness_rgba",
+                legend=("gradient", ruggedness_legend_entries()), recipe=RUGGEDNESS_RECIPE,
+            )
+
+            def _ruggedness_hover(face: int, _uv, _w) -> list:
+                meta = mesh.face_metadata[face]
+                return [f"Ruggedness: {meta['ruggedness']:.2f}"] if "ruggedness" in meta else []
+
+            reg.add_hover(_ruggedness_hover)
 
         if world.has_feature("volcanoes"):
             reg.add_overlay("volcanoes", "Volcanoes", checked=False)
@@ -382,4 +410,8 @@ class ElevationBuilder(Stage):
         if "eb_volcano_positions" in arrays:
             self.volcano_positions = arrays["eb_volcano_positions"]
             ctx.world.add_feature("volcanoes", self.volcano_positions)
+        # The ruggedness texture is saved with the mesh; per-face values are restored as its face means.
+        if "ruggedness" in ctx.mesh.face_textures:
+            tex = np.asarray(ctx.mesh.face_textures["ruggedness"], dtype=np.float64)
+            RUGGEDNESS_FACE.write(ctx.mesh, tex[..., 0].mean(axis=(1, 2)))
         ctx.world.antimeridian = find_ideal_antimeridian(ctx.mesh)

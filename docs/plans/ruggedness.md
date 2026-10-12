@@ -1,0 +1,245 @@
+# Terrain Ruggedness — Plan
+
+Maps are flat, worst at the settlement tier. The cause is the detail amplitude
+rule every tier shares (`region/upsample.py::refine_terrain`):
+
+    amplitude = relief_factor × feature wavelength × effective slope   (clamped)
+
+where the slope is the **parent's**. The chain starts at the globe, which is
+smooth at ~14 km (mountains ~0.007 km/km), and each tier adds its own clamps:
+
+| tier | feature wavelength | slope_reference | slope_floor | max_relief_km |
+|---|---|---|---|---|
+| region | ~28 km | 0.005 | 0.10 | 1.0 |
+| local | ~9 km | 0.03 | 0.03 | 0.6 |
+| settlement | ~0.73 km | 0.1 | 0.03 | **0.03** |
+
+So a settlement map gets ±2 m of detail on flat ground and ±30 m at most. Raising
+the clamps only goes so far: a 14 km slope doesn't know what the ground is like
+below it. A dissected range and a high plateau can have the same coarse slope.
+Each tier also restarts a normalised fBm whose amplitude grows linearly with
+wavelength (an effective Hurst exponent H = 1), which is as smooth at fine scales
+as fBm gets.
+
+**Ruggedness** is a new world field that says how rough the ground is below the
+globe's resolution. It sets the sub-grid relief spectrum directly, and it replaces
+the places that currently use slope or elevation range as a stand-in for it.
+
+## Decisions (2026-10-11)
+
+1. **One channel now, with room for a second.** The first channel is
+   ruggedness (relief amplitude). The second, to come later, is character:
+   jagged vs rolling, which is the spectrum's Hurst exponent `H`. For now `H` is a
+   single param, read through one function so a per-texel channel can replace it
+   without touching the callers.
+2. **Plate tectonics seeds it, later stages refine it.** The elevation stage
+   writes the seed. Later stages edit it in place, the same way the delta stage
+   already rewrites `ELEVATION`.
+3. **Sub-grid only.** The global elevation texture, and so climate, hydrology,
+   biomes and every calibration, doesn't change.
+4. **Slope users reviewed one by one** (table below). Most wanted ruggedness.
+   Danger and buildability use both.
+5. **Ruggedness drives coast style.** `coast_smoothness` goes; the coast stage's
+   terms move into the ruggedness field.
+6. **Texture, not per-face.** Rasterised with `rasterize_face_values`
+   (position-only), so the amplitude doesn't step at face edges. It is carried
+   down the tiers as a bilinear copy, the way `coast_smoothness` is now: not
+   conserved, no noise of its own. Elevation stays the only noise source.
+7. **Realm consumers come in a later phase**, after the terrain looks right.
+8. **Settlements build on hills.** That's the point of the change. The footprint
+   and anchor knobs get retuned so hill towns happen, not just tolerated.
+9. **One basic knob** for ruggedness. Everything else is advanced.
+10. **Rivers and lakes on rough relief are deferred** until we've seen the
+    results. The hope is that hydrology refining ruggedness (smooth valley floors
+    and floodplains) does most of the work.
+11. **The basic knob acts in the world build** (2026-10-11): it scales the field
+    itself, so the view tiers and the realm consumers read the same thing.
+    Changing it needs a rebuild.
+12. **The stage is renamed** `worldgen/coast/` → `worldgen/ruggedness/` (and
+    `globe.coast` → `globe.ruggedness`) in Phase 2.
+
+## The field
+
+`ruggedness` ∈ [0, 1], a texture `(N, H, W, 1)` float32 plus a per-face mean. It
+is an index, not a physical quantity, so terms combine and refine additively the
+way the coast stage's do now. It maps to relief through a log interpolation,
+because relief spans orders of magnitude (metres on a floodplain, hundreds of
+metres in a range):
+
+    relief_ref(ρ) = relief_flat × (relief_rugged / relief_flat) ** ρ     # km at λ_ref
+
+### Seed (elevation stage)
+
+From what `ElevationBuilder` already has. Each term is clipped and combined like
+the coast stage's, with low-frequency noise so the field isn't just a function of
+elevation:
+
+| term | source |
+|---|---|
+| base | constant |
+| orogenic | `exp(−hops / decay)` from convergent boundaries (from the coast stage) |
+| rift | the same from divergent continental boundaries (weaker) |
+| volcanic | `volcanic_activity` (from the coast stage) |
+| interior | plate-interior distance lowers it (cratons, shields) |
+| noise | 2-octave simplex on face centroids (from the coast stage) |
+
+Erosion output and height above sea level are candidate terms; we'll decide from
+the debug layer.
+
+### Refinement (later stages)
+
+The coast stage becomes the **ruggedness refinement stage**. It runs at the same
+point (after wetland, before resources, danger and cost, so every world-build
+consumer sees the final field):
+
+| term | source |
+|---|---|
+| glacial | + ramp on annual mean temperature (from the coast stage) |
+| delta | − at river mouths by `sqrt(flow / max)` (from the coast stage) |
+| wetland | − on the Wetland biome (wetlands are flat by definition) |
+| floodplain / valley floor | − along big rivers. **Deferred** (Decision 10) |
+
+Diffused over the face graph, then rasterised seam-free, as the coast stage does
+now.
+
+## The spectrum (all tiers)
+
+`refine_terrain` stops normalising the fBm. Octave `k`, at wavelength `λ_k`, gets
+an absolute amplitude:
+
+    A_k = relief_ref(ρ) × (λ_k / λ_ref) ** H        (each octave capped)
+
+with `ρ` read bilinearly from the parent's `ruggedness`. Each tier contributes
+only its own band (parent Nyquist to own Nyquist, as now), so the relief at any
+scale is the same whichever tier draws it. A settlement map ends up with every
+band from the globe down. The per-tier `relief_factor` / `slope_reference` /
+`slope_floor` / `max_relief_km` knobs go away, replaced by one set of spectrum
+params shared by all tiers (`relief_flat`, `relief_rugged`, `λ_ref` = 1 km, `H`,
+a per-octave cap).
+
+What stays:
+- shallow-water damping (lake beds),
+- the coast blend (persistence and wander near water), now lerped on ruggedness
+  instead of smoothness,
+- conservation (unchanged, since the noise is still added before
+  `conserve_smooth`).
+
+Targets for calibration: local relief over ~1 km windows of a few tens of metres
+on plains, ~100–300 m in hills, several hundred metres and more in mountains.
+
+## Slope and proxy users, case by case
+
+**→ ruggedness** (were stand-ins):
+
+| where | now | becomes |
+|---|---|---|
+| `region/upsample.py` detail amplitude | parent slope | the spectrum |
+| `region/upsample.py` coast wander / persistence | slope, `coast_smoothness` | ruggedness |
+| `worldgen/coast/` | its own ruggedness → smoothness | the refinement stage |
+| `worldgen/cost/surfaces.py` land cost | `face_elevation_range` | ruggedness (Phase 5) |
+| `worldgen/cost/surfaces.py` navigability | `face_elevation_range` | ruggedness (Phase 5) |
+| `realmgen/scoring/suitability.py` penalty | `face_elevation_range` | ruggedness (Phase 5) |
+| `worldgen/danger/builder.py` | `face_elevation_range` | ruggedness (Phase 5) |
+| polity seeding, forts | `land_base_cost` | follow the cost change automatically |
+| `settlegen/profile.py` stone share | the frame's 2–98% relief | ruggedness |
+
+**→ slope + ruggedness** (both mean something):
+
+| where | why |
+|---|---|
+| `region/resources.py` danger terrain nudge | rough country hides danger even where the texel itself is flat |
+| `settlegen/footprint.py` buildability / footprint shape | slope decides what's buildable; ruggedness tilts the footprint and its density |
+| `localmap/villages.py`, `localmap/farmland.py`, `settlegen/hinterland.py` | candidates; decide when retuning |
+
+**→ slope stays** (a real gradient):
+hydrology routing, orographic precipitation, wetland flatness (global and
+riparian), refined fertility slope penalty, settlement arterial slope cost,
+anchor flatness and citadels, road channel climb, small-lake breach
+(`region/lakes.py`, revisit after Phase 3).
+
+## Phases
+
+### 0. Baseline harness
+`scripts/measure_relief.py` reports, per tier (region, local, settlement), on
+seeds 4/31/35:
+- local relief in ~1 km windows, by ruggedness class (and by biome until the
+  field exists), as p10/p50/p90,
+- slope percentiles,
+- conservation max.
+
+It records today's numbers before anything changes and gives the calibration
+targets above. Results go to `scripts/results/relief_results.json`.
+
+### 1. Seed field
+- `RUGGEDNESS_FACE` / `RUGGEDNESS` channels in `worldgen/geology/channels.py`.
+- Seed terms in `ElevationBuilder`, with params under `ElevationParams.ruggedness`.
+- A `--debug` Ruggedness layer with a texture recipe, so the region view draws
+  its own copy.
+- Nothing reads it yet.
+
+### 2. Refinement stage, coast smoothness retired
+- The coast stage becomes the refinement stage: glacial, delta and wetland terms,
+  diffusion, rasterisation.
+- `coast_smoothness` and its channels, display and persistence are deleted
+  (backwards compatibility isn't needed).
+- The `globe.coast.base_ruggedness` basic param is replaced by the single basic
+  knob.
+
+### 3. Spectrum at every tier
+- `refine_terrain` reads `ruggedness` from the parent and builds the absolute
+  spectrum.
+- Each tier copies `ruggedness` down bilinearly.
+- The per-tier slope knobs are deleted.
+- Calibrate with `measure_relief` plus `debug_region` / `debug_local` /
+  `debug_settlement`. Conservation must stay at float noise.
+- Watch, but don't fix yet (Decision 10): small-lake counts, cut-off sea
+  channels, rivers climbing out of their valleys at the local and settlement
+  tiers, wetland share.
+
+### 4. Settlement consumers
+- Footprint, anchors and profile read ruggedness, per the table above.
+- Retune `slope_free` / `slope_weight` / `buildable_max_slope` so towns climb
+  hills.
+- `measure_settlements` footprint error and pieces will move; record the new
+  baseline.
+
+### 5. Realm consumers
+- Replace `face_elevation_range` in cost, navigability, suitability and danger.
+- Retune `ruggedness_cost_per_km`, `penalty_scale_km`, `navigable_ruggedness_km`
+  and danger weights.
+- Re-run `measure_population_absolute`, `measure_polities` and
+  `measure_borders`, keeping the calibrated bands (world 300–400 M; polity
+  priorities largest > count > corr).
+
+### Deferred
+- Hydrology refining ruggedness (valley floors, floodplains), and rivers/lakes on
+  rough relief.
+- Second channel: per-texel `H` (jagged vs rolling).
+- Wetland flatness reading the seed ruggedness.
+
+## Status
+
+Planned 2026-10-11.
+
+**Phase 0 done (2026-10-11).** `scripts/measure_relief.py`. Baseline, seeds
+4/31/35, median over seeds of each class's window relief (m, p10 / p50 / p90),
+by span tercile:
+
+| tier (window) | flat | hilly | rugged |
+|---|---|---|---|
+| region (3 texels, ~13 km) | 6 / 12 / 20 | 10 / 18 / 31 | 17 / 35 / 71 |
+| local (~1 km) | 1.6 / 3.2 / 5.9 | 2.0 / 4.2 / 8.0 | 4.2 / 9.6 / 20 |
+| settlement (1 km) | 5.0 / 7.2 / 10 | 5.1 / 7.8 / 13 | 6.9 / 11 / 19 |
+| settlement (250 m) | 1.9 / 3.0 / 4.8 | 1.9 / 3.1 / 5.7 | 2.4 / 4.6 / 8.0 |
+
+Rugged ground gets ~10 m per km where Earth's mountains have hundreds. The
+settlement frames sit on towns, so they lean flat within each class.
+
+**Phase 1 done (2026-10-11).** Seed in `worldgen/geology/ruggedness.py`, written
+by `ElevationBuilder` (`RUGGEDNESS_FACE` / `RUGGEDNESS`), `--debug` Ruggedness
+layer. Added an **uplift** term (height above sea level) beyond the planned
+ones: without it, high plateaus far from a boundary came out smooth. Erosion
+stays a candidate. Nothing reads the field yet. The basic knob
+(`globe.elevation.ruggedness.base`) joins `BASIC_PARAMS` in Phase 2, replacing
+`globe.coast.base_ruggedness`, so there is never more than one basic ruggedness
+knob, and never one that does nothing.

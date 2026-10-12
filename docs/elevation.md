@@ -5,7 +5,8 @@
 - `worldgen/geology/elevation.py` — elevation model, erosion, rasterisation, noise, seam smoothing, ocean mask
 - `worldgen/geology/tectonics.py` — plates
 - `worldgen/geology/volcanism.py` — activity + volcano peaks
-- `worldgen/geology/channels.py` — `IS_OCEAN`, `ELEVATION_FACE`, `PLATE_TYPE`, `BOUNDARY_TYPE`, `VOLCANIC_ACTIVITY`, `ELEVATION`, `OCEAN_MASK`
+- `worldgen/geology/ruggedness.py` — the ruggedness seed (`RuggednessParams`, `ruggedness_seed`, `ruggedness_texture`; shared `decayed_max` / `diffuse`)
+- `worldgen/geology/channels.py` — `IS_OCEAN`, `ELEVATION_FACE`, `PLATE_TYPE`, `BOUNDARY_TYPE`, `VOLCANIC_ACTIVITY`, `ELEVATION`, `OCEAN_MASK`, `RUGGEDNESS_FACE`, `RUGGEDNESS`
 - `worldgen/geology/display.py`
 
 ## `elevation_builder.py`
@@ -17,6 +18,7 @@
 - `noise` — `noise_amplitude`, `noise_coast_sigma`
 - `face_erosion` — hydraulic/thermal knobs (hidden)
 - `volcanism` — `n_hotspots`, `volcanic_decay_rate`, `volcanic_max_hops`, `volcanic_elevation_scale`, `volcanic_elevation_scale_oceanic`
+- `ruggedness` — `base` (the master knob) and the seed's term weights ([below](#ruggednesspy))
 
 Mesh params are not here (mesh is pre-built); river params are in
 `HydrologyParams`. The seed goes to `ElevationBuilder(params, *, seed)`; each draw
@@ -27,7 +29,7 @@ others.
 
 plates → relax → types + velocities → boundary classification → face elevations
 → volcanism → face erosion → + volcanism × `volcanic_elevation_scale[_oceanic]` →
-`rasterize_face_values` → fBm simplex noise (`compute_noise_elevation_deltas`,
+ruggedness seed → `rasterize_face_values` → fBm simplex noise (`compute_noise_elevation_deltas`,
 band-limited to the texel grid, × `exp(−|elevation| / noise_coast_sigma)`, so
 strongest near sea level, roughening coasts) → seam smoothing → ocean mask →
 `world.antimeridian` (`find_ideal_antimeridian`).
@@ -36,8 +38,9 @@ Attributes: `mesh`, `plate_ids`, `plate_omegas`, `face_velocities`,
 `boundary_types`, `boundary_data`, `elevations` (face means of final texture),
 `elevation_textures`, `ocean_mask`, `volcanism`, `volcano_positions`, `max_speed`.
 
-- Textures: `"elevation"` (`(N, H, W, 1)` float32, km), `"ocean_mask"` (`(N, H, W, 1)` uint8).
+- Textures: `"elevation"` (`(N, H, W, 1)` float32, km), `"ocean_mask"` (`(N, H, W, 1)` uint8), `"ruggedness"` (`(N, H, W, 1)` float32 in [0, 1]).
 - Per face: `plate_id`, `plate_type`, `boundary_type`, `surface_speed`, `volcanic_activity`, `elevation` (tectonic + erosion + volcanic value *before noise* — read by resource placement), `is_ocean` (> half texels ocean).
+- Per face: `ruggedness` (seed index in [0, 1]; on load, the texture's face means).
 - Feature `"volcanoes"`: unit-sphere positions of above-sea-level activity peaks.
 
 ## `elevation.py`
@@ -80,6 +83,35 @@ convergent arcs and `n_hotspots` random hotspots, BFS with exponential decay (ma
 wins). `generate_volcano_positions(mesh, volcanism, elevations, threshold=0.3)` —
 above threshold, above sea level, local maximum.
 
+## `ruggedness.py`
+
+**Ruggedness** ∈ [0, 1]: how rough the ground is *below* the globe's resolution
+(0 floodplain-smooth, 1 alpine). The globe's relief doesn't read it; it is meant
+to set the sub-grid relief the region, local and settlement tiers draw, and to
+replace the slope / elevation-span proxies elsewhere
+([plans/ruggedness.md](plans/ruggedness.md)). An index, not a physical quantity:
+terms add, and relief will map from it logarithmically, so `base` shifts sub-grid
+relief by a uniform factor. Later stages refine it in place.
+
+`ruggedness_seed(mesh, params, seed, *, plate_types, boundary_data, rate_norm,
+volcanism, elevation)` sums, per face:
+
+| term | contribution | params |
+|---|---|---|
+| base | constant | `base` 0.3 |
+| orogenic | convergent faces at `min(|normal| / rate_norm, 1)` (× `arc_factor` unless continent meets continent), max-decayed `exp(−hops / decay)` | `orogenic_weight` 0.5, `arc_factor` 0.7, `orogenic_decay_hops` 2 |
+| rift | divergent faces on continental plates, likewise | `rift_weight` 0.25, `rift_decay_hops` 1.5 |
+| volcanic | `volcanic_activity` | `volcanic_weight` 0.3 |
+| uplift | `clip(face elevation / uplift_ref_km, 0, 1)` (pre-noise tectonic value) — high plateaus are dissected | `uplift_weight` 0.3, `uplift_ref_km` 2 |
+| interior | **subtracted**: `1 − exp(−hops / decay)` from any plate boundary (shields, cratons) | `interior_weight` 0.2, `interior_decay_hops` 3 |
+| noise | 2-octave simplex on centroids, ~[−1, 1] | `noise_weight` 0.3, `noise_frequency` 5 |
+
+then `smoothing_passes` (3) of neighbour-mean diffusion at `smoothing_alpha`
+(0.5), clipped, and rasterised as a smooth function of position with one
+seam-averaging pass (`ruggedness_texture`), so a bilinear read is continuous
+across face edges. Seeds 4/31: land p5/p50/p95 ≈ 0.14 / 0.34 / 0.67, corr with
+face elevation ≈ 0.68; collision belts brightest, plate interiors darkest.
+
 ## `display.py`
 
 `_elevation_color`, `ELEVATION_RECIPE` (`relief=True`; rerun by the region view),
@@ -89,5 +121,5 @@ above threshold, above sea level, local maximum.
 `ocean_categorical_scheme`, `is_water_meta`).
 
 **Elevation** always; `--debug`: Plates, Plate Type, Speed, Boundary, Volcanic
-Activity, **Volcanoes** overlay (unchecked), `[px: … km]` hover
+Activity, **Ruggedness** (`RUGGEDNESS_RECIPE`, water flat, hillshaded; + hover), **Volcanoes** overlay (unchecked), `[px: … km]` hover
 (`refined=("elevation",)`).
