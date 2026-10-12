@@ -40,9 +40,9 @@ from worldgen.resources.fertility import (
 from worldgen.resources.forest import compute_forest_density
 from worldgen.resources.minerals import place_mineral_deposits, place_mineral_sites
 from worldgen.resources.rare_bio import place_rare_bio_resources
+from worldgen.geology.ruggedness import face_relief
 from worldgen.resources.terrain import (
     coastal_ocean_faces,
-    face_elevation_range,
     face_hops_from_seeds,
     lake_containing_faces,
     river_traversed_faces,
@@ -216,7 +216,7 @@ class ResourcesBuilder(Stage):
         )                                                          # (N,) bool
 
         _report("Computing terrain ruggedness…")
-        face_elev_range = face_elevation_range(elevation_tex)      # (N,) km
+        face_relief_km = face_relief(mesh)                         # (N,) km, from ruggedness
 
         _report("Computing water-proximity hops…")
         river_seed_mask = river_traversed_faces(rivers, n_faces=n)
@@ -262,7 +262,7 @@ class ResourcesBuilder(Stage):
             precipitation_tex=precipitation_tex,
             ocean_mask_tex=ocean_mask_tex,
             face_biome=face_biome,
-            face_elev_range_km=face_elev_range,
+            face_relief_km=face_relief_km,
             water_hops=water_hops,
             volcanism_hops=volcanism_hops,
             params=fp,

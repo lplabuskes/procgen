@@ -38,7 +38,7 @@ from worldgen.geology.channels import ELEVATION, IS_OCEAN
 from worldgen.geology.display import is_water_meta, water_gradient_scheme
 from worldgen.hydrology.channels import LAKE_MASK, RIVERS
 from worldgen.resources.channels import FERTILITY_MEAN, MINERALS, RARE_BIO
-from worldgen.resources.terrain import face_elevation_range
+from worldgen.geology.ruggedness import face_relief
 
 
 # ── Params ────────────────────────────────────────────────────────────────────
@@ -204,7 +204,7 @@ class ScoringStage(Stage):
         t_warmest = TEMPERATURE_WARMEST.read(mesh)
         t_coldest = TEMPERATURE_COLDEST.read(mesh)
         p_annual = PRECIPITATION_ANNUAL.read(mesh)
-        elev_range = face_elevation_range(ELEVATION.read(mesh))
+        relief = face_relief(mesh)          # km, from ruggedness
 
         ctx.report("Mapping resource deposits to faces…")
         resource_mask = np.zeros(n, dtype=bool)
@@ -237,7 +237,7 @@ class ScoringStage(Stage):
             params=sp.weights,
         )
         ruggedness_mult = compute_ruggedness_penalty(
-            elev_range, penalty_scale_km=sp.ruggedness.penalty_scale_km,
+            relief, penalty_scale_km=sp.ruggedness.penalty_scale_km,
         )
         suitability = (suitability * ruggedness_mult).astype(np.float32)
 

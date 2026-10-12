@@ -30,7 +30,7 @@ A polity is a **tree, not a flat partition** (`docs/plans/polity_generation_brie
 
 - **`seeding`** (`CapitalSeedingParams`) — `min_separation` (land cost-distance between capitals), `min_pop_fraction` (of largest city), `trade_weight`.
 - **`defensibility`** (`DefensibilityParams`; consumed by `PopulationStage` via `compute_settlement_defensibility`) — terrain/river weights and wall probability/strength knobs; see [realm_population.md](realm_population.md#defensibility).
-- **`projection`** (`ProjectionParams`) — `base_range` (master consolidation knob; land range = `base_range · (range_floor + infrastructure)`), `range_floor`, `sea_range_factor` (× land range for the sea channel; 1.2; 1.5 → 1.4 when trade was restricted to settlement ports, which concentrates `maritime_reach` at port capitals, → 1.3 in the 2026-10-06 retune, → 1.2 with a face-level ridge claim step (land claims dearer, not the sea channel's), → 1.4 when that step was removed for ridge-line following in refine (2026-10-08; 1.2 without it left the mean largest domain at 15%); a river claim step took it to 1.1 and was removed), `sea_weight`, `legitimacy_spread` (± magnitude jitter), `maritime_scale` (`maritime_reach ← scale × trade_norm`), `cohesion_min`, `infrastructure_min`, `infrastructure_emergent` (weight of pop+trade in the infrastructure roll).
+- **`projection`** (`ProjectionParams`) — `base_range` (master consolidation knob; land range = `base_range · (range_floor + infrastructure)`), `range_floor`, `sea_range_factor` (× land range for the sea channel; 1.2; 1.5 → 1.4 when trade was restricted to settlement ports, which concentrates `maritime_reach` at port capitals, → 1.3 in the 2026-10-06 retune, → 1.2 with a face-level ridge claim step (land claims dearer, not the sea channel's), → 1.4 when that step was removed for ridge-line following in refine (2026-10-08; 1.2 without it left the mean largest domain at 15%); a river claim step took it to 1.1 and was removed; → 1.2 when land cost and suitability moved to the world's ruggedness (2026-10-11: its coherent mountain belts leave wide cheap lowlands, so domains grew — mean largest 29.2% at 1.4), `sea_weight`, `legitimacy_spread` (± magnitude jitter), `maritime_scale` (`maritime_reach ← scale × trade_norm`), `cohesion_min`, `infrastructure_min`, `infrastructure_emergent` (weight of pop+trade in the infrastructure roll).
 - **`claiming`** (`ClaimingParams`) — `hysteresis` (incumbent bonus), `max_iters` (claim loop), `outer_max_iters` (independence-relaxation loop; promotes independents to sovereigns until none remain — **no cap on sovereign count**), `exclave_max_faces` (40; seatless land pieces up to this size are merged into a neighbour, [Exclaves](#exclaves); 0 = off).
 - **`hierarchy`** (`HierarchyParams`) — `direct_threshold` (0.8; the infra-correlation knob: lower → more negative `corr(infrastructure, vassal_frac)`), `vassal_floor` (0.2; vassal ratio floor — the sovereign-count knob), `power_exponent` (0.5; sqrt of raw population dampens size), `cohesion_gain_floor` / `_span`, `max_recursion_depth` (2), `vassal_cluster_distance` (15; candidates within this land cost-distance merge, largest becomes the seat; 0 = off).
 - **`loyalty`** (`LoyaltyParams`, Stage 4; both **off (0.0) by default**) — `economic_grip` (secession resistance ∝ intra-polity trade fraction), `peripheral_wealth_ratio` (non-capital ≥ this × its capital's trade wealth breaks away), `peripheral_external_floor` (min external trade fraction). Monotonic: more grip → fewer, bigger domains; more aggressive peripheral thresholds → more sovereigns.
@@ -194,6 +194,17 @@ largest domain 26.9 / 29.3 / 5.9 / 20.5 / 33.5 / 25.2% (mean 23.6; 24.9 with the
 ridge step at 1.2), sovereigns 53 / 35 / 59 / 54 / 37 / 38 (mean 46.0 vs 42.8),
 `corr(infra, vassal_frac)` mean −0.29 (−0.14). 1.2 / 1.3 gave mean largest 15.2 /
 19.7%, sovereigns 54.2 / 49.3. Validation: `scripts/measure_borders.py`.
+
+**Ruggedness retune (2026-10-11).** Land cost and suitability read the world's
+ruggedness ([ruggedness.md](ruggedness.md); face relief in km) instead of the
+per-face elevation span. Its belts are coherent where the span was noisy face to
+face, so lowland domains spread and cities thin out (an ablation, rebuilding with
+the old proxy in one consumer at a time: cost drives sovereign count, suitability
+city count). At `sea_range_factor` 1.2, seeds 1 2 3 4 31 35: largest domain
+17.2 / 22.7 / 20.1 / 17.5 / 30.9 / 31.5% (mean 23.3), sovereigns 58 / 33 / 36 /
+39 / 34 / 35 (mean 39.2, was 53.8), `corr(infra, vassal_frac)` mean −0.49 (was
+−0.18); 1.4 / 1.0 gave mean largest 29.2 / 16.5%. Sovereign exclaves (seeds 4 31
+35) 5.7 per seed (was 3.0), mostly land-cut.
 
 ## PolityStage
 

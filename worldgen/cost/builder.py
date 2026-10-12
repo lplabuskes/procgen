@@ -26,7 +26,8 @@ from core.pipeline import BuildContext, Stage
 from core.world import World
 from worldgen.climate.channels import BIOME, TEMPERATURE
 from worldgen.cost.channels import COST_SURFACES, IS_STRAIT, IS_WATER
-from worldgen.geology.channels import ELEVATION, IS_OCEAN
+from worldgen.geology.channels import IS_OCEAN
+from worldgen.geology.ruggedness import face_relief
 from worldgen.geology.display import LAND_COLOR, OCEAN_COLOR, is_water_meta
 from worldgen.hydrology.channels import LAKE_MASK, RIVER_OBJECTS
 from worldgen.wetland.channels import WETLAND_FRACTION
@@ -81,12 +82,6 @@ class CostParams:
     strait: StraitParams = field(default_factory=StraitParams, metadata={"label": "Straits"})
 
 
-def _face_elevation_range_km(elevation_tex: np.ndarray) -> np.ndarray:
-    """Per-face pixel elevation span (km) — the ruggedness proxy."""
-    elev = elevation_tex[..., 0]
-    return (elev.max(axis=(1, 2)) - elev.min(axis=(1, 2))).astype(np.float32)
-
-
 def _face_lake_mask(mesh: PolygonMesh, threshold: float = 0.5) -> np.ndarray:
     """Per-face lake flag: at least ``threshold`` of its pixels are lake (a shoreline sliver doesn't count)."""
     n = len(mesh.faces)
@@ -124,7 +119,7 @@ class CostBuilder(Stage):
         is_ocean = IS_OCEAN.read(mesh)
         is_lake = _face_lake_mask(mesh)
         is_water = is_ocean | is_lake          # sailable, impassable on land
-        elev_range = _face_elevation_range_km(ELEVATION.read(mesh))
+        relief = face_relief(mesh)             # km, from ruggedness
         temperature_tex = TEMPERATURE.read(mesh) if TEMPERATURE.present(mesh) else None
 
         _report("Computing land base cost…")
@@ -135,7 +130,7 @@ class CostBuilder(Stage):
             )
         land_cost, land_passable = compute_land_base_cost(
             face_biome,
-            elev_range,
+            relief,
             is_water,
             biome_cost_scale=p.land.biome_cost_scale,
             ruggedness_cost_per_km=p.land.ruggedness_cost_per_km,
@@ -153,7 +148,7 @@ class CostBuilder(Stage):
         )
         river_navigability = compute_river_navigability(
             river_flow_mag,
-            elev_range,
+            relief,
             navigable_ruggedness_km=p.land.navigable_ruggedness_km,
         )
         river_navigable = navigable_river_mask(

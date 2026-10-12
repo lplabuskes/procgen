@@ -167,3 +167,30 @@ def ruggedness_texture(mesh: "PolygonMesh", face_values: np.ndarray, tex_size: i
     tex = rasterize_face_values(mesh, np.asarray(face_values, dtype=np.float64), tex_size)
     smooth_texture_seams(mesh, tex, n_passes=1)
     return np.clip(tex, 0.0, 1.0).astype(np.float32)
+
+
+# The face-scale relief (km) the index stands for, for the world-build consumers that
+# think in km of relief (land cost, navigability, suitability, fertility, danger):
+# log-linear like the finer tiers' spectrum, matched to the land quantiles of the
+# per-face elevation span it replaced (seeds 4/31/35: span ≈ exp(4.9 (ρ − 0.64)) km).
+FACE_RELIEF_SMOOTH_KM = 0.04
+FACE_RELIEF_RUGGED_KM = 5.0
+
+
+def face_relief_km(rho: np.ndarray) -> np.ndarray:
+    """``(N,)`` float32: face-scale relief (km) for ruggedness ``rho`` in [0, 1]."""
+    r = np.clip(np.asarray(rho, dtype=np.float64), 0.0, 1.0)
+    return (FACE_RELIEF_SMOOTH_KM * (FACE_RELIEF_RUGGED_KM / FACE_RELIEF_SMOOTH_KM) ** r).astype(np.float32)
+
+
+def face_relief(mesh: "PolygonMesh") -> np.ndarray:
+    """``(N,)`` float32 face relief (km) from the mesh's ``ruggedness``.
+
+    A mesh without the field (unit tests' hand-built ones) falls back to the
+    per-face elevation span, the proxy ruggedness replaced.
+    """
+    from worldgen.geology.channels import ELEVATION, RUGGEDNESS_FACE
+    if RUGGEDNESS_FACE.present(mesh):
+        return face_relief_km(RUGGEDNESS_FACE.read(mesh))
+    from worldgen.resources.terrain import face_elevation_range
+    return face_elevation_range(ELEVATION.read(mesh))

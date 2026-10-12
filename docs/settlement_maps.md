@@ -192,7 +192,8 @@ town's fields usually outgrow its frame: the hinterland is what lies inside it.
   hostelry, commerce, crop industries, timber, herding/tanning/wool, mineral
   workings and rare resources within 10 km;
 - **wind** (annual mean, frame axes, with steadiness), **materials** (stone /
-  timber / brick / adobe shares), **danger**;
+  timber / brick / adobe shares; stone from the world's `ruggedness` at the
+  settlement, 0 at 0.25 to full at 0.65), **danger**;
 - **history stubs**: `founding_age` (lognormal about 100 y × (pop/500)^0.35,
   ×1.5 for a capital) and `planned` (chance by kind), for a later history layer.
 

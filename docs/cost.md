@@ -40,9 +40,9 @@ and navigable rivers highlighted).
 [0,1]); `sea_base_cost` + `sea_passable` (= water ∪ navigable river);
 `strait_mask`; `wind_dir (N,3)` (coast-blended mean wind direction, or `None`).
 
-- `compute_land_base_cost` — `biome_cost_scale · BIOME_TRAVERSAL_COST[biome] + ruggedness_cost_per_km · (pixel elevation span) + forest_cost_strength · forest_density_mean`, then × `(1 + wetland_cost_strength · wetland_fraction)` in the builder ([wetland.md](wetland.md)). Water impassable; only realmgen's hinterland stage opts into a limited coastal-water band via its own permeable graph.
+- `compute_land_base_cost` — `biome_cost_scale · BIOME_TRAVERSAL_COST[biome] + ruggedness_cost_per_km · (face relief, km) + forest_cost_strength · forest_density_mean`, then × `(1 + wetland_cost_strength · wetland_fraction)` in the builder ([wetland.md](wetland.md)). The face relief is the world's ruggedness in km (`worldgen.geology.ruggedness.face_relief`). Water impassable; only realmgen's hinterland stage opts into a limited coastal-water band via its own permeable graph.
 - `compute_river_flow_field` — per-face downstream unit tangent + max flow; in-lake segments skipped; `exclude_mask` zeros water faces.
-- `compute_river_navigability` — linear taper: placid → 1, `navigable_ruggedness_km` relief → 0.
+- `compute_river_navigability` — linear taper on the same face relief: placid → 1, `navigable_ruggedness_km` → 0.
 - `navigable_river_mask` — flow ≥ `navigable_flow_min` (= `navigable_flow_factor` × river threshold) ∧ navigability > 0 ∧ not water.
 - `build_land_edge_costs` — mean of the two faces' base cost × a **directional** river multiplier per face, clipped to `[river_min_mult, river_max_mult]`: `1 + w·(ford_strength·(1 − align) − corridor_strength·navigability·align)`, `w = min(flow / river_flow_reference, 1)`, `align = |step · flow_dir|`. Cheap *along* a navigable valley (tapered by navigability), dear to *ford* (not tapered). `settlement_mask` waives the ford penalty on settlement faces (bridges). Realmgen calls it after adding danger to the base.
 - `detect_straits` — water faces pinched between opposite land neighbours.

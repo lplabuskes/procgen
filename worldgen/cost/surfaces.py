@@ -1,6 +1,6 @@
 """Physical base cost surfaces for overland and maritime movement (per face).
 
-- **Land** — biome difficulty + ruggedness, plus an anisotropic river term (cheap along a valley, dear
+- **Land** — biome difficulty + ruggedness (face relief, km), plus an anisotropic river term (cheap along a valley, dear
   to ford).  All open water (ocean ∪ lake) is impassable.
 - **Sea** — coastal water cheapest, open ocean dearer, straits discounted, land impassable.  Lakes are
   sailable, and navigable rivers extend the network inland up to the fall line.
@@ -82,7 +82,7 @@ class CostSurfaces:
 
 def compute_land_base_cost(
     face_biome: np.ndarray,
-    face_elev_range_km: np.ndarray,
+    face_relief_km: np.ndarray,
     is_water: np.ndarray,
     *,
     biome_cost_scale: float = 1.0,
@@ -94,8 +94,8 @@ def compute_land_base_cost(
 
     Args:
         face_biome: (N,) int — biome index per face.
-        face_elev_range_km: (N,) float — per-face pixel elevation span (km), the
-            ruggedness proxy (per-pixel slope is noise-dominated; see terrain.py).
+        face_relief_km: (N,) float — face-scale relief (km) the world's ruggedness
+            stands for (:func:`worldgen.geology.ruggedness.face_relief`).
         is_water: (N,) bool — open water (ocean ∪ lake), impassable.
         face_forest_density: (N,) float in [0, 1] — mean forest density per face;
             None disables the forest term.
@@ -108,7 +108,7 @@ def compute_land_base_cost(
     biome = np.clip(np.asarray(face_biome).astype(np.int64), 0, N_BIOMES - 1)
     cost = (
         biome_cost_scale * BIOME_TRAVERSAL_COST[biome]
-        + ruggedness_cost_per_km * np.maximum(np.asarray(face_elev_range_km, dtype=np.float64), 0.0)
+        + ruggedness_cost_per_km * np.maximum(np.asarray(face_relief_km, dtype=np.float64), 0.0)
     ).astype(np.float32)
     if face_forest_density is not None and forest_cost_strength > 0.0:
         forest = np.clip(np.asarray(face_forest_density, dtype=np.float32), 0.0, 1.0)
@@ -172,7 +172,7 @@ def compute_river_flow_field(
 
 def compute_river_navigability(
     river_flow_mag: np.ndarray,
-    face_elev_range_km: np.ndarray,
+    face_relief_km: np.ndarray,
     *,
     navigable_ruggedness_km: float = 0.6,
 ) -> np.ndarray:
@@ -184,14 +184,14 @@ def compute_river_navigability(
 
     Args:
         river_flow_mag: (N,) float — river flow per face (0 = none).
-        face_elev_range_km: (N,) float — per-face pixel elevation span (km), the ruggedness proxy.
+        face_relief_km: (N,) float — face-scale relief (km) from the world's ruggedness.
         navigable_ruggedness_km: local relief (km) at which navigability hits 0.
 
     Returns:
         (N,) float32; 0 where no river passes.
     """
     flow = np.asarray(river_flow_mag, dtype=np.float64)
-    relief = np.maximum(np.asarray(face_elev_range_km, dtype=np.float64), 0.0)
+    relief = np.maximum(np.asarray(face_relief_km, dtype=np.float64), 0.0)
     scale = max(float(navigable_ruggedness_km), 1e-9)
     flat = np.clip(1.0 - relief / scale, 0.0, 1.0)
     nav = np.where(flow > 0.0, flat, 0.0)

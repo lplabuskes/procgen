@@ -148,8 +148,7 @@ on plains, ~100–300 m in hills, several hundred metres and more in mountains.
 | where | why |
 |---|---|
 | `region/resources.py` danger terrain nudge | rough country hides danger even where the texel itself is flat |
-| `settlegen/footprint.py` buildability / footprint shape | slope decides what's buildable; ruggedness tilts the footprint and its density |
-| `localmap/villages.py`, `localmap/farmland.py`, `settlegen/hinterland.py` | candidates; decide when retuning |
+| ~~`settlegen/footprint.py`, `localmap/villages.py`, `localmap/farmland.py`, `settlegen/hinterland.py`~~ | **slope only** (user, 2026-10-11): with real relief the local and settlement slopes see the hills; ruggedness on top would penalise flat valley floors in rugged country. Ruggedness goes where the measuring tier is coarser than the relief (Phase 5, region danger nudge). |
 
 **→ slope stays** (a real gradient):
 hydrology routing, orographic precipitation, wetland flatness (global and
@@ -291,3 +290,53 @@ climbing out of valleys in the renders checked), small lakes on local maps (seed
 same 40 maps as docs/local.md: 319 local-only lakes, 0.19% of land, vs 577 /
 0.27% before), regional texture reads as fBm rather than drainage (the character
 channel's job), `connect_ocean` channels (no visible artefacts found).
+
+**Phase 4 (2026-10-11).** `measure_settlements.py` reports the hills (site
+ruggedness, frame and footprint relief and slope, steep share, `hill_ratio` =
+footprint slope ÷ the land's, stone share). On the new terrain (seeds 4/31/35,
+6 cities / 3 towns / 3 villages each), footprint |error| 3.8% / 2.5% / 5.7%
+(baseline 3.1 / 2.2 / 5.4), pieces and sparse share unchanged. Footprints
+already climb: `hill_ratio` ~0.96 overall, 0.76–1.0 on the ρ ≈ 0.4 sites with
+10–40% of their ground steeper than 0.15. `slope_free` / `slope_weight` /
+`buildable_max_slope` left as they are. The sampled settlements sit on smooth
+ground (mean ρ ~0.2 vs land median 0.3): that's their placement in the realm
+stage (Phase 5's suitability penalty), not the footprint. The stone share reads
+`ruggedness` at the settlement (`stone_ruggedness_low` 0.25 → `_high` 0.65;
+replaces `rugged_relief_m`, which the real relief saturated everywhere).
+Decided with the user: settlement- and local-tier siting (footprint, buildable
+ground, villages, farmland, hinterland) stays slope-only. **Phase 4 done.**
+
+**Phase 5 done (2026-10-11).** `worldgen.geology.ruggedness.face_relief_km` maps
+ruggedness to a face-scale relief in km (0.04 → 5.0 km, log-linear, matched to
+the old per-face elevation span's land quantiles), so every km-denominated knob
+kept its meaning. It replaces `face_elevation_range` in land cost and river
+navigability (`worldgen/cost`), suitability (`realmgen/scoring`), the fertility
+terrain factor (`worldgen/resources`) and danger-source placement
+(`worldgen/danger`); polity seeding and forts follow through land cost.
+`face_elevation_range` remains only as `face_relief`'s fallback for meshes
+without the field. The region danger nudge is left on slope + forest: it is
+renormalised per global texel, and ruggedness is nearly constant within one.
+
+Fixed on the way: per-face ruggedness is now the texture's face means at build
+too (it was the raw values at build and the face means after load, so a saved
+world disagreed with its own build).
+
+Realm shift (baseline → ruggedness, same code otherwise): cities 395 / 360 / 377 →
+273 / 319 / 287, sovereigns (6 seeds) 53.8 → 39.2 mean, mean largest domain
+23.9 → 29.2% at the old `sea_range_factor`. An ablation (rebuilding with the old
+proxy in one consumer at a time; all four old reproduces the baseline exactly)
+put the polity change on land cost and the city count on suitability; fertility
+and danger barely matter. Retuned: `sea_range_factor` 1.4 → 1.2 (mean largest
+23.3%, corr −0.49), `rural_density_max` 14 → 13 (world 343 / 401 / 354 M). Seed
+31's top city is 572k, over the 50k–500k band, as seed 4's 588k was before.
+Borders: river share 2.1 → 2.4%, ridge share 3.1 → 2.8%, sovereign exclaves
+3.0 → 5.7 per seed (mostly land-cut). Settlements sit at about the land's mean
+ruggedness, as before (cities ρ 0.34 / 0.36 / 0.30 vs land 0.35 / 0.35 / 0.31).
+
+Noticed, not fixed (pre-existing, outside this work): re-running the cost stage
+on a *loaded* world doesn't reproduce its build (seed 4: 428 vs 273 cities), so
+some cost input restores differently on load.
+
+**All five phases done.** Still open: rivers and lakes against the rough relief
+beyond the breach fix (Decision 10), hydrology refining ruggedness, and the
+character (Hurst) channel.

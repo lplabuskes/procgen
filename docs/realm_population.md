@@ -35,7 +35,8 @@ world). Rationale: `docs/plans/city_population_rework_plan.md`.
 - **`TradeSpawnParams`**: `hub_` / `waypoint_` / `port_` spawn quantiles,
   min-suitability and exclusion knobs (`waypoint_min_cost` too).
 - **`PopulationParams`**: `relaxation_passes`, `rural_density_max` (D_max,
-  /km² at fertility 1), `fishing_density_max` (D_fish, /km² of water at aquatic
+  /km² at fertility 1; 13, was 14 until ruggedness moved suitability — rural people rose ~45 M a seed —
+  seeds 4/31/35 world 343 / 401 / 354 M), `fishing_density_max` (D_fish, /km² of water at aquatic
   fertility 1), `fertility_exponent` (γ ≈ 2, restores density contrast),
   `surplus_rate` (s), `city_surplus_share` (city's slice of `s·cap`),
   `trade_food_weight` (β, people per unit trade flow), `city_min`,

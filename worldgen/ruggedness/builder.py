@@ -134,8 +134,10 @@ class RuggednessBuilder(Stage):
             mesh, RUGGEDNESS_FACE.read(mesh), self.params,
             temperature_annual=t_annual, mouth_strength=mouths, wetland_fraction=wetland,
         )
-        RUGGEDNESS_FACE.write(mesh, rho)
-        RUGGEDNESS.write(mesh, ruggedness_texture(mesh, rho, ELEVATION.read(mesh).shape[1]))
+        tex = ruggedness_texture(mesh, rho, ELEVATION.read(mesh).shape[1])
+        RUGGEDNESS.write(mesh, tex)
+        # Per face: the texture's face means, as load restores them, so a saved world reads alike.
+        RUGGEDNESS_FACE.write(mesh, tex[..., 0].mean(axis=(1, 2)).astype(np.float64))
         ctx.report("Ruggedness done.")
 
     # ── Display ───────────────────────────────────────────────────────────────
@@ -164,7 +166,7 @@ class RuggednessBuilder(Stage):
         reg.add_hover(_ruggedness_hover, refined=("ruggedness",))
 
     # ── Persistence ───────────────────────────────────────────────────────────
-    # The texture is saved with the mesh; per-face values are restored as its face means.
+    # The texture is saved with the mesh; per-face values are its face means, at build and on load.
 
     def serialize(self) -> dict:
         return {}

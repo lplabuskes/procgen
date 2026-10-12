@@ -266,8 +266,10 @@ class ElevationBuilder(Stage):
             plate_types=plate_types, boundary_data=boundary_data,
             rate_norm=p.elevation.elevation_rate_norm, volcanism=volcanism, elevation=elevations,
         )
-        RUGGEDNESS_FACE.write(dual, ruggedness)
-        RUGGEDNESS.write(dual, ruggedness_texture(dual, ruggedness, p.elevation.elevation_tex_size))
+        rugged_tex = ruggedness_texture(dual, ruggedness, p.elevation.elevation_tex_size)
+        RUGGEDNESS.write(dual, rugged_tex)
+        # Per face: the texture's face means, which is what a saved world restores.
+        RUGGEDNESS_FACE.write(dual, rugged_tex[..., 0].mean(axis=(1, 2)).astype(np.float64))
 
         _report("Generating elevation textures…")
         elevation_textures = compute_elevation_textures(

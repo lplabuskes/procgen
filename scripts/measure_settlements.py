@@ -14,7 +14,11 @@ local map (spread over its list), and reports per settlement and per kind:
     pieces, sparse share, density;
   • gates, bridges and fords, landings; anchor candidates per kind;
   • the layout: blocks or farmsteads, plots, piers, wall length and gates, and
-    the ground the walls took in beyond the site's footprint.
+    the ground the walls took in beyond the site's footprint;
+  • the hills (``docs/plans/ruggedness.md``): the site's ruggedness, the frame's
+    land relief (2nd–98th percentile) and mean slope, the footprint's relief, mean
+    slope, share steeper than ``STEEP`` and its slope as a share of the land's
+    around it (``hill_ratio``: 1 builds as steep as its surroundings, 0 only on flats).
 
 Usage:
     python3 scripts/measure_settlements.py                     # seeds 4, 31, 35
@@ -35,8 +39,10 @@ import time
 from pathlib import Path
 
 import numpy as np
+import shapely
 
 from settlegen.builder import build_settlement_map
+from settlegen.footprint import site_slope, wet_texels
 from settlegen.chain import SettlementRef, population
 from settlegen.upsample import settlement_conservation_report
 from _common import (
@@ -46,6 +52,35 @@ from _common import (
 DEFAULT_SEEDS = [4, 31, 35]
 RESULTS_PATH = Path(__file__).parent / "results" / "settlement_results.json"
 STEPS = ("chain", "terrain", "site", "profile", "layout")
+# Slope (km/km, ~8.5°) above which footprint ground counts as steep.
+STEEP = 0.15
+
+
+def hills(m) -> dict:  # type: ignore[no-untyped-def]
+    """How hilly the frame is and how far up it the footprint climbs (see the module docstring)."""
+    fields, site = m.fields, m.site
+    t = fields.tex_size
+    elev = np.asarray(fields.textures["elevation"][0, ..., 0], dtype=np.float64) * 1000.0
+    slope = site_slope(fields, site.frame)
+    land = ~wet_texels(fields, site.frame, site.water)
+    xy = site.frame.texel_xy(t)
+    inside = shapely.contains_xy(site.footprint, xy[..., 0], xy[..., 1]) & land
+    rugged = fields.textures.get("ruggedness")
+    out = {
+        "ruggedness": float(np.mean(rugged)) if rugged is not None else float("nan"),
+        "frame_relief_m": float(np.subtract(*np.percentile(elev[land], [98, 2]))) if land.any() else float("nan"),
+        "frame_slope": float(slope[land].mean()) if land.any() else float("nan"),
+    }
+    if inside.any():
+        out.update({
+            "fp_relief_m": float(np.subtract(*np.percentile(elev[inside], [98, 2]))),
+            "fp_slope": float(slope[inside].mean()),
+            "fp_steep_share": float((slope[inside] > STEEP).mean()),
+        })
+        out["hill_ratio"] = out["fp_slope"] / max(out["frame_slope"], 1e-9)
+    else:
+        out.update({k: float("nan") for k in ("fp_relief_m", "fp_slope", "fp_steep_share", "hill_ratio")})
+    return out
 
 
 def pick(store, n_cities: int, n_towns: int, n_villages: int) -> list[SettlementRef]:  # type: ignore[no-untyped-def]
@@ -100,6 +135,8 @@ def measure(store, ref: SettlementRef, params) -> dict:  # type: ignore[no-untyp
         "wall_gates": len(layout.walls.gates) if layout.walls is not None else 0,
         "walls_took_ha": (layout.footprint.difference(site.footprint).area / 1e4
                           if layout.footprint is not None else 0.0),
+        "stone": float(profile.materials.get("stone", float("nan"))),
+        **hills(m),
     }
     return row
 
@@ -110,7 +147,9 @@ def _fmt(row: dict) -> str:
             f"{row['t_total']:>5.1f} s (chain {row['t_chain']:>4.1f}) · cons {row['conservation_max']:.1e} · "
             f"fp {row['footprint_error']:+5.1%} {row['pieces']}p · gates {row['gates']} br {row['bridges']} "
             f"fd {row['fords']} land {row['landings']} · blocks {row['blocks']:,} plots {row['lots']:,} "
-            f"piers {row['piers']}" + (f" · walls {row['wall_km']:.1f} km" if row["wall_km"] else ""))
+            f"piers {row['piers']}" + (f" · walls {row['wall_km']:.1f} km" if row["wall_km"] else "")
+            + f" · ρ {row['ruggedness']:.2f} relief {row['frame_relief_m']:.0f} m, fp {row['fp_relief_m']:.0f} m "
+              f"slope {row['fp_slope']:.3f} ({row['hill_ratio']:.2f}×) steep {row['fp_steep_share']:.0%}")
 
 
 def summarise(rows: list[dict]) -> dict:
@@ -127,7 +166,9 @@ def summarise(rows: list[dict]) -> dict:
             "footprint_abs_error": avg([{"v": abs(r["footprint_error"])} for r in sub], "v"),
             **{k: avg(sub, k) for k in ("pieces", "sparse_share", "gates", "bridges", "fords", "landings",
                                         "anchors_citadel", "anchors_market", "anchors_waterfront",
-                                        "anchors_sacred", "blocks", "lots", "piers", "wall_km", "walls_took_ha")},
+                                        "anchors_sacred", "blocks", "lots", "piers", "wall_km", "walls_took_ha",
+                                        "ruggedness", "frame_relief_m", "frame_slope", "fp_relief_m", "fp_slope",
+                                        "fp_steep_share", "hill_ratio", "stone")},
         }
     return out
 
@@ -144,6 +185,9 @@ def print_summary(summary: dict) -> None:
               f"waterfront {s['anchors_waterfront']:.1f} sacred {s['anchors_sacred']:.1f} · blocks {s['blocks']:,.0f}, "
               f"plots {s['lots']:,.0f}, piers {s['piers']:.1f}, walls {s['wall_km']:.1f} km "
               f"(took in {s['walls_took_ha']:.1f} ha)")
+        print(f"          hills: ρ {s['ruggedness']:.2f} · frame relief {s['frame_relief_m']:.0f} m, slope "
+              f"{s['frame_slope']:.3f} · footprint relief {s['fp_relief_m']:.0f} m, slope {s['fp_slope']:.3f} "
+              f"({s['hill_ratio']:.2f}× the land's), steep {s['fp_steep_share']:.0%} · stone {s['stone']:.2f}")
 
 
 def main() -> None:

@@ -31,9 +31,9 @@ from worldgen.geology.channels import (
 )
 from worldgen.hydrology.channels import LAKE_MASK, RIVER_OBJECTS
 from worldgen.resources.channels import FERTILITY_MEAN
+from worldgen.geology.ruggedness import face_relief
 from worldgen.resources.terrain import (
     coastal_ocean_faces,
-    face_elevation_range,
     face_hops_from_seeds,
     lake_containing_faces,
     river_traversed_faces,
@@ -84,7 +84,7 @@ class DangerBuilder(Stage):
         )
         is_water = is_ocean | is_lake_face
         elev_mean = elevation_tex[..., 0].mean(axis=(1, 2)).astype(np.float32)
-        elev_range = face_elevation_range(elevation_tex)
+        elev_range = face_relief(mesh)          # km, from ruggedness
 
         ctx.report("Danger: computing terrain inputs…")
         ocean_depth_hops = face_hops_from_seeds(

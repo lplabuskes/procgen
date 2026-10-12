@@ -33,14 +33,14 @@ fertility over ocean/lake texels → crops → minerals + workings → rare reso
 ## Individual modules
 
 **`terrain.py`**:
-- `face_elevation_range(elevation_tex)` — per-face pixel elevation span as ruggedness (per-pixel slope is noise-dominated at default tex_size)
+- `face_elevation_range(elevation_tex)` — per-face pixel elevation span (the old ruggedness proxy; now only the fallback of `worldgen.geology.ruggedness.face_relief` for meshes without the field)
 - `face_hops_from_seeds(mesh, seed_mask, max_hops)` — BFS hops; beyond → `max_hops+1`
 - `river_traversed_faces` / `lake_containing_faces` — water-proximity seeds
 - `coastal_ocean_faces(mesh, is_ocean)` — ocean faces next to land (depth BFS seeds)
 - `volcanic_faces(mesh, threshold)`
 
 **`fertility.py`**:
-- `compute_fertility()` — product of five per-face factors: climate (bell in growing-season T and log-P), terrain (elevation-range penalty), water proximity (floodplain hop-decay bonus), volcanism proximity (volcanic-soil bonus), biome LUT; plus optional per-pixel forest penalty. Factors rasterised with `rasterize_face_values` so faces blend continuously.
+- `compute_fertility()` — product of five per-face factors: climate (bell in growing-season T and log-P), terrain (face-relief penalty, `elevation_range_threshold_km`, the relief from the world's ruggedness), water proximity (floodplain hop-decay bonus), volcanism proximity (volcanic-soil bonus), biome LUT; plus optional per-pixel forest penalty. Factors rasterised with `rasterize_face_values` so faces blend continuously.
 - `compute_aquatic_fertility()` — per-face scalar for ocean/lake faces from SST, ocean depth hops (upwelling proxy) and lake river-proximity; written over water pixels so fishing enters carrying capacity.
 - `neighbour_water_fertility()` — land faces have no aquatic value, so their sea pixels take the mean of neighbouring ocean faces' and lake pixels of neighbouring lake faces' (0 if none): a coast's shallows are the same fishing grounds, feeding its fishers ([realm_population.md](realm_population.md#farmers-and-fishers)).
 - `apply_delta_fertility()` — raises delta plains toward `delta_fertility` (0.9) × growing-season T bell (the river, not rain, waters a delta), Only raises.

@@ -31,8 +31,9 @@ settlement map's terrain, **never writing back**:
 - **wind**: the annual-mean prevailing wind at its face, in frame axes (m/s),
   with its steadiness (|mean| / mean |wind|);
 - **materials**: shares of stone / timber / brick / adobe from ruggedness (the
-  frame's land relief), forest, aridity (biome), fertile clay plains, nearby
-  marble and (cities) wealth;
+  world's ``ruggedness`` at the settlement, from ``stone_ruggedness_low`` to
+  ``_high``), forest, aridity (biome), fertile clay plains, nearby marble and
+  (cities) wealth;
 - **danger**: the terrain's danger at the settlement;
 - **stubs for the history layer**: ``founding_age`` (years; a seeded draw,
   older for more people and for capitals) and ``planned`` (seeded, likelier
@@ -108,8 +109,9 @@ class SettlementProfileParams:
     march_tension: float = _f(0.2, label="March border tension", min=0.01, max=1.0, step=0.01)
     min_industry: float = _f(0.1, label="Industry floor", min=0.0, max=1.0, step=0.05)
     max_industries: int = _f(8, label="Industries kept", min=1, max=20)
-    # Land relief (m, 2nd–98th percentile over the frame) at which building turns to stone.
-    rugged_relief_m: float = _f(80.0, label="Rugged relief (m)", min=5.0, max=500.0, step=5.0)
+    # Ruggedness at the settlement from which building turns to stone (none at low, full at high).
+    stone_ruggedness_low: float = _f(0.25, label="Stone from ruggedness", min=0.0, max=1.0, step=0.05)
+    stone_ruggedness_high: float = _f(0.65, label="All-stone ruggedness", min=0.0, max=1.0, step=0.05)
 
 
 @dataclass
@@ -420,6 +422,13 @@ def _biome(fields: RegionFields) -> str:
     return BIOME_NAMES[b] if 0 <= b < len(BIOME_NAMES) else "Unknown"
 
 
+def _stone_ruggedness(fields: RegionFields, params: SettlementProfileParams) -> float:
+    """The materials' ruggedness in [0, 1]: the world's ``ruggedness`` at the settlement, ramped."""
+    lo, hi = float(params.stone_ruggedness_low), float(params.stone_ruggedness_high)
+    rho = _at_center(fields, "ruggedness", lo)
+    return float(np.clip((rho - lo) / max(hi - lo, 1e-9), 0.0, 1.0))
+
+
 def _relief_m(fields: RegionFields) -> float:
     """The frame's land relief: 2nd–98th percentile of elevation (m)."""
     elev = fields.textures["elevation"][0, ..., 0].astype(np.float64) * 1000.0
@@ -491,7 +500,7 @@ def build_profile(
         near = _nearness(center, workings[0][is_marble], reach)
         marble = float(near.max()) if near.size else 0.0
     materials = material_shares(
-        rugged=_relief_m(fields) / float(params.rugged_relief_m),
+        rugged=_stone_ruggedness(fields, params),
         forest=_at_center(fields, "forest_density"), arid=_ARID.get(biome, 0.0),
         fertility=_at_center(fields, "fertility"), marble=marble,
         wealth=wealth if ref.kind == "city" else 0.0,

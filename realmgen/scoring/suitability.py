@@ -102,17 +102,17 @@ def compute_climate_habitability(
 
 
 def compute_ruggedness_penalty(
-    face_elev_range_km: np.ndarray,
+    face_relief_km: np.ndarray,
     *,
     penalty_scale_km: float = 1.0,
 ) -> np.ndarray:
     """Ruggedness multiplier ``exp(-range / scale)``, (N,) float32 in (0, 1].
 
     Args:
-        face_elev_range_km: (N,) per-face pixel elevation span (km) — the ruggedness
-            proxy, since per-pixel slope is noise-dominated.
+        face_relief_km: (N,) face-scale relief (km) the world's ruggedness stands for
+            (:func:`worldgen.geology.ruggedness.face_relief`).
     """
-    r = np.maximum(np.asarray(face_elev_range_km, dtype=np.float64), 0.0)
+    r = np.maximum(np.asarray(face_relief_km, dtype=np.float64), 0.0)
     return np.exp(-r / max(penalty_scale_km, 1e-9)).astype(np.float32)
 
 

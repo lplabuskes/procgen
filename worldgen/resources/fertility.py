@@ -176,7 +176,7 @@ def compute_fertility(
     precipitation_tex: np.ndarray,
     ocean_mask_tex: np.ndarray,
     face_biome: np.ndarray,
-    face_elev_range_km: np.ndarray,
+    face_relief_km: np.ndarray,
     water_hops: np.ndarray,
     volcanism_hops: np.ndarray,
     params: "FertilityParams",
@@ -190,7 +190,7 @@ def compute_fertility(
         precipitation_tex: (N, H, W, K) float32 mm/season.
         ocean_mask_tex: (N, H, W, 1) uint8; 1=ocean.
         face_biome: (N,) int biome index.
-        face_elev_range_km: (N,) float32 — pixel elevation span per face.
+        face_relief_km: (N,) float32 — face-scale relief (km) from the world's ruggedness.
         water_hops: (N,) int — face hops from any river/lake face.
         volcanism_hops: (N,) int — face hops from any volcanic face.
         mesh: if given, the per-face multiplier is rasterized smoothly; otherwise broadcast per face.
@@ -210,7 +210,7 @@ def compute_fertility(
 
     face_terrain = (
         1.0 - np.clip(
-            face_elev_range_km / max(p.elevation_range_threshold_km, 1e-3), 0.0, 1.0
+            face_relief_km / max(p.elevation_range_threshold_km, 1e-3), 0.0, 1.0
         )
     ).astype(np.float32)                                             # (N,)
 

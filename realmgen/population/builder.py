@@ -80,7 +80,7 @@ class TradeSpawnParams:
 @paramclass
 class PopulationParams:
     relaxation_passes: int = _f(2, label="Relaxation passes", min=1, max=5)
-    rural_density_max: float = _f(14.0, label="Max rural density (people/km² at fertility 1)", min=1.0, max=100.0)
+    rural_density_max: float = _f(13.0, label="Max rural density (people/km² at fertility 1)", min=1.0, max=100.0)
     # A land face's own shallows feed fishers on its shore; a water face's feed the
     # cities that reach it.
     fishing_density_max: float = _f(

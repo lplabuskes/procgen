@@ -72,7 +72,7 @@ class TestComputeFertility:
             precipitation_tex=precip,
             ocean_mask_tex=ocean,
             face_biome=biome,
-            face_elev_range_km=rng,
+            face_relief_km=rng,
             water_hops=wh,
             volcanism_hops=vh,
             **_default_kwargs(),
@@ -89,7 +89,7 @@ class TestComputeFertility:
             precipitation_tex=precip,
             ocean_mask_tex=ocean,
             face_biome=biome,
-            face_elev_range_km=rng,
+            face_relief_km=rng,
             water_hops=wh,
             volcanism_hops=vh,
             **_default_kwargs(),
@@ -106,7 +106,7 @@ class TestComputeFertility:
             precipitation_tex=precip,
             ocean_mask_tex=ocean,
             face_biome=biome,
-            face_elev_range_km=rng,
+            face_relief_km=rng,
             water_hops=wh,
             volcanism_hops=vh,
             **_default_kwargs(),
@@ -122,12 +122,12 @@ class TestComputeFertility:
         rugged = np.full(1, 5.0, dtype=np.float32)  # well above 2.5 threshold
         f_flat = compute_fertility(
             temperature_tex=temp, precipitation_tex=precip, ocean_mask_tex=ocean,
-            face_biome=biome, face_elev_range_km=flat,
+            face_biome=biome, face_relief_km=flat,
             water_hops=wh, volcanism_hops=vh, **_default_kwargs(),
         )
         f_rugged = compute_fertility(
             temperature_tex=temp, precipitation_tex=precip, ocean_mask_tex=ocean,
-            face_biome=biome, face_elev_range_km=rugged,
+            face_biome=biome, face_relief_km=rugged,
             water_hops=wh, volcanism_hops=vh, **_default_kwargs(),
         )
         assert f_rugged.max() < 0.05
@@ -143,12 +143,12 @@ class TestComputeFertility:
         kw2 = _default_kwargs(optimal_temperature_c=5.0)  # detune climate so f < 1
         f_far2 = compute_fertility(
             temperature_tex=temp, precipitation_tex=precip, ocean_mask_tex=ocean,
-            face_biome=biome, face_elev_range_km=rng,
+            face_biome=biome, face_relief_km=rng,
             water_hops=far, volcanism_hops=vh, **kw2,
         )
         f_near2 = compute_fertility(
             temperature_tex=temp, precipitation_tex=precip, ocean_mask_tex=ocean,
-            face_biome=biome, face_elev_range_km=rng,
+            face_biome=biome, face_relief_km=rng,
             water_hops=near, volcanism_hops=vh, **kw2,
         )
         assert f_near2.max() > f_far2.max()
@@ -163,12 +163,12 @@ class TestComputeFertility:
         kw = _default_kwargs(optimal_temperature_c=18.0)  # 5° vs 18° → climate < 1
         f_far = compute_fertility(
             temperature_tex=temp, precipitation_tex=precip, ocean_mask_tex=ocean,
-            face_biome=biome, face_elev_range_km=rng,
+            face_biome=biome, face_relief_km=rng,
             water_hops=wh, volcanism_hops=far, **kw,
         )
         f_near = compute_fertility(
             temperature_tex=temp, precipitation_tex=precip, ocean_mask_tex=ocean,
-            face_biome=biome, face_elev_range_km=rng,
+            face_biome=biome, face_relief_km=rng,
             water_hops=wh, volcanism_hops=near, **kw,
         )
         assert f_near.max() > f_far.max()

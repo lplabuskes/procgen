@@ -111,3 +111,25 @@ def test_elevation_stage_writes_ruggedness():
     assert face.shape == (len(mesh.faces),) and tex.shape == (len(mesh.faces), 8, 8, 1)
     assert 0.0 <= face.min() and face.max() <= 1.0
     assert face.std() > 0.05                            # tectonics and noise give it structure
+
+
+def test_face_relief_is_log_linear_and_falls_back_to_the_span(mesh):
+    from worldgen.geology.ruggedness import (
+        FACE_RELIEF_RUGGED_KM, FACE_RELIEF_SMOOTH_KM, face_relief, face_relief_km,
+    )
+    relief = face_relief_km(np.array([0.0, 0.5, 1.0, 2.0]))
+    assert relief[0] == pytest.approx(FACE_RELIEF_SMOOTH_KM)
+    assert relief[1] == pytest.approx(np.sqrt(FACE_RELIEF_SMOOTH_KM * FACE_RELIEF_RUGGED_KM), rel=1e-5)
+    assert relief[2] == pytest.approx(FACE_RELIEF_RUGGED_KM) and relief[3] == relief[2]   # clipped
+    n = len(mesh.faces)
+    elev = np.zeros((n, 4, 4, 1), dtype=np.float32)
+    elev[:, 0, 0, 0] = 0.3
+    mesh.set_face_textures("elevation", elev, n_channels=1)
+    try:
+        assert np.allclose(face_relief(mesh), 0.3)          # no ruggedness: the elevation span
+        RUGGEDNESS_FACE.write(mesh, np.ones(n))
+        assert np.allclose(face_relief(mesh), FACE_RELIEF_RUGGED_KM)
+    finally:
+        mesh.face_textures.pop("elevation", None)
+        for meta in mesh.face_metadata:
+            meta.pop("ruggedness", None)

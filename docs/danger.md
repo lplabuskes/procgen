@@ -51,7 +51,7 @@ then one `DangerSourceParams` per source (`count`, `hop_radius`,
 |---|---|
 | Volcanic | Dragon Lair (any land), Fire Elemental Rift (volcanic land) |
 | Ocean | Kraken Domain (deep ocean), Deadwater Zone (open ocean), Sea Serpent Territory (near coast) |
-| Highland | Harpy Peak (high, moderately rugged), Troll Hold (river faces), Giant Lair (high ground) |
+| Highland | Harpy Peak (high, moderately rugged: face relief from the world's ruggedness), Troll Hold (river faces), Giant Lair (high ground) |
 | Forest | Goblin Warband (forest), Werewolf Range (wooded steppe/savannah), Basilisk Territory (semi-arid/desert), Cursed Forest (dense forest far from fresh water), Lizardfolk Fen (warm wetland, `wetland_fraction ≥ 0.2`, not Icecap/Tundra/Taiga) |
 | Planar Rift | Fire (volcanic), Earth (active continental boundaries), Air (very high), Water (open ocean) |
 | Undead | Lich Stronghold (high, barren, treeless), Barrow Field (low, flat, dry), Haunt (barren coast) |

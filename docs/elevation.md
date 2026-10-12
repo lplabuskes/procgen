@@ -113,6 +113,14 @@ seam-averaging pass (`ruggedness_texture`), so a bilinear read is continuous
 across face edges. Seeds 4/31: land p5/p50/p95 ≈ 0.14 / 0.34 / 0.67, corr with
 face elevation ≈ 0.68; collision belts brightest, plate interiors darkest.
 
+**Face relief** (`face_relief_km`, `face_relief(mesh)`): the face-scale relief in
+km the index stands for, for the world-build consumers that think in km (land
+cost and navigability, suitability, fertility, danger sources):
+`FACE_RELIEF_SMOOTH_KM` 0.04 × (5.0 / 0.04) ** ρ, log-linear like the finer
+tiers' spectrum and matched to the land quantiles of the per-face elevation span
+it replaced (seeds 4/31/35: span ≈ exp(4.9 (ρ − 0.64)) km; corr ~0.5, so where
+relief falls changes, not how much). A mesh without the field falls back to the span.
+
 ## `display.py`
 
 `_elevation_color`, `ELEVATION_RECIPE` (`relief=True`; rerun by the region view),

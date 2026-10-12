@@ -19,8 +19,9 @@ Part of `realmgen/`. [Back to realmgen overview](realmgen.md)
 water proximity (`compute_water_proximity`: freshwater BFS + climate-stage coast
 distance), climate habitability (`compute_climate_habitability`: T/P bells),
 `fertility_mean`, resource access (`compute_resource_proximity`: BFS from
-mineral/rare-bio faces); × ruggedness multiplier (`compute_ruggedness_penalty`,
-face elevation span). Water faces 0.
+mineral/rare-bio faces); × ruggedness multiplier (`compute_ruggedness_penalty`:
+`exp(−face relief / penalty_scale_km)`, the face relief from the world's
+ruggedness, `worldgen.geology.ruggedness.face_relief`). Water faces 0.
 
 **Situational value** (`combine_situational_value`): harbour quality (coastal,
 depth-scaled), river confluences, navigable river heads, mountain passes (local

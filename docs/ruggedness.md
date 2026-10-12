@@ -32,7 +32,7 @@ missing → contributes nothing). Adds:
 
 The terms' sum is diffused (`smoothing_passes` 2 at `smoothing_alpha` 0.5; the
 seed is diffused already), added to the seed, clipped to [0, 1] and rasterised
-seam-free (`ruggedness_texture`).
+seam-free (`ruggedness_texture`); the per-face values are then the texture's face means.
 
 Seeds 4/31/35: land p5/p50/p95 ≈ 0.06–0.10 / 0.27–0.32 / 0.66–0.74; coastal
 land a little rougher (p50 0.33–0.41). That is ~0.2 smoother at the coast than
@@ -47,5 +47,7 @@ olive → brown → slate alpine, water flat, hillshaded where relief) + hover
 
 ## Persistence
 
-Texture saved with the mesh (`serialize` adds nothing). `load` restores the
-per-face values from texture face means (close to, not exactly, the built ones).
+Texture saved with the mesh (`serialize` adds nothing). The per-face values are
+the texture's face means, both when built and when `load` restores them, so a
+saved world reads exactly as built (a rerun of the cost stage on a loaded world
+otherwise gave seed 4 428 cities instead of 275).
