@@ -51,7 +51,7 @@ shared relief signal puts moisture/temperature bands on the contours.
 
 | field | detail | conserved |
 |---|---|---|
-| `elevation` | slope-proportional fBm — **the only noise source**; restyled/reshaped near water by ruggedness | additively, smooth; shore edit keeps every parent mean |
+| `elevation` | a relief spectrum set by the parent's ruggedness — **the only noise source**; restyled/reshaped near water by ruggedness | additively, smooth; shore edit keeps every parent mean |
 | `temperature` | lapse rate on refined relief (sub-sea-level ground counts as sea level) | additively, smooth |
 | `precipitation` | orographic: × `1 + orographic_gain · anomaly` (per km, clipped ±0.9) | multiplicatively, smooth |
 | `biome` | reclassified from **area-averaged** refined climate | derived |
@@ -121,12 +121,27 @@ texel spacing`) up to `nyquist_safety / texel spacing`. A tier no finer than its
 parent gets `detail_octaves == 0`. At defaults: **2 octaves** over ~4.5 km texels
 (globe ~14 km).
 
-**Detail amplitude.** `relief_factor × (detail wavelength, km) × effective
-slope`, capped at `max_relief_km`; effective slope saturates at
-`slope_reference` and floors at `slope_floor` of it (near water see
-[Coast style](#coast-style)). The global field is smooth at ~15 km (mountains
-only ~0.007 km/km), hence the small `slope_reference` (0.005). Typical: tens of
-metres on plains, a few hundred in rough country.
+**Detail amplitude: the relief spectrum** (`spectrum_amplitudes`, shared by
+every tier — the local and settlement tiers take these params from the region's).
+Octave `k`, of wavelength `λ_k` (= Earth radius / frequency), gets its own
+amplitude per texel:
+
+    A_k = relief_factor × relief(ρ) × (λ_k / reference_wavelength_km) ** hurst,  capped at octave_cap_km
+    relief(ρ) = relief_flat_km × (relief_rugged_km / relief_flat_km) ** ρ
+
+`ρ` is the parent's `ruggedness` read bilinearly (`parent_ruggedness`; 0.3 where
+the parent has none), `hurst` the terrain character, from jagged (low: fine
+scales keep their relief) to rolling (1) — one value for now, read per texel
+through `hurst_exponent`, the handle for a character field beside ruggedness.
+The octaves are summed un-normalised, so a tier draws exactly its band's share
+of one spectrum and a scale's relief is the same whichever tier draws it (a
+settlement map carries every band from the globe down). Defaults 2.5 m → 250 m
+at 1 km, `hurst` 0.75, cap 1 km per octave. Window relief over ~1 km (seeds
+4/31/35, `measure_relief.py`, medians): ρ < 0.2 13 m local / 21 m settlement;
+0.2–0.4 28 / 47 m; 0.4–0.6 64 / 100 m; over ~13 km on regions, ρ ≥ 0.6 465 m
+(p90 910 m). Near water see [Coast style](#coast-style). Replaced a
+slope-proportional amplitude (the parent's slope × wavelength), which on a globe
+smooth at ~15 km gave ~10 m per km even in mountains.
 
 **The critical invariant.** `conservation_report(fields, globe)` averages each
 global texel's in-hexagon regional samples vs the global value — elevation,
@@ -173,8 +188,11 @@ them with its own (below). No noise of its own.
   or on ice cap (warmest season < 0 °C); both judged per basin.
 - **Breaching.** A lake must be deeper than the parent surface drops over
   `lake_breach_parent_texels` parent texels (parent slope × length) — erosion
-  cuts sills fastest on steep ground, and slope-proportional detail digs its
-  deepest pits there, so without this lakes crowd mountain flanks — and than
+  cuts sills fastest on steep ground, so without this lakes crowd mountain
+  flanks — plus `lake_breach_relief` (0.3) × the tier's summed octave
+  amplitudes (`detail_relief`): noise pits are as deep as the detail is tall
+  (without it, seed 4's densest farmland was 22% small lake; with it, its
+  regions are back to the ~0.05% they had) — and than
   `lake_min_depth_km`, and at least `lake_min_texels` big. In the cold the
   length shrinks by `lake_glacial_factor` (annual mean ≤ 0 °C, fading out by
   10 °C): glacial lake country.
@@ -233,12 +251,13 @@ of ~14 km steps in a region (4.5 km locally). The correction causes it (blurring
 the coarse read beforehand does nothing); zero-mean-per-texel noise can only
 fringe it by 1–3 texels. Hence two steps.
 
-**1. Detail style (`coast_style`).** In the band, fBm persistence moves from
-`persistence` toward `coast_persistence_smooth` (0.25, ruggedness 0) / `_rugged`
-(0.8, ruggedness 1) per texel (`_varying_persistence_fbm`). Amplitude becomes `wander × detail wavelength
-× parent slope`, `wander` from `coast_wander_smooth` (0.03) to `_rugged` (0.5), so
-the shore moves ~that many wavelengths regardless of gradient (the
-slope-saturated amplitude would swamp a flat coast). Over sea, the underwater
+**1. Detail style (`coast_style`).** In the band the detail blends (by the
+tent) from the spectrum to a coast fBm over the same octaves, with persistence
+`coast_persistence_smooth` (0.25, ruggedness 0) to `_rugged` (0.8, ruggedness 1)
+per texel (`_weighted_octaves`) at amplitude `wander × detail wavelength ×
+parent slope`, `wander` from `coast_wander_smooth` (0.03) to `_rugged` (0.5), so
+the shore moves ~that many wavelengths regardless of gradient (a contour
+moves by amplitude / slope). Over sea, the underwater
 fade is lifted in the band so rugged coasts raise skerries; lakes keep it.
 
 **2. Shore reshaping (`reshape_coast`, default on).** After elevation is
@@ -255,9 +274,12 @@ conserved, a *target* shore is drawn and elevation edited to match:
   past it. The parent-mean change is taken back from that parent texel's texels
   that can absorb it without crossing the surface (dry raised / wet lowered, in
   proportion to height above / depth below), so every parent mean is unchanged
-  and no other texel changes side. Needing > `coast_max_scale` (1×) of that
-  height, or nothing to absorb → left as is (keeps its step). Seed 4 region 49:
-  ~⅔ of wanted edits applied.
+  and no other texel changes side. Each texel's share is tapered to zero at
+  its parent texel's edges (`anchor_edge_taper`: `2ω − 1`, ω its own anchor's
+  bilinear weight), so the absorption never steps there — untapered, it drew
+  straight cliffs along parent-texel edges once coasts had hundreds of metres
+  of relief. Needing > `coast_max_scale` (1×) of that height, or nothing to
+  absorb → left as is (keeps its step).
 - Two passes share the target: sea vs sea level (lakes excluded), then lakes vs
   their own surfaces (ocean excluded). A lake surface is carried ~two parent
   texels onto shore via the lowest neighbouring surface (as the later flood
@@ -328,8 +350,8 @@ refined/coarse elevation and slope, land masks.
 | param | default | |
 |---|---|---|
 | `n_cols`, `tex_size` | 14, 64 | grid size |
-| `relief_factor`, `slope_reference`, `slope_floor`, `max_relief_km` | 1.0, 0.005, 0.10, 1.0 | detail amplitude |
-| `octaves`, `lacunarity`, `persistence`, `nyquist_safety` | 4, 2.0, 0.5, 0.5 | detail band |
+| `relief_flat_km`, `relief_rugged_km`, `reference_wavelength_km`, `hurst`, `octave_cap_km`, `relief_factor` | 0.0025, 0.25, 1.0, 0.75, 1.0, 1.0 | the relief spectrum (all tiers) |
+| `octaves`, `lacunarity`, `nyquist_safety` | 4, 2.0, 0.5 | detail band |
 | `orographic_gain` | 0.5 /km | precipitation |
 | `lapse_rate_c_per_km` | 6.5 | temperature (`DERIVED`: the app copies the climate's) |
 | `water_relief_depth_km`, `refine_water_masks`, `water_spread_texels` | 0.1, True, 4 | water |

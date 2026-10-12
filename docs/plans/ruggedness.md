@@ -254,3 +254,40 @@ on region and local views. `globe.elevation.ruggedness.base` replaced
 `globe.coast.base_ruggedness` in `BASIC_PARAMS`. Coastal land is ~0.2 smoother
 than the old coast field (seed 4 p5–p95 0.14–0.74 vs 0.31–0.90): plains coasts
 draw smoother. Left as is for review; `coast_*_smooth` params absorb it if wanted.
+
+**Phase 3 done (2026-10-11).** `refine_terrain` builds the detail from the
+spectrum (`spectrum_amplitudes`: `relief_flat_km` 2.5 m → `relief_rugged_km`
+250 m at 1 km, `hurst` 0.75, `octave_cap_km` 1, `relief_factor` kept as an
+advanced overall multiplier), the octaves summed un-normalised. The params live
+on `RegionUpsampleParams` and the local and settlement tiers share them.
+`slope_reference` / `slope_floor` / `max_relief_km` / `persistence` are gone at
+every tier, and `relief_factor` left `BASIC_PARAMS`. `hurst_exponent` is the
+per-texel handle for the character channel. Medians of 1 km window relief
+(seeds 4/31/35):
+
+| ruggedness | local | settlement | (baseline, by span tercile: local 3–10 m, settlement 7–11 m) |
+|---|---|---|---|
+| < 0.2 | 13 m | 21 m | |
+| 0.2–0.4 | 28 m | 47 m | |
+| 0.4–0.6 | 64 m | 100 m | |
+
+Regions over ~13 km at ρ ≥ 0.6: 465 m (p90 910 m). Conservation still at float
+noise on every tier.
+
+Two things broke and were fixed in this phase rather than deferred:
+- **Small lakes flooded the plains** (seed 4's densest hex: 22% lake on the
+  region, 26% on its local map): noise pits now run tens of metres deep, beyond
+  the slope × length breach. Added `lake_breach_relief` (0.3 × the tier's summed
+  octave amplitudes, `detail_relief`): region 29 back to 0.02% (baseline 0.04%),
+  cold rugged region 49 keeps ~2.5% (glacial lake country).
+- **Shore reshaping drew straight cliffs** along parent-texel edges (local and
+  settlement tiers): it put each parent mean back by scaling the parent texel's
+  ground, which steps at the parent's edge once relief is tall.
+  `reshape_to_target(taper=...)` now weights each texel's share by
+  `anchor_edge_taper` (0 along parent edges), so the absorption is continuous.
+
+Still open (Decision 10, watching): rivers on the rougher relief (none seen
+climbing out of valleys in the renders checked), small lakes on local maps (seed 4, the
+same 40 maps as docs/local.md: 319 local-only lakes, 0.19% of land, vs 577 /
+0.27% before), regional texture reads as fBm rather than drainage (the character
+channel's job), `connect_ocean` channels (no visible artefacts found).

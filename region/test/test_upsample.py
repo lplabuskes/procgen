@@ -9,8 +9,8 @@ from region.upsample import (
     conservation_report,
     connect_ocean,
     flood_to_level,
+    spectrum_amplitudes,
 )
-from region.source import global_slope
 
 REGION_ID = 40   # the region conftest carves its lake into: coast *and* a lake
 BIOME_REGION = 20  # region 40's synthetic climate is all one biome; this one is not
@@ -90,23 +90,39 @@ def test_no_detail_when_relief_is_disabled(synthetic_globe):
     assert conservation_report(flat, synthetic_globe)["elevation"]["max"] < 1e-3
 
 
-def test_detail_follows_slope(synthetic_globe):
-    """Steeper ground gets more added relief than flat ground."""
-    params = _params()
-    fields = build_region_fields(synthetic_globe, REGION_ID, params)
-    smooth = build_region_fields(synthetic_globe, REGION_ID, _params(relief_factor=0.0))
+def test_detail_follows_ruggedness(synthetic_globe):
+    """Rugged ground gets more added relief than smooth ground."""
+    tex = synthetic_globe.mesh.face_textures
+    positions = synthetic_globe.mesh.face_texture_positions(*tex["elevation"].shape[1:3])
+    tex["ruggedness"] = np.clip(0.5 + 2.0 * positions[..., :1], 0.0, 1.0).astype(np.float32)
+    try:
+        fields = build_region_fields(synthetic_globe, REGION_ID, _params())
+        smooth = build_region_fields(synthetic_globe, REGION_ID, _params(relief_factor=0.0))
+    finally:
+        tex.pop("ruggedness")
     detail = np.abs(fields.textures["elevation"] - smooth.textures["elevation"]).reshape(-1)
+    rugged = fields.textures["ruggedness"].reshape(-1)
+    assert rugged.min() < 0.3 and rugged.max() > 0.7
+    high = rugged > np.percentile(rugged, 75)
+    low = rugged < np.percentile(rugged, 25)
+    assert detail[high].mean() > 3.0 * detail[low].mean()
 
-    from region.sampling import GlobalSampler
-    sampler = GlobalSampler(synthetic_globe.mesh)
-    faces, u, v = sampler.locate(fields.positions.reshape(-1, 3))
-    slope = sampler.sample(
-        global_slope(synthetic_globe.mesh, synthetic_globe.mesh.face_textures["elevation"]),
-        faces, u, v,
-    )[:, 0]
-    steep = slope > np.percentile(slope, 75)
-    gentle = slope < np.percentile(slope, 25)
-    assert detail[steep].mean() > detail[gentle].mean()
+
+def test_spectrum_amplitudes():
+    p = _params()
+    wavelengths = np.array([8.0, 4.0, 2.0, 1.0])
+    rugged = np.array([0.0, 0.5, 1.0])
+    amps = spectrum_amplitudes(wavelengths, rugged, np.full(3, p.hurst), p)
+    assert amps.shape == (4, 3)
+    # At the reference wavelength: relief_flat → relief_rugged, log-linearly.
+    assert amps[3, 0] == pytest.approx(p.relief_flat_km)
+    assert amps[3, 2] == pytest.approx(p.relief_rugged_km)
+    assert amps[3, 1] == pytest.approx(np.sqrt(p.relief_flat_km * p.relief_rugged_km))
+    # Each halving of wavelength scales by 2 ** -hurst, until the cap.
+    assert amps[1, 0] / amps[2, 0] == pytest.approx(2.0 ** p.hurst)
+    capped = spectrum_amplitudes(np.array([1000.0]), np.array([1.0]), np.array([p.hurst]), p)
+    assert capped[0, 0] == pytest.approx(p.octave_cap_km)
+    assert not spectrum_amplitudes(wavelengths, rugged, np.full(3, p.hurst), _params(relief_factor=0.0)).any()
 
 
 def _anchor_mask(fields, globe, key) -> np.ndarray:

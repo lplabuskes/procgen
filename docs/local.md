@@ -108,18 +108,20 @@ the parent hexagon and its halo). Seed 4: all fields at float32 noise
 ### `LocalUpsampleParams`
 
 `RegionUpsampleParams` with local defaults (only these are the local tier's own; the
-other fields are the region's, copied by `with_region_detail` / `AppParams`): `n_cols=16`, `slope_reference=0.03`,
-`slope_floor=0.03`, `max_relief_km=0.6`, `lake_smoothing_parent_texels=0.25` (~3 local
+other fields are the region's, copied by `with_region_detail` / `AppParams`): `n_cols=16`,
+`lake_smoothing_parent_texels=0.25` (~3 local
 texels, ~1 km: rounds the staircase's parent-texel pits off; 0.5 leaves no local lakes),
 `lake_max_parent_texels=1` (only lakes below the region's resolution, ~20 km²; uncapped,
 a local map found region-sized lakes the region had left dry — 93% of its own lake area),
 `lake_breach_parent_texels=1.5` (~7 km, near the region's ~15 km; with the cap it only sets
 how many sub-texel lakes: seed 4, 40 maps in regions 48/51/16/45/25, 577 local-only lakes,
-0.27% of land, median ~10 km², 50–80 per map in lake districts, 0–10 elsewhere),
+0.27% of land, median ~10 km², 50–80 per map in lake districts, 0–10 elsewhere; with the
+relief spectrum and `lake_breach_relief`, 319 lakes, 0.19% of land, up to 131 per map),
 `water_spread_texels=12` (~one regional
 texel), `biome_smoothing=13` (~one regional texel, so biome edges follow the
-region), `slope_saturation=0.1`. Relief numbers are a first cut, untuned (seed 4
-region 34: ~50 m land relief std vs parent texel). Coast params keep region
+region), `slope_saturation=0.1`. The relief is the region's spectrum
+([region_fields.md](region_fields.md), "Detail amplitude"; shared params): ~13 m per km on
+smooth ground to ~65 m at ruggedness 0.5 (`measure_relief.py`). Coast params keep region
 defaults; band, blur and bays scale with the region's texels
 ([region_fields.md](region_fields.md#coast-style)).
 

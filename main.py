@@ -91,7 +91,6 @@ BASIC_PARAMS: tuple[str, ...] = (
     "realm.towns.town_fraction",
     "region.upsample.n_cols",
     "region.upsample.tex_size",
-    "region.upsample.relief_factor",
     "region.upsample.refine_water_masks",
     "region.upsample.reshape_coast",
     "region.upsample.connect_ocean",

@@ -20,7 +20,8 @@ and reports, per tier and class, over the dry texels each map draws:
 Terrain classes are terciles over land faces of the globe's per-face elevation
 span (``face_elevation_range``) — the globe doesn't change in this work, so the
 classes stay put across runs — and, once the world carries a ``ruggedness``
-field, terciles of that too.
+field, terciles of that too; and fixed bins of each texel's own ruggedness
+(``rho``: <0.2, 0.2–0.4, 0.4–0.6, ≥0.6), which is what the spectrum reads.
 
 Usage:
     python3 scripts/measure_relief.py                 # seeds 4, 31, 35
@@ -55,6 +56,10 @@ from _common import add_seed_args, get_map_store, load_history, resolve_seeds, s
 DEFAULT_SEEDS = [4, 31, 35]
 RESULTS_PATH = Path(__file__).parent / "results" / "relief_results.json"
 CLASSES = ("flat", "hilly", "rugged")
+# Fixed bins of each texel's own (refined copy of the) ruggedness, for calibrating the spectrum.
+RHO_EDGES = (0.2, 0.4, 0.6)
+RHO_CLASSES = ("<0.2", "0.2-0.4", "0.4-0.6", ">=0.6")
+NAMES = {"span": CLASSES, "ruggedness": CLASSES, "rho": RHO_CLASSES}
 # (tier, window km) pairs reported; a region's window is three of its texels whatever this says.
 WINDOWS = (("region", None), ("local", 1.0), ("settlement", 1.0), ("settlement", 0.25))
 
@@ -129,10 +134,13 @@ def sample(fields: RegionFields, classes: dict[str, np.ndarray], window_km: Opti
     relief = window_relief_m(fields, land, window_texels(fields, window_km))
     slope = refined_slope(fields.textures["elevation"][..., 0], texel_km(fields))
     faces = fields.faces[land]
-    return {
+    out = {
         "relief": relief[land], "slope": slope[land],
         **{scheme: cls[faces] for scheme, cls in classes.items()},
     }
+    if "ruggedness" in fields.textures:
+        out["rho"] = np.digitize(np.asarray(fields.textures["ruggedness"][..., 0])[land], RHO_EDGES)
+    return out
 
 
 def summarise(chunks: list[dict], scheme: str) -> dict[str, dict]:
@@ -140,7 +148,7 @@ def summarise(chunks: list[dict], scheme: str) -> dict[str, dict]:
     if not chunks:
         return out
     pooled = {k: np.concatenate([c[k] for c in chunks]) for k in ("relief", "slope", scheme)}
-    for k, name in enumerate(CLASSES):
+    for k, name in enumerate(NAMES[scheme]):
         sel = pooled[scheme] == k
         if not sel.any():
             continue
@@ -165,6 +173,7 @@ def measure_seed(seed: int, n_hexes: int, n_towns: int, rebuild: bool) -> dict:
     assert world is not None
     classes = face_classes(world)
     span = classes["span"]
+    schemes = [*classes, "rho"]
     n_cols = int(store.region_params.upsample.n_cols)
 
     # Local maps (and their regions) of land faces spread over each span class.
@@ -212,7 +221,8 @@ def measure_seed(seed: int, n_hexes: int, n_towns: int, rebuild: bool) -> dict:
 
     tiers = {
         f"{tier}" + (f"@{w}km" if tier == "settlement" else ""): {
-            scheme: summarise(chunks[(tier, w)], scheme) for scheme in classes
+            scheme: summarise(chunks[(tier, w)], scheme) for scheme in schemes
+            if all(scheme in c for c in chunks[(tier, w)])
         }
         for tier, w in WINDOWS
     }
@@ -241,7 +251,7 @@ def print_pooled(rows: list[dict]) -> None:
     """Median over seeds of each tier/scheme/class's p50 relief and p90 slope."""
     print("\nacross seeds (median of per-seed values):")
     keys = sorted({(t, sc, c) for r in rows for t, d in r["tiers"].items() for sc, bc in d.items() for c in bc},
-                  key=lambda k: (k[0], k[1], CLASSES.index(k[2])))
+                  key=lambda k: (k[0], k[1], NAMES[k[1]].index(k[2])))
     for tier, scheme, name in keys:
         vals = [r["tiers"][tier][scheme][name] for r in rows if name in r["tiers"].get(tier, {}).get(scheme, {})]
         stats = ("relief_p10", "relief_p50", "relief_p90", "slope_p90")

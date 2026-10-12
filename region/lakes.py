@@ -20,7 +20,9 @@ its texel spacing over the map plus a margin:
 - **Breaching.** Erosion the relief doesn't model cuts sills fastest on steep
   ground, so a lake must be deeper than the parent's surface drops over
   ``lake_breach_parent_texels`` (parent slope × length) — lakes gather on flats
-  and valley floors — and than ``lake_min_depth_km``, and at least
+  and valley floors — plus ``lake_breach_relief`` of the tier's own detail
+  relief (noise pits are as deep as the noise is tall, and drain once the
+  relief they stand for is eroded), and than ``lake_min_depth_km``, and at least
   ``lake_min_texels`` big.  In the cold the breach length shrinks by
   ``lake_glacial_factor``: glacially scoured ground is lake country.
 - **Size cap.** Optionally no bigger than ``lake_max_parent_texels`` parent
@@ -38,7 +40,7 @@ Deterministic; no noise of its own.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, Callable, Optional, cast
 
 import numpy as np
 from scipy import ndimage
@@ -48,7 +50,7 @@ from region.grid import RegionHexGrid
 from worldgen.hydrology.builder import HydrologyParams
 
 if TYPE_CHECKING:
-    from region.source import ParentSource
+    from region.source import Located, ParentSource
 
 EARTH_RADIUS_KM = 6371.0
 
@@ -229,6 +231,8 @@ def find_small_lakes(
     drain_clearance_parent_texels: float = 0.0,
     inherited: Optional[np.ndarray] = None,
     hydrology: Optional[HydrologyParams] = None,
+    relief: Optional[Callable[["Located"], np.ndarray]] = None,
+    breach_relief: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """The tier's own lakes over its ``(M, T, T)`` refined ``elevation``: ``(lake, surface, smoothed)``.
 
@@ -241,7 +245,8 @@ def find_small_lakes(
     parent's channels as ``(K, 2, 3)`` unit-vector segments, with no lake within
     ``drain_clearance_parent_texels`` of them.  A lake must be
     deeper than ``min_depth_km`` and than the parent's surface drops over
-    ``breach_parent_texels`` of its texels (parent slope × that length).
+    ``breach_parent_texels`` of its texels (parent slope × that length) plus
+    ``breach_relief`` × ``relief(loc)``, the tier's detail relief (km) there.
     ``inherited`` (``(M, T, T)`` bool, part of ``water``) is the parent's small
     lakes: smoothed over as land (the caller re-shores them on ``smoothed``),
     and no ``drains`` through them (the parent's channel runs under them).
@@ -264,6 +269,8 @@ def find_small_lakes(
     # Uncovered nodes are outlets at the parent's (smooth) height.
     e[~covered] = source.coarse("elevation", loc)[~covered, 0]
     breach = source.slope(loc) * float(breach_parent_texels) * source.spacing_rad * EARTH_RADIUS_KM
+    if relief is not None and breach_relief > 0.0:
+        breach = breach + float(breach_relief) * relief(loc)
     edge = np.zeros((n, n), dtype=bool)
     edge[[0, -1], :] = edge[:, [0, -1]] = True
     wet = covered & water[hexes, hr, hc]

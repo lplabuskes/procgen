@@ -14,8 +14,9 @@ temperature and precipitation, so independent noise in either would dissolve
 biome boundaries into speckle; deriving both from the relief makes them follow
 ridges and valleys instead.
 
-- **Elevation** — slope-proportional fBm with a floor, faded under shallow water;
-  near water the parent's ruggedness restyles it (:func:`coast_style`).  Additive.
+- **Elevation** — a relief spectrum set by the parent's ruggedness
+  (:func:`spectrum_amplitudes`), faded under shallow water; near water the
+  ruggedness restyles it (:func:`coast_style`).  Additive.
 - **Temperature** — lapse-rate correction on the refined relief.  Additive.
 - **Precipitation** — orographic response to the relief.  Multiplicative.
 - **Biome** — reclassified from the refined climate with the global classifier.
@@ -66,6 +67,8 @@ _SEED_SALT_ELEVATION = 0x9E37
 _SEED_SALT_COAST = 0xC0A5
 # The region tier's noise stream, one per world (the local tier's is localmap.upsample._SEED_SALT_LOCAL).
 _SEED_SALT_REGION = 0x5E61
+# Ruggedness assumed where the parent has none (tests' synthetic globes): the seed's base.
+_DEFAULT_RUGGEDNESS = 0.3
 
 
 @paramclass
@@ -78,14 +81,19 @@ class RegionUpsampleParams:
     n_cols: int = _f(14, label="Hex columns per region", min=4, max=64)
     # 64 gives ~4 km texels vs the globe's ~15 km: two detail octaves.
     tex_size: int = _f(64, label="Hex texture size", min=4, max=128)
-    # Amplitude = relief_factor × detail wavelength × local slope.  Global slopes
-    # at ~15 km only reach ~0.007 km/km, hence the small saturation point.
+    # ── the detail spectrum, shared by every tier (:func:`spectrum_amplitudes`).  An
+    # octave of wavelength λ gets amplitude relief(ρ) × (λ / reference_wavelength_km) ** hurst,
+    # capped at octave_cap_km, where ρ is the parent's ruggedness and relief(ρ) runs
+    # log-linearly from relief_flat_km (ρ = 0) to relief_rugged_km (ρ = 1).  Each tier
+    # draws only its own band, so a scale's relief is the same whichever tier draws it.
+    relief_flat_km: float = _f(0.0025, label="Relief at 1 km, smooth (km)", min=0.0001, max=0.1, step=0.0005)
+    relief_rugged_km: float = _f(0.25, label="Relief at 1 km, rugged (km)", min=0.001, max=2.0, step=0.01)
+    reference_wavelength_km: float = _f(1.0, label="Relief reference wavelength (km)", min=0.01, max=100.0)
+    # Amplitude ∝ wavelength ** hurst: low is jagged (fine scales keep their relief), 1 rolling.
+    hurst: float = _f(0.75, label="Hurst exponent (jagged ↔ rolling)", min=0.1, max=1.0, step=0.05)
+    octave_cap_km: float = _f(1.0, label="Max relief per octave (km)", min=0.0, max=5.0, step=0.05)
+    # Overall multiplier on the spectrum (0 = no detail; the world's ruggedness is the real knob).
     relief_factor: float = _f(1.0, label="Detail relief factor", min=0.0, max=8.0)
-    slope_reference: float = _f(
-        0.005, label="Slope saturation (km/km)", min=0.0005, max=0.05, step=0.0005
-    )
-    slope_floor: float = _f(0.10, label="Flat-ground detail floor", min=0.0, max=1.0)
-    max_relief_km: float = _f(1.0, label="Max detail relief (km)", min=0.0, max=5.0)
     # 0.5/km: a 400 m sub-grid ridge catches ~20% more rain, a hollow ~20% less.
     orographic_gain: float = _f(
         0.5, label="Orographic precip gain (/km)", min=0.0, max=3.0, step=0.05
@@ -134,7 +142,6 @@ class RegionUpsampleParams:
         2.0, label="Riparian flatness slope scale (m/km)", min=0.1, max=50.0, step=0.1)
     octaves: int = _f(4, label="Detail octaves (max)", min=0, max=8)
     lacunarity: float = _f(2.0, label="Detail lacunarity", min=1.1, max=4.0)
-    persistence: float = _f(0.5, label="Detail persistence", min=0.1, max=0.95)
     nyquist_safety: float = _f(0.5, label="Nyquist safety factor", min=0.1, max=1.0)
     # ── coast style (from ``ruggedness``).  Coasts are nearly flat at the
     # parent's scale, so near water the amplitude is ``wander × detail wavelength ×
@@ -168,13 +175,17 @@ class RegionUpsampleParams:
     coast_edit_max_km: float = _f(0.02, label="Coast edit max depth/height (km)", min=0.0, max=0.2, step=0.005)
     # ── small lakes (region/lakes.py): basins in the refined relief, filled by
     # their catchment's runoff against evaporation.  One shallower than the parent
-    # surface drops over the breach length (or than the min depth), or smaller
-    # than the min size, counts as breached by erosion the relief doesn't model.
+    # surface drops over the breach length plus lake_breach_relief × this tier's
+    # detail relief (or than the min depth), or smaller than the min size, counts
+    # as breached by erosion the relief doesn't model.
     small_lakes: bool = _f(True, label="Small lakes", min=0, max=1)
     # Measured on the smoothed relief (lake_smoothing_parent_texels), whose basins are shallower.
     lake_breach_parent_texels: float = _f(
         1.0, label="Small lake breach length (parent texels)", min=0.0, max=30.0, step=0.25
     )
+    # Noise pits are as deep as the detail is tall: this share of the tier's summed octave
+    # amplitudes (spectrum_amplitudes) drains, leaving basins the relief itself shapes.
+    lake_breach_relief: float = _f(0.3, label="Small lake breach (× detail relief)", min=0.0, max=3.0, step=0.05)
     lake_min_depth_km: float = _f(0.001, label="Small lake min depth (km)", min=0.0, max=0.1, step=0.0005)
     # Breach length multiplier at an annual mean ≤ 0 °C (fading out by 10 °C): glacial lake country.
     lake_glacial_factor: float = _f(0.3, label="Small lake glacial breach factor", min=0.05, max=1.0, step=0.05)
@@ -267,37 +278,92 @@ class RegionFields:
 # ── detail machinery ─────────────────────────────────────────────────────────
 
 
-def _octave_bands(
+def _octave_frequencies(
     base_frequency: float, max_frequency: float, params: RegionUpsampleParams
-) -> tuple[np.ndarray, np.ndarray]:
-    """Frequencies/amplitudes for the band between the global and regional grids."""
+) -> np.ndarray:
+    """Frequencies (unit sphere) of the octaves between the parent's grid and this one's."""
     freqs: list[float] = []
-    amps: list[float] = []
-    freq, amp = float(base_frequency), 1.0
+    freq = float(base_frequency)
     for _ in range(max(int(params.octaves), 0)):
         if freq > max_frequency:
             break
         freqs.append(freq)
-        amps.append(amp)
-        amp *= params.persistence
         freq *= params.lacunarity
-    return np.asarray(freqs, dtype=np.float64), np.asarray(amps, dtype=np.float64)
+    return np.asarray(freqs, dtype=np.float64)
 
 
-def _normalized_fbm(
-    points: np.ndarray, seed: int, freqs: np.ndarray, amps: np.ndarray
+def _octave_noise(points: np.ndarray, seed: int, freqs: np.ndarray) -> np.ndarray:
+    """``(K, P)`` simplex noise in ~[-1, 1], one row per octave of ``freqs``."""
+    perm = make_perm(seed)
+    out = np.zeros((freqs.size, len(points)), dtype=np.float64)
+    for k, freq in enumerate(freqs):
+        out[k] = fbm_sum(points, perm, np.array([freq]), np.array([1.0]))
+    return out
+
+
+def parent_ruggedness(source: ParentSource, loc: Located) -> np.ndarray:
+    """``(P,)`` the parent's ruggedness, bilinear and clipped; a moderate constant without the field."""
+    if not source.has("ruggedness"):
+        return np.full(len(loc.anchors), _DEFAULT_RUGGEDNESS)
+    return np.clip(source.coarse("ruggedness", loc)[:, 0], 0.0, 1.0)
+
+
+def hurst_exponent(source: ParentSource, loc: Located, params: RegionUpsampleParams) -> np.ndarray:
+    """``(P,)`` the spectrum's Hurst exponent — the terrain's character, jagged (low) to rolling (1).
+
+    One value for now; the handle for a per-texel character field beside ruggedness.
+    """
+    return np.full(len(loc.anchors), float(params.hurst))
+
+
+def relief_at_reference(rugged: np.ndarray, params: RegionUpsampleParams) -> np.ndarray:
+    """``(P,)`` octave amplitude (km) at the reference wavelength: log-linear in ruggedness."""
+    lo = max(float(params.relief_flat_km), 1e-9)
+    hi = max(float(params.relief_rugged_km), 1e-9)
+    return lo * (hi / lo) ** np.asarray(rugged, dtype=np.float64)
+
+
+def spectrum_amplitudes(
+    wavelengths_km: np.ndarray, rugged: np.ndarray, hurst: np.ndarray, params: RegionUpsampleParams
 ) -> np.ndarray:
-    """fBm over ``(P, 3)`` points normalized to roughly ``[-1, 1]``; zeros if no octaves."""
+    """``(K, P)`` amplitude (km) of each octave at each texel (see ``RegionUpsampleParams.relief_flat_km``)."""
+    ref = float(params.relief_factor) * relief_at_reference(rugged, params)
+    ratio = np.asarray(wavelengths_km, dtype=np.float64)[:, None] / max(float(params.reference_wavelength_km), 1e-9)
+    return np.minimum(ref[None, :] * ratio ** np.asarray(hurst, dtype=np.float64)[None, :],
+                      float(params.octave_cap_km))
+
+
+def detail_relief(
+    source: ParentSource, loc: Located, spacing_rad: float, params: RegionUpsampleParams
+) -> np.ndarray:
+    """``(P,)`` the tier's summed octave amplitudes (km) at ``loc``: how tall its detail stands there."""
+    freqs = _octave_frequencies(
+        0.5 / max(source.spacing_rad, 1e-12), float(params.nyquist_safety) / max(spacing_rad, 1e-12), params)
     if freqs.size == 0:
-        return np.zeros(len(points), dtype=np.float64)
-    total = float(amps.sum()) or 1.0
-    return fbm_sum(points, make_perm(seed), freqs, amps) / total
+        return np.zeros(len(loc.anchors), dtype=np.float64)
+    amplitudes = spectrum_amplitudes(
+        EARTH_RADIUS_KM / freqs, parent_ruggedness(source, loc), hurst_exponent(source, loc, params), params)
+    return amplitudes.sum(axis=0)
+
+
+def _weighted_octaves(octaves: np.ndarray, persistence: np.ndarray) -> np.ndarray:
+    """``(P,)`` normalised fBm from ``(K, P)`` octaves, octave ``k`` weighted ``persistence ** k`` per point."""
+    if octaves.shape[0] == 0:
+        return np.zeros(octaves.shape[1], dtype=np.float64)
+    weight = np.ones(octaves.shape[1], dtype=np.float64)
+    total = np.zeros(octaves.shape[1], dtype=np.float64)
+    norm = np.zeros(octaves.shape[1], dtype=np.float64)
+    for row in octaves:
+        total += weight * row
+        norm += weight
+        weight = weight * persistence
+    return total / norm
 
 
 def _varying_persistence_fbm(
     points: np.ndarray, seed: int, freqs: np.ndarray, persistence: np.ndarray
 ) -> np.ndarray:
-    """:func:`_normalized_fbm` with per-point persistence (octave ``k`` weighs ``persistence ** k``)."""
+    """Normalised fBm with per-point persistence (octave ``k`` weighs ``persistence ** k``)."""
     if freqs.size == 0:
         return np.zeros(len(points), dtype=np.float64)
     perm = make_perm(seed)
@@ -317,7 +383,7 @@ class CoastStyle:
 
     near: np.ndarray         # (P,) blend weight: 1 at the shore, 0 away from it
     rugged: np.ndarray       # (P,) the parent's ruggedness
-    persistence: np.ndarray  # (P,) fBm persistence
+    persistence: np.ndarray  # (P,) the shore's fBm persistence
     wander: np.ndarray       # (P,) shoreline wander, in detail wavelengths
 
 
@@ -340,12 +406,10 @@ def coast_style(
     rugged = np.clip(source.coarse("ruggedness", loc)[:, 0], 0.0, 1.0)
     p_rugged, p_smooth = float(params.coast_persistence_rugged), float(params.coast_persistence_smooth)
     w_rugged, w_smooth = float(params.coast_wander_rugged), float(params.coast_wander_smooth)
-    coast_persistence = p_smooth + (p_rugged - p_smooth) * rugged
-    base = float(params.persistence)
     return CoastStyle(
         near=near,
         rugged=rugged,
-        persistence=base + (coast_persistence - base) * near,
+        persistence=p_smooth + (p_rugged - p_smooth) * rugged,
         wander=w_smooth + (w_rugged - w_smooth) * rugged,
     )
 
@@ -367,14 +431,6 @@ def _box_filter(texture: np.ndarray, size: int) -> np.ndarray:
     for i in range(size):
         total += cols[:, i:i + h, :, :]
     return (total / float(size * size)).astype(texture.dtype)
-
-
-def _effective_slope(slope: np.ndarray, params: RegionUpsampleParams) -> np.ndarray:
-    """Map raw slope (km/km) to the amplitude multiplier, floored and saturated."""
-    ref = max(float(params.slope_reference), 1e-9)
-    norm = np.clip(slope / ref, 0.0, 1.0)
-    floor = float(params.slope_floor)
-    return ref * (floor + (1.0 - floor) * norm)
 
 
 def _shallow_water_damping(depth: np.ndarray, params: RegionUpsampleParams) -> np.ndarray:
@@ -455,7 +511,7 @@ def reshape_to_target(
     elevation: np.ndarray, target: np.ndarray, anchors: np.ndarray, weights: np.ndarray,
     n_anchors: int, *, level: float | np.ndarray = 0.0, active: Optional[np.ndarray] = None,
     max_scale: float = 1.0, min_offset: float = 0.001, max_offset: float = 0.02,
-    two_sided: bool = False,
+    two_sided: bool = False, taper: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Edit ``elevation`` so its side of ``level`` matches ``target``'s, keeping every anchor's mean.
 
@@ -468,6 +524,10 @@ def reshape_to_target(
     unless ``two_sided``: then such an anchor takes it on the other side, moved
     towards the level (dry lowered or wet made shallower) by at most
     ``_TOWARD_MAX`` of their height/depth, so none crosses.
+
+    ``taper`` (``(P,)`` in [0, 1], optional) weights each texel's share of the
+    absorption: zero along the anchors' edges (:func:`anchor_edge_taper`), it keeps
+    the absorption from stepping at them, which shows once the relief is tall.
     """
     e0 = np.asarray(elevation, dtype=np.float64)
     lvl = np.broadcast_to(np.asarray(level, dtype=np.float64), e0.shape)
@@ -484,12 +544,14 @@ def reshape_to_target(
     dry = new > 0.0
     # delta > 0: the anchor rose, so its wet texels deepen; delta < 0: its dry ones rise.
     absorb = act & np.where(delta[anchors] > 0.0, ~dry, dry)
-    capacity = np.bincount(anchors, weights=np.where(absorb, weights * np.abs(new), 0.0), minlength=n_anchors)
+    share = np.abs(new) if taper is None else np.abs(new) * np.clip(np.asarray(taper, dtype=np.float64), 0.0, 1.0)
+    capacity = np.bincount(anchors, weights=np.where(absorb, weights * share, 0.0), minlength=n_anchors)
     with np.errstate(divide="ignore", invalid="ignore"):
         k = np.where(capacity > 0.0, np.abs(delta) / capacity, np.inf)
+    # The texel scaled hardest moves by k × share / |new| of its height: at most max_scale.
     ok = (delta == 0.0) | (k <= max_scale)
     k = np.where(ok, np.where(np.isfinite(k), k, 0.0), 0.0)
-    out = np.where(absorb, new * (1.0 + k[anchors]), new)
+    out = np.where(absorb, new + np.sign(new) * share * k[anchors], new)
     if two_sided:
         toward = act & ~absorb
         cap_t = np.bincount(anchors, weights=np.where(toward, weights * np.abs(new), 0.0), minlength=n_anchors)
@@ -529,6 +591,18 @@ def conserve_multiplicative(
     )
     scale[counts[anchors] <= 0.0] = 1.0
     return values * scale
+
+
+def anchor_edge_taper(source: ParentSource, loc: Located) -> np.ndarray:
+    """``(P,)`` in [0, 1]: 1 at each point's anchor (parent texel) centre, 0 along its edges.
+
+    ``2ω − 1`` clipped, ``ω`` the weight the parent's bilinear stencil gives the
+    point's own anchor (1 at its centre, ½ along an edge, ¼ at a corner):
+    continuous, so a change scaled by it never steps at a parent-texel edge.
+    """
+    anchors, idx, w, _, _ = _smooth_setup(source, loc)
+    own = (np.asarray(w, dtype=np.float64) * (idx == anchors[:, None])).sum(axis=1)
+    return np.clip(2.0 * own - 1.0, 0.0, 1.0)
 
 
 def _smooth_setup(source: ParentSource, loc: Located) -> tuple:
@@ -840,12 +914,13 @@ def _reshape_coasts(
         # The scales conservation removes from the elevation itself.
         freqs = np.array([0.5 * base_frequency, base_frequency])
         bays = _varying_persistence_fbm(flat_pos, seed ^ _SEED_SALT_COAST, freqs, style.persistence)
-        goal = goal + bays * np.clip(wander * 2.0 * feature_length_km * slope, 0.0, float(params.max_relief_km))
+        goal = goal + bays * np.clip(wander * 2.0 * feature_length_km * slope, 0.0, float(params.octave_cap_km))
 
     groups, n_groups = loc.groups()
     edit: dict[str, Any] = dict(
         max_scale=float(params.coast_max_scale),
         min_offset=float(params.coast_edit_min_km), max_offset=float(params.coast_edit_max_km),
+        taper=anchor_edge_taper(source, loc),
     )
     out = e
     if sea_band is not None and sea_band.any():
@@ -898,6 +973,8 @@ def _add_small_lakes(
         smoothing_parent_texels=float(params.lake_smoothing_parent_texels),
         drain_clearance_parent_texels=float(params.lake_drain_clearance_parent_texels),
         inherited=inherited,
+        relief=lambda at: detail_relief(source, at, grid.texel_spacing_rad(elevation.shape[1]), params),
+        breach_relief=float(params.lake_breach_relief),
     )
     if inherited.any():
         old, old_level = _flood(
@@ -974,11 +1051,10 @@ def refine_terrain(
     max_frequency = (
         float(params.nyquist_safety) / spacing_rad if spacing_rad > 0 else 0.0
     )
-    freqs, amps = _octave_bands(base_frequency, max_frequency, params)
+    freqs = _octave_frequencies(base_frequency, max_frequency, params)
     feature_length_km = EARTH_RADIUS_KM / base_frequency
 
     slope = source.slope(loc)
-    eff_slope = _effective_slope(slope, params)
     water = _anchor_water(source, loc)
 
     textures: dict[str, np.ndarray] = {}
@@ -987,20 +1063,21 @@ def refine_terrain(
     elev_coarse = source.coarse("elevation", loc)                            # (P, 1)
     style = coast_style(source, loc, params)
     damping = _shallow_water_damping(water.depth(elev_coarse[:, 0]), params)
-    amplitude = np.clip(
-        float(params.relief_factor) * feature_length_km * eff_slope, 0.0, float(params.max_relief_km),
-    ) * damping
-    # Near water: coast-style persistence and wander amplitude; the underwater
-    # fade is lifted over the sea (islands) but kept for lakes.
-    if style is None:
-        noise = _normalized_fbm(flat_pos, seed ^ _SEED_SALT_ELEVATION, freqs, amps)
-    else:
-        noise = _varying_persistence_fbm(flat_pos, seed ^ _SEED_SALT_ELEVATION, freqs, style.persistence)
+    # The spectrum: each octave at its ruggedness- and wavelength-set amplitude.
+    octaves = _octave_noise(flat_pos, seed ^ _SEED_SALT_ELEVATION, freqs)          # (K, P)
+    amplitudes = spectrum_amplitudes(
+        EARTH_RADIUS_KM / freqs, parent_ruggedness(source, loc), hurst_exponent(source, loc, params), params)
+    detail = (amplitudes * octaves).sum(axis=0) * damping
+    # Near water: the coast style's persistence, at an amplitude that moves the shore
+    # ~``wander`` wavelengths whatever the gradient; the underwater fade is lifted
+    # over the sea (islands) but kept for lakes.
+    if style is not None:
         coast_amplitude = np.clip(
-            style.wander * feature_length_km * slope, 0.0, float(params.max_relief_km),
+            style.wander * feature_length_km * slope, 0.0, float(params.octave_cap_km),
         ) * np.where(water.lake, damping, 1.0)
-        amplitude = amplitude + (coast_amplitude - amplitude) * style.near
-    elevation = elev_coarse + (noise * amplitude)[:, None]
+        coast_detail = _weighted_octaves(octaves, style.persistence) * coast_amplitude
+        detail = detail + (coast_detail - detail) * style.near
+    elevation = elev_coarse + detail[:, None]
     elevation = conserve_smooth(elevation, source, loc, source.anchor_values("elevation", loc), weights)
     if style is not None and params.reshape_coast:
         elevation = _reshape_coasts(

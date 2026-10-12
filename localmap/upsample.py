@@ -38,7 +38,7 @@ _SEED_SALT_LOCAL = 0x10CA
 
 @paramclass
 class LocalUpsampleParams(RegionUpsampleParams):
-    """:class:`RegionUpsampleParams` with the local tier's defaults (relief not yet tuned).
+    """:class:`RegionUpsampleParams` with the local tier's defaults (the relief spectrum is the region's).
 
     Only the fields redeclared here are the local tier's own; the rest are the
     region's (:data:`SHARED_WITH_REGION`, copied down by :func:`with_region_detail`).
@@ -46,13 +46,6 @@ class LocalUpsampleParams(RegionUpsampleParams):
 
     n_cols: int = _f(16, label="Hex columns per local map", min=4, max=64)
     tex_size: int = _f(64, label="Hex texture size", min=4, max=128)
-    # Regional sub-grid slopes run ~0.003–0.035 km/km: saturating at 0.03 gives
-    # mountains a few hundred metres of local relief; the floor keeps plains to ~15 m.
-    slope_reference: float = _f(
-        0.03, label="Slope saturation (km/km)", min=0.0005, max=0.1, step=0.0005
-    )
-    slope_floor: float = _f(0.03, label="Flat-ground detail floor", min=0.0, max=1.0)
-    max_relief_km: float = _f(0.6, label="Max detail relief (km)", min=0.0, max=5.0)
     # About one regional texel (~4.5 km / ~365 m).
     water_spread_texels: int = _f(12, label="Shoreline spread (texels)", min=0, max=32)
     # ~One regional texel, so biome edges follow the region rather than local speckle.

@@ -6,8 +6,9 @@ from region.sampling import anchor_means
 from region.upsample import (
     SEA_LEVEL_KM,
     RegionUpsampleParams,
-    _normalized_fbm,
+    _octave_noise,
     _varying_persistence_fbm,
+    _weighted_octaves,
     build_region_fields,
     conservation_report,
     reshape_to_target,
@@ -93,14 +94,15 @@ def test_reshape_respects_a_per_texel_level_and_the_active_mask():
     assert np.array_equal((out <= 0.02)[changed], (t + 0.02 <= 0.02)[changed])
 
 
-def test_constant_persistence_matches_plain_fbm():
+def test_weighted_octaves_match_varying_persistence_fbm():
     rng = np.random.default_rng(1)
     points = rng.normal(size=(200, 3))
     points /= np.linalg.norm(points, axis=1, keepdims=True)
     freqs = np.array([20.0, 40.0, 80.0])
-    plain = _normalized_fbm(points, 5, freqs, 0.5 ** np.arange(3))
-    varying = _varying_persistence_fbm(points, 5, freqs, np.full(len(points), 0.5))
-    assert np.allclose(plain, varying)
+    persistence = rng.uniform(0.2, 0.9, len(points))
+    split = _weighted_octaves(_octave_noise(points, 5, freqs), persistence)
+    varying = _varying_persistence_fbm(points, 5, freqs, persistence)
+    assert np.allclose(split, varying)
 
 
 # ── refine_fields with a ruggedness field ─────────────────────────────────────────

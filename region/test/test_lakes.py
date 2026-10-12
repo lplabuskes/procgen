@@ -164,10 +164,12 @@ def test_channels_end_in_the_globes_water_but_run_through_small_lakes(fields, sy
 
 
 def test_no_small_lakes_on_ice_cap(synthetic_globe):
-    """Region 40 never thaws (warmest season < 0 °C): even with every other gate open."""
+    """Region 40 never thaws (warmest season < 0 °C): even with every other gate open.
+
+    Gentle relief, so no valley floor warms past freezing."""
     ice = build_region_fields(synthetic_globe, 40, RegionUpsampleParams(
         n_cols=6, tex_size=16, lake_breach_parent_texels=0.0, lake_min_depth_km=0.0, lake_min_texels=1,
-        lake_min_aridity_index=0.0))
+        lake_min_aridity_index=0.0, relief_factor=0.25))
     assert ice.textures["temperature"].max(axis=-1).max() < 0.0
     assert not (ice.textures[SMALL_LAKE_KEY] > 0.5).any()
 

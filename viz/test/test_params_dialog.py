@@ -51,7 +51,7 @@ def test_full_view_hides_derived_and_hidden(qapp):
     assert "region.upsample.lapse_rate_c_per_km" not in shown        # derived from the climate
     assert "region.upsample.coast_band" in shown
     assert not any(f"local.upsample.{name}" in shown for name in SHARED_WITH_REGION)
-    assert "local.upsample.slope_reference" in shown                 # the local tier's own
+    assert "local.upsample.water_spread_texels" in shown             # the local tier's own
 
 
 def test_result_keeps_unshown_values(qapp):
@@ -72,4 +72,4 @@ def test_app_params_copy_coupled_values_down():
     assert params.region.upsample.lapse_rate_c_per_km == 5.0
     assert params.local.upsample.lapse_rate_c_per_km == 5.0
     assert params.local.upsample.coast_band == 0.4
-    assert params.local.upsample.slope_reference != params.region.upsample.slope_reference
+    assert params.local.upsample.water_spread_texels != params.region.upsample.water_spread_texels

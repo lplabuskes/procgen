@@ -56,7 +56,7 @@ _SEED_SALT_SETTLEMENT = 0x5E77
 
 @paramclass
 class SettlementUpsampleParams(LocalUpsampleParams):
-    """:class:`LocalUpsampleParams` with the settlement tier's defaults (relief not yet tuned).
+    """:class:`LocalUpsampleParams` with the settlement tier's defaults (the relief spectrum is the region's).
 
     Only the fields redeclared here are the settlement tier's own; the rest are
     the local tier's (:data:`SHARED_WITH_LOCAL`, copied down by :func:`with_local_detail`).
@@ -65,13 +65,6 @@ class SettlementUpsampleParams(LocalUpsampleParams):
     texel_m: float = _f(15.0, label="Texel size (m)", min=2.0, max=100.0, step=1.0)
     # Ground kept around the footprint and garden ring.
     margin_km: float = _f(0.5, label="Frame margin (km)", min=0.0, max=5.0, step=0.1)
-    # Local slopes over ~365 m texels run to ~0.1–0.3 km/km in hills; the floor
-    # keeps plains to a couple of metres.
-    slope_reference: float = _f(
-        0.1, label="Slope saturation (km/km)", min=0.001, max=1.0, step=0.001
-    )
-    slope_floor: float = _f(0.03, label="Flat-ground detail floor", min=0.0, max=1.0)
-    max_relief_km: float = _f(0.03, label="Max detail relief (km)", min=0.0, max=1.0, step=0.005)
     # About one local texel (~365 m / 15 m).
     water_spread_texels: int = _f(24, label="Shoreline spread (texels)", min=0, max=128)
     min_land_m: float = _f(75.0, label="Narrowest land between waters (m)", min=0.0, max=500.0, step=5.0)

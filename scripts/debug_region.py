@@ -184,7 +184,7 @@ def main() -> None:
     fig, axes = plt.subplots(1, 2, figsize=(13, 6.8))
     draw_region(axes[0], coarse, args.layer, "global field, upsampled only")
     draw_region(axes[1], refined, args.layer,
-                f"+ slope-proportional detail ({refined.detail_octaves} octaves)")
+                f"+ ruggedness-driven detail ({refined.detail_octaves} octaves)")
     fig.suptitle(
         f"Region {region_id} · seed {args.seed} · {args.layer} · "
         f"{refined.n_hexes}×{refined.tex_size}² texels (~{refined.texel_area_km2:.0f} km² each)",
