@@ -868,6 +868,19 @@ where arms meet — deferred to the user's todo):
 - **Hover/status name the settlement** (`City 13`, `Village 3 (local map
   50/115)`), lost when the layout summary replaced it.
 
+**Diagonal sea saddles, 2026-10-11** (user review, seed 376065913 city 195: the
+north land on the east bank should be an island). The local map's strait, one
+texel wide, reaches the sea only corner to corner across two land texels (a
+saddle — on the local grid neither the water nor the land is 4-connected
+there). Interpolation at the settlement tier closed it (the four corners
+average +0.6 m) and `connect_ocean` didn't reopen it: the strait runs off the
+frame's edge, so it counts as open sea. Now the sea wins a saddle:
+`settlegen.upsample.join_ocean_saddles` cuts a `saddle_channel_m` (100 m)
+channel between the two sea texels' centres, before `clear_thin_land` (masks
+only, elevation still conserved). Rare: seven seed-4 port/river cities have
+0–3 saddles in their local maps, none in their frames. Left: the cut squares
+off the land it crosses (city 195's island ends in a ~90 m straight edge).
+
 **Phase 7 done 2026-10-11** (user call): the viewer as built — main view, Back,
 site/hinterland/layout drawn, layout hover + summary line, debug-only anchor and
 buildable toggles — is accepted; the full profile in the hover is not pursued.

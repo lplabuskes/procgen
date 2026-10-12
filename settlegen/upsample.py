@@ -16,6 +16,11 @@ the map uses.  The small-lake flag is the exception: it follows the refined lake
 Defaults: ``texel_m = 15`` against the local map's ~365 m — a ~24× refinement,
 ~4–5 octaves of detail.  No new small lakes (the frame has no hex grid; the
 local tier already draws lakes down to ~10 km²); cut-off sea is reconnected.
+Where two of a local map's sea texels touch only at a corner, across two land
+texels (a strait one texel wide running on diagonally), the sea wins: the frame
+cuts a ``saddle_channel_m`` channel between them (:func:`join_ocean_saddles`),
+so the strait stays open and the land beyond stays an island, where smooth
+interpolation would close it.
 Land narrower than ``min_land_m`` between waters (a spit, a sliver of an islet:
 on a flat shore the refined relief sits within centimetres of the water and
 pokes through in one-texel ridges) goes to the water nearest it
@@ -38,6 +43,7 @@ from core.params import param_field as _f, paramclass
 from localmap.upsample import LocalUpsampleParams
 from region.sampling import GlobalSampler
 from region.upsample import EARTH_RADIUS_KM, SMALL_LAKE_KEY, RegionFields, anchor_residuals, refine_terrain
+from settlegen.frame import Frame
 from settlegen.geometry import SettlementGeometry
 from settlegen.grid import SettlementGrid
 from settlegen.source import LocalMapsSource
@@ -69,6 +75,8 @@ class SettlementUpsampleParams(LocalUpsampleParams):
     # About one local texel (~365 m / 15 m).
     water_spread_texels: int = _f(24, label="Shoreline spread (texels)", min=0, max=128)
     min_land_m: float = _f(75.0, label="Narrowest land between waters (m)", min=0.0, max=500.0, step=5.0)
+    saddle_channel_m: float = _f(100.0, label="Channel across a diagonal sea saddle (m)", min=0.0, max=500.0,
+                                 step=5.0)
 
 
 # The detail fields the settlement tier takes from the local tier: those it doesn't redeclare.
@@ -88,6 +96,59 @@ def km_per_local_unit(local: RegionFields) -> float:
     """Ground km per unit of a local map's ``(s, t)`` (the map is one unit across)."""
     texel_units = 2.0 * local.grid.radius / local.tex_size
     return local.grid.texel_spacing_rad(local.tex_size) * EARTH_RADIUS_KM / texel_units
+
+
+def ocean_saddles(maps: Sequence[RegionFields]) -> np.ndarray:
+    """``(K, 2, 3)`` pairs of sea texel centres (unit vectors) that touch only at a
+    corner across two dry texels, within one hexagon's texture of any of ``maps``."""
+    out = []
+    for f in maps:
+        if "ocean_mask" not in f.textures:
+            continue
+        sea = f.textures["ocean_mask"][..., 0] > 0.5
+        lake = f.textures["lake_mask"][..., 0] > 0.5 if "lake_mask" in f.textures else np.zeros_like(sea)
+        dry = ~sea & ~lake
+        drawn = f.in_hex
+        pos = f.positions
+        a, b = (slice(None), slice(None, -1), slice(None, -1)), (slice(None), slice(1, None), slice(1, None))
+        c, d = (slice(None), slice(1, None), slice(None, -1)), (slice(None), slice(None, -1), slice(1, None))
+        for (p, q), (u, v) in (((a, b), (c, d)), ((c, d), (a, b))):
+            hit = sea[p] & sea[q] & dry[u] & dry[v] & drawn[p] & drawn[q]
+            if hit.any():
+                out.append(np.stack([pos[p][hit], pos[q][hit]], axis=1))
+    return np.concatenate(out).astype(np.float64) if out else np.zeros((0, 2, 3))
+
+
+def join_ocean_saddles(textures: dict, frame: Frame, maps: Sequence[RegionFields], width_m: float) -> None:
+    """In place: sea along a ``width_m`` channel between each pair of :func:`ocean_saddles`
+    in the frame (masks only, as :func:`clear_thin_land`)."""
+    ocean = textures.get("ocean_mask")
+    if ocean is None or width_m <= 0.0:
+        return
+    pairs = ocean_saddles(maps)
+    if not len(pairs):
+        return
+    ends = frame.to_xy(pairs.reshape(-1, 3)).reshape(-1, 2, 2)
+    tex = ocean.shape[1]
+    texel = frame.side_m / tex
+    keep = (np.abs(ends.mean(axis=1)) < frame.half + width_m).all(axis=1)
+    sea = ocean[0, ..., 0] > 0.5
+    lake = textures.get("lake_mask")
+    wet_lake = lake[0, ..., 0] > 0.5 if lake is not None else np.zeros_like(sea)
+    half_w = 0.5 * float(width_m)
+    for p0, p1 in ends[keep]:
+        lo, hi = np.minimum(p0, p1) - half_w, np.maximum(p0, p1) + half_w
+        # Texel columns run with x, rows down from the top (largest y).
+        c0, c1 = (np.clip(np.floor((np.r_[lo[0], hi[0]] + frame.half) / texel), 0, tex - 1)).astype(int)
+        r0, r1 = (np.clip(np.floor((frame.half - np.r_[hi[1], lo[1]]) / texel), 0, tex - 1)).astype(int)
+        cols = (np.arange(c0, c1 + 1) + 0.5) * texel - frame.half
+        rows = frame.half - (np.arange(r0, r1 + 1) + 0.5) * texel
+        xy = np.stack(np.meshgrid(cols, rows), axis=-1)
+        seg = p1 - p0
+        t = np.clip(((xy - p0) @ seg) / max(float(seg @ seg), 1e-12), 0.0, 1.0)
+        near = np.linalg.norm(xy - (p0 + t[..., None] * seg), axis=-1) <= half_w
+        sea[r0:r1 + 1, c0:c1 + 1] |= near & ~wet_lake[r0:r1 + 1, c0:c1 + 1]
+    textures["ocean_mask"] = sea[None, ..., None].astype(ocean.dtype)
 
 
 def clear_thin_land(textures: dict, texel_m: float, min_land_m: float) -> None:
@@ -167,6 +228,7 @@ def build_settlement_fields(
     )
     textures, loc = terrain.textures, terrain.located
     shape = (1, tex_size, tex_size)
+    join_ocean_saddles(textures, Frame(geometry, float(side_km) * 1000.0), maps, float(params.saddle_channel_m))
     clear_thin_land(textures, float(side_km) * 1000.0 / tex_size, float(params.min_land_m))
     if source.has(SMALL_LAKE_KEY) and "lake_mask" in textures:
         near_small = source.coarse(SMALL_LAKE_KEY, loc)[:, 0].reshape(shape) > 0.0

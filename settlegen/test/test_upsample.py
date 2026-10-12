@@ -1,13 +1,19 @@
 """The settlement tier's critical invariant: a settlement map refines the local
 texels' elevation it covers — on one local map, or across the seam between two —
 and holds every other field constant at the settlement's local value."""
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
+from scipy.ndimage import label
 
 from region.upsample import SMALL_LAKE_KEY
 from settlegen.source import LocalMapsSource
 from settlegen.test.conftest import FRAME_TEXELS, settlement_params
-from settlegen.upsample import build_settlement_fields, clear_thin_land, settlement_conservation_report
+from settlegen.frame import Frame
+from settlegen.upsample import (
+    build_settlement_fields, clear_thin_land, join_ocean_saddles, ocean_saddles, settlement_conservation_report,
+)
 
 
 @pytest.fixture(scope="module")
@@ -94,3 +100,45 @@ def test_thin_land_between_waters_goes_to_the_nearest_water():
     assert textures["ocean_mask"][0, ..., 0][20, 22] == 1
     # Wide land, even at the frame's edge, stays.
     assert not textures["ocean_mask"][0, ..., 0][:, 36:].any()
+
+
+class _FlatGeometry:
+    """Stands in for a settlement geometry: ``x, y`` metres → ``[0, 1]²`` of a 400 m square."""
+
+    def ecef_to_local(self, ecef):
+        ecef = np.asarray(ecef, dtype=np.float64).reshape(-1, 3)
+        return ecef[:, 0] / 400.0 + 0.5, ecef[:, 1] / 400.0 + 0.5, np.ones(len(ecef), dtype=bool)
+
+
+def _parent(sea_cells, lake_cells=()):
+    """A 4 × 4 parent texture of 100 m texels centred on 0 (row 0 at the top)."""
+    sea = np.zeros((1, 4, 4, 1), dtype=np.uint8)
+    lake = np.zeros_like(sea)
+    for i, j in sea_cells:
+        sea[0, i, j, 0] = 1
+    for i, j in lake_cells:
+        lake[0, i, j, 0] = 1
+    i, j = np.mgrid[0:4, 0:4]
+    pos = np.stack([(j - 1.5) * 100.0, (1.5 - i) * 100.0, np.zeros((4, 4))], axis=-1)[None]
+    return SimpleNamespace(textures={"ocean_mask": sea, "lake_mask": lake}, in_hex=np.ones((1, 4, 4), dtype=bool),
+                           positions=pos)
+
+
+def _bodies(mask: np.ndarray) -> int:
+    return int(label(mask)[1])  # type: ignore[index]
+
+
+def test_a_strait_running_on_across_a_corner_stays_open():
+    parent = _parent([(1, 1), (2, 2)])                       # sea touching at a corner, across two dry texels
+    assert len(ocean_saddles([parent])) == 1                  # type: ignore[list-item]
+    assert len(ocean_saddles([_parent([(1, 1), (2, 2), (1, 2)])])) == 0     # type: ignore[list-item]
+    assert len(ocean_saddles([_parent([(1, 1), (2, 2)], [(2, 1)])])) == 0   # type: ignore[list-item]
+    # The frame (40 × 10 m) has the two as separate pools, the corner between them dry.
+    xy = Frame(_FlatGeometry(), 400.0).texel_xy(40)  # type: ignore[arg-type]
+    pools = (np.linalg.norm(xy - [-50.0, 50.0], axis=-1) < 40.0) | (np.linalg.norm(xy - [50.0, -50.0], axis=-1) < 40.0)
+    textures = {"ocean_mask": pools[None, ..., None].astype(np.uint8)}
+    assert _bodies(pools) == 2
+    join_ocean_saddles(textures, Frame(_FlatGeometry(), 400.0), [parent], 30.0)  # type: ignore[arg-type,list-item]
+    out = textures["ocean_mask"][0, ..., 0] > 0
+    assert _bodies(out) == 1
+    assert out.sum() - pools.sum() < 0.3 * pools.sum()        # a channel, not a flood
