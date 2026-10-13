@@ -12,12 +12,14 @@ deltas keep to the world's channels.
 """
 from __future__ import annotations
 
+from dataclasses import field
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 from scipy.spatial import KDTree
 
 from core.params import param_field as _f, paramclass
+from region.carve import RiverCarveParams
 from region.corridor import node_spacing_rad, raster_frame
 from region.rivers import RegionRiverParams, RegionRivers, RiverPath, StreamPath, route_stream_paths
 from region.upsample import RegionFields
@@ -42,6 +44,8 @@ class LocalRiverParams:
         1.0, label="Corridor half-width (regional texels)", min=0.25, max=3.0, step=0.25)
     valley_seeking: float = _f(2.0, label="Valley seeking", min=0.0, max=6.0, step=0.25)
     smoothing_iterations: int = _f(8, label="Path smoothing iterations", min=0, max=20)
+    carve: RiverCarveParams = field(
+        default_factory=lambda: RiverCarveParams(wall_texels=3.0, quantile=0.1), metadata={"label": "Valley carving"})
 
 
 def _runs(inside: np.ndarray) -> list[tuple[int, int]]:

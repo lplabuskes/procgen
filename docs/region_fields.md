@@ -51,7 +51,7 @@ shared relief signal puts moisture/temperature bands on the contours.
 
 | field | detail | conserved |
 |---|---|---|
-| `elevation` | a relief spectrum set by the parent's ruggedness — **the only noise source**; restyled/reshaped near water by ruggedness | additively, smooth; shore edit keeps every parent mean |
+| `elevation` | a relief spectrum set by the parent's ruggedness — **the only noise source**; restyled/reshaped near water by ruggedness; river valleys carved once the rivers are routed ([region_features.md](region_features.md#valley-carving-regioncarvepy)) | additively, smooth; shore edit and carving keep every parent mean |
 | `temperature` | lapse rate on refined relief (sub-sea-level ground counts as sea level) | additively, smooth |
 | `precipitation` | orographic: × `1 + orographic_gain · anomaly` (per km, clipped ±0.9) | multiplicatively, smooth |
 | `biome` | reclassified from **area-averaged** refined climate | derived |

@@ -337,9 +337,8 @@ Noticed, not fixed (pre-existing, outside this work): re-running the cost stage
 on a *loaded* world doesn't reproduce its build (seed 4: 428 vs 273 cities), so
 some cost input restores differently on load.
 
-**All five phases done.** Still open: rivers and lakes against the rough relief
-beyond the breach fix (Decision 10), hydrology refining ruggedness, and the
-character (Hurst) channel.
+**All five phases done.** Still open: the character (Hurst) channel (rivers and
+lakes on the rough relief, and hydrology refining ruggedness, done below).
 
 **Hydrology → ruggedness and a water check (2026-10-11).**
 - *Floodplain term* in the ruggedness stage (per texel, along stream-network
@@ -363,5 +362,33 @@ character (Hurst) channel.
   exact constant conservation correction instead of the smooth one, which carried
   rugged shores' offsets into the lake bed (73% of the remaining islands were
   lake beds lifted that way).
-- *Rivers not fixed*: re-routed rivers cross the spectrum's bumps (they seek
-  valleys but nothing makes them descend). Needs carving — see the open question.
+- *Rivers not fixed* then: re-routed rivers cross the spectrum's bumps (they seek
+  valleys but nothing makes them descend).
+
+**River valleys carved (2026-10-12).** `region/carve.py`, at every tier once its
+rivers are routed ([region_features.md](../region_features.md#valley-carving-regioncarvepy)):
+a never-rising bed per line (isotonic regression at a quantile), a valley floor
+and walls around it, every parent mean restored on the ground beside. Region:
+rivers only, median fit; local: rivers and the region's streams, quantile 0.1;
+settlement: floors at least the channel's half-width. `measure_lakes_rivers.py`:
+
+  | | pre-spectrum | before carving | carved |
+  |---|---|---|---|
+  | region river climb (m / 100 km) | 47 | 531 | 24 |
+  | region river length uphill > 2 m | 24% | 41% | 3.4% |
+  | local river climb (m / 100 km) | 175 | 1,571 | 16 |
+  | local river length uphill > 2 m | — | ~37% | 0.5% |
+  | region islands / lake | 0.33 | 0.41 | 0.42 |
+  | local islands / lake | 1.00 | 1.09 | 1.24 |
+
+  Conservation stays exact at every tier. Learned on the way: carving the
+  region's *streams* too covers the region in valleys (no room left to absorb:
+  ±600 m single-texel speckle), so only the local maps carve them; an end floor
+  (lake surface, stem bed) must never exceed the stretch's lowest ground, or a
+  route the routing left below a lake rides a km-high causeway; dry hollows under
+  sea level are fitted as at it (land isn't cut below it); the smooth absorption
+  must judge convergence without the thin parent texels it skips (else it quits
+  early and the exact step leaves parent-texel squares). Left: on the roughest
+  ground (ρ ≳ 0.75; seed 31 region 4) the region's beds pool into long steps and
+  confluences can't absorb their cut, so some climb remains there; local routes
+  wandering onto their region valley's walls cut gorges hundreds of metres deep.

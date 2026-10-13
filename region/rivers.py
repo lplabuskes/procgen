@@ -27,6 +27,7 @@ from scipy.ndimage import distance_transform_edt
 from scipy.spatial import KDTree
 
 from core.params import param_field as _f, paramclass
+from region.carve import RiverCarveParams
 from region.corridor import (
     CROSS_COST,
     EdgeCost,
@@ -83,6 +84,7 @@ class RegionRiverParams:
     distributaries: DistributaryParams = field(
         default_factory=DistributaryParams, metadata={"label": "Delta distributaries"}
     )
+    carve: RiverCarveParams = field(default_factory=RiverCarveParams, metadata={"label": "Valley carving"})
 
 
 @dataclass

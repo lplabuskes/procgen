@@ -116,7 +116,11 @@ in frame metres.
   chained across seams (by world river id), re-traced with
   `localmap.rivers.build_local_rivers` on a 45 m raster.
   A line hooking back in at the frame's edge is cut; an end just inside heading
-  out is carried past it (`_tidy_ends`).
+  out is carried past it (`_tidy_ends`). Then carved into the frame's terrain
+  (`region.carve.carve_rivers`, conserved against the local maps;
+  [region_features.md](region_features.md#valley-carving-regioncarvepy)): floor at
+  least the channel's half-width (one texel), walls 4 texels, bed quantile 0.1.
+  Everything after the water (roads, footprint, layout, slope) reads the carved terrain.
 - **Channels** (`natural_channels`): bankfull width, the course smoothed over a
   width (`course_smoothing`), width wandering (lognormal σ 0.15) and banks
   shifting (0.1 × width) over 4 widths. Rivers ≥ 60 m get ~0.6 islands/km: long

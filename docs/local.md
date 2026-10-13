@@ -26,7 +26,7 @@ One tier down: [settlement_maps.md](settlement_maps.md) — one town, city or vi
 region_roads, region_deltas, …world and realm tuning) → LocalMap`:
 
 1. fields (`build_local_fields`);
-2. rivers and the region's streams (`build_local_rivers`); region deltas snapped onto local mouths;
+2. rivers and the region's streams (`build_local_rivers`), their valleys carved (`region.carve.carve_rivers`); region deltas snapped onto local mouths;
 3. cities this map owns re-sited (`refine_local_cities`, saved on the world);
 4. roads (`build_local_roads`), fording local rivers, ending on re-sited cities;
 5. towns this map owns re-sited (`refine_local_towns`, saved); every other town/city in and around the map placed where it stands, moved off local water by `snap_to_land`;
@@ -154,9 +154,16 @@ Seed 4: dense-land hex ~30 streams (~1,800 km) where it had 1 river; ~0.3 s per
 map + ~0.35 s once per region. Local rivers ~1.1× the regional length (median
 sinuosity 1.1–1.2), ~0.1 s per map.
 
+**Valleys.** Once routed, the rivers and streams are carved into the local
+elevation (`region.carve.carve_rivers`, conserved against the region;
+[region_features.md](region_features.md#valley-carving-regioncarvepy)) with the
+local defaults: floor 0.75 texels, walls 3, bed quantile 0.1 (cut-leaning: a
+stream crossing a rise the region left gets a gorge, not a causeway).
+
 ### `LocalRiverParams`
 `raster_texels` (1.0), `margin` (0.03), `corridor_parent_texels` (1.0),
-`valley_seeking` (2.0), `smoothing_iterations` (8).
+`valley_seeking` (2.0), `smoothing_iterations` (8), `carve` (`RiverCarveParams`:
+`wall_texels` 3.0, `quantile` 0.1).
 
 ## Roads (`localmap/roads.py`)
 

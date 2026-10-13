@@ -1,8 +1,9 @@
 """One region map, end to end: :func:`build_region_map` runs, over one region cell:
 
 1. fields (:func:`region.upsample.build_region_fields`);
-2. rivers (:func:`region.rivers.build_region_rivers`), and riparian wetland
-   along them (:func:`region.wetlands.add_riparian_wetland`);
+2. rivers (:func:`region.rivers.build_region_rivers`), their valleys carved
+   (:func:`region.carve.carve_rivers`), and riparian wetland along them
+   (:func:`region.wetlands.add_riparian_wetland`);
 3. this region's cities re-sited (:func:`region.cities.refine_region_cities`, saved on the world);
 4. roads (:func:`region.roads.build_region_roads`), ending on the re-sited cities;
 5. the world's deltas snapped onto the re-routed mouths (:func:`region.rivers.snap_deltas`);
@@ -22,10 +23,12 @@ from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
+from region.carve import carve_rivers
 from region.cities import refine_region_cities
 from region.params import RegionParams
 from region.rivers import RegionRivers, RiverPath, build_region_rivers, snap_deltas
 from region.roads import RegionRoads, build_region_roads
+from region.source import GlobalSource
 from region.streams import RegionStreamParams, build_region_streams
 from region.towns import refine_region_towns
 from region.upsample import RegionFields, build_region_fields
@@ -56,7 +59,11 @@ class RegionMap:
         return self.fields.region_id
 
     def streams(self, globe: "World", params: RegionStreamParams) -> list[RiverPath]:
-        """This region's streams for its local maps, cached until ``params`` change."""
+        """This region's streams for its local maps, cached until ``params`` change.
+
+        On the river-carved relief; they aren't carved here (a few texels apart, their
+        valleys would cover the region), only on the local maps.
+        """
         if self._streams is None or self._streams[0] != params:
             built = build_region_streams(self.fields, globe, self.rivers, params)
             self._streams = (dataclasses.replace(params), built)
@@ -87,6 +94,7 @@ def refine_region_features(
     """
     params = params or RegionParams()
     rivers = build_region_rivers(fields, globe, params.rivers)
+    carve_rivers(fields, GlobalSource(globe), rivers.paths, params.rivers.carve, fields.in_hex)
     add_riparian_wetland(fields, rivers, params.upsample)
     refine_region_cities(fields, rivers, globe, river_threshold_factor, params.settlements)
     cities = globe.get_feature("settlements") or []

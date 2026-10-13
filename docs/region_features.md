@@ -10,14 +10,15 @@ down ([local.md](local.md), [local_settlements.md](local_settlements.md)).
 - `region/rivers.py` — `RegionRiverParams`, `RegionRivers`, `build_region_rivers`, `route_stream_paths`, `snap_deltas`, `river_length_km`
 - `region/distributaries.py` — `DistributaryParams`, `add_distributaries`, `mouth_count`
 - `region/streams.py` — `RegionStreamParams`, `build_region_streams`: streams below the world's network, for local maps
+- `region/carve.py` — `RiverCarveParams`, `carve_rivers`, `decreasing_fit`: river valleys carved into a tier's elevation once its rivers are routed (every tier)
 - `region/roads.py` — `RegionRoadParams`, `RegionRoads`, `build_region_roads`, `route_polyline`, `move_points`
 - `region/towns.py` — `RegionSettlementParams`, `refine_region_towns`, `refine_towns`, `tier_sites`, `REGION_TIER` / `LOCAL_TIER`
 - `region/cities.py` — `refine_region_cities`, `refine_cities`
 - `region/builder.py` — `RegionMap`, `build_region_map`, `refine_region_features`, `land_reach`: the whole region tier, Qt-free (as `localmap/builder.py` one tier down); `RegionView` builds through it
 
 Order on entering a region (`refine_region_features`;
-[viz_regionview.md](viz_regionview.md)): rivers → cities → roads (ending on the
-re-sited cities) → deltas → towns (which read the roads). The region's streams
+[viz_regionview.md](viz_regionview.md)): rivers → their valleys carved → cities →
+roads (ending on the re-sited cities) → deltas → towns (which read the roads). The region's streams
 are built on demand for its local maps (`RegionMap.streams`, cached per
 `RegionStreamParams`).
 
@@ -111,7 +112,69 @@ route shared edges independently (shown alone, so no seam visible).
 ### `RegionRiverParams`
 `raster_texels` (1.0), `margin` (0.08), `corridor_global_texels` (1.0),
 `valley_seeking` (2.0), `min_global_nodes` (3), `smoothing_iterations` (8),
-`separation` (3.0), `distributaries` (`DistributaryParams`).
+`separation` (3.0), `distributaries` (`DistributaryParams`), `carve`
+(`RiverCarveParams`, below).
+
+## Valley carving (`region/carve.py`)
+
+Re-routed rivers seek their corridor's valleys but nothing makes them descend:
+over the relief spectrum's bumps they climbed (region ~530 m per 100 km, ~40% of
+their length on uphill steps). Once routed, each tier carves its drawn lines into
+its own elevation, `carve_rivers(fields, source, paths, params, weights,
+half_widths)` — the region its rivers (`refine_region_features`, right after
+`build_region_rivers`), a local map its rivers and the region's streams, a
+settlement map its rivers and streams with floors at least half the channel's
+width. The tier below conserves against the carved means, so it inherits the
+valleys.
+
+- **Bed.** Along each line (stems first), the nearest texel's ground every
+  `step_texels` is fitted with a never-rising profile: isotonic regression at
+  `quantile` (pool-adjacent-violators; 0 = the running minimum, all cut; 0.5 =
+  the median, as much filled as cut). A dry stretch ends no lower than the water
+  it runs into (lake surface; never below sea level) or the stem it joins (within
+  a texel), and starts no higher than the lake it leaves — but an end floor never
+  exceeds the stretch's own lowest ground: a lake or stem the routing left above
+  ground the stretch crosses means a climb in, not a causeway. Dry ground under
+  sea level is fitted as at it (land is never cut below it).
+- **Valley.** Texels within `floor_texels` of a bed take its height; over
+  `wall_texels` beyond they blend back (smoothstep). On several floors (a
+  junction) the earliest line's bed holds, so a tributary neither lifts nor sinks
+  its stem. Water texels are never edited; no dry texel is cut below the water
+  within two texels of it, nor below sea level.
+- **Conservation.** Each parent texel's mean is restored on its ground outside the
+  valleys (weighted by the blend), read smoothly across parent texels (24
+  over-relaxed passes, read(residual) / read(coverage)) and closed by an exact
+  per-parent-texel step; exact to float noise. A parent texel whose valleys would
+  need its ground moved more than `absorb_relief` × its own relief range on
+  average is cut less (eased smoothly); one under 10% outside the valleys (a
+  confluence, a map's clipped edge) isn't carved, and takes any crumbs on all
+  its ground. Ground the absorption pushes under water is held at its floor.
+- **Re-carving** starts from `RegionFields.uncarved` (feature params changing
+  re-run the carve on the same fields); `RegionFields.located` keeps the build's
+  own parent texels (re-locating the float32 positions moves a few edge texels).
+
+The region doesn't carve its streams: a few texels apart, their valleys would
+cover the region (every parent texel thin, the absorption a speckle of ±600 m
+single texels); the local maps carve them.
+
+| Tier | `floor_texels` | `wall_texels` | `quantile` | `absorb_relief` |
+|---|---|---|---|---|
+| region | 0.75 | 1.0 | 0.5 (the least volume to absorb on ~3×3-texel parents) | 1.0 |
+| local | 0.75 | 3.0 | 0.1 (gorges, not causeways) | 1.0 |
+| settlement | 1.0 (or the channel's half-width) | 4.0 | 0.1 | 1.0 |
+
+Measured with `scripts/measure_lakes_rivers.py` (seeds 4/31/35; see
+[plans/ruggedness.md](plans/ruggedness.md)): river climb region 531 → 24 m per
+100 km (uphill length 41% → 3.4%), local 1,571 → 16 (→ 0.5%); lakes unchanged. Left: on the roughest ground
+(ruggedness ≳ 0.75, detail ±500 m at 4 km) the region's beds pool into long
+steps and confluences can't absorb their cut, so some climb remains there, and a
+local route wandering onto its region valley's walls cuts a gorge hundreds of
+metres deep. ~0.5 s per region, ~0.3 s per local map.
+
+### `RiverCarveParams`
+`carve` (True), `floor_texels` (0.75), `wall_texels` (1.0), `quantile` (0.5),
+`step_texels` (0.5), `absorb_relief` (1.0); the local and settlement tiers' own
+defaults above.
 
 ## Delta distributaries (`region/distributaries.py`)
 

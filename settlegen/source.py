@@ -106,9 +106,9 @@ class LocalMapsSource(ParentSource):
         return self.interpolate(self._anchor_field(key), loc)
 
     def anchor_values(self, key: str, loc: Located) -> np.ndarray:
-        if len(self.maps) == 1:
-            return self.sources[0].anchor_values(key, loc.data[1][0][2])
-        # At the re-owned anchor, which may be another map's texel.
+        # At the re-owned anchor, which may be another map's texel.  Read at ``loc.anchors``
+        # (as the multi-map case must), not the sub-locations': a caller may pin them
+        # (region.carve keeps the build's anchors), and in a build they're the same.
         return self._anchor_field(key)[loc.anchors]
 
     def owners(self) -> np.ndarray:

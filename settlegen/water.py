@@ -35,6 +35,7 @@ from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, P
 from core.params import param_field as _f, paramclass
 from localmap.builder import LocalMap
 from localmap.rivers import LocalRiverParams, build_local_rivers
+from region.carve import RiverCarveParams, carve_rivers
 from region.rivers import RegionRivers, RiverPath
 from region.upsample import SEA_LEVEL_KM, RegionFields
 from settlegen.contour import regions_below
@@ -82,6 +83,10 @@ class SettlementRiverParams(LocalRiverParams):
     min_land_m: float = _f(75.0, label="Narrowest land beside a channel (m)", min=0.0, max=500.0, step=5.0)
     # The channel's course is the line smoothed over this many widths.
     course_smoothing: float = _f(1.0, label="Channel course smoothing (× width)", min=0.0, max=5.0, step=0.1)
+    # Floors at least the channel's half-width; the local maps carved the valleys, this the bumps in them.
+    carve: RiverCarveParams = field(
+        default_factory=lambda: RiverCarveParams(floor_texels=1.0, wall_texels=4.0, quantile=0.1),
+        metadata={"label": "Valley carving"})
 
 
 @dataclass
@@ -564,7 +569,11 @@ def build_site_water(
     parent, streams = parent_rivers(maps, globe.antimeridian)
     rivers = (build_local_rivers(fields, maps[0].fields, parent, globe, params, streams)
               if parent.paths or streams else RegionRivers(region_id=fields.region_id, paths=[]))
-    lines = river_lines(rivers, frame, discharge_per_flow_unit(globe.mesh))
+    scale = discharge_per_flow_unit(globe.mesh)
+    carved = list(rivers.paths) + list(rivers.streams)
+    carve_rivers(fields, LocalMapsSource([m.fields for m in maps], globe.antimeridian), carved, params.carve,
+                 fields.in_hex, [0.5 * channel_width_km(np.asarray(f, dtype=np.float64) * scale) for _, f, _ in carved])
+    lines = river_lines(rivers, frame, scale)
     still = _as_multipolygon(shapely.union_all([sea, lakes]))
     channels = natural_channels(lines, still, params, frame.half)
     return SiteWater(

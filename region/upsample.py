@@ -30,7 +30,7 @@ finer than the globe gets no detail (``RegionFields.detail_octaves == 0``).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 import numpy as np
@@ -265,6 +265,10 @@ class RegionFields:
     parent_anchors: Optional[np.ndarray] = None   # (M, T, T) int32
     in_map: Optional[np.ndarray] = None           # (M, T, T) bool
     conserved: Optional[np.ndarray] = None        # (M, T, T) bool
+    # The elevation before its rivers were carved (region/carve.py); None: not carved.
+    uncarved: Optional[np.ndarray] = None         # (M, T, T, 1) float32
+    # The texels located on the parent tier, kept for re-carving (region/carve.py).
+    located: Optional[Located] = field(default=None, repr=False, compare=False)
 
     @property
     def n_hexes(self) -> int:
