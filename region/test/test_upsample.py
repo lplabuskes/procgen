@@ -408,3 +408,18 @@ def test_missing_elevation_is_an_error(synthetic_globe):
     bare = World.from_mesh(Mesh.icosphere(1).mesh_dual())
     with pytest.raises(ValueError, match="elevation"):
         build_region_fields(bare, REGION_ID, _params())
+
+
+def test_character_pivots_the_spectrum():
+    from region.upsample import hurst_from_jaggedness
+
+    p = _params()
+    h = hurst_from_jaggedness(np.array([0.0, 0.5, 1.0]), p)
+    np.testing.assert_allclose(h, [p.hurst + p.hurst_swing, p.hurst, p.hurst - p.hurst_swing])
+    rugged = np.full(3, 0.3)
+    at_pivot = spectrum_amplitudes(np.array([p.hurst_pivot_km]), rugged, h, p)
+    np.testing.assert_allclose(at_pivot[0], at_pivot[0, 1])           # every character alike at the pivot
+    fine = spectrum_amplitudes(np.array([0.1]), rugged, h, p)
+    assert fine[0, 2] > fine[0, 1] > fine[0, 0]                        # jagged keeps fine relief, rolling sheds it
+    coarse = spectrum_amplitudes(np.array([4.0 * p.hurst_pivot_km]), rugged, h, _params(octave_cap_km=5.0))
+    assert coarse[0, 0] > coarse[0, 1] > coarse[0, 2]

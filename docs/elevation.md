@@ -6,7 +6,8 @@
 - `worldgen/geology/tectonics.py` — plates
 - `worldgen/geology/volcanism.py` — activity + volcano peaks
 - `worldgen/geology/ruggedness.py` — the ruggedness seed (`RuggednessParams`, `ruggedness_seed`, `ruggedness_texture`; shared `decayed_max` / `diffuse`)
-- `worldgen/geology/channels.py` — `IS_OCEAN`, `ELEVATION_FACE`, `PLATE_TYPE`, `BOUNDARY_TYPE`, `VOLCANIC_ACTIVITY`, `ELEVATION`, `OCEAN_MASK`, `RUGGEDNESS_FACE`, `RUGGEDNESS`
+- `worldgen/geology/jaggedness.py` — the jaggedness (terrain character) seed (`JaggednessParams`, `jaggedness_seed`, `NEUTRAL_JAGGEDNESS`)
+- `worldgen/geology/channels.py` — `IS_OCEAN`, `ELEVATION_FACE`, `PLATE_TYPE`, `BOUNDARY_TYPE`, `VOLCANIC_ACTIVITY`, `ELEVATION`, `OCEAN_MASK`, `RUGGEDNESS_FACE`, `RUGGEDNESS`, `JAGGEDNESS_FACE`, `JAGGEDNESS`
 - `worldgen/geology/display.py`
 
 ## `elevation_builder.py`
@@ -19,6 +20,7 @@
 - `face_erosion` — hydraulic/thermal knobs (hidden)
 - `volcanism` — `n_hotspots`, `volcanic_decay_rate`, `volcanic_max_hops`, `volcanic_elevation_scale`, `volcanic_elevation_scale_oceanic`
 - `ruggedness` — the seed: `base` (the master knob, in `BASIC_PARAMS` as `globe.elevation.ruggedness.base`) and the term weights ([below](#ruggednesspy))
+- `jaggedness` — the character seed: `base` (neutral 0.5) and the term weights ([below](#jaggednesspy)); all advanced
 
 Mesh params are not here (mesh is pre-built); river params are in
 `HydrologyParams`. The seed goes to `ElevationBuilder(params, *, seed)`; each draw
@@ -29,7 +31,7 @@ others.
 
 plates → relax → types + velocities → boundary classification → face elevations
 → volcanism → face erosion → + volcanism × `volcanic_elevation_scale[_oceanic]` →
-ruggedness seed → `rasterize_face_values` → fBm simplex noise (`compute_noise_elevation_deltas`,
+ruggedness and jaggedness seeds → `rasterize_face_values` → fBm simplex noise (`compute_noise_elevation_deltas`,
 band-limited to the texel grid, × `exp(−|elevation| / noise_coast_sigma)`, so
 strongest near sea level, roughening coasts) → seam smoothing → ocean mask →
 `world.antimeridian` (`find_ideal_antimeridian`).
@@ -38,9 +40,9 @@ Attributes: `mesh`, `plate_ids`, `plate_omegas`, `face_velocities`,
 `boundary_types`, `boundary_data`, `elevations` (face means of final texture),
 `elevation_textures`, `ocean_mask`, `volcanism`, `volcano_positions`, `max_speed`.
 
-- Textures: `"elevation"` (`(N, H, W, 1)` float32, km), `"ocean_mask"` (`(N, H, W, 1)` uint8), `"ruggedness"` (`(N, H, W, 1)` float32 in [0, 1]).
+- Textures: `"elevation"` (`(N, H, W, 1)` float32, km), `"ocean_mask"` (`(N, H, W, 1)` uint8), `"ruggedness"`, `"jaggedness"` (`(N, H, W, 1)` float32 in [0, 1]).
 - Per face: `plate_id`, `plate_type`, `boundary_type`, `surface_speed`, `volcanic_activity`, `elevation` (tectonic + erosion + volcanic value *before noise* — read by resource placement), `is_ocean` (> half texels ocean).
-- Per face: `ruggedness` (seed index in [0, 1]). The ruggedness stage rewrites both later and restores the per-face values on load ([ruggedness.md](ruggedness.md)).
+- Per face: `ruggedness`, `jaggedness` (seed indices in [0, 1]). The ruggedness stage rewrites both fields later and restores the per-face values on load ([ruggedness.md](ruggedness.md)).
 - Feature `"volcanoes"`: unit-sphere positions of above-sea-level activity peaks.
 
 ## `elevation.py`
@@ -121,6 +123,25 @@ tiers' spectrum and matched to the land quantiles of the per-face elevation span
 it replaced (seeds 4/31/35: span ≈ exp(4.9 (ρ − 0.64)) km; corr ~0.5, so where
 relief falls changes, not how much). A mesh without the field falls back to the span.
 
+## `jaggedness.py`
+
+**Jaggedness** ∈ [0, 1]: the terrain's *character* beside ruggedness's amount
+(0 rolling, 0.5 neutral, 1 jagged). It sets the finer tiers' relief spectrum's
+Hurst exponent ([region_fields.md](region_fields.md#detail-amplitude-the-relief-spectrum)):
+jagged ground keeps its relief at fine scales, rolling ground puts it in the
+long wavelengths. The ruggedness stage refines it with climate
+([ruggedness.md](ruggedness.md#jaggedness)). Nothing in the world build reads it.
+
+`jaggedness_seed(mesh, params, *, plate_types, boundary_data, rate_norm)` sums, per face:
+
+| term | contribution | params |
+|---|---|---|
+| base | constant; above neutral since most land is plate interior | `base` 0.62 |
+| young | convergent faces as ruggedness's orogenic term (`boundary_strengths`), max-decayed — active orogens are sharp | `young_weight` 0.4, `arc_factor` 0.7, `young_decay_hops` 2 |
+| old | **subtracted**: `1 − exp(−hops / decay)` from any plate boundary — interiors are worn and rounded | `old_weight` 0.35, `old_decay_hops` 3 |
+
+then diffused (`smoothing_passes` 2 at 0.5), clipped and rasterised like ruggedness.
+
 ## `display.py`
 
 `_elevation_color`, `ELEVATION_RECIPE` (`relief=True`; rerun by the region view),
@@ -128,7 +149,8 @@ relief falls changes, not how much). A mesh without the field falls back to the 
 `_plate_palette`, and water-aware helpers reused by other stages
 (`apply_water_masks`, `ocean_gradient_scheme`, `water_gradient_scheme`,
 `ocean_categorical_scheme`, `is_water_meta`); `RUGGEDNESS_RECIPE`,
-`ruggedness_color`, `ruggedness_legend_entries` (registered by the ruggedness stage).
+`ruggedness_color`, `ruggedness_legend_entries`, `JAGGEDNESS_RECIPE`, `jaggedness_color`,
+`jaggedness_legend_entries` (registered by the ruggedness stage).
 
 **Elevation** always; `--debug`: Plates, Plate Type, Speed, Boundary, Volcanic
 Activity, **Volcanoes** overlay (unchecked), `[px: … km]` hover

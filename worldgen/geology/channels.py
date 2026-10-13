@@ -32,3 +32,9 @@ OCEAN_MASK = TextureChannel("ocean_mask", n_channels=1)
 RUGGEDNESS_FACE = MetaChannel("ruggedness", dtype=np.float64, default=0.3)
 # The same field rasterised continuously across face edges, (N, H, W, 1).
 RUGGEDNESS = TextureChannel("ruggedness", n_channels=1, codec=TextureCodec(step=1 / 255))
+
+# ── Jaggedness (worldgen/geology/jaggedness.py) ──────────────────────────────
+# Terrain character in [0, 1] (0 rolling, 1 jagged; 0.5 neutral): the finer tiers'
+# relief spectrum's Hurst exponent.  Seeded and refined like ruggedness.
+JAGGEDNESS_FACE = MetaChannel("jaggedness", dtype=np.float64, default=0.5)
+JAGGEDNESS = TextureChannel("jaggedness", n_channels=1, codec=TextureCodec(step=1 / 255))

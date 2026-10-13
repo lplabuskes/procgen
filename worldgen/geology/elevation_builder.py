@@ -29,6 +29,8 @@ from worldgen.geology.channels import (
     IS_OCEAN,
     OCEAN_MASK,
     PLATE_TYPE,
+    JAGGEDNESS,
+    JAGGEDNESS_FACE,
     RUGGEDNESS,
     RUGGEDNESS_FACE,
     VOLCANIC_ACTIVITY,
@@ -50,6 +52,7 @@ from worldgen.geology.tectonics import (
     generate_plates,
     relax_plates,
 )
+from worldgen.geology.jaggedness import JaggednessParams, jaggedness_seed
 from worldgen.geology.ruggedness import RuggednessParams, ruggedness_seed, ruggedness_texture
 from worldgen.geology.volcanism import compute_volcanism, generate_volcano_positions
 
@@ -124,6 +127,7 @@ class ElevationParams:
     )
     volcanism: VolcanismParams = field(default_factory=VolcanismParams, metadata={"label": "Volcanism"})
     ruggedness: RuggednessParams = field(default_factory=RuggednessParams, metadata={"label": "Ruggedness seed"})
+    jaggedness: JaggednessParams = field(default_factory=JaggednessParams, metadata={"label": "Jaggedness seed"})
 
 
 class _ElevationBuilt(Protocol):
@@ -260,7 +264,7 @@ class ElevationBuilder(Stage):
         VOLCANIC_ACTIVITY.write(dual, volcanism)
         ELEVATION_FACE.write(dual, elevations)
 
-        _report("Seeding ruggedness…")
+        _report("Seeding ruggedness and jaggedness…")
         ruggedness, _ = ruggedness_seed(
             dual, p.ruggedness, self._seed("ruggedness"),
             plate_types=plate_types, boundary_data=boundary_data,
@@ -270,6 +274,13 @@ class ElevationBuilder(Stage):
         RUGGEDNESS.write(dual, rugged_tex)
         # Per face: the texture's face means, which is what a saved world restores.
         RUGGEDNESS_FACE.write(dual, rugged_tex[..., 0].mean(axis=(1, 2)).astype(np.float64))
+        jagged, _ = jaggedness_seed(
+            dual, p.jaggedness, plate_types=plate_types, boundary_data=boundary_data,
+            rate_norm=p.elevation.elevation_rate_norm,
+        )
+        jagged_tex = ruggedness_texture(dual, jagged, p.elevation.elevation_tex_size)
+        JAGGEDNESS.write(dual, jagged_tex)
+        JAGGEDNESS_FACE.write(dual, jagged_tex[..., 0].mean(axis=(1, 2)).astype(np.float64))
 
         _report("Generating elevation textures…")
         elevation_textures = compute_elevation_textures(

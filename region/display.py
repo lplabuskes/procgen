@@ -123,6 +123,8 @@ def describe_texel(
         parts.append(f"P: {float(tex['precipitation'][at].sum()):.0f} mm/yr")
     if "ruggedness" in keys:
         parts.append(f"Ruggedness: {float(tex['ruggedness'][at][0]):.2f}")
+    if "jaggedness" in keys:
+        parts.append(f"Jaggedness: {float(tex['jaggedness'][at][0]):.2f}")
     return parts
 
 

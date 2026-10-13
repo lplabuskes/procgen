@@ -213,7 +213,7 @@ targets above. Results go to `scripts/results/relief_results.json`.
 ### Deferred
 - Hydrology refining ruggedness (valley floors, floodplains), and rivers/lakes on
   rough relief.
-- Second channel: per-texel `H` (jagged vs rolling).
+- ~~Second channel: per-texel `H` (jagged vs rolling).~~ Done 2026-10-12 (below).
 - Wetland flatness reading the seed ruggedness.
 
 ## Status
@@ -392,3 +392,29 @@ settlement: floors at least the channel's half-width. `measure_lakes_rivers.py`:
   ground (ρ ≳ 0.75; seed 31 region 4) the region's beds pool into long steps and
   confluences can't absorb their cut, so some climb remains there; local routes
   wandering onto their region valley's walls cut gorges hundreds of metres deep.
+
+**Character channel: jaggedness (2026-10-12).** The second channel, decided with
+the user: drivers are tectonic age, aridity and glacial/alpine (no noise or
+volcanic term); character preserves the region's relief and moves relief between
+coarse and fine scales; it changes only the spectrum's exponent (no ridged
+noise); and only the terrain detail reads it (no realm or settlement consumer).
+
+- `jaggedness` ∈ [0, 1] (0 rolling, 0.5 neutral, 1 jagged), a texture plus face
+  means like ruggedness. Seeded in the elevation stage
+  (`worldgen/geology/jaggedness.py`: young orogens +, plate interiors −),
+  refined in the ruggedness stage (`refine_jaggedness`: aridity + on P / PET,
+  glacial ± by ruggedness: alpine jagged, ice-scoured lowland rolling).
+- The spectrum: `H = hurst + hurst_swing (1 − 2j)` (0.75 ± 0.25), pivoted at
+  `hurst_pivot_km` 16 km, so neutral ground draws exactly the calibrated
+  spectrum and a region's relief barely moves with character.
+- Seeds 4/31/35: land p5 / p50 / p95 ≈ 0.28 / 0.51 / 0.78, ~20% rolling
+  (< 0.35), ~20% jagged (≥ 0.65); desert and semi-arid ~0.7, icecap 0.67–0.87,
+  tropical and savannah ~0.4; corr with ruggedness 0.51–0.74.
+- `measure_relief.py` (seeds 4/31/35, medians of 1 km window relief): by
+  ruggedness class the region is unchanged (within 2%; ρ ≥ 0.6 547 vs 559 m),
+  local and settlement within ~±20%. By jaggedness class (confounded with
+  ruggedness: jagged ground is mostly rough too): local rolling 17 / neutral 24 /
+  jagged 49 m; settlement 22 / 42 / 133 m, at 250 m 7 / 15 / 49 m. Conservation at
+  float noise on every tier. `measure_lakes_rivers.py` unchanged (region islands
+  per lake 0.41, local 1.07; river climb region 23, local 12 m / 100 km).
+

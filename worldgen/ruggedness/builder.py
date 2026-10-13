@@ -18,6 +18,17 @@ texture; ``RUGGEDNESS`` / ``RUGGEDNESS_FACE`` (its face means) are rewritten in
 place.  Runs after the wetland stage and before resources, danger and cost, so
 every later consumer reads the final field.  The region and
 local tiers style their shores by it (``region/upsample.py``).
+
+It refines the **jaggedness** seed (:mod:`worldgen.geology.jaggedness`) alongside,
+with climate (:func:`refine_jaggedness`):
+
+- **aridity** — dry ground is jagged (badlands, mesas, sharp scarps: little soil
+  and no creep to round it), humid ground rolling: a ramp on precipitation / PET;
+- **glacial** — on cold ground (the glacial ramp), rough ground goes jagged
+  (arêtes, horns, cirques) and smooth ground rolling (ice-scoured, hummocky
+  lowlands): signed by a ramp on the refined ruggedness.
+
+``JAGGEDNESS`` / ``JAGGEDNESS_FACE`` are rewritten in place the same way.
 """
 from __future__ import annotations
 
@@ -27,18 +38,40 @@ import numpy as np
 from scipy.spatial import KDTree
 
 from core.display import DisplayRegistry
-from core.params import param_field as _f, paramclass
+from core.params import field, param_field as _f, paramclass
 from core.pipeline import BuildContext, Stage
 from core.world import World
-from worldgen.climate.channels import TEMPERATURE_ANNUAL
-from worldgen.geology.channels import ELEVATION, RUGGEDNESS, RUGGEDNESS_FACE
+from worldgen.climate.channels import PRECIPITATION_ANNUAL, TEMPERATURE_ANNUAL
+from worldgen.geology.channels import ELEVATION, JAGGEDNESS, JAGGEDNESS_FACE, RUGGEDNESS, RUGGEDNESS_FACE
 from worldgen.geology.ruggedness import decayed_max, diffuse, ruggedness_texture
 from worldgen.hydrology.channels import RIVER_OBJECTS, STREAMS
+from worldgen.hydrology.rivers import potential_evapotranspiration
 from worldgen.resources.terrain import global_slope
+from worldgen.wetland.builder import _PetParams
 from worldgen.wetland.channels import WETLAND_FRACTION
 
 if TYPE_CHECKING:
     from core.mesh import PolygonMesh
+    from worldgen.hydrology.builder import HydrologyParams
+
+
+@paramclass
+class JaggednessRefineParams:
+    # Aridity: 0 at or above aridity_humid (precipitation / PET), full at or below aridity_arid.
+    # Seed 4's dry biomes (steppe, shrubland, desert) sit at 0.2–0.6, the rest at ~1.5–2 and above.
+    aridity_weight: float = _f(0.4, label="Aridity weight", min=0.0, max=1.0, step=0.05)
+    aridity_humid: float = _f(1.0, label="Aridity onset (P/PET)", min=0.0, max=10.0, step=0.05)
+    aridity_arid: float = _f(0.3, label="Aridity full (P/PET)", min=0.0, max=10.0, step=0.05)
+    # Glacial: the cold ramp (annual mean, °C) times ±weight, jagged on rough ground and
+    # rolling on smooth, from −1 at alpine_low ruggedness to +1 at alpine_high.
+    glacial_weight: float = _f(0.3, label="Glacial weight", min=0.0, max=1.0, step=0.05)
+    glacial_warm_c: float = _f(4.0, label="Glacial onset (°C)", min=-30.0, max=30.0, step=0.5)
+    glacial_cold_c: float = _f(-6.0, label="Glacial full (°C)", min=-40.0, max=20.0, step=0.5)
+    alpine_low: float = _f(0.35, label="Ice-scoured below ruggedness", min=0.0, max=1.0, step=0.05)
+    alpine_high: float = _f(0.65, label="Alpine above ruggedness", min=0.0, max=1.0, step=0.05)
+    # Neighbour-mean diffusion of the refinement terms (the seed is diffused already).
+    smoothing_passes: int = _f(2, label="Smoothing passes", min=0, max=20)
+    smoothing_alpha: float = _f(0.5, label="Smoothing strength", min=0.0, max=1.0, step=0.05)
 
 
 @paramclass
@@ -68,6 +101,8 @@ class RuggednessRefineParams:
     # Neighbour-mean diffusion of the refinement terms (the seed is diffused already).
     smoothing_passes: int = _f(2, label="Smoothing passes", min=0, max=20)
     smoothing_alpha: float = _f(0.5, label="Smoothing strength", min=0.0, max=1.0, step=0.05)
+    jaggedness: JaggednessRefineParams = field(
+        default_factory=JaggednessRefineParams, metadata={"label": "Jaggedness"})
 
 
 def _ramp(x: np.ndarray, zero_at: float, one_at: float) -> np.ndarray:
@@ -103,6 +138,37 @@ def refine_ruggedness(
     if wetland_fraction is not None:
         terms["wetland"] = -float(p.wetland_weight) * np.clip(
             np.asarray(wetland_fraction, dtype=np.float64), 0.0, 1.0)
+    seed_values = np.asarray(seed_values, dtype=np.float64)
+    if not terms:
+        return np.clip(seed_values, 0.0, 1.0), terms
+    delta = diffuse(np.sum(list(terms.values()), axis=0), adjacency, p.smoothing_passes, float(p.smoothing_alpha))
+    return np.clip(seed_values + delta, 0.0, 1.0), terms
+
+
+def refine_jaggedness(
+    mesh: "PolygonMesh",
+    seed_values: np.ndarray,
+    params: JaggednessRefineParams,
+    *,
+    ruggedness: np.ndarray,
+    temperature_annual: Optional[np.ndarray] = None,
+    aridity_index: Optional[np.ndarray] = None,
+) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    """Per-face refined jaggedness in [0, 1] and each term's (undiffused) contribution.
+
+    ``ruggedness`` per face (the refined field); ``aridity_index`` per face
+    precipitation / PET.  Missing climate inputs contribute nothing.
+    """
+    p = params
+    adjacency = mesh.face_adjacency
+    terms: dict[str, np.ndarray] = {}
+    if aridity_index is not None:
+        terms["aridity"] = float(p.aridity_weight) * _ramp(
+            np.asarray(aridity_index, dtype=np.float64), float(p.aridity_humid), float(p.aridity_arid))
+    if temperature_annual is not None:
+        cold = _ramp(np.asarray(temperature_annual, dtype=np.float64), float(p.glacial_warm_c), float(p.glacial_cold_c))
+        alpine = 2.0 * _ramp(np.asarray(ruggedness, dtype=np.float64), float(p.alpine_low), float(p.alpine_high)) - 1.0
+        terms["glacial"] = float(p.glacial_weight) * cold * alpine
     seed_values = np.asarray(seed_values, dtype=np.float64)
     if not terms:
         return np.clip(seed_values, 0.0, 1.0), terms
@@ -176,12 +242,16 @@ def river_mouth_strength(rivers, n_faces: int) -> np.ndarray:
 
 
 class RuggednessBuilder(Stage):
-    """Refines the ruggedness seed in place with glacial, deltaic and wetland causes."""
+    """Refines the ruggedness seed in place with glacial, deltaic and wetland causes, and jaggedness with climate."""
 
     name = "ruggedness"
 
-    def __init__(self, params: RuggednessRefineParams | None = None) -> None:
+    def __init__(
+        self, params: RuggednessRefineParams | None = None, pet: "HydrologyParams | None" = None,
+    ) -> None:
         self.params: RuggednessRefineParams = params or RuggednessRefineParams()
+        # PET for the aridity index, as the hydrology and wetland stages compute it.
+        self.pet: "HydrologyParams | _PetParams" = pet if pet is not None else _PetParams()
 
     def build(self, ctx: BuildContext) -> None:
         mesh = ctx.mesh
@@ -207,7 +277,26 @@ class RuggednessBuilder(Stage):
         RUGGEDNESS.write(mesh, tex)
         # Per face: the texture's face means, as load restores them, so a saved world reads alike.
         RUGGEDNESS_FACE.write(mesh, tex[..., 0].mean(axis=(1, 2)).astype(np.float64))
+        if JAGGEDNESS_FACE.present(mesh):
+            self._refine_jaggedness(mesh, rho, t_annual)
         ctx.report("Ruggedness done.")
+
+    def _refine_jaggedness(self, mesh: "PolygonMesh", rho: np.ndarray, t_annual: Optional[np.ndarray]) -> None:
+        aridity = None
+        if t_annual is not None and PRECIPITATION_ANNUAL.present(mesh):
+            pet = self.pet
+            pet_mm = potential_evapotranspiration(
+                np.asarray(t_annual, dtype=np.float64),
+                float(pet.pet_baseline_mm_yr), float(pet.pet_per_degree_mm_yr), float(pet.pet_max_mm_yr),
+            )
+            aridity = np.asarray(PRECIPITATION_ANNUAL.read(mesh), dtype=np.float64) / np.maximum(pet_mm, 1e-9)
+        jag, _ = refine_jaggedness(
+            mesh, JAGGEDNESS_FACE.read(mesh), self.params.jaggedness,
+            ruggedness=rho, temperature_annual=t_annual, aridity_index=aridity,
+        )
+        tex = ruggedness_texture(mesh, jag, ELEVATION.read(mesh).shape[1])
+        JAGGEDNESS.write(mesh, tex)
+        JAGGEDNESS_FACE.write(mesh, tex[..., 0].mean(axis=(1, 2)).astype(np.float64))
 
     # ── Display ───────────────────────────────────────────────────────────────
 
@@ -215,7 +304,11 @@ class RuggednessBuilder(Stage):
         self, world: World, reg: DisplayRegistry, *, debug: bool = False
     ) -> None:
         mesh = world.mesh
-        if not debug or "ruggedness" not in mesh.face_textures:
+        if not debug:
+            return
+        if "jaggedness" in mesh.face_textures:
+            self._register_jaggedness(mesh, reg)
+        if "ruggedness" not in mesh.face_textures:
             return
         from worldgen.geology.display import RUGGEDNESS_RECIPE, ruggedness_color, ruggedness_legend_entries
 
@@ -234,6 +327,25 @@ class RuggednessBuilder(Stage):
 
         reg.add_hover(_ruggedness_hover, refined=("ruggedness",))
 
+    @staticmethod
+    def _register_jaggedness(mesh: "PolygonMesh", reg: DisplayRegistry) -> None:
+        from worldgen.geology.display import JAGGEDNESS_RECIPE, jaggedness_color, jaggedness_legend_entries
+
+        mesh.set_face_textures("jaggedness_rgba", JAGGEDNESS_RECIPE(mesh.face_textures))
+        reg.add_scheme(
+            "Jaggedness", jaggedness_color, texture="jaggedness_rgba",
+            legend=("gradient", jaggedness_legend_entries()), recipe=JAGGEDNESS_RECIPE,
+        )
+
+        def _jaggedness_hover(face: int, _uv, local) -> list:
+            refined = local(("jaggedness",)) if local is not None else None
+            if refined:
+                return refined
+            meta = mesh.face_metadata[face]
+            return [f"Jaggedness: {meta['jaggedness']:.2f}"] if "jaggedness" in meta else []
+
+        reg.add_hover(_jaggedness_hover, refined=("jaggedness",))
+
     # ── Persistence ───────────────────────────────────────────────────────────
     # The texture is saved with the mesh; per-face values are its face means, at build and on load.
 
@@ -245,3 +357,6 @@ class RuggednessBuilder(Stage):
         if "ruggedness" in mesh.face_textures:
             tex = np.asarray(mesh.face_textures["ruggedness"], dtype=np.float64)
             RUGGEDNESS_FACE.write(mesh, tex[..., 0].mean(axis=(1, 2)))
+        if "jaggedness" in mesh.face_textures:
+            tex = np.asarray(mesh.face_textures["jaggedness"], dtype=np.float64)
+            JAGGEDNESS_FACE.write(mesh, tex[..., 0].mean(axis=(1, 2)))

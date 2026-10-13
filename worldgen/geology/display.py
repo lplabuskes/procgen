@@ -189,3 +189,31 @@ def _render_ruggedness(tex: Mapping[str, np.ndarray]) -> np.ndarray:
 
 # Drawn on land with water flat; hillshaded where the view has relief.
 RUGGEDNESS_RECIPE = TextureRecipe(_render_ruggedness, sources=("ruggedness",), relief=True)
+
+
+# ── Jaggedness (debug) ───────────────────────────────────────────────────────
+# Rolling (soft green) → neutral (pale sand) → jagged (rust).
+_JAGGEDNESS_STOPS = [
+    (0.00, (0.42, 0.66, 0.48, 1.0)),
+    (0.50, (0.88, 0.85, 0.70, 1.0)),
+    (1.00, (0.70, 0.30, 0.20, 1.0)),
+]
+
+jaggedness_color = ocean_gradient_scheme("jaggedness", _JAGGEDNESS_STOPS, default=0.5)
+
+
+def jaggedness_legend_entries() -> list[tuple[str, tuple]]:
+    labels = ["rolling", "neutral", "jagged"]
+    return [(lbl, c) for lbl, (_, c) in zip(labels, _JAGGEDNESS_STOPS)]
+
+
+def _render_jaggedness(tex: Mapping[str, np.ndarray]) -> np.ndarray:
+    jagged = np.clip(np.asarray(tex["jaggedness"], dtype=np.float32), 0.0, 1.0)
+    return apply_water_masks(
+        gradient_texture(jagged, _JAGGEDNESS_STOPS),
+        ocean_mask_tex=tex.get("ocean_mask"), lake_mask_tex=tex.get("lake_mask"),
+    )
+
+
+# Drawn like ruggedness: land coloured, water flat, hillshaded where the view has relief.
+JAGGEDNESS_RECIPE = TextureRecipe(_render_jaggedness, sources=("jaggedness",), relief=True)

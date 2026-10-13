@@ -21,7 +21,9 @@ Terrain classes are terciles over land faces of the globe's per-face elevation
 span (``face_elevation_range``) — the globe doesn't change in this work, so the
 classes stay put across runs — and, once the world carries a ``ruggedness``
 field, terciles of that too; and fixed bins of each texel's own ruggedness
-(``rho``: <0.2, 0.2–0.4, 0.4–0.6, ≥0.6), which is what the spectrum reads.
+(``rho``: <0.2, 0.2–0.4, 0.4–0.6, ≥0.6), which is what the spectrum reads; and
+fixed bins of each texel's jaggedness (``jag``: rolling <0.35, neutral, jagged
+≥0.65), which tilts the spectrum toward fine (jagged) or coarse (rolling) scales.
 
 Usage:
     python3 scripts/measure_relief.py                 # seeds 4, 31, 35
@@ -59,7 +61,10 @@ CLASSES = ("flat", "hilly", "rugged")
 # Fixed bins of each texel's own (refined copy of the) ruggedness, for calibrating the spectrum.
 RHO_EDGES = (0.2, 0.4, 0.6)
 RHO_CLASSES = ("<0.2", "0.2-0.4", "0.4-0.6", ">=0.6")
-NAMES = {"span": CLASSES, "ruggedness": CLASSES, "rho": RHO_CLASSES}
+# Fixed bins of each texel's jaggedness (the spectrum's Hurst exponent).
+JAG_EDGES = (0.35, 0.65)
+JAG_CLASSES = ("rolling", "neutral", "jagged")
+NAMES = {"span": CLASSES, "ruggedness": CLASSES, "rho": RHO_CLASSES, "jag": JAG_CLASSES}
 # (tier, window km) pairs reported; a region's window is three of its texels whatever this says.
 WINDOWS = (("region", None), ("local", 1.0), ("settlement", 1.0), ("settlement", 0.25))
 
@@ -140,6 +145,8 @@ def sample(fields: RegionFields, classes: dict[str, np.ndarray], window_km: Opti
     }
     if "ruggedness" in fields.textures:
         out["rho"] = np.digitize(np.asarray(fields.textures["ruggedness"][..., 0])[land], RHO_EDGES)
+    if "jaggedness" in fields.textures:
+        out["jag"] = np.digitize(np.asarray(fields.textures["jaggedness"][..., 0])[land], JAG_EDGES)
     return out
 
 
@@ -173,7 +180,7 @@ def measure_seed(seed: int, n_hexes: int, n_towns: int, rebuild: bool) -> dict:
     assert world is not None
     classes = face_classes(world)
     span = classes["span"]
-    schemes = [*classes, "rho"]
+    schemes = [*classes, "rho", "jag"]
     n_cols = int(store.region_params.upsample.n_cols)
 
     # Local maps (and their regions) of land faces spread over each span class.

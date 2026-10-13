@@ -57,7 +57,8 @@ class GlobePipeline(Pipeline):
         self.delta_builder: DeltaBuilder = DeltaBuilder(self.params.delta)
         # Shares hydrology's PET, so lakes and wetlands see one water balance.
         self.wetland_builder: WetlandBuilder = WetlandBuilder(self.params.wetland, pet=self.params.hydrology)
-        self.ruggedness_builder: RuggednessBuilder = RuggednessBuilder(self.params.ruggedness)
+        self.ruggedness_builder: RuggednessBuilder = RuggednessBuilder(
+            self.params.ruggedness, pet=self.params.hydrology)
         self.resources_builder: ResourcesBuilder = ResourcesBuilder(self.params.resources)
         self.danger_builder: DangerBuilder = DangerBuilder(self.params.danger)
         self.cost_builder: CostBuilder = CostBuilder(

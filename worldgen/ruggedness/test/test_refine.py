@@ -178,3 +178,57 @@ def test_floodplain_skips_steep_reaches():
     centre = 5 * tex * tex + 4 * tex + 4
     steep = floodplain_strength(dual, _network(dual, [centre], [20_000.0], tex), RuggednessRefineParams())
     assert steep.reshape(-1)[centre] < 0.05                  # a gorge, not a floodplain
+
+
+def test_jaggedness_refine_aridity_and_glacial(mesh):
+    from worldgen.ruggedness.builder import JaggednessRefineParams, refine_jaggedness
+
+    n = len(mesh.faces)
+    p = JaggednessRefineParams(smoothing_passes=0)
+    seed = np.full(n, 0.5)
+    rugged = np.full(n, 0.5)
+    rugged[3], rugged[4] = 1.0, 0.0
+    aridity = np.full(n, 2.0)
+    aridity[2] = p.aridity_arid / 2.0
+    temperature = np.full(n, p.glacial_warm_c + 10.0)
+    temperature[[3, 4]] = p.glacial_cold_c - 5.0
+
+    j, terms = refine_jaggedness(mesh, seed, p, ruggedness=rugged)
+    np.testing.assert_allclose(j, 0.5)
+    assert terms == {}
+    j, _ = refine_jaggedness(mesh, seed, p, ruggedness=rugged, temperature_annual=temperature, aridity_index=aridity)
+    assert j[2] == pytest.approx(0.5 + p.aridity_weight)       # deserts are jagged
+    assert j[3] == pytest.approx(0.5 + p.glacial_weight)       # alpine
+    assert j[4] == pytest.approx(0.5 - p.glacial_weight)       # ice-scoured lowland
+    assert j[5] == pytest.approx(0.5)
+
+
+def test_stage_refines_jaggedness_and_load_restores_it():
+    from core.pipeline import BuildContext
+    from core.world import World
+    from worldgen.geology.channels import JAGGEDNESS_FACE, RUGGEDNESS_FACE
+    from worldgen.ruggedness.builder import RuggednessBuilder
+
+    dual = Mesh.icosphere(3).mesh_dual()
+    n = len(dual.faces)
+    dual.set_face_textures("elevation", np.zeros((n, 8, 8, 1), dtype=np.float32), n_channels=1)
+    RUGGEDNESS_FACE.write(dual, np.full(n, SEED))
+    JAGGEDNESS_FACE.write(dual, np.full(n, 0.5))
+    temperature = np.full(n, 15.0)
+    precipitation = np.full(n, 3000.0)
+    precipitation[:10] = 50.0
+    dual.apply_metadata_channel("temperature_annual", temperature.tolist())
+    dual.apply_metadata_channel("precipitation_annual", precipitation.tolist())
+    world = World.from_mesh(dual)
+    stage = RuggednessBuilder()
+    stage.build(BuildContext(world=world))
+
+    tex = dual.face_textures["jaggedness"]
+    assert tex.shape == (n, 8, 8, 1)
+    built = np.asarray(JAGGEDNESS_FACE.read(dual), dtype=np.float64)
+    assert built[:10].mean() > 0.6 and np.median(built) == pytest.approx(0.5, abs=0.02)
+
+    for meta in dual.face_metadata:
+        meta.pop("jaggedness")
+    stage.load({}, BuildContext(world=world))
+    assert np.abs(np.asarray(JAGGEDNESS_FACE.read(dual), dtype=np.float64) - built).max() < 0.1

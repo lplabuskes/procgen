@@ -45,6 +45,7 @@ from region.resources import RefineContext, refine_resources, refined_slope
 from region.sampling import GlobalSampler, anchor_means, anchor_plan, stencil_read
 from region.source import GlobalSource, Located, ParentSource
 from utils.simplex import fbm_sum, make_perm
+from worldgen.geology.jaggedness import NEUTRAL_JAGGEDNESS
 from worldgen.resources.minerals import mineral_workings, site_workers
 
 if TYPE_CHECKING:
@@ -86,11 +87,18 @@ class RegionUpsampleParams:
     # capped at octave_cap_km, where ρ is the parent's ruggedness and relief(ρ) runs
     # log-linearly from relief_flat_km (ρ = 0) to relief_rugged_km (ρ = 1).  Each tier
     # draws only its own band, so a scale's relief is the same whichever tier draws it.
+    # The parent's jaggedness j tilts the exponent to hurst + hurst_swing × (1 − 2j) about
+    # hurst_pivot_km: the region's band keeps its relief and jagged ground (low exponent)
+    # moves relief into the fine scales, rolling ground out of them.
     relief_flat_km: float = _f(0.0025, label="Relief at 1 km, smooth (km)", min=0.0001, max=0.1, step=0.0005)
     relief_rugged_km: float = _f(0.25, label="Relief at 1 km, rugged (km)", min=0.001, max=2.0, step=0.01)
     reference_wavelength_km: float = _f(1.0, label="Relief reference wavelength (km)", min=0.01, max=100.0)
-    # Amplitude ∝ wavelength ** hurst: low is jagged (fine scales keep their relief), 1 rolling.
-    hurst: float = _f(0.75, label="Hurst exponent (jagged ↔ rolling)", min=0.1, max=1.0, step=0.05)
+    # Amplitude ∝ wavelength ** hurst at neutral character (jaggedness 0.5).
+    hurst: float = _f(0.75, label="Hurst exponent (neutral)", min=0.1, max=1.0, step=0.05)
+    # Exponent swing to either side: jagged (1) hurst − swing, rolling (0) hurst + swing.  0 ignores character.
+    hurst_swing: float = _f(0.25, label="Hurst swing (jagged ↔ rolling)", min=0.0, max=0.6, step=0.05)
+    # Character pivots the spectrum here: ~ the region tier's octaves (≈ 28 / 14 / 7 km) weighted by amplitude.
+    hurst_pivot_km: float = _f(16.0, label="Hurst pivot wavelength (km)", min=0.1, max=200.0, step=1.0)
     octave_cap_km: float = _f(1.0, label="Max relief per octave (km)", min=0.0, max=5.0, step=0.05)
     # Overall multiplier on the spectrum (0 = no detail; the world's ruggedness is the real knob).
     relief_factor: float = _f(1.0, label="Detail relief factor", min=0.0, max=8.0)
@@ -313,12 +321,22 @@ def parent_ruggedness(source: ParentSource, loc: Located) -> np.ndarray:
     return np.clip(source.coarse("ruggedness", loc)[:, 0], 0.0, 1.0)
 
 
-def hurst_exponent(source: ParentSource, loc: Located, params: RegionUpsampleParams) -> np.ndarray:
-    """``(P,)`` the spectrum's Hurst exponent — the terrain's character, jagged (low) to rolling (1).
+def parent_jaggedness(source: ParentSource, loc: Located) -> np.ndarray:
+    """``(P,)`` the parent's jaggedness, bilinear and clipped; neutral without the field."""
+    if not source.has("jaggedness"):
+        return np.full(len(loc.anchors), NEUTRAL_JAGGEDNESS)
+    return np.clip(source.coarse("jaggedness", loc)[:, 0], 0.0, 1.0)
 
-    One value for now; the handle for a per-texel character field beside ruggedness.
-    """
-    return np.full(len(loc.anchors), float(params.hurst))
+
+def hurst_from_jaggedness(jagged: np.ndarray, params: RegionUpsampleParams) -> np.ndarray:
+    """``(P,)`` Hurst exponent for jaggedness in [0, 1]: ``hurst`` at 0.5, ∓ ``hurst_swing`` at jagged / rolling."""
+    j = np.clip(np.asarray(jagged, dtype=np.float64), 0.0, 1.0)
+    return np.clip(float(params.hurst) + float(params.hurst_swing) * (1.0 - 2.0 * j), 0.05, 1.5)
+
+
+def hurst_exponent(source: ParentSource, loc: Located, params: RegionUpsampleParams) -> np.ndarray:
+    """``(P,)`` the spectrum's Hurst exponent — the terrain's character, jagged (low) to rolling (high)."""
+    return hurst_from_jaggedness(parent_jaggedness(source, loc), params)
 
 
 def relief_at_reference(rugged: np.ndarray, params: RegionUpsampleParams) -> np.ndarray:
@@ -331,10 +349,17 @@ def relief_at_reference(rugged: np.ndarray, params: RegionUpsampleParams) -> np.
 def spectrum_amplitudes(
     wavelengths_km: np.ndarray, rugged: np.ndarray, hurst: np.ndarray, params: RegionUpsampleParams
 ) -> np.ndarray:
-    """``(K, P)`` amplitude (km) of each octave at each texel (see ``RegionUpsampleParams.relief_flat_km``)."""
-    ref = float(params.relief_factor) * relief_at_reference(rugged, params)
-    ratio = np.asarray(wavelengths_km, dtype=np.float64)[:, None] / max(float(params.reference_wavelength_km), 1e-9)
-    return np.minimum(ref[None, :] * ratio ** np.asarray(hurst, dtype=np.float64)[None, :],
+    """``(K, P)`` amplitude (km) of each octave at each texel (see ``RegionUpsampleParams.relief_flat_km``).
+
+    At ``hurst == params.hurst`` this is ``relief(ρ) × (λ / λ_ref) ** hurst``; other
+    exponents pivot about ``hurst_pivot_km``, where every character has the same relief.
+    """
+    h0 = float(params.hurst)
+    pivot = max(float(params.hurst_pivot_km), 1e-9)
+    at_pivot = float(params.relief_factor) * relief_at_reference(rugged, params) * (
+        pivot / max(float(params.reference_wavelength_km), 1e-9)) ** h0
+    ratio = np.asarray(wavelengths_km, dtype=np.float64)[:, None] / pivot
+    return np.minimum(at_pivot[None, :] * ratio ** np.asarray(hurst, dtype=np.float64)[None, :],
                       float(params.octave_cap_km))
 
 
@@ -1027,7 +1052,7 @@ def _add_small_lakes(
 class Terrain:
     """:func:`refine_terrain`'s result, with what the rest of :func:`refine_fields` reads."""
 
-    textures: dict[str, np.ndarray]   # elevation, water masks, filled_height, ruggedness, delta
+    textures: dict[str, np.ndarray]   # elevation, water masks, filled_height, ruggedness, jaggedness, delta
     located: Located
     detail_octaves: int
     water: "_AnchorWater"
@@ -1121,11 +1146,12 @@ def refine_terrain(
     textures.update(masks)
     textures["elevation"] = elevation.reshape(m, tex_size, tex_size, 1).astype(np.float32)
 
-    # Copied (bilinear, not conserved) so the tier below styles its shores alike.
-    if source.has("ruggedness"):
-        textures["ruggedness"] = np.clip(source.coarse("ruggedness", loc), 0.0, 1.0).reshape(
-            m, tex_size, tex_size, 1
-        ).astype(np.float32)
+    # Copied (bilinear, not conserved) so the tier below styles its shores and draws its spectrum alike.
+    for key in ("ruggedness", "jaggedness"):
+        if source.has(key):
+            textures[key] = np.clip(source.coarse(key, loc), 0.0, 1.0).reshape(
+                m, tex_size, tex_size, 1
+            ).astype(np.float32)
 
     # Delta plain and marsh, copied likewise (for region.distributaries).
     if source.has("delta"):

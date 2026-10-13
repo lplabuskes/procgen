@@ -58,6 +58,7 @@ shared relief signal puts moisture/temperature bands on the contours.
 | `ocean_mask`, `lake_mask`, `filled_height` | re-flooded to the parent's water surface over refined relief, plus the tier's [small lakes](#small-lakes-regionlakespy) | surface exact; shoreline refined |
 | `small_lake_mask` | the part of `lake_mask` below the globe's resolution (`SMALL_LAKE_KEY`), the parent's re-flooded + this tier's | no |
 | `ruggedness` | bilinear copy of parent's (if any), clipped [0, 1] | no — a style for the tier below |
+| `jaggedness` | bilinear copy of parent's (if any), clipped [0, 1] | no — the tier below's spectrum character |
 | `delta` | bilinear copy of parent's delta plain ([delta.md](delta.md)), clipped [0, 1] | no — guides distributaries |
 | `wetland` | parent's score ± sub-grid relief, stamped into `biome` at the tier's lower threshold; riparian marsh added once rivers are routed ([wetland.md](wetland.md)) | no — derived |
 | `forest_density` | treeline on refined elevation | multiplicatively, over land |
@@ -134,17 +135,25 @@ every tier — the local and settlement tiers take these params from the region'
 Octave `k`, of wavelength `λ_k` (= Earth radius / frequency), gets its own
 amplitude per texel:
 
-    A_k = relief_factor × relief(ρ) × (λ_k / reference_wavelength_km) ** hurst,  capped at octave_cap_km
+    A_k = relief_factor × relief(ρ) × (P / λ_ref) ** hurst × (λ_k / P) ** H,  capped at octave_cap_km
     relief(ρ) = relief_flat_km × (relief_rugged_km / relief_flat_km) ** ρ
+    H = hurst + hurst_swing × (1 − 2 j)
 
 `ρ` is the parent's `ruggedness` read bilinearly (`parent_ruggedness`; 0.3 where
-the parent has none), `hurst` the terrain character, from jagged (low: fine
-scales keep their relief) to rolling (1) — one value for now, read per texel
-through `hurst_exponent`, the handle for a character field beside ruggedness.
+the parent has none), `j` its `jaggedness` (`parent_jaggedness`; neutral 0.5
+without the field), `λ_ref` = `reference_wavelength_km` and `P` =
+`hurst_pivot_km`. At neutral character (`H = hurst`) this is
+`relief(ρ) × (λ_k / λ_ref) ** hurst`, the calibrated spectrum. Character tilts it
+about the pivot (`hurst_exponent` → `hurst_from_jaggedness`): jagged ground (low
+`H`: fine scales keep their relief) gets more relief below the pivot, rolling
+ground (high `H`) less, and above it the reverse. The pivot, 16 km, is about the
+region tier's octaves (≈ 28 / 14 / 7 km) weighted by amplitude, so a region's
+relief barely moves with character while the local and settlement tiers carry
+the difference.
 The octaves are summed un-normalised, so a tier draws exactly its band's share
 of one spectrum and a scale's relief is the same whichever tier draws it (a
 settlement map carries every band from the globe down). Defaults 2.5 m → 250 m
-at 1 km, `hurst` 0.75, cap 1 km per octave. Window relief over ~1 km (seeds
+at 1 km, `hurst` 0.75 ± `hurst_swing` 0.25, cap 1 km per octave. Window relief over ~1 km (seeds
 4/31/35, `measure_relief.py`, medians): ρ < 0.2 13 m local / 21 m settlement;
 0.2–0.4 28 / 47 m; 0.4–0.6 64 / 100 m; over ~13 km on regions, ρ ≥ 0.6 465 m
 (p90 910 m). Near water see [Coast style](#coast-style). Replaced a
@@ -359,6 +368,7 @@ refined/coarse elevation and slope, land masks.
 |---|---|---|
 | `n_cols`, `tex_size` | 14, 64 | grid size |
 | `relief_flat_km`, `relief_rugged_km`, `reference_wavelength_km`, `hurst`, `octave_cap_km`, `relief_factor` | 0.0025, 0.25, 1.0, 0.75, 1.0, 1.0 | the relief spectrum (all tiers) |
+| `hurst_swing`, `hurst_pivot_km` | 0.25, 16 | character: the exponent's swing jagged ↔ rolling, and where it pivots |
 | `octaves`, `lacunarity`, `nyquist_safety` | 4, 2.0, 0.5 | detail band |
 | `orographic_gain` | 0.5 /km | precipitation |
 | `lapse_rate_c_per_km` | 6.5 | temperature (`DERIVED`: the app copies the climate's) |

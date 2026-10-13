@@ -1,8 +1,8 @@
 # Ruggedness Stage
 
 ## Files
-- `worldgen/ruggedness/builder.py` — `RuggednessRefineParams`, `RuggednessBuilder` (stage, display, persistence), `refine_ruggedness`, `river_mouth_strength`
-- The field, its channels (`RUGGEDNESS_FACE`, `RUGGEDNESS`), the seed and the display recipe live in `worldgen/geology/` ([elevation.md](elevation.md#ruggednesspy)).
+- `worldgen/ruggedness/builder.py` — `RuggednessRefineParams`, `RuggednessBuilder` (stage, display, persistence), `refine_ruggedness`, `river_mouth_strength`; `JaggednessRefineParams` (`globe.ruggedness.jaggedness`), `refine_jaggedness`
+- The field, its channels (`RUGGEDNESS_FACE`, `RUGGEDNESS`), the seed and the display recipe live in `worldgen/geology/` ([elevation.md](elevation.md#ruggednesspy)); likewise jaggedness's ([elevation.md](elevation.md#jaggednesspy)).
 
 ## Concept
 
@@ -47,15 +47,36 @@ land a little rougher (p50 0.33–0.41). That is ~0.2 smoother at the coast than
 the old coast-style ruggedness (`1 − coast_smoothness`, seed 4 p5–p95 0.31–0.90),
 so plains coasts draw smoother than they did.
 
+## Jaggedness
+
+The stage also refines the **jaggedness** seed (terrain character: 0 rolling,
+1 jagged; [elevation.md](elevation.md#jaggednesspy)) in place, after ruggedness,
+with climate (`refine_jaggedness`). It needs `jaggedness` on the mesh (else it
+is skipped) and reads `temperature_annual`, `precipitation_annual` and the
+refined per-face ruggedness:
+
+| term | contribution | params (`globe.ruggedness.jaggedness`) |
+|---|---|---|
+| aridity | + ramp of P / PET (PET as hydrology's, `RuggednessBuilder(pet=HydrologyParams)`): 0 at `aridity_humid`, full at `aridity_arid` — dry ground keeps sharp scarps and badlands, humid ground creeps round | `aridity_weight` 0.4, `aridity_humid` 1.0, `aridity_arid` 0.3 |
+| glacial | ± the glacial ramp of annual T × (2 · ramp(ρ, `alpine_low`, `alpine_high`) − 1): cold rough ground goes jagged (arêtes, horns), cold smooth ground rolling (ice-scoured, hummocky lowlands) | `glacial_weight` 0.3, `glacial_warm_c` 4 °C, `glacial_cold_c` −6 °C, `alpine_low` 0.35, `alpine_high` 0.65 |
+
+The terms are diffused (`smoothing_passes` 2 at 0.5), added to the seed,
+clipped, rasterised; the per-face values are the texture's face means.
+Seed 4's dry biomes (steppe, shrubland, desert) sit at P / PET ≈ 0.2–0.6, the
+rest at ~1.5–2 and above (PET bottoms out in the cold, so boreal ratios run high).
+
 ## Display
 
 `--debug`: **Ruggedness** scheme (`RUGGEDNESS_RECIPE`: pale green smooth →
 olive → brown → slate alpine, water flat, hillshaded where relief) + hover
 (`refined=("ruggedness",)`, so region and local views show their copy).
 
+`--debug`: **Jaggedness** scheme (`JAGGEDNESS_RECIPE`: green rolling → sand
+neutral → rust jagged, water flat, hillshaded) + hover (`refined=("jaggedness",)`).
+
 ## Persistence
 
-Texture saved with the mesh (`serialize` adds nothing). The per-face values are
+Textures (`ruggedness`, `jaggedness`) saved with the mesh (`serialize` adds nothing); `load` restores both per-face fields as face means. The per-face values are
 the texture's face means, both when built and when `load` restores them, so a
 saved world reads exactly as built (a rerun of the cost stage on a loaded world
 otherwise gave seed 4 428 cities instead of 275).
