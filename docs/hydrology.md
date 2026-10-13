@@ -82,6 +82,18 @@ region tier runs it on the stream network). Rivers route through exorheic lakes
 API: `generate() → list[River]`, `get_lake_polygons()`,
 `get_filled_height_texture()`, `get_lake_mask_texture()`.
 
+**Lakes on the trend surface.** With `lake_elevations` (the builder passes
+`trend_elevation(mesh)` when the world has a [relief band](elevation.md#relief_bandpy)),
+lakes are the flooded components of *that* surface, not of the routed elevation:
+the band's ~28 km dips would otherwise fill as hundreds of ragged lakes (seeds
+4/31/35: 48/57/85 lakes → 211/205/301, faces partly lake : mostly lake ~2 → ~9;
+with this 56/57/115, ~2). Those lakes and a one-texel rim (`lake_beds`; the rim
+holds the spill point) take the trend surface before step 1, so the routing's flood
+fills each to its own level (within ~3 m, seeds 4/31/35); the band's pits elsewhere
+fill as flats, not lakes; rivers still route over the band. The builder writes
+the edited elevation back and zeroes the band on `lake_beds` (so the region sees
+no band bumps under a lake bed).
+
 ## Design notes
 
 - **Routing along the single-receiver tree** (not the bilinear gradient) keeps

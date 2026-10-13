@@ -456,3 +456,29 @@ class TestStreamNetwork:
         for name in ("nodes", "receiver", "flow", "channel", "stop"):
             np.testing.assert_array_equal(getattr(back, name), getattr(streams, name))
         assert back.resolution == streams.resolution
+
+
+def test_lakes_follow_lake_elevations_not_the_band():
+    """Lakes come from the trend surface; the band's pits fill as flats, and lake beds take the trend."""
+    mesh = Mesh.icosphere(3).mesh_dual()
+    rng = np.random.default_rng(3)
+    elevations = 4.0 * mesh.face_centroids[:, 2] + 0.5 * rng.standard_normal(len(mesh.faces))
+    trend = compute_elevation_textures(mesh, elevations, tex_size=8)
+    band = (0.4 * rng.standard_normal(trend.shape)).astype(np.float32)
+    ocean = (trend <= 0.0).astype(np.uint8)          # the elevation stage's mask, as the pipeline passes it
+    plain = RiverGenerator(mesh, trend, min_flow=100.0, sea_level=0.0, min_lake_pixels=5, ocean_mask_textures=ocean)
+    plain.generate()
+    banded = RiverGenerator(mesh, trend + band, min_flow=100.0, sea_level=0.0, min_lake_pixels=5,
+                            ocean_mask_textures=ocean, lake_elevations=trend)
+    banded.generate()
+    lakes = banded.get_lake_mask_texture().reshape(-1) > 0
+    np.testing.assert_array_equal(lakes, plain.get_lake_mask_texture().reshape(-1) > 0)
+    assert lakes.any() and np.all(banded.lake_beds[lakes])
+    beds = banded.lake_beds
+    np.testing.assert_allclose(banded.elevations[beds], trend.reshape(-1)[beds])
+    np.testing.assert_allclose(banded.elevations[~beds], (trend + band).reshape(-1)[~beds])
+    # Each lake stands at its trend level, the routing's fill the trend's over the lake — unless
+    # band bumps past the rim wall in a bigger basin (this band is far rougher than the real one;
+    # seeds 4/31/35: within ~3 m).
+    diff = np.abs(banded.get_filled_height_texture() - plain.get_filled_height_texture()).reshape(-1)[lakes]
+    assert np.mean(diff < 1e-3) > 0.9

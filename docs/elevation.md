@@ -7,7 +7,9 @@
 - `worldgen/geology/volcanism.py` — activity + volcano peaks
 - `worldgen/geology/ruggedness.py` — the ruggedness seed (`RuggednessParams`, `ruggedness_seed`, `ruggedness_texture`; shared `decayed_max` / `diffuse`)
 - `worldgen/geology/jaggedness.py` — the jaggedness (terrain character) seed (`JaggednessParams`, `jaggedness_seed`, `NEUTRAL_JAGGEDNESS`)
-- `worldgen/geology/channels.py` — `IS_OCEAN`, `ELEVATION_FACE`, `PLATE_TYPE`, `BOUNDARY_TYPE`, `VOLCANIC_ACTIVITY`, `ELEVATION`, `OCEAN_MASK`, `RUGGEDNESS_FACE`, `RUGGEDNESS`, `JAGGEDNESS_FACE`, `JAGGEDNESS`
+- `worldgen/geology/relief_band.py` — the relief band (`ReliefBandParams`, `compute_relief_band`, `trend_elevation`)
+- `worldgen/geology/preview.py` — the ruggedness preview the band is sized by (`preview_temperature`, `preview_ruggedness`)
+- `worldgen/geology/channels.py` — `IS_OCEAN`, `ELEVATION_FACE`, `PLATE_TYPE`, `BOUNDARY_TYPE`, `VOLCANIC_ACTIVITY`, `ELEVATION`, `OCEAN_MASK`, `RUGGEDNESS_FACE`, `RUGGEDNESS`, `JAGGEDNESS_FACE`, `JAGGEDNESS`, `RELIEF_BAND`
 - `worldgen/geology/display.py`
 
 ## `elevation_builder.py`
@@ -21,9 +23,12 @@
 - `volcanism` — `n_hotspots`, `volcanic_decay_rate`, `volcanic_max_hops`, `volcanic_elevation_scale`, `volcanic_elevation_scale_oceanic`
 - `ruggedness` — the seed: `base` (the master knob, in `BASIC_PARAMS` as `globe.elevation.ruggedness.base`) and the term weights ([below](#ruggednesspy))
 - `jaggedness` — the character seed: `base` (neutral 0.5) and the term weights ([below](#jaggednesspy)); all advanced
+- `relief_band` — `enabled` (True), `subsamples` (3), `preview` (True) ([below](#relief_bandpy)); all advanced
 
 Mesh params are not here (mesh is pre-built); river params are in
-`HydrologyParams`. The seed goes to `ElevationBuilder(params, *, seed)`; each draw
+`HydrologyParams`. The seed goes to `ElevationBuilder(params, *, seed, preview_temperature,
+preview_refine)` (the last two, the climate's `TemperatureParams` and the ruggedness
+stage's params, feed the [preview](#previewpy); `GlobePipeline` passes them); each draw
 takes a name-keyed sub-seed (`_seed("plates")`, …) so adding a draw never shifts
 others.
 
@@ -33,14 +38,15 @@ plates → relax → types + velocities → boundary classification → face ele
 → volcanism → face erosion → + volcanism × `volcanic_elevation_scale[_oceanic]` →
 ruggedness and jaggedness seeds → `rasterize_face_values` → fBm simplex noise (`compute_noise_elevation_deltas`,
 band-limited to the texel grid, × `exp(−|elevation| / noise_coast_sigma)`, so
-strongest near sea level, roughening coasts) → seam smoothing → ocean mask →
+strongest near sea level, roughening coasts) → [relief band](#relief_bandpy), sized by the
+[ruggedness preview](#previewpy) → seam smoothing → ocean mask →
 `world.antimeridian` (`find_ideal_antimeridian`).
 
 Attributes: `mesh`, `plate_ids`, `plate_omegas`, `face_velocities`,
 `boundary_types`, `boundary_data`, `elevations` (face means of final texture),
 `elevation_textures`, `ocean_mask`, `volcanism`, `volcano_positions`, `max_speed`.
 
-- Textures: `"elevation"` (`(N, H, W, 1)` float32, km), `"ocean_mask"` (`(N, H, W, 1)` uint8), `"ruggedness"`, `"jaggedness"` (`(N, H, W, 1)` float32 in [0, 1]).
+- Textures: `"elevation"` (`(N, H, W, 1)` float32, km, band included), `"ocean_mask"` (`(N, H, W, 1)` uint8), `"ruggedness"`, `"jaggedness"` (`(N, H, W, 1)` float32 in [0, 1]), `"relief_band"` (`(N, H, W, 1)` float32, km; only when enabled).
 - Per face: `plate_id`, `plate_type`, `boundary_type`, `surface_speed`, `volcanic_activity`, `elevation` (tectonic + erosion + volcanic value *before noise* — read by resource placement), `is_ocean` (> half texels ocean).
 - Per face: `ruggedness`, `jaggedness` (seed indices in [0, 1]). The ruggedness stage rewrites both fields later and restores the per-face values on load ([ruggedness.md](ruggedness.md)).
 - Feature `"volcanoes"`: unit-sphere positions of above-sea-level activity peaks.
@@ -141,6 +147,48 @@ long wavelengths. The ruggedness stage refines it with climate
 | old | **subtracted**: `1 − exp(−hops / decay)` from any plate boundary — interiors are worn and rounded | `old_weight` 0.35, `old_decay_hops` 3 |
 
 then diffused (`smoothing_passes` 2 at 0.5), clipped and rasterised like ruggedness.
+
+## `relief_band.py`
+
+The part of the region tier's relief the globe can resolve. The region draws a
+ruggedness-set spectrum from the globe's Nyquist (~28 km) down to its own
+([region_fields.md](region_fields.md#detail-amplitude-the-relief-spectrum)) and
+conserves each global texel's mean; whatever of the detail a global texel sees,
+conservation used to take straight back out, leaving texel-scale noise (seeds
+4/31/35: 30–40% of the detail's variance; the texel-scale share rose 0.21 → 0.37).
+Now the globe draws it: `compute_relief_band` averages the region's detail over each
+global texel's footprint (`subsamples`² sub-points interpolated between texel
+positions, ruggedness / jaggedness bilinear at each) with the region's noise stream
+(`world.seed ^ _SEED_SALT_REGION ^ _SEED_SALT_ELEVATION`), octaves and amplitudes —
+`RegionUpsampleParams()` defaults, since the band is part of the world and the
+region's params are view-side (conservation absorbs a retune). It is added to the
+elevation everywhere, land and sea, and kept as `"relief_band"`; the region starts
+from `elevation − relief_band` ([region_fields.md](region_fields.md)). ~1.3 s.
+
+Seeds 4/31/35, the region with the most land, the roughest and the smoothest
+(`measure_relief_noise.py`): conservation's correction 18–145 m rms (was 22–314 m),
+no longer anti-correlated with the detail (+0.03…+0.32, was −0.6…−0.7);
+texel-scale share after conservation 0.13–0.25 (was 0.33–0.40). The globe's dry
+land below sea level rose 0.06–0.10% → 0.51–0.74% (band dips on humid coastal
+lowlands 15–50 m above sea before the band; accepted by user choice).
+
+`trend_elevation(mesh)`: the elevation without its band. The band is sub-grid
+roughness the ruggedness already stands for, so slopes read as a regional gradient
+(wetland flatness, floodplain flatness) read this surface; water (hydrology,
+lakes, the ocean mask) runs over the full elevation.
+
+## `preview.py`
+
+The band needs the ruggedness the region will draw from, but the ruggedness stage
+refines the seed only after climate, rivers and wetlands, which need the banded
+elevation. `preview_ruggedness` runs the stage's own `refine_ruggedness` on stand-in
+inputs: a temperature (`preview_temperature`: the climate's annual parabola in latitude
+minus its lapse rate over the face's height; ~1 °C mean error on land) for the
+**glacial** term. River mouths and wetlands are left out: with their real inputs they
+move face ruggedness by ~0.001 (seeds 4/31/35), and the floodplain term is texel-scale
+along rivers the preview can't place. Against the final ruggedness, land faces: corr
+0.96–0.98, mean error +0.04 (the floodplains) vs the seed's 0.84–0.93. Not written:
+the seed stays the seed and the ruggedness stage refines it as before.
 
 ## `display.py`
 

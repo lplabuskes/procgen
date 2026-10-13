@@ -1,0 +1,781 @@
+[
+  {
+    "timestamp": "2026-10-12T20:00:10",
+    "seeds": [
+      {
+        "seed": 4,
+        "globe": {
+          "dry_max_m": 2743.7998046875,
+          "dry_min_m": -373.20001220703125,
+          "dry_below_sea": 0.0009728684007325783
+        },
+        "regions": {
+          "most_land": {
+            "region": 48,
+            "rho": 0.22079393289274166,
+            "detail_rms_m": 154.83315042385172,
+            "removed_share": 0.305843461333988,
+            "correction_rms_m": 99.29678332822698,
+            "correction_vs_detail": -0.6042786714227482,
+            "lag1_before": 0.661351202599639,
+            "lag1_after": 0.523679310071398,
+            "texel_share_before": 0.2554497173443016,
+            "texel_share_after": 0.3933823850641387,
+            "band_rms_m": 0.0,
+            "dry_max_m": 3385.290174298979,
+            "dry_min_m": -196.24215596904463,
+            "dry_below_sea": 3.9217993215287176e-05
+          },
+          "roughest": {
+            "region": 49,
+            "rho": 0.7826078097945286,
+            "detail_rms_m": 498.15663955591765,
+            "removed_share": 0.295642587818648,
+            "correction_rms_m": 314.0532919574524,
+            "correction_vs_detail": -0.5923267480268719,
+            "lag1_before": 0.6507753472564801,
+            "lag1_after": 0.5146260663988922,
+            "texel_share_before": 0.26774786708590564,
+            "texel_share_after": 0.4042374747410747,
+            "band_rms_m": 0.0,
+            "dry_max_m": 3922.255219345059,
+            "dry_min_m": -1156.092674530009,
+            "dry_below_sea": 0.017694995605344637
+          },
+          "smoothest": {
+            "region": 51,
+            "rho": 0.16729598284552086,
+            "detail_rms_m": 50.68304863706126,
+            "removed_share": 0.3481163328222726,
+            "correction_rms_m": 34.54959863272804,
+            "correction_vs_detail": -0.653340471094323,
+            "lag1_before": 0.7050943074073467,
+            "lag1_after": 0.5579262608040925,
+            "texel_share_before": 0.2038020933830443,
+            "texel_share_after": 0.3426802311981747,
+            "band_rms_m": 0.0,
+            "dry_max_m": 1491.246004468409,
+            "dry_min_m": -96.22309687009258,
+            "dry_below_sea": 0.001570030545474447
+          }
+        }
+      },
+      {
+        "seed": 31,
+        "globe": {
+          "dry_max_m": 3653.300048828125,
+          "dry_min_m": -366.1000061035156,
+          "dry_below_sea": 0.0006973694446605395
+        },
+        "regions": {
+          "most_land": {
+            "region": 35,
+            "rho": 0.3395805528800219,
+            "detail_rms_m": 103.77189628072162,
+            "removed_share": 0.39900538414751746,
+            "correction_rms_m": 74.95502807121127,
+            "correction_vs_detail": -0.6951806149294381,
+            "lag1_before": 0.6990994564381352,
+            "lag1_after": 0.5221419329083433,
+            "texel_share_before": 0.2114275806292791,
+            "texel_share_after": 0.3863128752774606,
+            "band_rms_m": 0.0,
+            "dry_max_m": 2511.113140653084,
+            "dry_min_m": -108.1716532607525,
+            "dry_below_sea": 0.00028476529037890124
+          },
+          "roughest": {
+            "region": 3,
+            "rho": 0.698699638884449,
+            "detail_rms_m": 405.07227795924825,
+            "removed_share": 0.33030729677204873,
+            "correction_rms_m": 268.5704203634082,
+            "correction_vs_detail": -0.6199448496529646,
+            "lag1_before": 0.7016949013833184,
+            "lag1_after": 0.5710897585543471,
+            "texel_share_before": 0.21340445915816175,
+            "texel_share_after": 0.33951694198095356,
+            "band_rms_m": 0.0,
+            "dry_max_m": 4567.830964665842,
+            "dry_min_m": -1226.828640809726,
+            "dry_below_sea": 0.013162153414607832
+          },
+          "smoothest": {
+            "region": 12,
+            "rho": 0.1558937266406304,
+            "detail_rms_m": 32.47981486680192,
+            "removed_share": 0.3402460985586991,
+            "correction_rms_m": 21.824351201810636,
+            "correction_vs_detail": -0.6356549476820086,
+            "lag1_before": 0.7167965634571258,
+            "lag1_after": 0.5849361879153361,
+            "texel_share_before": 0.2015831460170418,
+            "texel_share_after": 0.3299832999306786,
+            "band_rms_m": 0.0,
+            "dry_max_m": 918.3095895051546,
+            "dry_min_m": -49.964957141391466,
+            "dry_below_sea": 0.0009355688059282852
+          }
+        }
+      },
+      {
+        "seed": 35,
+        "globe": {
+          "dry_max_m": 2555.0,
+          "dry_min_m": -310.79998779296875,
+          "dry_below_sea": 0.000587215439068324
+        },
+        "regions": {
+          "most_land": {
+            "region": 0,
+            "rho": 0.2246096477637239,
+            "detail_rms_m": 49.27561199574666,
+            "removed_share": 0.3795941409848176,
+            "correction_rms_m": 34.877866329497884,
+            "correction_vs_detail": -0.6766178230711266,
+            "lag1_before": 0.7041487729052531,
+            "lag1_after": 0.5432822644570727,
+            "texel_share_before": 0.20654872965935747,
+            "texel_share_after": 0.36372634939305154,
+            "band_rms_m": 0.0,
+            "dry_max_m": 814.6162123727107,
+            "dry_min_m": -196.17517363730664,
+            "dry_below_sea": 0.0012509177929459115
+          },
+          "roughest": {
+            "region": 41,
+            "rho": 0.6497961811882098,
+            "detail_rms_m": 344.6713132262297,
+            "removed_share": 0.3324569529451012,
+            "correction_rms_m": 229.41651143722842,
+            "correction_vs_detail": -0.6336921682237062,
+            "lag1_before": 0.7000481376426018,
+            "lag1_after": 0.5596405246871683,
+            "texel_share_before": 0.21452792024335524,
+            "texel_share_after": 0.3485946268871693,
+            "band_rms_m": 0.0,
+            "dry_max_m": 2846.3528151852634,
+            "dry_min_m": -953.0291017657178,
+            "dry_below_sea": 0.013406132696338908
+          },
+          "smoothest": {
+            "region": 46,
+            "rho": 0.134687524833679,
+            "detail_rms_m": 38.18775584950177,
+            "removed_share": 0.3591798527912596,
+            "correction_rms_m": 26.51588828740369,
+            "correction_vs_detail": -0.657128193879868,
+            "lag1_before": 0.7192912158602454,
+            "lag1_after": 0.5790811068659181,
+            "texel_share_before": 0.19567538018966213,
+            "texel_share_after": 0.33151449282763157,
+            "band_rms_m": 0.0,
+            "dry_max_m": 899.5790053146442,
+            "dry_min_m": -348.54288762309795,
+            "dry_below_sea": 0.03491213030432919
+          }
+        }
+      }
+    ]
+  },
+  {
+    "timestamp": "2026-10-12T20:02:58",
+    "seeds": [
+      {
+        "seed": 4,
+        "globe": {
+          "dry_max_m": 3393.699951171875,
+          "dry_min_m": -720.7000122070312,
+          "dry_below_sea": 0.004814935900557175
+        },
+        "regions": {
+          "most_land": {
+            "region": 48,
+            "rho": 0.29675613474099755,
+            "detail_rms_m": 158.7617784916699,
+            "removed_share": 0.3117090036558393,
+            "correction_rms_m": 64.46691706426934,
+            "correction_vs_detail": -0.5322743581608691,
+            "lag1_before": 0.6662807199626117,
+            "lag1_after": 0.580985191366495,
+            "texel_share_before": 0.25014463788556657,
+            "texel_share_after": 0.33469948512725806,
+            "band_rms_m": 37.132428091635035,
+            "dry_max_m": 3637.9061858286173,
+            "dry_min_m": -462.0821519944981,
+            "dry_below_sea": 5.170172536043488e-05
+          },
+          "roughest": {
+            "region": 49,
+            "rho": 0.7841903297011487,
+            "detail_rms_m": 495.12427505256204,
+            "removed_share": 0.2939294441005235,
+            "correction_rms_m": 198.08429567107137,
+            "correction_vs_detail": -0.5509309692677778,
+            "lag1_before": 0.6507000191208046,
+            "lag1_after": 0.5542979370029919,
+            "texel_share_before": 0.2678857411121484,
+            "texel_share_after": 0.36370485252711354,
+            "band_rms_m": 91.0531899219072,
+            "dry_max_m": 3890.4043436600687,
+            "dry_min_m": -1183.9555829455871,
+            "dry_below_sea": 0.017720550346049056
+          },
+          "smoothest": {
+            "region": 41,
+            "rho": 0.1872343410201048,
+            "detail_rms_m": 40.61877525009388,
+            "removed_share": 0.4096204942158576,
+            "correction_rms_m": 15.588616590072933,
+            "correction_vs_detail": 0.3957275718068253,
+            "lag1_before": 0.7232942784172909,
+            "lag1_after": 0.7661124168364442,
+            "texel_share_before": 0.19650894312692507,
+            "texel_share_after": 0.15591839009460084,
+            "band_rms_m": 28.249529033713443,
+            "dry_max_m": 933.1790281027572,
+            "dry_min_m": -188.24333195721317,
+            "dry_below_sea": 0.02744886975242196
+          }
+        }
+      }
+    ]
+  },
+  {
+    "timestamp": "2026-10-12T20:08:35",
+    "seeds": [
+      {
+        "seed": 4,
+        "globe": {
+          "dry_max_m": 3416.39990234375,
+          "dry_min_m": -873.0,
+          "dry_below_sea": 0.005764665039084373
+        },
+        "regions": {
+          "most_land": {
+            "region": 48,
+            "rho": 0.25123425216596346,
+            "detail_rms_m": 146.57981003099727,
+            "removed_share": 0.3018535846515504,
+            "correction_rms_m": 59.83872106720991,
+            "correction_vs_detail": 0.11907413569101256,
+            "lag1_before": 0.6606046701097408,
+            "lag1_after": 0.6990561508019977,
+            "texel_share_before": 0.2564421983203102,
+            "texel_share_after": 0.21921302618116836,
+            "band_rms_m": 79.77872095131629,
+            "dry_max_m": 3881.0716545281057,
+            "dry_min_m": -641.7703602539729,
+            "dry_below_sea": 0.00033544830455585603
+          },
+          "roughest": {
+            "region": 49,
+            "rho": 0.7813725245335084,
+            "detail_rms_m": 467.706349965921,
+            "removed_share": 0.28721006237635327,
+            "correction_rms_m": 145.023397720558,
+            "correction_vs_detail": 0.07616352199191195,
+            "lag1_before": 0.6460762017820114,
+            "lag1_after": 0.6712899924134892,
+            "texel_share_before": 0.2732009238887601,
+            "texel_share_after": 0.24901365296122563,
+            "band_rms_m": 217.89528152835726,
+            "dry_max_m": 4054.9337119267543,
+            "dry_min_m": -1485.1900347069204,
+            "dry_below_sea": 0.026924672827024786
+          },
+          "smoothest": {
+            "region": 51,
+            "rho": 0.16567708596728495,
+            "detail_rms_m": 50.407674235508,
+            "removed_share": 0.34761798091263024,
+            "correction_rms_m": 33.044102746157215,
+            "correction_vs_detail": 0.31271224150938864,
+            "lag1_before": 0.7012599399286299,
+            "lag1_after": 0.7717496644734223,
+            "texel_share_before": 0.20815776616397952,
+            "texel_share_after": 0.14329133580365175,
+            "band_rms_m": 38.69321155426039,
+            "dry_max_m": 1702.2253429529314,
+            "dry_min_m": -216.798179958332,
+            "dry_below_sea": 0.0025189593675060957
+          }
+        }
+      },
+      {
+        "seed": 31,
+        "globe": {
+          "dry_max_m": 4594.7998046875,
+          "dry_min_m": -1057.199951171875,
+          "dry_below_sea": 0.005052072342696838
+        },
+        "regions": {
+          "most_land": {
+            "region": 35,
+            "rho": 0.3394108966265653,
+            "detail_rms_m": 102.26240580381892,
+            "removed_share": 0.3977217748122385,
+            "correction_rms_m": 34.62891369750023,
+            "correction_vs_detail": 0.10613545889973183,
+            "lag1_before": 0.6972656270144912,
+            "lag1_after": 0.718341780530264,
+            "texel_share_before": 0.21388322757699962,
+            "texel_share_after": 0.19498652198590258,
+            "band_rms_m": 57.867529936649454,
+            "dry_max_m": 2669.3354328717096,
+            "dry_min_m": -122.62447203991252,
+            "dry_below_sea": 0.00036233567148232453
+          },
+          "roughest": {
+            "region": 3,
+            "rho": 0.6996553006562392,
+            "detail_rms_m": 403.39073831239926,
+            "removed_share": 0.3275425924024581,
+            "correction_rms_m": 95.36041769023741,
+            "correction_vs_detail": 0.03473783234832108,
+            "lag1_before": 0.7007041791152555,
+            "lag1_after": 0.7114050120957995,
+            "texel_share_before": 0.21486674581697204,
+            "texel_share_after": 0.20519469767824594,
+            "band_rms_m": 191.61606862076272,
+            "dry_max_m": 4828.996013258898,
+            "dry_min_m": -1017.4356724184833,
+            "dry_below_sea": 0.017258908630287676
+          },
+          "smoothest": {
+            "region": 12,
+            "rho": 0.15709673392235288,
+            "detail_rms_m": 32.47040293524107,
+            "removed_share": 0.337881701116683,
+            "correction_rms_m": 10.281302808129066,
+            "correction_vs_detail": 0.2106202690928667,
+            "lag1_before": 0.7151219615664635,
+            "lag1_after": 0.746605132983316,
+            "texel_share_before": 0.20346352310004553,
+            "texel_share_after": 0.17410951586855844,
+            "band_rms_m": 17.683136521734458,
+            "dry_max_m": 963.0270785844602,
+            "dry_min_m": -100.0859323732555,
+            "dry_below_sea": 0.0014832393948383269
+          }
+        }
+      },
+      {
+        "seed": 35,
+        "globe": {
+          "dry_max_m": 3210.699951171875,
+          "dry_min_m": -668.0999755859375,
+          "dry_below_sea": 0.007447064626369626
+        },
+        "regions": {
+          "most_land": {
+            "region": 0,
+            "rho": 0.22035592241299898,
+            "detail_rms_m": 46.83030151934941,
+            "removed_share": 0.37433478885279897,
+            "correction_rms_m": 17.534211141772573,
+            "correction_vs_detail": 0.1497803691239029,
+            "lag1_before": 0.7015958291779119,
+            "lag1_after": 0.7282266770751353,
+            "texel_share_before": 0.209921072802096,
+            "texel_share_after": 0.1854428122531054,
+            "band_rms_m": 26.683706264956964,
+            "dry_max_m": 880.9524488575862,
+            "dry_min_m": -224.78831829772005,
+            "dry_below_sea": 0.0012704347684195558
+          },
+          "roughest": {
+            "region": 41,
+            "rho": 0.6551373740114703,
+            "detail_rms_m": 329.31162344559374,
+            "removed_share": 0.3221411236321901,
+            "correction_rms_m": 138.66260306797486,
+            "correction_vs_detail": 0.22395988091670993,
+            "lag1_before": 0.6936359896798694,
+            "lag1_after": 0.7378276316226682,
+            "texel_share_before": 0.22168085898120998,
+            "texel_share_after": 0.18047060424328926,
+            "band_rms_m": 189.8391996370661,
+            "dry_max_m": 3040.9060013651624,
+            "dry_min_m": -1195.8667290764952,
+            "dry_below_sea": 0.026908131094655032
+          },
+          "smoothest": {
+            "region": 46,
+            "rho": 0.15319537139807737,
+            "detail_rms_m": 37.72158491096097,
+            "removed_share": 0.34437159605354967,
+            "correction_rms_m": 47.51731561562129,
+            "correction_vs_detail": 0.3172309411833394,
+            "lag1_before": 0.7174253842492814,
+            "lag1_after": 0.8371651868456602,
+            "texel_share_before": 0.20858602218811848,
+            "texel_share_after": 0.1262238505344444,
+            "band_rms_m": 42.67822056168155,
+            "dry_max_m": 1325.8655896614323,
+            "dry_min_m": -1054.5114461823428,
+            "dry_below_sea": 0.08823462343155866
+          }
+        }
+      }
+    ]
+  },
+  {
+    "timestamp": "2026-10-12T20:30:26",
+    "seeds": [
+      {
+        "seed": 4,
+        "globe": {
+          "dry_max_m": 3416.39990234375,
+          "dry_min_m": -873.0,
+          "dry_below_sea": 0.005764673108877848
+        },
+        "regions": {
+          "most_land": {
+            "region": 48,
+            "rho": 0.25123415169906405,
+            "detail_rms_m": 146.57980935570396,
+            "removed_share": 0.30185358230106973,
+            "correction_rms_m": 59.838922552989224,
+            "correction_vs_detail": 0.11907095875725117,
+            "lag1_before": 0.6606046676288878,
+            "lag1_after": 0.6990574545084025,
+            "texel_share_before": 0.25644220020237324,
+            "texel_share_after": 0.21921194041215752,
+            "band_rms_m": 79.77855926396536,
+            "dry_max_m": 3880.9680088707996,
+            "dry_min_m": -641.7528929723869,
+            "dry_below_sea": 0.00033544830455585603
+          },
+          "roughest": {
+            "region": 49,
+            "rho": 0.7813725245335084,
+            "detail_rms_m": 467.6904468662969,
+            "removed_share": 0.28721025789664817,
+            "correction_rms_m": 145.0397105581767,
+            "correction_vs_detail": 0.07615500449665712,
+            "lag1_before": 0.6460727326392539,
+            "lag1_after": 0.6712877103196816,
+            "texel_share_before": 0.27320481335570007,
+            "texel_share_after": 0.24901571616242368,
+            "band_rms_m": 217.89551880967585,
+            "dry_max_m": 4054.8357471797053,
+            "dry_min_m": -1485.1979679137692,
+            "dry_below_sea": 0.02692458416073081
+          },
+          "smoothest": {
+            "region": 51,
+            "rho": 0.16567708596728495,
+            "detail_rms_m": 50.40911508708977,
+            "removed_share": 0.3476290761344568,
+            "correction_rms_m": 33.04366433685774,
+            "correction_vs_detail": 0.31271607613131075,
+            "lag1_before": 0.7012534601382473,
+            "lag1_after": 0.771755133999354,
+            "texel_share_before": 0.2081625582214362,
+            "texel_share_after": 0.14328361309939974,
+            "band_rms_m": 38.69329919521333,
+            "dry_max_m": 1702.2253394994475,
+            "dry_min_m": -216.79841852824237,
+            "dry_below_sea": 0.0025189593675060957
+          }
+        }
+      },
+      {
+        "seed": 31,
+        "globe": {
+          "dry_max_m": 4594.7998046875,
+          "dry_min_m": -1057.10009765625,
+          "dry_below_sea": 0.005052072342696838
+        },
+        "regions": {
+          "most_land": {
+            "region": 35,
+            "rho": 0.3394108966265653,
+            "detail_rms_m": 102.2624144669755,
+            "removed_share": 0.39772176251534824,
+            "correction_rms_m": 34.62891709774537,
+            "correction_vs_detail": 0.10613825459669443,
+            "lag1_before": 0.6972656258526603,
+            "lag1_after": 0.7183419838418095,
+            "texel_share_before": 0.21388322834108742,
+            "texel_share_after": 0.19498634272925708,
+            "band_rms_m": 57.86759841694483,
+            "dry_max_m": 2669.3374508184347,
+            "dry_min_m": -122.64125298611343,
+            "dry_below_sea": 0.0003623365130685025
+          },
+          "roughest": {
+            "region": 3,
+            "rho": 0.6996553006562392,
+            "detail_rms_m": 403.3907399615254,
+            "removed_share": 0.3275425927703788,
+            "correction_rms_m": 95.36012943617261,
+            "correction_vs_detail": 0.034746060397931496,
+            "lag1_before": 0.7007041808800772,
+            "lag1_after": 0.7114054916218022,
+            "texel_share_before": 0.21486674425313554,
+            "texel_share_after": 0.20519415470674918,
+            "band_rms_m": 191.61634492527244,
+            "dry_max_m": 4828.995909541391,
+            "dry_min_m": -1017.435809431746,
+            "dry_below_sea": 0.017258908630287676
+          },
+          "smoothest": {
+            "region": 12,
+            "rho": 0.15709673392235288,
+            "detail_rms_m": 32.47040231518564,
+            "removed_share": 0.337881707898887,
+            "correction_rms_m": 10.28134770792281,
+            "correction_vs_detail": 0.21062102483725795,
+            "lag1_before": 0.7151219609866741,
+            "lag1_after": 0.7466054161276772,
+            "texel_share_before": 0.20346352378007415,
+            "texel_share_after": 0.1741092697100762,
+            "band_rms_m": 17.683133125193873,
+            "dry_max_m": 963.0270785878283,
+            "dry_min_m": -100.08593171208956,
+            "dry_below_sea": 0.0014832313461047993
+          }
+        }
+      },
+      {
+        "seed": 35,
+        "globe": {
+          "dry_max_m": 3210.699951171875,
+          "dry_min_m": -668.0999755859375,
+          "dry_below_sea": 0.007447075558530667
+        },
+        "regions": {
+          "most_land": {
+            "region": 0,
+            "rho": 0.22035592241299898,
+            "detail_rms_m": 46.83030183346112,
+            "removed_share": 0.37433479627267907,
+            "correction_rms_m": 17.53422864027858,
+            "correction_vs_detail": 0.14978324699153145,
+            "lag1_before": 0.7015958320870195,
+            "lag1_after": 0.7282266509353426,
+            "texel_share_before": 0.20992106931971083,
+            "texel_share_after": 0.18544270571357674,
+            "band_rms_m": 26.683701974835436,
+            "dry_max_m": 880.9524219395263,
+            "dry_min_m": -224.78537348119312,
+            "dry_below_sea": 0.0012704318069503109
+          },
+          "roughest": {
+            "region": 41,
+            "rho": 0.6551373740114703,
+            "detail_rms_m": 329.3116253266987,
+            "removed_share": 0.3221411327283703,
+            "correction_rms_m": 138.66269001065012,
+            "correction_vs_detail": 0.22396138827138576,
+            "lag1_before": 0.6936359940182373,
+            "lag1_after": 0.737827691270224,
+            "texel_share_before": 0.22168085530118525,
+            "texel_share_after": 0.18047050146462193,
+            "band_rms_m": 189.8391281285805,
+            "dry_max_m": 3040.9056018848755,
+            "dry_min_m": -1195.8680681623262,
+            "dry_below_sea": 0.026908131094655032
+          },
+          "smoothest": {
+            "region": 46,
+            "rho": 0.1531816847796712,
+            "detail_rms_m": 37.71988378542863,
+            "removed_share": 0.34437617625656286,
+            "correction_rms_m": 47.51878068159419,
+            "correction_vs_detail": 0.3172368647492291,
+            "lag1_before": 0.7174267506122955,
+            "lag1_after": 0.8371589063613922,
+            "texel_share_before": 0.20858526371040634,
+            "texel_share_after": 0.1262352920756036,
+            "band_rms_m": 42.67831801656884,
+            "dry_max_m": 1325.8659266652444,
+            "dry_min_m": -1054.513276453524,
+            "dry_below_sea": 0.08823227601304358
+          }
+        }
+      }
+    ]
+  },
+  {
+    "timestamp": "2026-10-12T21:06:16",
+    "seeds": [
+      {
+        "seed": 4,
+        "globe": {
+          "dry_max_m": 3416.39990234375,
+          "dry_min_m": -873.0,
+          "dry_below_sea": 0.0058351304850157125
+        },
+        "regions": {
+          "most_land": {
+            "region": 48,
+            "rho": 0.23792546088538127,
+            "detail_rms_m": 154.9483718359858,
+            "removed_share": 0.30780591329909024,
+            "correction_rms_m": 47.297258565816186,
+            "correction_vs_detail": 0.12923088312291867,
+            "lag1_before": 0.6627572355694598,
+            "lag1_after": 0.6929054611443448,
+            "texel_share_before": 0.25387461636163444,
+            "texel_share_after": 0.22488049465731516,
+            "band_rms_m": 78.5015171493305,
+            "dry_max_m": 3896.665274610171,
+            "dry_min_m": -641.748089623214,
+            "dry_below_sea": 0.00043506153539852373
+          },
+          "roughest": {
+            "region": 49,
+            "rho": 0.7801624506774787,
+            "detail_rms_m": 492.9941485386749,
+            "removed_share": 0.2936114486912308,
+            "correction_rms_m": 111.49159830263879,
+            "correction_vs_detail": 0.07210005699786932,
+            "lag1_before": 0.6500395405805992,
+            "lag1_after": 0.6668401052172315,
+            "texel_share_before": 0.2687936690788278,
+            "texel_share_after": 0.25297412707357825,
+            "band_rms_m": 217.89551880967585,
+            "dry_max_m": 4062.699225605925,
+            "dry_min_m": -1485.1979679137692,
+            "dry_below_sea": 0.025154332691228444
+          },
+          "smoothest": {
+            "region": 51,
+            "rho": 0.16241993026153198,
+            "detail_rms_m": 49.88690195860064,
+            "removed_share": 0.3473409712539846,
+            "correction_rms_m": 28.61107626143607,
+            "correction_vs_detail": 0.3749334986634972,
+            "lag1_before": 0.7050177454782731,
+            "lag1_after": 0.7776770955094324,
+            "texel_share_before": 0.20388322236121065,
+            "texel_share_after": 0.13689556122159172,
+            "band_rms_m": 36.49594751085924,
+            "dry_max_m": 1668.7265329500017,
+            "dry_min_m": -210.01924500924076,
+            "dry_below_sea": 0.0028320146694285034
+          }
+        }
+      },
+      {
+        "seed": 31,
+        "globe": {
+          "dry_max_m": 4594.7998046875,
+          "dry_min_m": -1057.10009765625,
+          "dry_below_sea": 0.005089308169147986
+        },
+        "regions": {
+          "most_land": {
+            "region": 35,
+            "rho": 0.33596430170942065,
+            "detail_rms_m": 103.7394869353393,
+            "removed_share": 0.39868439538981004,
+            "correction_rms_m": 26.89289773723232,
+            "correction_vs_detail": 0.025577213792184455,
+            "lag1_before": 0.6984703823682111,
+            "lag1_after": 0.7089059826446531,
+            "texel_share_before": 0.21197534933091336,
+            "texel_share_after": 0.2027253255793844,
+            "band_rms_m": 53.33527170155662,
+            "dry_max_m": 2669.7215333046875,
+            "dry_min_m": -135.26008008654338,
+            "dry_below_sea": 0.00036748715539357176
+          },
+          "roughest": {
+            "region": 3,
+            "rho": 0.6996001089732656,
+            "detail_rms_m": 404.7367200628932,
+            "removed_share": 0.32831123028057557,
+            "correction_rms_m": 92.57889266463732,
+            "correction_vs_detail": 0.03459466691257353,
+            "lag1_before": 0.7010445872545259,
+            "lag1_after": 0.711288673328458,
+            "texel_share_before": 0.21441215055034907,
+            "texel_share_after": 0.2052092942581182,
+            "band_rms_m": 191.61634492527244,
+            "dry_max_m": 4828.980263100849,
+            "dry_min_m": -1017.4358058312733,
+            "dry_below_sea": 0.017137655674624518
+          },
+          "smoothest": {
+            "region": 12,
+            "rho": 0.1541976890871751,
+            "detail_rms_m": 32.36291245693672,
+            "removed_share": 0.3399029328708894,
+            "correction_rms_m": 9.237260087099074,
+            "correction_vs_detail": 0.20813667573607342,
+            "lag1_before": 0.7164324047687485,
+            "lag1_after": 0.7447364568738386,
+            "texel_share_before": 0.20203254685099875,
+            "texel_share_after": 0.1755003114158341,
+            "band_rms_m": 17.221117243461446,
+            "dry_max_m": 963.0147092004618,
+            "dry_min_m": -100.08462774306281,
+            "dry_below_sea": 0.0014642583738968412
+          }
+        }
+      },
+      {
+        "seed": 35,
+        "globe": {
+          "dry_max_m": 3210.699951171875,
+          "dry_min_m": -668.0999755859375,
+          "dry_below_sea": 0.008185192904417177
+        },
+        "regions": {
+          "most_land": {
+            "region": 0,
+            "rho": 0.217973087910463,
+            "detail_rms_m": 47.20412496808662,
+            "removed_share": 0.3788008039018865,
+            "correction_rms_m": 13.763105594269582,
+            "correction_vs_detail": 0.09963842210533405,
+            "lag1_before": 0.7039436035623978,
+            "lag1_after": 0.7229321048840295,
+            "texel_share_before": 0.2071622902160413,
+            "texel_share_after": 0.18949033915802357,
+            "band_rms_m": 24.626754118821882,
+            "dry_max_m": 876.2114133999338,
+            "dry_min_m": -222.26222064852095,
+            "dry_below_sea": 0.001226098445959881
+          },
+          "roughest": {
+            "region": 41,
+            "rho": 0.6516076137749067,
+            "detail_rms_m": 343.55443674669147,
+            "removed_share": 0.3291413683746186,
+            "correction_rms_m": 112.14511857298416,
+            "correction_vs_detail": 0.2564731243920272,
+            "lag1_before": 0.6983437958806158,
+            "lag1_after": 0.7360362806667256,
+            "texel_share_before": 0.21665885434689444,
+            "texel_share_after": 0.18190899035720853,
+            "band_rms_m": 187.12543533397144,
+            "dry_max_m": 2963.7950454818183,
+            "dry_min_m": -1196.2967264629106,
+            "dry_below_sea": 0.026884521601400497
+          },
+          "smoothest": {
+            "region": 46,
+            "rho": 0.14788388603606434,
+            "detail_rms_m": 37.80102175701108,
+            "removed_share": 0.3448421397937986,
+            "correction_rms_m": 47.1788753385829,
+            "correction_vs_detail": 0.3254606591967521,
+            "lag1_before": 0.7175579577215407,
+            "lag1_after": 0.8369850350971794,
+            "texel_share_before": 0.20861886365593837,
+            "texel_share_after": 0.12656447625486197,
+            "band_rms_m": 42.641715016578146,
+            "dry_max_m": 1328.3593216702156,
+            "dry_min_m": -1055.1408614083807,
+            "dry_below_sea": 0.09903519286317816
+          }
+        }
+      }
+    ]
+  }
+]

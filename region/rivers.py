@@ -84,7 +84,10 @@ class RegionRiverParams:
     distributaries: DistributaryParams = field(
         default_factory=DistributaryParams, metadata={"label": "Delta distributaries"}
     )
-    carve: RiverCarveParams = field(default_factory=RiverCarveParams, metadata={"label": "Valley carving"})
+    # Absorption 2× since the globe carries the relief band: the region's relief keeps its long
+    # wavelengths, and at 1× the beds' cuts were eased (seeds 4/31/35: climb 23 → 40 m / 100 km; 28 at 2×).
+    carve: RiverCarveParams = field(
+        default_factory=lambda: RiverCarveParams(absorb_relief=2.0), metadata={"label": "Valley carving"})
 
 
 @dataclass

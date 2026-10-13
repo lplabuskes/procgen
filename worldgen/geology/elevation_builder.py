@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from typing import List, Mapping, Optional, Protocol, TypeGuard
+from typing import TYPE_CHECKING, List, Mapping, Optional, Protocol, TypeGuard
 
 import numpy as np
 
@@ -29,6 +29,7 @@ from worldgen.geology.channels import (
     IS_OCEAN,
     OCEAN_MASK,
     PLATE_TYPE,
+    RELIEF_BAND,
     JAGGEDNESS,
     JAGGEDNESS_FACE,
     RUGGEDNESS,
@@ -53,7 +54,13 @@ from worldgen.geology.tectonics import (
     relax_plates,
 )
 from worldgen.geology.jaggedness import JaggednessParams, jaggedness_seed
+from worldgen.geology.preview import preview_ruggedness
+from worldgen.geology.relief_band import ReliefBandParams, compute_relief_band
 from worldgen.geology.ruggedness import RuggednessParams, ruggedness_seed, ruggedness_texture
+
+if TYPE_CHECKING:
+    from worldgen.climate.builder import TemperatureParams
+    from worldgen.ruggedness.builder import RuggednessRefineParams
 from worldgen.geology.volcanism import compute_volcanism, generate_volcano_positions
 
 _SPEED_STOPS = [
@@ -128,6 +135,7 @@ class ElevationParams:
     volcanism: VolcanismParams = field(default_factory=VolcanismParams, metadata={"label": "Volcanism"})
     ruggedness: RuggednessParams = field(default_factory=RuggednessParams, metadata={"label": "Ruggedness seed"})
     jaggedness: JaggednessParams = field(default_factory=JaggednessParams, metadata={"label": "Jaggedness seed"})
+    relief_band: ReliefBandParams = field(default_factory=ReliefBandParams, metadata={"label": "Relief band"})
 
 
 class _ElevationBuilt(Protocol):
@@ -156,10 +164,16 @@ class ElevationBuilder(Stage):
     name = "elevation"
 
     def __init__(
-        self, params: ElevationParams | None = None, *, seed: Optional[int] = None
+        self, params: ElevationParams | None = None, *, seed: Optional[int] = None,
+        preview_temperature: "TemperatureParams | None" = None,
+        preview_refine: "RuggednessRefineParams | None" = None,
     ) -> None:
         self.params: ElevationParams = params or ElevationParams()
         self._world_seed: Optional[int] = seed
+        # The climate's temperature and the ruggedness stage's params, for the relief
+        # band's ruggedness preview (worldgen/geology/preview.py); None → their defaults.
+        self.preview_temperature = preview_temperature
+        self.preview_refine = preview_refine
         self._seed_base: int = 0  # resolved at the start of build()
         self.mesh: Optional[PolygonMesh] = None
         self.plate_ids: Optional[List[int]] = None
@@ -296,6 +310,21 @@ class ElevationBuilder(Stage):
             coast_sigma=p.noise.noise_coast_sigma,
         )
         elevation_textures[:, :, :, 0] += noise_deltas[:, :, :, 0]
+
+        if p.relief_band.enabled:
+            # The part of the region's relief the globe resolves lives here (relief_band.py),
+            # sized by the ruggedness the region will draw from, previewed (preview.py).
+            _report("Adding the relief band…")
+            band_rugged = rugged_tex
+            if p.relief_band.preview:
+                rho = preview_ruggedness(
+                    dual, RUGGEDNESS_FACE.read(dual), face_elevations_from_texture(elevation_textures),
+                    temperature=self.preview_temperature, refine=self.preview_refine)
+                band_rugged = ruggedness_texture(dual, rho, p.elevation.elevation_tex_size)
+            band = compute_relief_band(
+                dual, band_rugged, jagged_tex, int(ctx.world.seed or 0), p.relief_band)
+            RELIEF_BAND.write(dual, band)
+            elevation_textures[:, :, :, 0] += band[..., 0]
 
         _report("Smoothing elevation seams…")
         smooth_elevation_seams(dual, elevation_textures)

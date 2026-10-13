@@ -26,8 +26,10 @@ final relief, water and streams (deltas included). Shares hydrology's PET params
 
 `score = flatness × (1 − (1 − rain) · (1 − flood))`, 0 on water.
 
-- **flatness** `= 1 / (1 + (slope / slope_scale)²)` (`slope_scale_m_per_km` 0.4;
-  global slope from `worldgen.resources.terrain.global_slope`).
+- **flatness** `= 1 / (1 + (slope / slope_scale)²)` (`slope_scale_m_per_km` 0.45, 0.4 before the relief band;
+  global slope from `worldgen.resources.terrain.global_slope` on the trend surface,
+  the elevation without its [relief band](elevation.md#relief_bandpy): the band is
+  sub-grid roughness, and on it seed 4's wetlands fell 4.7% → 0.5% of land).
 - **rain** `= smoothstep(rain_low, rain_high, P / PET)` (4, 12). PET is hydrology's
   `clamp(100 + 60·max(0, T), 0, 2500)` mm/yr — it bottoms out in the cold, so boreal
   ratios run high and the thresholds sit well above 1. Rain-fed bogs and fens; ~60%

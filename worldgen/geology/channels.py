@@ -38,3 +38,8 @@ RUGGEDNESS = TextureChannel("ruggedness", n_channels=1, codec=TextureCodec(step=
 # relief spectrum's Hurst exponent.  Seeded and refined like ruggedness.
 JAGGEDNESS_FACE = MetaChannel("jaggedness", dtype=np.float64, default=0.5)
 JAGGEDNESS = TextureChannel("jaggedness", n_channels=1, codec=TextureCodec(step=1 / 255))
+
+# ── Relief band (worldgen/geology/relief_band.py) ────────────────────────────
+# The region tier's detail averaged over each global texel (km), already part of
+# ``elevation``; the region starts from ``elevation − relief_band``.  (N, H, W, 1).
+RELIEF_BAND = TextureChannel("relief_band", n_channels=1, codec=TextureCodec(step=1e-4))

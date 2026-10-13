@@ -28,6 +28,7 @@ from scipy.sparse.csgraph import connected_components
 
 from _common import add_seed_args, avg, get_physical_world, load_history, resolve_seeds, save_history
 from worldgen.climate.classification import BIOME_NAMES, WETLAND_BIOME
+from worldgen.geology.relief_band import trend_elevation
 from worldgen.hydrology.rivers import inter_face_adjacency, texel_neighbor_csr
 from worldgen.wetland.builder import WetlandParams, _PetParams, wetland_score
 
@@ -49,6 +50,7 @@ def measure(seed: int, rebuild: bool, params: WetlandParams) -> dict:
         temperature=tex["temperature"], precipitation=tex["precipitation"],
         channel_nodes=streams.nodes[streams.channel] if streams is not None else None,
         channel_flow=streams.flow[streams.channel] if streams is not None else None,
+        slope_elevation=trend_elevation(mesh)[..., 0],
     )
     inside = mesh.face_texture_in_polygon(h, w)
     land = ~(ocean | lake) & inside

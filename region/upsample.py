@@ -61,6 +61,10 @@ SEA_LEVEL_KM = 0.0
 # for the globe: rivers and streams flow through these rather than end in them.
 SMALL_LAKE_KEY = "small_lake_mask"
 
+# The globe's relief band (worldgen.geology.channels.RELIEF_BAND): this tier's detail
+# averaged over each global texel, already in the globe's elevation.
+RELIEF_BAND_KEY = "relief_band"
+
 # Ice cap: the warmest season stays below this (worldgen.climate.classification).
 ICECAP_WARMEST_C = 0.0
 
@@ -194,7 +198,9 @@ class RegionUpsampleParams:
     )
     # Noise pits are as deep as the detail is tall: this share of the tier's summed octave
     # amplitudes (spectrum_amplitudes) drains, leaving basins the relief itself shapes.
-    lake_breach_relief: float = _f(0.3, label="Small lake breach (× detail relief)", min=0.0, max=3.0, step=0.05)
+    # 1.25 since the globe carries the relief band: the detail's long wavelengths (once taken back
+    # out by conservation) dig basins at 0.3 (seeds 4/31/35: small lakes 0.35% → 3.7% of land; 0.63% now).
+    lake_breach_relief: float = _f(1.25, label="Small lake breach (× detail relief)", min=0.0, max=3.0, step=0.05)
     lake_min_depth_km: float = _f(0.001, label="Small lake min depth (km)", min=0.0, max=0.1, step=0.0005)
     # Breach length multiplier at an annual mean ≤ 0 °C (fading out by 10 °C): glacial lake country.
     lake_glacial_factor: float = _f(0.3, label="Small lake glacial breach factor", min=0.05, max=1.0, step=0.05)
@@ -1056,8 +1062,9 @@ class Terrain:
     located: Located
     detail_octaves: int
     water: "_AnchorWater"
-    elev_coarse: np.ndarray           # (P, 1) bilinear parent elevation
+    elev_coarse: np.ndarray           # (P, 1) bilinear parent elevation (net of its relief band)
     elevation: np.ndarray             # (P, 1) refined elevation
+    raw: np.ndarray                   # (P, 1) coarse + detail, before conservation (diagnostics)
 
 
 def refine_terrain(
@@ -1098,6 +1105,11 @@ def refine_terrain(
 
     # ── elevation ────────────────────────────────────────────────────────────
     elev_coarse = source.coarse("elevation", loc)                            # (P, 1)
+    if source.has(RELIEF_BAND_KEY):
+        # The globe already carries this tier's detail averaged over each of its texels
+        # (worldgen/geology/relief_band.py): start from the globe without it, so the
+        # full detail below averages back to the globe before conservation runs.
+        elev_coarse = elev_coarse - source.coarse(RELIEF_BAND_KEY, loc)
     style = coast_style(source, loc, params)
     depth = water.depth(elev_coarse[:, 0])
     # The spectrum: each octave at its ruggedness- and wavelength-set amplitude.
@@ -1159,7 +1171,7 @@ def refine_terrain(
             m, tex_size, tex_size, -1
         ).astype(np.float32)
 
-    return Terrain(textures, loc, int(freqs.size), water, elev_coarse, elevation)
+    return Terrain(textures, loc, int(freqs.size), water, elev_coarse, elevation, raw)
 
 
 def refine_fields(

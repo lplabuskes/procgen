@@ -50,7 +50,8 @@ class GlobePipeline(Pipeline):
     def __init__(self, params: GlobeParams | None = None) -> None:
         self.params: GlobeParams = params or GlobeParams()
         self.elevation_builder: ElevationBuilder = ElevationBuilder(
-            self.params.elevation, seed=self.params.seed
+            self.params.elevation, seed=self.params.seed,
+            preview_temperature=self.params.climate.temperature, preview_refine=self.params.ruggedness,
         )
         self.climate_builder: ClimateBuilder = ClimateBuilder(self.params.climate)
         self.hydrology_builder: HydrologyBuilder = HydrologyBuilder(self.params.hydrology)

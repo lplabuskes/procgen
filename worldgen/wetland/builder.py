@@ -19,6 +19,7 @@ from core.world import World
 from worldgen.climate.channels import PRECIPITATION, TEMPERATURE
 from worldgen.climate.classification import WETLAND_BIOME
 from worldgen.geology.channels import ELEVATION, OCEAN_MASK
+from worldgen.geology.relief_band import trend_elevation
 from worldgen.hydrology.channels import LAKE_MASK, STREAMS
 from worldgen.hydrology.rivers import potential_evapotranspiration, texel_graph
 from worldgen.resources.terrain import global_slope
@@ -35,8 +36,9 @@ class WetlandParams:
     # The globe marks whole texels (~14 km) Wetland at or above this score; the finer
     # tiers use their own, lower, thresholds.
     threshold: float = _f(0.5, label="Wetland threshold", min=0.0, max=1.0, step=0.05)
-    # Flatness halves at this slope.
-    slope_scale_m_per_km: float = _f(0.4, label="Flatness slope scale (m/km)", min=0.05, max=10.0, step=0.05)
+    # Flatness halves at this slope.  0.45 since the relief band (0.4 before): the band moves
+    # the rain and flood terms, and 0.45 restores seeds 4/31/35's mean share (4.7% of land).
+    slope_scale_m_per_km: float = _f(0.45, label="Flatness slope scale (m/km)", min=0.05, max=10.0, step=0.05)
     # Rain-fed wetness ramps over this range of precipitation / PET.  PET bottoms out at
     # hydrology's baseline in the cold, so boreal ratios run high: these sit well above 1.
     rain_low: float = _f(4.0, label="Rain-fed onset (P/PET)", min=0.0, max=20.0, step=0.1)
@@ -77,18 +79,22 @@ def wetland_score(
     precipitation: Optional[np.ndarray],
     channel_nodes: Optional[np.ndarray] = None,
     channel_flow: Optional[np.ndarray] = None,
+    slope_elevation: Optional[np.ndarray] = None,
 ) -> dict[str, np.ndarray]:
     """The score and its terms, each ``(N, H, W)``; 0 on water.
 
     ``elevation`` (km) and ``water`` (bool) are ``(N, H, W)``; ``surface_km`` the
-    water surface on water texels (sea level, the lake level).
+    water surface on water texels (sea level, the lake level).  Flatness reads the
+    slope of ``slope_elevation`` (``(N, H, W)`` km; default ``elevation``): the
+    globe's trend surface, without its relief band.
     """
     n, h, w = elevation.shape
     land = ~water.reshape(-1)
     ground_m = elevation.reshape(-1).astype(np.float64) * 1000.0
     surface_m = surface_km.reshape(-1).astype(np.float64) * 1000.0
 
-    flat = flatness(global_slope(mesh, elevation[..., None])[..., 0], params).reshape(-1)
+    sloped = elevation if slope_elevation is None else slope_elevation
+    flat = flatness(global_slope(mesh, sloped[..., None])[..., 0], params).reshape(-1)
     if temperature is not None and precipitation is not None:
         pet_mm = potential_evapotranspiration(
             np.asarray(temperature, dtype=np.float64).mean(axis=-1),
@@ -153,7 +159,7 @@ class WetlandBuilder(Stage):
             elevation=elevation, water=ocean | lake, surface_km=surface,
             temperature=temperature,
             precipitation=PRECIPITATION.read(mesh) if PRECIPITATION.present(mesh) else None,
-            channel_nodes=nodes, channel_flow=flow,
+            channel_nodes=nodes, channel_flow=flow, slope_elevation=trend_elevation(mesh)[..., 0],
         )
         WETLAND.write(mesh, terms["score"][..., None].astype(np.float16))
 

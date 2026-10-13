@@ -55,7 +55,7 @@ def test_terms_are_monotone_and_bounded():
     assert np.all(np.diff(f) >= 0.0)
     r = rain_term(np.array([100.0, 1000.0, 5000.0]), np.array([1000.0, 200.0, 100.0]), p)
     assert r[0] == 0.0 and r[-1] == 1.0 and 0.0 < r[1] < 1.0
-    flat = flatness(np.array([0.0, 0.0004, 0.01]), p)
+    flat = flatness(np.array([0.0, p.slope_scale_m_per_km / 1000.0, 0.01]), p)
     assert np.isclose(flat[0], 1.0) and np.isclose(flat[1], 0.5) and flat[2] < 0.01
     s = combine(np.array([1.0, 1.0, 0.0]), np.array([0.5, 0.0, 1.0]), np.array([0.5, 1.0, 1.0]))
     assert np.allclose(s, [0.75, 1.0, 0.0])

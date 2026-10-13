@@ -5,7 +5,8 @@ from typing import List, Mapping, Optional
 import numpy as np
 
 from worldgen.climate.channels import PRECIPITATION, TEMPERATURE
-from worldgen.geology.channels import ELEVATION, OCEAN_MASK
+from worldgen.geology.channels import ELEVATION, OCEAN_MASK, RELIEF_BAND
+from worldgen.geology.relief_band import trend_elevation
 from worldgen.hydrology.channels import (
     DRAINAGE_LANDING, FILLED_HEIGHT, LAKE_MASK, RIVER_OBJECTS, RIVER_TEXELS, RIVERS, STREAMS,
 )
@@ -61,6 +62,9 @@ class HydrologyBuilder(Stage):
         precip_tex = PRECIPITATION.read(mesh) if PRECIPITATION.present(mesh) else None
         temperature_tex = TEMPERATURE.read(mesh) if TEMPERATURE.present(mesh) else None
         ocean_mask_tex = OCEAN_MASK.read(mesh) if OCEAN_MASK.present(mesh) else None
+        # Lakes are found on the trend surface: the relief band's dips would otherwise fill
+        # as hundreds of ragged lakes (worldgen/geology/relief_band.py).
+        banded = RELIEF_BAND.present(mesh)
         river_gen = RiverGenerator(
             mesh,
             elevation_textures,
@@ -73,8 +77,15 @@ class HydrologyBuilder(Stage):
             pet_per_degree_mm_yr=self.params.pet_per_degree_mm_yr,
             pet_max_mm_yr=self.params.pet_max_mm_yr,
             ocean_mask_textures=ocean_mask_tex,
+            lake_elevations=trend_elevation(mesh) if banded else None,
         )
         self.rivers = river_gen.generate()
+        if banded and river_gen.lake_beds.any():
+            # Lake beds and their rims lose the band (no band bumps poke through as islands).
+            shape = elevation_textures.shape
+            beds = river_gen.lake_beds.reshape(shape)
+            ELEVATION.write(mesh, river_gen.elevations.reshape(shape).astype(np.float32))
+            RELIEF_BAND.write(mesh, np.where(beds, 0.0, RELIEF_BAND.read(mesh)).astype(np.float32))
         self.lake_polygons = river_gen.get_lake_polygons()
         self.streams = river_gen.stream_network(self.params.stream_flow_threshold)
         STREAMS.write(ctx.world, self.streams)

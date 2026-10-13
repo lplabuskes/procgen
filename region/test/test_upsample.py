@@ -423,3 +423,44 @@ def test_character_pivots_the_spectrum():
     assert fine[0, 2] > fine[0, 1] > fine[0, 0]                        # jagged keeps fine relief, rolling sheds it
     coarse = spectrum_amplitudes(np.array([4.0 * p.hurst_pivot_km]), rugged, h, _params(octave_cap_km=5.0))
     assert coarse[0, 0] > coarse[0, 1] > coarse[0, 2]
+
+
+def test_relief_band_shrinks_the_conservation_correction(synthetic_globe):
+    """With the region's detail averaged onto the globe, conservation has little left to take out."""
+    import copy
+    from region.geometry import RegionGeometry
+    from region.grid import RegionHexGrid
+    from region.source import GlobalSource
+    from region.upsample import _SEED_SALT_REGION, refine_terrain
+    from worldgen.geology.relief_band import ReliefBandParams, compute_relief_band
+
+    params = _params()
+    tex = synthetic_globe.mesh.face_textures
+    rugged = np.full_like(tex["elevation"], 0.7)
+    band = compute_relief_band(synthetic_globe.mesh, rugged, None, int(synthetic_globe.seed or 0),
+                               ReliefBandParams(), spectrum=params)
+    worlds = {}
+    for name, keep_band in (("banded", True), ("unbanded", False)):
+        world = copy.copy(synthetic_globe)
+        world.mesh = copy.copy(synthetic_globe.mesh)
+        textures = dict(tex, elevation=tex["elevation"] + band, ruggedness=rugged)
+        if keep_band:
+            textures["relief_band"] = band
+        world.mesh.face_textures = textures
+        worlds[name] = world
+
+    grid = RegionHexGrid(RegionGeometry(REGION_ID, synthetic_globe.antimeridian), params.n_cols)
+    positions, in_hex = grid.texture_positions(TEX_SIZE), grid.texture_in_hexagon(TEX_SIZE)
+    correction = {}
+    for name, world in worlds.items():
+        terrain = refine_terrain(GlobalSource(world), positions, in_hex, grid.texel_spacing_rad(TEX_SIZE), params,
+                                 int(world.seed or 0) ^ _SEED_SALT_REGION)
+        land = in_hex.reshape(-1) & (terrain.elev_coarse[:, 0] > 0.2)
+        correction[name] = float((terrain.elevation - terrain.raw)[land, 0].std())
+    # This coarse globe puts only ~15 region texels in a global texel, so the region's own
+    # per-texel mean is a noisy sample of near-Nyquist detail (~0.7 here; the real ~3×
+    # step does better, seeds 4/31/35: correction 2–3× smaller).
+    assert correction["banded"] < 0.8 * correction["unbanded"]
+
+    fields = build_region_fields(worlds["banded"], REGION_ID, params)
+    assert conservation_report(fields, worlds["banded"])["elevation"]["max"] < 1e-3

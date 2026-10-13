@@ -15,7 +15,10 @@ and later phases of [plans/ruggedness.md](plans/ruggedness.md) drive the
 sub-grid relief and the realm's terrain costs from it.
 
 Runs after the wetland stage and before resources, danger and cost, so every
-later consumer reads the final field. (Replaced the coast stage and its
+later consumer reads the final field. The elevation stage has already previewed this
+refinement (glacial term only) to size the globe's relief band
+([elevation.md](elevation.md#previewpy)); the final field here differs from the
+preview mostly by the floodplains. (Replaced the coast stage and its
 `coast_smoothness`, whose tectonic, volcanic and noise terms moved to the seed.)
 
 ## `RuggednessBuilder`
@@ -29,7 +32,7 @@ missing → contributes nothing). Adds:
 | glacial | + ramp of annual mean T, 0 at warm limit → 1 at cold | `glacial_weight` 0.3, `glacial_warm_c` 4 °C, `glacial_cold_c` −6 °C |
 | delta | − `sqrt(flow / largest flow)` at each river mouth face, spread `max · exp(−hops / decay)` | `delta_weight` 0.6, `delta_decay_hops` 1.5 |
 | wetland | − the face's Wetland share | `wetland_weight` 0.4 |
-| floodplain | − per **texel** along the rivers (`floodplain_strength`): `weight · strength · exp(−d / width)` from each stream-network channel texel at ≥ `floodplain_min_flow`; strength = `min(√(flow / floodplain_full_flow), 1) × 1 / (1 + (slope / floodplain_slope)²)` (the globe's slope at the river: gorges stay rough); width = `floodplain_width_km · (flow / min flow) ** exponent` | `floodplain_weight` 0.35, `floodplain_min_flow` 500, `floodplain_full_flow` 20,000, `floodplain_width_km` 6, `floodplain_width_exponent` 0.4, `floodplain_slope` 0.001 |
+| floodplain | − per **texel** along the rivers (`floodplain_strength`): `weight · strength · exp(−d / width)` from each stream-network channel texel at ≥ `floodplain_min_flow`; strength = `min(√(flow / floodplain_full_flow), 1) × 1 / (1 + (slope / floodplain_slope)²)` (the slope of the globe's trend surface — elevation without its [relief band](elevation.md#relief_bandpy) — at the river: gorges stay rough); width = `floodplain_width_km · (flow / min flow) ** exponent` | `floodplain_weight` 0.35, `floodplain_min_flow` 500, `floodplain_full_flow` 20,000, `floodplain_width_km` 6, `floodplain_width_exponent` 0.4, `floodplain_slope` 0.001 |
 
 The face terms' sum is diffused (`smoothing_passes` 2 at `smoothing_alpha` 0.5; the
 seed is diffused already), added to the seed, clipped to [0, 1] and rasterised

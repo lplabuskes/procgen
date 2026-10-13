@@ -13,7 +13,8 @@ from region.upsample import SMALL_LAKE_KEY, RegionUpsampleParams, build_region_f
 
 REGION_ID = 51   # mostly land and thawing (see region/test/test_lakes.py)
 OPEN: dict[str, Any] = dict(
-    lake_breach_parent_texels=0.0, lake_min_depth_km=0.0, lake_min_texels=1, lake_min_aridity_index=0.0,
+    lake_breach_parent_texels=0.0, lake_breach_relief=0.3,
+    lake_min_depth_km=0.0, lake_min_texels=1, lake_min_aridity_index=0.0,
 )
 
 

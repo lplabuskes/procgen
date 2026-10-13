@@ -62,6 +62,8 @@ class LocalUpsampleParams(RegionUpsampleParams):
     lake_breach_parent_texels: float = _f(
         1.5, label="Small lake breach length (parent texels)", min=0.0, max=30.0, step=0.5
     )
+    # The local tier's parent (a region) has no relief band, so its detail is high-passed as before.
+    lake_breach_relief: float = _f(0.3, label="Small lake breach (× detail relief)", min=0.0, max=3.0, step=0.05)
     # Only lakes below the region's resolution (~20 km²): bigger basins the region left dry stay dry.
     lake_max_parent_texels: float = _f(
         1.0, label="Small lake max size (parent texels, 0 = none)", min=0.0, max=50.0, step=0.5

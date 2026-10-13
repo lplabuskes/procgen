@@ -129,7 +129,8 @@ def test_drain_nodes_follow_their_segment():
 def fields(synthetic_globe):
     # Every gate open: the analytic globe is smooth and its test region coarse.
     return build_region_fields(synthetic_globe, REGION_ID, RegionUpsampleParams(
-        n_cols=6, tex_size=16, lake_breach_parent_texels=0.0, lake_min_depth_km=0.0, lake_min_texels=1,
+        n_cols=6, tex_size=16, lake_breach_parent_texels=0.0, lake_breach_relief=0.3,
+        lake_min_depth_km=0.0, lake_min_texels=1,
         lake_min_aridity_index=0.0))
 
 
@@ -168,7 +169,8 @@ def test_no_small_lakes_on_ice_cap(synthetic_globe):
 
     Gentle relief, so no valley floor warms past freezing."""
     ice = build_region_fields(synthetic_globe, 40, RegionUpsampleParams(
-        n_cols=6, tex_size=16, lake_breach_parent_texels=0.0, lake_min_depth_km=0.0, lake_min_texels=1,
+        n_cols=6, tex_size=16, lake_breach_parent_texels=0.0, lake_breach_relief=0.3,
+        lake_min_depth_km=0.0, lake_min_texels=1,
         lake_min_aridity_index=0.0, relief_factor=0.25))
     assert ice.textures["temperature"].max(axis=-1).max() < 0.0
     assert not (ice.textures[SMALL_LAKE_KEY] > 0.5).any()
@@ -188,7 +190,8 @@ def _parent_texels_to_channels(fields, globe) -> np.ndarray:
 def test_no_small_lake_within_the_rivers_clearance(synthetic_globe):
     def build(clearance: float):
         return build_region_fields(synthetic_globe, REGION_ID, RegionUpsampleParams(
-            n_cols=6, tex_size=16, lake_breach_parent_texels=0.0, lake_min_depth_km=0.0, lake_min_texels=1,
+            n_cols=6, tex_size=16, lake_breach_parent_texels=0.0, lake_breach_relief=0.3,
+            lake_min_depth_km=0.0, lake_min_texels=1,
             lake_min_aridity_index=0.0, lake_drain_clearance_parent_texels=clearance))
     assert (_parent_texels_to_channels(build(0.0), synthetic_globe) < 0.9).any()
     assert (_parent_texels_to_channels(build(1.0), synthetic_globe) > 0.9).all()

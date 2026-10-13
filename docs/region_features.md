@@ -159,7 +159,7 @@ single texels); the local maps carve them.
 
 | Tier | `floor_texels` | `wall_texels` | `quantile` | `absorb_relief` |
 |---|---|---|---|---|
-| region | 0.75 | 1.0 | 0.5 (the least volume to absorb on ~3×3-texel parents) | 1.0 |
+| region | 0.75 | 1.0 | 0.5 (the least volume to absorb on ~3×3-texel parents) | 2.0 (since the globe's relief band: at 1.0 the climb rose 23 → 40 m per 100 km; 28 at 2.0) |
 | local | 0.75 | 3.0 | 0.1 (gorges, not causeways) | 1.0 |
 | settlement | 1.0 (or the channel's half-width) | 4.0 | 0.1 | 1.0 |
 

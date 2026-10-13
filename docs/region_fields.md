@@ -51,7 +51,7 @@ shared relief signal puts moisture/temperature bands on the contours.
 
 | field | detail | conserved |
 |---|---|---|
-| `elevation` | a relief spectrum set by the parent's ruggedness — **the only noise source**; restyled/reshaped near water by ruggedness; river valleys carved once the rivers are routed ([region_features.md](region_features.md#valley-carving-regioncarvepy)) | additively, smooth; shore edit and carving keep every parent mean |
+| `elevation` | coarse read net of the globe's relief band; a relief spectrum set by the parent's ruggedness — **the only noise source**; restyled/reshaped near water by ruggedness; river valleys carved once the rivers are routed ([region_features.md](region_features.md#valley-carving-regioncarvepy)) | additively, smooth; shore edit and carving keep every parent mean |
 | `temperature` | lapse rate on refined relief (sub-sea-level ground counts as sea level) | additively, smooth |
 | `precipitation` | orographic: × `1 + orographic_gain · anomaly` (per km, clipped ±0.9) | multiplicatively, smooth |
 | `biome` | reclassified from **area-averaged** refined climate | derived |
@@ -124,6 +124,17 @@ regions (`measure_lakes_rivers.py`): islands per lake 0.33 before the spectrum �
 land near water made it worse: conservation pulled those anchors down.)
 Deep ocean (median 3.4 km) keeps full detail (painted over anyway).
 `debug_region.py` prints flooded/dried percentages.
+
+**The globe's relief band.** The globe already carries this tier's detail averaged
+over each of its texels (`relief_band`, [elevation.md](elevation.md#relief_bandpy)),
+so the region's coarse elevation is the bilinear read of `elevation − relief_band`
+(`RELIEF_BAND_KEY`; absent → nothing subtracted) and the full detail goes on top: the
+per-global-texel means already agree, and conservation's correction is the small
+difference (the band was sized by a ruggedness preview, and ignores the coast style
+and the underwater cap) instead of a high-pass that took the detail's long
+wavelengths back out. Seeds 4/31/35 (`measure_relief_noise.py`): correction 18–145 m
+rms (was 22–314 m), texel-scale share after conservation 0.13–0.25 (was 0.33–0.40).
+Local and settlement tiers have no band (their parent is a refined map).
 
 **Detail band.** ≤ `octaves` (4) from the parent grid's Nyquist (`0.5 / parent
 texel spacing`) up to `nyquist_safety / texel spacing`. A tier no finer than its
@@ -206,10 +217,12 @@ them with its own (below). No noise of its own.
 - **Breaching.** A lake must be deeper than the parent surface drops over
   `lake_breach_parent_texels` parent texels (parent slope × length) — erosion
   cuts sills fastest on steep ground, so without this lakes crowd mountain
-  flanks — plus `lake_breach_relief` (0.3) × the tier's summed octave
+  flanks — plus `lake_breach_relief` (region 1.25, local 0.3) × the tier's summed octave
   amplitudes (`detail_relief`): noise pits are as deep as the detail is tall
   (without it, seed 4's densest farmland was 22% small lake; with it, its
-  regions are back to the ~0.05% they had) — and than
+  regions are back to the ~0.05% they had; the region's 1.25 since the globe's
+  relief band left its detail's long wavelengths in, which at 0.3 dug small lakes
+  over 3.7% of land, seeds 4/31/35, now 0.63%) — and than
   `lake_min_depth_km`, and at least `lake_min_texels` big. In the cold the
   length shrinks by `lake_glacial_factor` (annual mean ≤ 0 °C, fading out by
   10 °C): glacial lake country.

@@ -4038,5 +4038,133 @@
         "ridge_share_near": 0.4625058437692331
       }
     ]
+  },
+  {
+    "date": "2026-10-12T20:33:31",
+    "label": "",
+    "overrides": [],
+    "rows": [
+      {
+        "seed": 4,
+        "sovereigns": 46,
+        "polities": 118,
+        "sov_exclaves": 3,
+        "sov_exclave_faces": 123,
+        "sov_lake": 0,
+        "sov_overseas": 1,
+        "sov_landcut": 2,
+        "dir_exclaves": 3,
+        "dir_exclave_faces": 89,
+        "dir_lake": 0,
+        "dir_overseas": 1,
+        "dir_landcut": 2,
+        "river_share": 0.02162607858638107,
+        "river_share_near": 0.6001929954381582,
+        "ridge_share": 0.029525054020059827,
+        "ridge_share_near": 0.28468885299960695
+      },
+      {
+        "seed": 31,
+        "sovereigns": 22,
+        "polities": 91,
+        "sov_exclaves": 6,
+        "sov_exclave_faces": 878,
+        "sov_lake": 1,
+        "sov_overseas": 5,
+        "sov_landcut": 0,
+        "dir_exclaves": 4,
+        "dir_exclave_faces": 217,
+        "dir_lake": 1,
+        "dir_overseas": 3,
+        "dir_landcut": 0,
+        "river_share": 0.02587529623517222,
+        "river_share_near": 0.5265130013185364,
+        "ridge_share": 0.04053966128767305,
+        "ridge_share_near": 0.45633923793828973
+      },
+      {
+        "seed": 35,
+        "sovereigns": 26,
+        "polities": 63,
+        "sov_exclaves": 3,
+        "sov_exclave_faces": 412,
+        "sov_lake": 0,
+        "sov_overseas": 1,
+        "sov_landcut": 2,
+        "dir_exclaves": 3,
+        "dir_exclave_faces": 412,
+        "dir_lake": 0,
+        "dir_overseas": 1,
+        "dir_landcut": 2,
+        "river_share": 0.012714266046352991,
+        "river_share_near": 0.46608332623629134,
+        "ridge_share": 0.019197605316933267,
+        "ridge_share_near": 0.3068745757804776
+      }
+    ]
+  },
+  {
+    "date": "2026-10-12T21:08:52",
+    "label": "",
+    "overrides": [],
+    "rows": [
+      {
+        "seed": 4,
+        "sovereigns": 42,
+        "polities": 84,
+        "sov_exclaves": 3,
+        "sov_exclave_faces": 263,
+        "sov_lake": 0,
+        "sov_overseas": 1,
+        "sov_landcut": 2,
+        "dir_exclaves": 3,
+        "dir_exclave_faces": 263,
+        "dir_lake": 0,
+        "dir_overseas": 1,
+        "dir_landcut": 2,
+        "river_share": 0.011640597482227589,
+        "river_share_near": 0.5332823629662605,
+        "ridge_share": 0.051503451642547146,
+        "ridge_share_near": 0.3368939829205394
+      },
+      {
+        "seed": 31,
+        "sovereigns": 30,
+        "polities": 89,
+        "sov_exclaves": 5,
+        "sov_exclave_faces": 539,
+        "sov_lake": 1,
+        "sov_overseas": 3,
+        "sov_landcut": 1,
+        "dir_exclaves": 2,
+        "dir_exclave_faces": 93,
+        "dir_lake": 1,
+        "dir_overseas": 1,
+        "dir_landcut": 0,
+        "river_share": 0.019456905684085243,
+        "river_share_near": 0.586852836677481,
+        "ridge_share": 0.02736952955282839,
+        "ridge_share_near": 0.42481320377856796
+      },
+      {
+        "seed": 35,
+        "sovereigns": 43,
+        "polities": 98,
+        "sov_exclaves": 1,
+        "sov_exclave_faces": 1,
+        "sov_lake": 0,
+        "sov_overseas": 1,
+        "sov_landcut": 0,
+        "dir_exclaves": 0,
+        "dir_exclave_faces": 0,
+        "dir_lake": 0,
+        "dir_overseas": 0,
+        "dir_landcut": 0,
+        "river_share": 0.012563999460801627,
+        "river_share_near": 0.7523385942091503,
+        "ridge_share": 0.023989057117626132,
+        "ridge_share_near": 0.37601933038314395
+      }
+    ]
   }
 ]

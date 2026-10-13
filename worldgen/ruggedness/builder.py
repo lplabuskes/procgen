@@ -43,6 +43,7 @@ from core.pipeline import BuildContext, Stage
 from core.world import World
 from worldgen.climate.channels import PRECIPITATION_ANNUAL, TEMPERATURE_ANNUAL
 from worldgen.geology.channels import ELEVATION, JAGGEDNESS, JAGGEDNESS_FACE, RUGGEDNESS, RUGGEDNESS_FACE
+from worldgen.geology.relief_band import trend_elevation
 from worldgen.geology.ruggedness import decayed_max, diffuse, ruggedness_texture
 from worldgen.hydrology.channels import RIVER_OBJECTS, STREAMS
 from worldgen.hydrology.rivers import potential_evapotranspiration
@@ -199,7 +200,8 @@ def floodplain_strength(mesh: "PolygonMesh", streams, params: RuggednessRefinePa
         return out.reshape(n, h, w)
     flow = flow[src]
     nodes = np.asarray(streams.nodes, dtype=np.int64)[src]
-    slope = global_slope(mesh, elev)[..., 0].reshape(-1)[np.clip(nodes, 0, n * h * w - 1)]
+    # The trend surface's slope: the relief band is roughness, not the valley's fall.
+    slope = global_slope(mesh, trend_elevation(mesh))[..., 0].reshape(-1)[np.clip(nodes, 0, n * h * w - 1)]
     flat = 1.0 / (1.0 + (slope / max(float(p.floodplain_slope), 1e-9)) ** 2)
     strength = np.minimum(np.sqrt(flow / max(float(p.floodplain_full_flow), 1e-9)), 1.0) * flat
     width_rad = (float(p.floodplain_width_km) * (flow / max(float(p.floodplain_min_flow), 1e-9))

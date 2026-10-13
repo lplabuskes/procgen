@@ -150,7 +150,14 @@ class RiverGenerator:
         pet_per_degree_mm_yr: float = 60.0,
         pet_max_mm_yr: float = 2500.0,
         ocean_mask_textures: np.ndarray | None = None,
+        lake_elevations: np.ndarray | None = None,
     ) -> None:
+        """``lake_elevations`` (same shape as ``elevation_textures``): the surface lakes are
+        found on — the globe's trend surface, without its relief band.  Lakes are its
+        flooded depressions, and those lakes and a one-texel rim round each take this
+        surface (:attr:`lake_beds`) so the routing reproduces them; the band's own pits
+        elsewhere fill as flats, not lakes.  None: lakes from ``elevation_textures``.
+        """
         if elevation_textures.ndim == 4:
             elev = elevation_textures[:, :, :, 0]
         elif elevation_textures.ndim == 3:
@@ -181,6 +188,12 @@ class RiverGenerator:
         self.min_lake_pixels = min_lake_pixels
 
         self.elevations: np.ndarray = elev.astype(np.float32).reshape(-1)
+        self._lake_elevations: np.ndarray | None = None
+        if lake_elevations is not None:
+            lake_elev = lake_elevations[..., 0] if lake_elevations.ndim == 4 else lake_elevations
+            self._lake_elevations = lake_elev.astype(np.float32).reshape(-1)
+        # Nodes that took ``lake_elevations`` (lakes plus a rim); set by compute_flow.
+        self.lake_beds: np.ndarray = np.zeros(self.n_nodes, dtype=bool)
         self.positions: np.ndarray = mesh.face_texture_positions(h, h).reshape(-1, 3)
 
         # Ocean mask first — the precip weighting renormalizes over land.
@@ -283,11 +296,18 @@ class RiverGenerator:
 
         Stores filled DEM as self._eff. Returns (r1, r2, f1, f2, flow_angle, flow_accum).
         """
+        lakes = None
+        if self._lake_elevations is not None:
+            _, raised = priority_flood(self._lake_elevations, self._ocean_mask, self._nbr_indptr, self._nbr_flat)
+            lakes = self._build_lake_mask(raised)
+            # The rim holds the spill point, so the routing's flood fills each lake to its own level.
+            self.lake_beds = self._dilate(lakes) & ~self._ocean_mask
+            self.elevations = np.where(self.lake_beds, self._lake_elevations, self.elevations).astype(np.float32)
         eff, was_raised = priority_flood(
             self.elevations, self._ocean_mask, self._nbr_indptr, self._nbr_flat
         )
         self._eff = eff
-        self._lake_mask = self._build_lake_mask(was_raised)
+        self._lake_mask = lakes if lakes is not None else self._build_lake_mask(was_raised)
         self._endorheic_mask = np.zeros(self.n_nodes, dtype=bool)
         r1, r2, f1, f2, ang = compute_dinf_flow(
             eff, self.n_nodes, self.n_faces, self._r2, self.resolution
@@ -342,6 +362,16 @@ class RiverGenerator:
             self._endorheic_mask[keep] = True
             self._eff[keep] = equilibrium_elev
             self._eff[leave] = self.elevations[leave]  # restore dry bed; old eff would route out the old spill
+
+    def _dilate(self, mask: np.ndarray) -> np.ndarray:
+        """``mask`` plus every neighbour of a set node."""
+        nodes = np.flatnonzero(mask)
+        starts, ends = self._nbr_indptr[nodes], self._nbr_indptr[nodes + 1]
+        counts = ends - starts
+        offsets = np.repeat(ends - np.cumsum(counts), counts) + np.arange(int(counts.sum()))
+        out = mask.copy()
+        out[self._nbr_flat[offsets]] = True
+        return out
 
     def _build_lake_mask(self, was_raised: np.ndarray) -> np.ndarray:
         """Bool mask of flooded land components with >= min_lake_pixels."""
