@@ -1303,7 +1303,9 @@ class RegionView(QWidget):
             "lots": _site_path(MultiPolygon([g for g in lots if isinstance(g, Polygon)]), ident),
             "open": {k: _site_path(getattr(layout, k), ident)
                      for k in ("green", "quays", "plaza", "precinct", "citadel")},
-            "arterials": _lines_path(layout.arterials),
+            # (width, path): the secondary arterials and wall street under the main streets.
+            "arterials": [(w, _lines_path([g for i, g in enumerate(layout.arterials) if layout.arterial_width(i) == w]))
+                          for w in sorted({layout.arterial_width(i) for i in range(len(layout.arterials))})],
             "walls": _lines_path(list(layout.walls.line.geoms)) if layout.walls is not None else QPainterPath(),
         }
         self._layout_paths = (id(layout), cache)
@@ -1332,17 +1334,19 @@ class RegionView(QWidget):
             painter.setBrush(QColor.fromRgbF(*OPEN_RGB[key]))
             painter.drawPath(path)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        width = float(layout.arterial_m)
-        casing = QPen(QColor(120, 100, 80, 220), width + 2.0 / max(px_per_m, 1e-9))
-        casing.setCapStyle(Qt.PenCapStyle.RoundCap)
-        casing.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        painter.setPen(casing)
-        painter.drawPath(cache["arterials"])
-        fill = QPen(QColor.fromRgbF(*ARTERIAL_RGB), width)
-        fill.setCapStyle(Qt.PenCapStyle.RoundCap)
-        fill.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        painter.setPen(fill)
-        painter.drawPath(cache["arterials"])
+        # Every casing first, then every fill, so junctions between widths stay open.
+        for width, path in cache["arterials"]:
+            casing = QPen(QColor(120, 100, 80, 220), width + 2.0 / max(px_per_m, 1e-9))
+            casing.setCapStyle(Qt.PenCapStyle.RoundCap)
+            casing.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(casing)
+            painter.drawPath(path)
+        for width, path in cache["arterials"]:
+            fill = QPen(QColor.fromRgbF(*ARTERIAL_RGB), width)
+            fill.setCapStyle(Qt.PenCapStyle.RoundCap)
+            fill.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(fill)
+            painter.drawPath(path)
         walls = layout.walls
         if walls is not None:
             stone = walls.kind == "stone"

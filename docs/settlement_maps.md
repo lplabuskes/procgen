@@ -211,6 +211,13 @@ slope, so it is tested on hand-built sites.
    town's runs through its market along the footprint's long axis; a city's run
    from the market to every gate and to the footprint's edge in the widest gaps
    (3–8 by size). Bridges where they cross channels.
+   **Secondary arterials** (7 m) then fill the gaps: from the dense cell farthest
+   from any arterial, least-cost to the nearest one and on, the other way
+   (> 110° off, ends ≥ spacing/2 apart), to another or out to the footprint's
+   edge (a dead end when neither is in reach, e.g. against a river), until
+   every dense cell lies within spacing/2 of one — 500 m apart in a city, 800 m
+   in a town (so only sprawling towns get any). Dry ground only; through the
+   walls only at their gates.
 3. **Market**: a town's main street widened (24 m); a city's plaza. Citadel and
    sacred precinct are open ground sized by people.
 4. **Old core**: a wobbly blob about the market (and citadel) holding
@@ -220,6 +227,8 @@ slope, so it is tested on hand-built sites.
    ground it takes in beyond the footprint joining `SettlementLayout.footprint`
    as walled gardens; stone from strength 0.4 (towers every 70 m / strength),
    else palisade; open within 15 m of water; gates where main streets cross.
+   A **wall street** (7 m) runs just inside the wall wherever there is one,
+   round the citadel's outside.
    Unwalled, blocks and plots just coarsen toward the edge.
 5. **Docks** where a waterfront is chosen: a 12 m quay along the shore, piers
    every ~60 m (sea/lake 60 m × size; rivers ≥ 40 m wide, ≤ 0.2 × width), moles

@@ -103,6 +103,52 @@ def test_walls_ring_the_core_open_to_the_river_with_gates(layout):
     assert len(walls.gates) >= 1
 
 
+def test_a_wall_street_runs_just_inside_the_walls(layout):
+    params = SettlementLayoutParams()
+    ring = [g for g, k in zip(layout.arterials, layout.arterial_kinds) if k == "wall"]
+    assert ring and sum(g.length for g in ring) > 0.5 * layout.walls.line.length
+    offset = 0.5 * params.wall_m + 0.5 * params.secondary_m
+    for line in ring:
+        pts = [shapely.Point(p) for p in line.coords]
+        assert all(abs(layout.walls.line.distance(p) - offset) < 1.5 for p in pts[1:-1])
+        assert all(layout.core.buffer(1e-6).contains(p) for p in pts)
+    # Blocks keep off it.
+    street = shapely.union_all(ring).buffer(0.5 * params.secondary_m - 0.5)
+    assert all(b.polygon.intersection(street).area < 1.0 for b in layout.blocks)
+
+
+def test_secondary_arterials_fill_the_gaps_through_the_gates_only():
+    params = SettlementLayoutParams(arterial_spacing_m=200.0)
+    lay = build_layout(_site(), _profile(), _slope(), (1, 2, 3), params)
+    kinds = lay.arterial_kinds
+    extra = [g for g, k in zip(lay.arterials, kinds) if k == "secondary"]
+    assert len(extra) >= 3
+    net = shapely.union_all(lay.arterials)
+    # Every dense block lies within about half the spacing of an arterial.
+    for b in lay.blocks:
+        assert net.distance(b.polygon.centroid) < 0.5 * params.arterial_spacing_m + 2.0 * params.route_step_m
+    # Each starts on an earlier arterial; most run through to another or out to the footprint's
+    # edge (a few dead-end, against the river).
+    edge = _site().footprint.boundary
+    dead = 0
+    for i, line in enumerate(lay.arterials):
+        if kinds[i] != "secondary":
+            continue
+        earlier = shapely.union_all(lay.arterials[:i])
+        a, b = shapely.Point(line.coords[0]), shapely.Point(line.coords[-1])
+        assert earlier.distance(a) < 1.0
+        dead += min(earlier.distance(b), edge.distance(b)) >= 1.0
+    assert dead <= 0.25 * len(extra)
+    # None makes a gate of its own.
+    walls = lay.walls
+    assert walls is not None
+    for p in shapely.get_parts(shapely.union_all(extra).intersection(walls.line)):
+        if p.is_empty:
+            continue
+        xy = np.asarray(p.coords[0])
+        assert np.min(np.linalg.norm(walls.gates - xy, axis=1)) < 2.0 * params.route_step_m
+
+
 def test_arterials_reach_every_gate_and_bridge_the_river(layout):
     net = shapely.union_all(layout.arterials)
     for g in _site().roads.gates:

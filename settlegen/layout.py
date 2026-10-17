@@ -17,14 +17,18 @@ a village are different places, not one plan at three sizes.  Villages:
    **city**'s run out of its market to every gate, and to the footprint's edge
    in the widest gaps between them until at least ``radial_streets`` leave it.
    Both reach the waterfront, citadel and sacred site.  Bridges where they
-   cross a channel.
+   cross a channel.  After the walls, **secondary arterials**
+   (:func:`infill_arterials`) fill the gaps until the dense ground lies within
+   half of ``arterial_spacing_m`` (towns: ``town_arterial_spacing_m``) of an
+   arterial, through the walls only at their gates.
 3. **Market**: a town's is its main street widened (``market_street_m``) about
    the market; a city's a plaza.  The citadel and the sacred precinct are open
    ground sized by population.
 4. **Old core**: a smooth blob about the market (and citadel) holding
    ``core_share`` of the footprint (more for strong walls, young places and
    towns).  Only a walled place shows it: walls (``palisade`` or ``stone``,
-   towers on stone) run round it, open along the water, with suburbs outside.
+   towers on stone) run round it, open along the water, with suburbs outside,
+   and a wall street (:func:`wall_street`) just inside them.
    Unwalled, blocks and lots just grow coarser toward the edge.
 5. **Docks** (:mod:`settlegen.docks`) where there is a waterfront: quays along
    the shore, piers into the water.
@@ -58,6 +62,7 @@ import shapely
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import dijkstra
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, Polygon
+from shapely.ops import nearest_points
 
 from core.params import param_field as _f, paramclass
 from settlegen.docks import Docks, DockSpec, build_docks
@@ -139,6 +144,13 @@ class SettlementLayoutParams:
     shrine_people: float = _f(1500.0, label="People per shrine", min=100.0, max=50000.0, step=100.0)
     well_ha: float = _f(1.5, label="Core hectares per well", min=0.1, max=20.0, step=0.1)
     radial_streets: int = _f(3, label="Main streets out of a city's market (at least)", min=0, max=12)
+    # Secondary arterials: through streets filling the gaps between the main ones, and the
+    # street inside the walls.
+    secondary_m: float = _f(7.0, label="Secondary arterial / wall street width (m)", min=2.0, max=40.0, step=0.5)
+    arterial_spacing_m: float = _f(500.0, label="City arterials at most this far apart (m)", min=100.0,
+                                   max=5000.0, step=25.0)
+    town_arterial_spacing_m: float = _f(800.0, label="Town arterials at most this far apart (m)", min=100.0,
+                                        max=5000.0, step=25.0)
     # Towns: a main street through the market, burgage plots along it.
     town_block_mult: float = _f(1.5, label="Town block (×)", min=0.5, max=10.0, step=0.1)
     main_street_gate_deg: float = _f(35.0, label="Main street takes a gate within (°)", min=0.0, max=90.0, step=1.0)
@@ -189,7 +201,7 @@ class SettlementLayout:
     citadel: MultiPolygon
     plaza: MultiPolygon
     precinct: MultiPolygon
-    arterials: list[LineString]
+    arterials: list[LineString]              # main streets, then the wall street and secondary arterials
     bridges: np.ndarray                      # (n, 2)
     streets: list[LineString]                # minor streets' centre lines
     blocks: list[Block]
@@ -201,6 +213,13 @@ class SettlementLayout:
     fill_footprint: bool = True              # the footprint is streets between the blocks (not a village)
     # The built-up ground when the layout grew the site's footprint (walls taking in gardens).
     footprint: Optional[MultiPolygon] = None
+    # Per arterial: "main", "wall" (inside the walls) or "secondary"; empty — all main.
+    arterial_kinds: list[str] = field(default_factory=list)
+    secondary_m: float = 7.0
+
+    def arterial_width(self, i: int) -> float:
+        kind = self.arterial_kinds[i] if i < len(self.arterial_kinds) else "main"
+        return self.arterial_m if kind == "main" else self.secondary_m
 
     @staticmethod
     def empty() -> "SettlementLayout":
@@ -292,7 +311,8 @@ def chaikin(xy: np.ndarray, iterations: int = 3) -> np.ndarray:
 
 # ── arterials ────────────────────────────────────────────────────────────────
 
-def _grid_graph(cost: np.ndarray, step_m: float):  # type: ignore[no-untyped-def]
+def _grid_edges(cost: np.ndarray, step_m: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """``(src, dst, weight)`` of an 8-connected grid over ``cost`` (per metre)."""
     n_r, n_c = cost.shape
     idx = np.arange(n_r * n_c).reshape(n_r, n_c)
     src, dst, w = [], [], []
@@ -305,8 +325,84 @@ def _grid_graph(cost: np.ndarray, step_m: float):  # type: ignore[no-untyped-def
         src.append(a.reshape(-1))
         dst.append(b.reshape(-1))
         w.append(e.reshape(-1))
-    n = n_r * n_c
-    return coo_matrix((np.concatenate(w), (np.concatenate(src), np.concatenate(dst))), shape=(n, n)).tocsr()
+    return np.concatenate(src), np.concatenate(dst), np.concatenate(w)
+
+
+def _csr(src: np.ndarray, dst: np.ndarray, w: np.ndarray, n: int):  # type: ignore[no-untyped-def]
+    return coo_matrix((w, (src, dst)), shape=(n, n)).tocsr()
+
+
+def _grid_graph(cost: np.ndarray, step_m: float):  # type: ignore[no-untyped-def]
+    return _csr(*_grid_edges(cost, step_m), cost.size)
+
+
+@dataclass
+class RouteGrid:
+    """The arterial routing grid: ``n`` × ``n`` cells of ``step`` m over the ``2·half`` frame
+    (row 0 at the top), with a per-metre ``cost`` (slope, water, off the footprint, along roads)."""
+
+    half: float
+    n: int
+    step: float
+    xx: np.ndarray
+    yy: np.ndarray
+    cost: np.ndarray
+    on_road: np.ndarray
+    wet: np.ndarray
+
+    @property
+    def centres(self) -> np.ndarray:
+        return np.column_stack([self.xx.reshape(-1), self.yy.reshape(-1)])
+
+    def cell(self, p: np.ndarray) -> int:
+        r = int(np.clip((self.half - p[1]) / self.step, 0, self.n - 1))
+        q = int(np.clip((p[0] + self.half) / self.step, 0, self.n - 1))
+        return r * self.n + q
+
+    def cells_on(self, lines: Sequence) -> np.ndarray:  # type: ignore[type-arg]
+        """``(n, n)`` bool: the cells ``lines`` (LineStrings or (k, 2) arrays) pass through."""
+        out = np.zeros((self.n, self.n), dtype=bool)
+        for xy in lines:
+            line = xy if isinstance(xy, LineString) else LineString(np.asarray(xy, dtype=np.float64)) \
+                if len(xy) >= 2 else None
+            if line is None or line.is_empty:
+                continue
+            pts = shapely.get_coordinates(shapely.line_interpolate_point(
+                line, np.append(np.arange(0.0, line.length, 0.4 * self.step), line.length)))
+            r = ((self.half - pts[:, 1]) / self.step).astype(int)
+            q = ((pts[:, 0] + self.half) / self.step).astype(int)
+            ok = (r >= 0) & (r < self.n) & (q >= 0) & (q < self.n)
+            out[r[ok], q[ok]] = True
+        return out
+
+
+def route_grid(
+    half: float, slope: np.ndarray, wet: MultiPolygon, footprint: MultiPolygon, roads: Sequence[np.ndarray],
+    params: SettlementLayoutParams,
+) -> RouteGrid:
+    """The :class:`RouteGrid` of a ``2·half`` frame (``slope``: the frame's (T, T) slope)."""
+    step = float(params.route_step_m)
+    n = max(int(math.ceil(2.0 * half / step)), 2)
+    step = 2.0 * half / n
+    c = -half + (np.arange(n) + 0.5) * step
+    xx, yy = np.meshgrid(c, c[::-1])
+    t = slope.shape[0]
+    rows = np.clip(((half - yy) / (2.0 * half) * t).astype(int), 0, t - 1)
+    cols = np.clip(((xx + half) / (2.0 * half) * t).astype(int), 0, t - 1)
+    cost = 1.0 + float(params.slope_weight) * slope[rows, cols]
+    grid = RouteGrid(half, n, step, xx, yy, cost, np.zeros((n, n), dtype=bool), np.zeros((n, n), dtype=bool))
+    grid.on_road = on_road = grid.cells_on([xy for xy in roads if len(xy) >= 2])
+    if not wet.is_empty:
+        grid.wet = is_wet = shapely.contains_xy(wet, xx, yy)
+        cost = np.where(is_wet & ~on_road, cost * float(params.water_cost), cost)
+    if not footprint.is_empty:
+        cost = np.where(shapely.contains_xy(footprint, xx, yy), cost, cost * float(params.outside_cost))
+    grid.cost = np.where(on_road, cost * float(params.road_follow), cost)
+    return grid
+
+
+def _smooth_path(xy: np.ndarray, step: float) -> LineString:
+    return LineString(chaikin(np.asarray(LineString(xy).simplify(0.6 * step).coords), 3))
 
 
 def route_arterials(
@@ -317,43 +413,13 @@ def route_arterials(
     ``2·half`` frame (``slope``: the frame's (T, T) slope), merged into one smoothed network."""
     if not targets:
         return []
-    step = float(params.route_step_m)
-    n = max(int(math.ceil(2.0 * half / step)), 2)
-    step = 2.0 * half / n
-    c = -half + (np.arange(n) + 0.5) * step
-    xx, yy = np.meshgrid(c, c[::-1])
-    t = slope.shape[0]
-    rows = np.clip(((half - yy) / (2.0 * half) * t).astype(int), 0, t - 1)
-    cols = np.clip(((xx + half) / (2.0 * half) * t).astype(int), 0, t - 1)
-    cost = 1.0 + float(params.slope_weight) * slope[rows, cols]
-    on_road = np.zeros((n, n), dtype=bool)
-    for xy in roads:
-        xy = np.asarray(xy, dtype=np.float64)
-        if len(xy) < 2:
-            continue
-        line = LineString(xy)
-        pts = np.asarray([(p.x, p.y) for p in shapely.line_interpolate_point(
-            line, np.append(np.arange(0.0, line.length, 0.4 * step), line.length))]).reshape(-1, 2)
-        r = ((half - pts[:, 1]) / step).astype(int)
-        q = ((pts[:, 0] + half) / step).astype(int)
-        ok = (r >= 0) & (r < n) & (q >= 0) & (q < n)
-        on_road[r[ok], q[ok]] = True
-    if not wet.is_empty:
-        is_wet = shapely.contains_xy(wet, xx, yy)
-        cost = np.where(is_wet & ~on_road, cost * float(params.water_cost), cost)
-    if not footprint.is_empty:
-        cost = np.where(shapely.contains_xy(footprint, xx, yy), cost, cost * float(params.outside_cost))
-    cost = np.where(on_road, cost * float(params.road_follow), cost)
-    graph = _grid_graph(cost, step)
-
-    def cell(p: np.ndarray) -> int:
-        r = int(np.clip((half - p[1]) / step, 0, n - 1))
-        q = int(np.clip((p[0] + half) / step, 0, n - 1))
-        return r * n + q
+    grid = route_grid(half, slope, wet, footprint, roads, params)
+    step, cell = grid.step, grid.cell
+    graph = _grid_graph(grid.cost, step)
 
     s = cell(source)
     _, pred = dijkstra(graph, directed=False, indices=s, return_predecessors=True)
-    centres = np.column_stack([xx.reshape(-1), yy.reshape(-1)])
+    centres = grid.centres
     segs: list[LineString] = []
     for target in targets:
         k = cell(target)
@@ -380,8 +446,128 @@ def route_arterials(
         for a, b in zip([0, *hit], [*hit, len(xy) - 1]):
             piece = LineString(xy[a:b + 1])
             if piece.length > 1e-6:
-                out.append(LineString(chaikin(np.asarray(piece.simplify(0.6 * step).coords), 3)))
+                out.append(_smooth_path(np.asarray(piece.coords), step))
     return out
+
+
+def _chain(pred: np.ndarray, k: int) -> list[int]:
+    """Cells from ``k`` back to the Dijkstra source."""
+    path = [k]
+    while pred[path[-1]] >= 0:
+        path.append(int(pred[path[-1]]))
+    return path
+
+
+def infill_arterials(
+    grid: RouteGrid, network: Sequence[LineString], serve: MultiPolygon, footprint: MultiPolygon, spacing: float,
+    walls: Optional[MultiLineString] = None, gates: Optional[np.ndarray] = None,
+    avoid: Optional[MultiPolygon] = None, max_streets: int = 400,
+) -> list[LineString]:
+    """Through streets filling the gaps in ``network`` until every cell of ``serve`` lies
+    within ``spacing / 2`` of an arterial.  Each starts at the cell farthest from one, runs
+    least-cost to the nearest arterial and on, the other way (> 110° off), to another
+    arterial or out to ``footprint``'s edge.  Dry ground only; through ``walls`` only at
+    ``gates``; ``avoid`` (citadel, precinct) dear."""
+    from scipy.ndimage import binary_dilation, distance_transform_edt
+
+    n, step = grid.n, grid.step
+    centres = grid.centres
+    if serve.is_empty or not network:
+        return []
+    wet = (grid.wet & ~grid.on_road).reshape(-1)
+    cost = grid.cost
+    if avoid is not None and not avoid.is_empty:
+        cost = np.where(shapely.contains_xy(avoid, grid.xx, grid.yy), 4.0 * cost, cost)
+    src, dst, w = _grid_edges(cost, step)
+    keep = ~(wet[src] | wet[dst])
+    covered = grid.cells_on(network).reshape(-1)
+    walled = walls is not None and not walls.is_empty
+    if walled:
+        near = np.asarray(shapely.dwithin(walls, shapely.points(centres), 1.5 * step), dtype=bool)
+        # A cell is on an arterial across the wall from it only by rasterising: not a way in.
+        test = np.flatnonzero(covered & near)
+        links = shapely.shortest_line(shapely.points(centres[test]), shapely.union_all(list(network)))
+        covered[test[shapely.intersects(links, walls)]] = False
+        test = np.flatnonzero(keep & (near[src] | near[dst]))
+        segs = shapely.linestrings(np.stack([centres[src[test]], centres[dst[test]]], axis=1))
+        cross = shapely.intersects(segs, walls)
+        if gates is not None and len(gates):
+            mid = 0.5 * (centres[src[test]] + centres[dst[test]])
+            at_gate = np.min(np.linalg.norm(mid[:, None, :] - gates[None], axis=2), axis=1) < 1.5 * step
+            cross &= ~at_gate
+        keep[test[cross]] = False
+    graph = _csr(src[keep], dst[keep], w[keep], n * n)
+
+    in_foot = np.asarray(shapely.contains_xy(footprint, grid.xx, grid.yy), dtype=bool)
+    grown = np.asarray(binary_dilation(in_foot, structure=np.ones((3, 3), dtype=bool)), dtype=bool)
+    edge = (grown & ~in_foot).reshape(-1) & ~wet
+    todo = (shapely.contains_xy(serve, grid.xx, grid.yy).reshape(-1) & ~wet)
+    limit = 4.0 * spacing
+    cos_apart = math.cos(math.radians(110.0))
+    paths: list[tuple[list[int], Optional[bool]]] = []    # cells, far end on an arterial (None: a dead end)
+    for _ in range(max_streets):
+        dist = np.asarray(distance_transform_edt(~covered.reshape(n, n))).reshape(-1) * step
+        score = np.where(todo, dist, -1.0)
+        k = int(np.argmax(score))
+        if score[k] < 0.5 * spacing:
+            break
+        d, pred = dijkstra(graph, directed=False, indices=k, limit=limit, return_predecessors=True)
+        reach = np.isfinite(d)
+        net = np.flatnonzero(covered & reach)
+        if not len(net):
+            todo &= np.linalg.norm(centres - centres[k], axis=1) > 0.5 * spacing
+            continue
+        a = int(net[np.argmin(d[net])])
+        cells = _chain(pred, a)                      # a … k
+        va = centres[a] - centres[k]
+        ends = np.flatnonzero((covered | edge) & reach)
+        v = centres[ends] - centres[k]
+        norm = np.linalg.norm(v, axis=1)
+        ok = ((norm > 2.0 * step) | edge[ends]) & ((v @ va) < cos_apart * norm * float(np.linalg.norm(va))) \
+            & (np.linalg.norm(centres[ends] - centres[a], axis=1) > 0.5 * spacing)   # not a loop
+        on_net: Optional[bool] = None
+        if ok.any():
+            b = int(ends[ok][np.argmin(d[ends[ok]])])
+            leg = _chain(pred, b)[::-1]              # k … b, cut where it first meets an arterial or the edge
+            stop = next(i for i in range(1, len(leg)) if covered[leg[i]] or edge[leg[i]])
+            cells += leg[1:stop + 1]
+            on_net = bool(covered[leg[stop]])
+        if (len(cells) - 1) * step < 0.3 * spacing:
+            todo &= np.linalg.norm(centres - centres[k], axis=1) > 0.5 * spacing
+            continue
+        paths.append((cells, on_net))
+        covered[cells] = True
+
+    out: list[LineString] = []
+    net_geom = shapely.union_all(list(network))
+    edge_line = footprint.boundary
+    for cells, on_net in paths:
+        xy = centres[cells].copy()
+        xy[0] = shapely.get_coordinates(nearest_points(net_geom, Point(xy[0]))[0])[0]
+        if on_net is not None:
+            far = net_geom if on_net else edge_line
+            xy[-1] = shapely.get_coordinates(nearest_points(far, Point(xy[-1]))[0])[0]
+        line = _smooth_path(xy, step)
+        if line.length > 1e-6:
+            out.append(line)
+            net_geom = net_geom.union(line)
+    return out
+
+
+def wall_street(core: MultiPolygon, walls: MultiLineString, offset: float, citadel: MultiPolygon,
+                min_m: float = 40.0) -> list[LineString]:
+    """The street just inside the walls: the core's outline ``offset`` m in, where there
+    is a wall beside it (not along the water), round the citadel's outside."""
+    if core.is_empty or walls.is_empty:
+        return []
+    inner = _multi(core.buffer(-offset, quad_segs=8))
+    loops = MultiLineString([LineString(g.exterior.coords) for g in inner.geoms])
+    line = loops.intersection(walls.buffer(offset + 2.0))
+    if not citadel.is_empty:
+        line = line.difference(citadel.buffer(offset))
+    parts = shapely.get_parts(shapely.line_merge(shapely.union_all(
+        [g for g in shapely.get_parts(line) if isinstance(g, LineString)] or [LineString()])))
+    return [g for g in parts if isinstance(g, LineString) and g.length >= min_m]
 
 
 # ── blocks and lots ──────────────────────────────────────────────────────────
@@ -860,10 +1046,31 @@ def build_layout(
         docks = build_docks(footprint, site.water, anchors["waterfront"], [la.xy for la in site.roads.landings],
                             pop, weight, profile.tier, rng, _dock_spec(params))
 
+    # ── the wall street and secondary arterials ──
+    n_main = len(arterials)
+    kinds = ["main"] * n_main
+    secondary_m = float(params.secondary_m)
+    if walls is not None:
+        ring = wall_street(core, walls.line, 0.5 * float(params.wall_m) + 0.5 * secondary_m, citadel)
+        arterials += ring
+        kinds += ["wall"] * len(ring)
+    if arterials:
+        spacing = float(params.town_arterial_spacing_m if town else params.arterial_spacing_m)
+        serve = _multi(footprint.difference(shapely.union_all([site.sparse, plaza, citadel, precinct, docks.quays])))
+        grid = route_grid(half, slope, water, footprint, roads, params)
+        extra = infill_arterials(grid, arterials, serve, footprint, spacing,
+                                 walls=walls.line if walls is not None else None,
+                                 gates=walls.gates if walls is not None else None,
+                                 avoid=_multi(shapely.union_all([citadel, precinct])))
+        arterials += extra
+        kinds += ["secondary"] * len(extra)
+
     # ── wards → blocks ──
     cut: list = [plaza, citadel, precinct, docks.quays]
-    if arterials:
-        cut.append(art_geom.buffer(0.5 * float(params.arterial_m)))
+    for which, width in ((("main",), float(params.arterial_m)), (("wall", "secondary"), secondary_m)):
+        lines = [g for g, k in zip(arterials, kinds) if k in which]
+        if lines:
+            cut.append(shapely.union_all(lines).buffer(0.5 * width))
     if walls is not None and not walls.line.is_empty:
         cut.append(walls.line.buffer(0.5 * float(params.wall_m)))
     land = _multi(footprint.difference(shapely.union_all(cut)))
@@ -876,8 +1083,8 @@ def build_layout(
         burgage += [True] * len(band)
         streets += lanes
     grid_angle = 0.0
-    if arterials:
-        longest = max(arterials, key=lambda g: g.length)
+    if n_main:
+        longest = max(arterials[:n_main], key=lambda g: g.length)
         xy = np.asarray(longest.coords)
         d = xy[-1] - xy[0]
         grid_angle = math.atan2(d[1], d[0])
@@ -940,6 +1147,7 @@ def build_layout(
         anchors=anchors, core=core, walls=walls, citadel=citadel, plaza=plaza, precinct=precinct,
         arterials=arterials, bridges=bridges, streets=streets, blocks=out_blocks, points=points,
         arterial_m=float(params.arterial_m), quays=docks.quays, piers=docks.piers, footprint=grown,
+        arterial_kinds=kinds, secondary_m=secondary_m,
     )
 
 
@@ -1006,8 +1214,11 @@ def describe_at(layout: SettlementLayout, site: "SettlementSite", xy: np.ndarray
                         (layout.green, "Village green"), (layout.quays, "Quay")):
         if not geom.is_empty and geom.contains(pt):
             return label
-    if layout.arterials and shapely.union_all(layout.arterials).distance(pt) <= 0.5 * layout.arterial_m:
-        return "Village street" if village else "Main street"
+    for i, line in enumerate(layout.arterials):
+        if line.distance(pt) <= 0.5 * layout.arterial_width(i):
+            kind = layout.arterial_kinds[i] if i < len(layout.arterial_kinds) else "main"
+            return "Village street" if village else {"wall": "Wall street", "secondary": "Through street"}.get(
+                kind, "Main street")
     block = block_at(layout, xy)
     if block is not None:
         label = district_label(block.district, tier)

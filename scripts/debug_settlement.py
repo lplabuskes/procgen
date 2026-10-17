@@ -116,6 +116,12 @@ def report(m: SettlementMap, store, timings: dict[str, float]) -> None:  # type:
           + (" · planned" if profile.planned else ""))
     areas = sorted(layout.district_areas_ha().items(), key=lambda kv: -kv[1])
     print("  districts (ha): " + ", ".join(f"{k} {v:.1f}" for k, v in areas))
+    if layout.arterials:
+        by_kind: dict[str, list[float]] = {}
+        for i, g in enumerate(layout.arterials):
+            kind = layout.arterial_kinds[i] if i < len(layout.arterial_kinds) else "main"
+            by_kind.setdefault(kind, []).append(g.length)
+        print("  arterials: " + ", ".join(f"{k} {len(v)} ({sum(v) / 1000:.2f} km)" for k, v in by_kind.items()))
     if layout.walls is not None:
         print(f"  walls: {layout.walls.kind}, {layout.walls.line.length / 1000:.2f} km, "
               f"{len(layout.walls.towers)} towers, {len(layout.walls.gates)} gates")
