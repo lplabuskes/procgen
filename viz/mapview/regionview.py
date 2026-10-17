@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Callable, Optional
 
 import numpy as np
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPainterPath, QPen, QPolygonF, QTransform
+from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPainterPath, QPen, QPixmap, QPolygonF, QTransform
 from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtWidgets import QWidget
 from shapely.geometry import MultiPolygon, Polygon
@@ -21,6 +21,7 @@ from region.borders import view_polity_borders
 from region.display import build_layer_texture, snap_to_land
 from realmgen.refine.barriers import pack_river_segments
 from viz.mapview.legend import draw_legend, legend_size
+from viz.mapview.measure import MeasureTape, draw_tape
 from viz.mapview.overlays import city_floor_radius, draw_overlays, fort_markers, settlement_markers, town_markers
 from localmap.store import MapStore
 from region.builder import RegionMap, land_reach
@@ -130,6 +131,15 @@ class RegionView(QWidget):
         self._hover_hex: Optional[int] = None
         self._hex_click_callback: Optional[Callable[[int], None]] = None
         self._mouse: Optional[tuple[float, float]] = None
+        # Measure mode: clicks place the tape's ends instead of opening settlements or hexes.
+        self._measure = False
+        self._tape = MeasureTape()
+        # The map as last painted (terrain, site, overlays, legend): hover-only changes
+        # (the picked hex, the measuring tape) re-blit it and draw over it.
+        self._base_cache: Optional[QPixmap] = None
+        self._base_cache_key: Optional[tuple] = None
+        # The rect the map is clipped to beside the legend (None: no legend), as last painted.
+        self._map_clip: Optional[QRectF] = None
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.OpenHandCursor)
@@ -165,6 +175,7 @@ class RegionView(QWidget):
         self._land_positions = {}
         self._zoom = 1.0
         self._pan[:] = 0.0
+        self._tape.clear()
         if globe is not None and "elevation" in globe.mesh.face_textures:
             # Settlements are refined in the world's features, so they persist (and
             # are saved) after the region is left.
@@ -172,7 +183,7 @@ class RegionView(QWidget):
             self._fields, self._grid = m.fields, m.fields.grid
             self._rivers, self._roads, self._deltas = m.rivers, m.roads, m.deltas
             self._rebuild_images()
-        self.update()
+        self._invalidate()
 
     # ── local maps ───────────────────────────────────────────────────────────
 
@@ -204,9 +215,10 @@ class RegionView(QWidget):
         if not keep_view:
             self._zoom = 1.0
             self._pan[:] = 0.0
+            self._tape.clear()
         self._rebuild_images()
         self._rebuild_farm_images()
-        self.update()
+        self._invalidate()
 
     def set_local_params(self, params: LocalParams, globe: Optional["World"] = None) -> None:
         """Replace the local tuning (in the store: every local map dropped and every
@@ -244,8 +256,9 @@ class RegionView(QWidget):
         self._land_positions = {}
         self._zoom = 1.0
         self._pan[:] = 0.0
+        self._tape.clear()
         self._rebuild_images()
-        self.update()
+        self._invalidate()
 
     @property
     def settlement_map(self) -> Optional[SettlementMap]:
@@ -320,6 +333,20 @@ class RegionView(QWidget):
             self._hover_hex = None
         self.update()
 
+    def set_measure_mode(self, enabled: bool) -> None:
+        """Measure mode: a click sets the tape's start, the next its end (a third starts over)."""
+        self._measure = bool(enabled)
+        self._tape.clear()
+        self.setCursor(self._idle_cursor())
+        self.update()
+
+    @property
+    def tape(self) -> MeasureTape:
+        return self._tape
+
+    def _idle_cursor(self) -> Qt.CursorShape:
+        return Qt.CursorShape.CrossCursor if self._measure else Qt.CursorShape.OpenHandCursor
+
     def set_hex_click_callback(self, cb: Optional[Callable[[int], None]]) -> None:
         """Called with the regional hex index clicked while local picking is on."""
         self._hex_click_callback = cb
@@ -338,7 +365,7 @@ class RegionView(QWidget):
         zoom, pan = self._zoom, self._pan.copy()
         self.set_region(self._geometry, self._globe)
         self._zoom, self._pan = zoom, pan
-        self.update()
+        self._invalidate()
 
     def set_realm_params(self, params: Optional["RealmParams"]) -> None:
         """The realm tuning the world was built with, used when refining (changes come with a new world)."""
@@ -367,6 +394,8 @@ class RegionView(QWidget):
         self._cell_layout = None
         self._view_frame = None
         self._drag_start = None
+        self._tape.clear()
+        self._base_cache = None
 
     def set_layer(self, layer: Optional[str], spec: Optional[SchemeSpec] = None) -> None:
         """Show one of the world map's layers, by scheme name and spec."""
@@ -375,19 +404,19 @@ class RegionView(QWidget):
         self._layer = layer
         self._spec = spec
         self._rebuild_images()
-        self.update()
+        self._invalidate()
 
     def set_overlay_visible(self, name: str, visible: bool) -> None:
         """Toggle one of the world map's feature overlays (same names, same styling)."""
         self._overlay_visible[name] = visible
         if name in _FARM_OVERLAYS and self._local is not None:
             self._rebuild_farm_images()
-        self.update()
+        self._invalidate()
 
     def set_legend(self, legend: Optional[tuple[str, list]]) -> None:
         """The active layer's ``(kind, entries)`` legend, drawn beside the cell."""
         self._legend = legend
-        self.update()
+        self._invalidate()
 
     def set_hover_callback(
         self, cb: Optional[Callable[[Optional[tuple[int, int, int]]], None]]
@@ -491,11 +520,55 @@ class RegionView(QWidget):
 
     # ── painting ─────────────────────────────────────────────────────────────
 
+    def _invalidate(self) -> None:
+        """Mark the cached map stale (its data or view changed) and schedule a repaint."""
+        self._base_cache = None
+        self.update()
+
     def paintEvent(self, _) -> None:
+        dpr = self.devicePixelRatioF()
+        key = (self.width(), self.height(), dpr)
+        if self._base_cache is None or self._base_cache_key != key:
+            pixmap = QPixmap(max(1, round(self.width() * dpr)), max(1, round(self.height() * dpr)))
+            pixmap.setDevicePixelRatio(dpr)
+            base_painter = QPainter(pixmap)
+            self._paint_base(base_painter)
+            base_painter.end()
+            self._base_cache = pixmap
+            self._base_cache_key = key
         painter = QPainter(self)
+        painter.drawPixmap(0, 0, self._base_cache)
+        self._paint_top(painter)
+
+    def _paint_top(self, painter: QPainter) -> None:
+        """What changes with the cursor alone, over the cached map: the hex picked for a
+        local map, and the measuring tape."""
+        if self._cell_layout is None or self._grid is None:
+            return
+        x0, y0, size, transform = self._cell_layout
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self._map_clip is not None:
+            painter.setClipRect(self._map_clip)
+        if self._local_pick and self._hover_hex is not None and self._local is None:
+            painter.save()
+            painter.setTransform(transform, True)
+            r_px = self._grid.radius * size
+            hs, ht = self._grid.centers[self._hover_hex]
+            pen = _cosmetic_pen(QColor(255, 235, 140, 230))
+            pen.setWidthF(2.0)
+            painter.setPen(pen)
+            painter.setBrush(QColor(255, 235, 140, 40))
+            painter.drawPolygon(self._hex_polygon(x0 + hs * size, y0 + (1.0 - ht) * size, r_px))
+            painter.restore()
+        if self._measure and self._geometry is not None:
+            draw_tape(painter, self._tape, _RegionProjector(self._geometry, x0, y0, size, transform, 1.0))
+
+    def _paint_base(self, painter: QPainter) -> None:
+        """The map: terrain, the settlement site, overlays and the legend (cached by :meth:`paintEvent`)."""
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), QColor(24, 28, 34))
         self._cell_layout = None
+        self._map_clip = None
 
         if self._grid is None:
             return
@@ -531,7 +604,8 @@ class RegionView(QWidget):
         # Zoomed in, the map fills everything right of the legend but never covers it.
         if legend:
             left = fx0 - 0.5 * legend_gap
-            painter.setClipRect(QRectF(left, 0.0, W - left, H))
+            self._map_clip = QRectF(left, 0.0, W - left, H)
+            painter.setClipRect(self._map_clip)
         painter.setTransform(transform, True)
         if self._hex_images:
             self._draw_textured_hexes(painter, x0, y0, size)
@@ -543,14 +617,6 @@ class RegionView(QWidget):
         painter.setPen(_cosmetic_pen(QColor(70, 85, 100)))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawPolygon(self._outline(x0, y0, size))
-        if self._local_pick and self._hover_hex is not None and self._local is None:
-            r_px = self._grid.radius * size
-            hs, ht = self._grid.centers[self._hover_hex]
-            pen = _cosmetic_pen(QColor(255, 235, 140, 230))
-            pen.setWidthF(2.0)
-            painter.setPen(pen)
-            painter.setBrush(QColor(255, 235, 140, 40))
-            painter.drawPolygon(self._hex_polygon(x0 + hs * size, y0 + (1.0 - ht) * size, r_px))
         painter.restore()
 
         # Overlays in screen space (markers stay upright, pixel-sized), clipped to the rotated cell.
@@ -763,7 +829,7 @@ class RegionView(QWidget):
             self._pan[1] = (my - cy - new_zoom * qy) / footprint
         self._zoom = new_zoom
         self._clamp_pan()
-        self.update()
+        self._invalidate()
 
     def zoom_in(self) -> None:
         self.zoom_toward(self.width() * 0.5, self.height() * 0.5, 1.2)
@@ -774,7 +840,7 @@ class RegionView(QWidget):
     def reset_view(self) -> None:
         self._zoom = 1.0
         self._pan[:] = 0.0
-        self.update()
+        self._invalidate()
 
     def _clamp_pan(self) -> None:
         """Keep the footprint centre's view covered — no panning off into the void."""
@@ -799,11 +865,17 @@ class RegionView(QWidget):
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_start = None
-            self.setCursor(Qt.CursorShape.OpenHandCursor)
+            self.setCursor(self._idle_cursor())
             pos = event.position()
             press, self._press_pos = self._press_pos, None
             clicked = press is not None and math.hypot(pos.x() - press[0], pos.y() - press[1]) < self._CLICK_SLOP
             if not clicked:
+                return
+            if self._measure:
+                point = self.ecef_at_screen(float(pos.x()), float(pos.y()))
+                if point is not None:
+                    self._tape.click(point)
+                    self.update()
                 return
             # A settlement under the click opens its map; otherwise, picking, the hex's local map.
             if self._settlement_click_callback is not None:
@@ -844,6 +916,21 @@ class RegionView(QWidget):
         if texel is not None and self._fields.in_map is not None and not self._fields.in_map[texel]:
             return None                     # a local map's square corner, outside the parent hexagon
         return texel
+
+    def ecef_at_screen(self, mx: float, my: float) -> Optional[np.ndarray]:
+        """The unit-sphere point drawn at a screen position, or None outside the map's outline."""
+        if self._cell_layout is None or self._geometry is None:
+            return None
+        x0, y0, size, transform = self._cell_layout
+        inverse, ok = transform.inverted()
+        if not ok:
+            return None
+        p = inverse.map(QPointF(mx, my))
+        if not self._outline(x0, y0, size).containsPoint(p, Qt.FillRule.OddEvenFill):
+            return None
+        s = (p.x() - x0) / size
+        t = 1.0 - (p.y() - y0) / size
+        return self._geometry.local_to_ecef(np.array([s]), np.array([t]))[0]
 
     def _cursor_frame_xy(self) -> Optional[np.ndarray]:
         """The cursor in the settlement frame's metres, or None."""
@@ -1030,14 +1117,18 @@ class RegionView(QWidget):
             self._pan[0] = self._drag_start_pan[0] + (mx - self._drag_start[0]) / footprint
             self._pan[1] = self._drag_start_pan[1] + (my - self._drag_start[1]) / footprint
             self._clamp_pan()
+            self._invalidate()
+        elif self._measure and self._tape.waiting:
+            self._tape.cursor = self.ecef_at_screen(mx, my)
             self.update()
         if self._hover_callback is not None:
             self._hover_callback(self.texel_at_screen(mx, my))
 
     def leaveEvent(self, event) -> None:
         self._mouse = None
-        if self._hover_hex is not None:
+        if self._hover_hex is not None or self._tape.cursor is not None:
             self._hover_hex = None
+            self._tape.cursor = None
             self.update()
         if self._hover_callback is not None:
             self._hover_callback(None)

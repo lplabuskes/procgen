@@ -9,6 +9,7 @@ zoomed region / local-map view: [viz_regionview.md](viz_regionview.md).
 - `viz/mapview/regionview.py` — `RegionView`, `_RegionProjector` ([viz_regionview.md](viz_regionview.md))
 - `viz/mapview/overlays.py` — `OverlayProjector`, `draw_overlays`, per-feature renderers (shared by every view)
 - `viz/mapview/legend.py` — `legend_size`, `draw_legend`
+- `viz/mapview/measure.py` — `MeasureTape`, `distance_km`, `format_distance`, `draw_tape` (measuring tape)
 - `viz/mapview/projections.py` — four map projections
 - `viz/mapview/registry.py` — `apply_registry` (Qt adapter for `DisplayRegistry`)
 - `viz/mapview/main.py` — dev entry point
@@ -67,8 +68,8 @@ API: `set_globe(world)` / `set_mesh(mesh, antimeridian=None)` (bare mesh uses
 
 - **Toolbar**: Save, Coloration combo, Overlays menu (checkable `QAction` per
   overlay), Regions toggle, Back ("← World Map" / "← Region"), **Local maps**
-  toggle (in a region: click a hex to open its local map), zoom −/+/Reset (routed
-  to the visible view).
+  toggle (in a region: click a hex to open its local map), **Measure** toggle
+  (measuring tape on every view), zoom −/+/Reset (routed to the visible view).
 - **Views**: `QStackedWidget` of world map, region `RegionView`, local-map
   `RegionView` ([viz_regionview.md](viz_regionview.md)).
 - **Bottom bar**: status, Parameters, Re-run.
@@ -119,6 +120,27 @@ Drawing order (feature key, registering stage):
 | `"settlements"` (population) | Tier circles, radius `TIER_RADII[tier] · zoom^0.3 · (√(pop/max_pop)·0.4 + 0.6)`. Region: × 1.5, ≥ 2 × largest town, ringed. Local: built-up footprint (`localmap/cities.py`, texels unioned via `QRegion`, tier colour, dark outline); smaller than the floor marker (2 × largest town radius) → "walled" marker (dark outline, white band, dark ring, dark centre dot), never mistaken for a town |
 | `"polity_borders"` (polity) | Black by depth (2.0 / 1.2 / 0.7 px × view_zoom^0.3 × level scale 1 / 1.25 / 1.5 for world / region / local, fainter deeper), sovereign on top |
 | farmland | Local only, no toggle ([viz_regionview.md](viz_regionview.md)) |
+
+---
+
+## `viz/mapview/measure.py` — measuring tape
+
+The toolbar's **Measure** toggle calls `set_measure_mode` on all four views
+(`MapWidget`, and the region / local / settlement `RegionView`s). In measure mode
+a click (press/release < 4 px; drags still pan) places the tape's ends instead of
+opening cities, regions, hexes or settlements: the first sets the start, a dashed
+line follows the cursor, the second fixes the end, a third starts over. Turning
+the mode off (the button, or **Esc** anywhere in the window), or opening another map in a
+view, clears that view's tape.
+
+- `MeasureTape` — `start` / `end` / `cursor` as ECEF unit vectors (`click`, `clear`, `waiting`, `ends`).
+  Each view finds the ground under a click with its `ecef_at_screen(mx, my)` (world: unprojected;
+  zoomed: inverse screen transform → `(s, t)` inside the map's outline → `local_to_ecef`).
+- `distance_km(a, b)` — great-circle distance on the 6,371 km globe.
+- `format_distance(km)` — `"42 m"` under 1 km, `"3.46 km"`, `"42.0 km"`, `"12,346 km"`.
+- `draw_tape(painter, tape, projector)` — cased yellow line along the great circle (`arc_points`,
+  ~0.25° samples; broken where the projector drops a segment, e.g. the antimeridian), end dots, and
+  the distance label beside the second (or moving) end. Drawn in screen space over the overlays.
 
 ---
 

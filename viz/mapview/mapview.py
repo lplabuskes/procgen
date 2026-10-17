@@ -5,7 +5,9 @@ from typing import TYPE_CHECKING, Callable, Optional, Sequence
 
 import numpy as np
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QBrush, QColor, QImage, QPainter, QPen, QPixmap, QPolygonF, QTransform
+from PySide6.QtGui import (
+    QAction, QBrush, QColor, QImage, QKeySequence, QPainter, QPen, QPixmap, QPolygonF, QShortcut, QTransform,
+)
 from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import (
     QApplication,
@@ -26,6 +28,7 @@ from core.display import LocalHoverFn, SchemeSpec, TextureRecipe
 from region.display import describe_texel
 from region.geometry import RegionGeometry, cell_border_polylines, ecef_to_cell
 from viz.mapview.legend import draw_legend
+from viz.mapview.measure import MeasureTape, draw_tape
 from viz.mapview.overlays import draw_overlays, settlement_markers
 from viz.mapview.projections import RobinsonProjection, Projection
 from localmap.store import MapStore
@@ -294,6 +297,10 @@ class MapWidget(QWidget):
         self._region_face_cells: Optional[np.ndarray] = None
         self._region_border_polylines: list[np.ndarray] = []  # each (N, 3) ECEF
 
+        # Measure mode: clicks place the tape's ends instead of opening cities or regions.
+        self._measure: bool = False
+        self._tape = MeasureTape()
+
         # Cached render of the map body (faces + overlays). Repainting all textured faces is
         # slow, so hover-only changes (region tint) just re-blit this and redraw on top.
         self._base_cache: Optional[QPixmap] = None
@@ -513,6 +520,8 @@ class MapWidget(QWidget):
         if self._region_mode:
             cx, cy = self._center[0], self._center[1]
             self._draw_region_overlay(painter, W, H, cx, cy, self._zoom * 0.5 * W, self._zoom * 0.5 * H)
+        if self._measure:
+            draw_tape(painter, self._tape, _WorldProjector(self, W, H))
 
         self._draw_legend(painter, W, H)
 
@@ -594,6 +603,11 @@ class MapWidget(QWidget):
 
     def _region_at_screen(self, mx: float, my: float) -> Optional[int]:
         """Return the region cell index at screen position, or None if off-map."""
+        ecef = self.ecef_at_screen(mx, my)
+        return None if ecef is None else int(ecef_to_cell(ecef[None, :], self._antimeridian)[0])
+
+    def ecef_at_screen(self, mx: float, my: float) -> Optional[np.ndarray]:
+        """The unit-sphere point drawn at a screen position, or None if off-map."""
         W, H = float(self.width()), float(self.height())
         scale_x = self._zoom * 0.5 * W
         scale_y = self._zoom * 0.5 * H
@@ -609,8 +623,21 @@ class MapWidget(QWidget):
         # so the original ECEF longitude is lon = shifted_lon + ant + π.
         lon = shifted_lon + self._antimeridian + np.pi
         cos_lat = np.cos(lat)
-        ecef = np.array([[cos_lat * np.cos(lon), cos_lat * np.sin(lon), np.sin(lat)]])
-        return int(ecef_to_cell(ecef, self._antimeridian)[0])
+        return np.array([cos_lat * np.cos(lon), cos_lat * np.sin(lon), np.sin(lat)])
+
+    def set_measure_mode(self, enabled: bool) -> None:
+        """Measure mode: a click sets the tape's start, the next its end (a third starts over)."""
+        self._measure = bool(enabled)
+        self._tape.clear()
+        self.setCursor(self._idle_cursor())
+        self.update()
+
+    @property
+    def tape(self) -> MeasureTape:
+        return self._tape
+
+    def _idle_cursor(self) -> Qt.CursorShape:
+        return Qt.CursorShape.CrossCursor if self._measure else Qt.CursorShape.OpenHandCursor
 
     def _draw_region_overlay(
         self,
@@ -729,6 +756,9 @@ class MapWidget(QWidget):
             self._center[1] = self._drag_start_center[1] + dy / scale_y
             self._clamp_center()
             self.update()
+        elif self._measure and self._tape.waiting:
+            self._tape.cursor = self.ecef_at_screen(mx, my)
+            self.update()
         if self._hover_callback is not None:
             face_src, uv = self._hit_face(mx, my)
             self._hover_callback(face_src, uv)
@@ -744,6 +774,9 @@ class MapWidget(QWidget):
         if self._region_mode and self._hover_region is not None:
             self._hover_region = None
             self.update()
+        if self._measure and self._tape.cursor is not None:
+            self._tape.cursor = None
+            self.update()
 
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -751,15 +784,24 @@ class MapWidget(QWidget):
             mx, my = float(pos.x()), float(pos.y())
             # A negligible-movement press-release is a click, not a drag: a city marker
             # opens its settlement map; otherwise, in region mode, the cell opens.
+            # In measure mode a click only places one of the tape's ends.
             clicked = (
                 self._drag_start is not None
                 and abs(mx - self._drag_start[0]) < 4.0
                 and abs(my - self._drag_start[1]) < 4.0
             )
+            if self._measure:
+                self._drag_start = None
+                self.setCursor(self._idle_cursor())
+                point = self.ecef_at_screen(mx, my) if clicked else None
+                if point is not None:
+                    self._tape.click(point)
+                    self.update()
+                return
             city = self.city_at_screen(mx, my) if clicked and self._city_click_callback is not None else None
             if city is not None and self._city_click_callback is not None:
                 self._drag_start = None
-                self.setCursor(Qt.CursorShape.OpenHandCursor)
+                self.setCursor(self._idle_cursor())
                 self._city_click_callback(city)
                 return
             if clicked and self._region_mode and self._region_click_callback is not None:
@@ -767,7 +809,7 @@ class MapWidget(QWidget):
                 if region is not None:
                     self._region_click_callback(region)
             self._drag_start = None
-            self.setCursor(Qt.CursorShape.OpenHandCursor)
+            self.setCursor(self._idle_cursor())
 
     def wheelEvent(self, event) -> None:
         delta = event.angleDelta().y()
@@ -860,6 +902,15 @@ class MapWindow(QMainWindow):
         self._local_btn.setVisible(False)
         toolbar_layout.addWidget(self._local_btn)
 
+        # Measuring tape, on every map: click two points for the ground distance between them.
+        self._measure_btn = QPushButton("Measure")
+        self._measure_btn.setCheckable(True)
+        self._measure_btn.setChecked(False)
+        self._measure_btn.setToolTip("Click two points to measure the distance between them (Esc: stop)")
+        toolbar_layout.addWidget(self._measure_btn)
+        # Escape leaves measure mode (dropping the tape).
+        QShortcut(QKeySequence(Qt.Key.Key_Escape), self, lambda: self._measure_btn.setChecked(False))
+
         toolbar_layout.addStretch()
 
         zoom_out_btn = QPushButton("−")
@@ -936,6 +987,8 @@ class MapWindow(QMainWindow):
         self._stack.addWidget(self._region_view)  # index 1: zoomed region
         self._stack.addWidget(self._local_view)   # index 2: a regional hex's local map
         self._stack.addWidget(self._settlement_view)  # index 3: a town's or city's settlement map
+        for measured in (self._map, self._region_view, self._local_view, self._settlement_view):
+            self._measure_btn.toggled.connect(measured.set_measure_mode)
 
         layout.addWidget(toolbar)
         layout.addWidget(self._stack, stretch=1)

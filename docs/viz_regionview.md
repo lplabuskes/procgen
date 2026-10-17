@@ -12,6 +12,8 @@ back from a local map shows the region untouched.
 - **Regions** toggles the cell overlay; clicking a cell (`_enter_region`) refines
   and shows it. **Back** (`← World Map` / `← Region`) steps local → region →
   world.
+- **Measure** (every view) turns clicks into measuring-tape ends ahead of
+  settlement and hex picking; see [viz.md](viz.md#vizmapviewmeasurepy--measuring-tape).
 - **Local maps** (in a region) enables hex picking: hovered hex highlighted; a
   click (press/release < 4 px apart, so drags still pan) opens its local map
   (`_enter_local`). The **Villages** toggle is added with the first local map.
@@ -99,6 +101,11 @@ screen (keeping zoom/pan); `MapWindow` rebuilds an open local map
 (`_reopen_local`); a new globe (`MapWindow.set_globe`) empties the store. See [region.md](region.md#regionparams-regionparamspy).
 
 **Drawing.**
+- The map (terrain, site, overlays, legend) is painted into a cached pixmap
+  (`_paint_base`); any change to it goes through `_invalidate()`. Cursor-only
+  changes — the hex picked for a local map, the measuring tape — call plain
+  `update()`, re-blit the cache and draw over it (`_paint_top`): a full paint
+  of a real region is ~130 ms, a re-blit plus tape ~10 ms.
 - Each hex's layer texture (`build_layer_texture`) cached as a `QImage`. Local
   `(s, t)` → screen is flip-and-scale, so each hex is an axis-aligned blit
   clipped to its hexagon (0.75 px proud, so antialiased neighbours leave no
