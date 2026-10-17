@@ -122,6 +122,9 @@ def report(m: SettlementMap, store, timings: dict[str, float]) -> None:  # type:
             kind = layout.arterial_kinds[i] if i < len(layout.arterial_kinds) else "main"
             by_kind.setdefault(kind, []).append(g.length)
         print("  arterials: " + ", ".join(f"{k} {len(v)} ({sum(v) / 1000:.2f} km)" for k, v in by_kind.items()))
+    if layout.closes or layout.alleys:
+        print(f"  lanes: {len(layout.closes)} closes ({sum(g.length for g in layout.closes) / 1000:.2f} km), "
+              f"{len(layout.alleys)} alleys ({sum(g.length for g in layout.alleys) / 1000:.2f} km)")
     if layout.walls is not None:
         print(f"  walls: {layout.walls.kind}, {layout.walls.line.length / 1000:.2f} km, "
               f"{len(layout.walls.towers)} towers, {len(layout.walls.gates)} gates")

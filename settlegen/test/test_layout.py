@@ -1,16 +1,17 @@
 """The layout on a hand-built site: a square town split by a river, two roads in."""
 import dataclasses
+import math
 
 import numpy as np
 import pytest
 import shapely
-from shapely.geometry import LineString, MultiLineString, MultiPolygon, box
+from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon, box
 
 from settlegen.anchors import Anchor, AnchorCandidates
 from settlegen.frame import Frame
 from settlegen.layout import (
-    OPEN_DISTRICTS, SettlementLayoutParams, build_layout, chaikin, core_polygon, describe_at, lots_of, route_arterials,
-    split_blocks,
+    OPEN_DISTRICTS, SettlementLayoutParams, build_layout, chaikin, core_polygon, describe_at, lanes_of, lots_of,
+    route_arterials, split_blocks,
 )
 from settlegen.profile import Industry, PolityRelation, SettlementProfile
 from settlegen.roads import Gate, RoadLine, SiteRoads
@@ -156,6 +157,62 @@ def test_arterials_reach_every_gate_and_bridge_the_river(layout):
     assert net.distance(shapely.Point(layout.anchors["market"])) < 1.0
     # The waterfront lies across the river from the market.
     assert len(layout.bridges) >= 1
+
+
+def test_closes_and_alleys_open_up_deep_blocks(layout):
+    assert len(layout.closes) >= 5 and len(layout.alleys) >= 1
+    blocks = shapely.union_all([b.polygon for b in layout.blocks])
+    half = 0.5 * layout.lane_m
+    for lane in [*layout.closes, *layout.alleys]:
+        # Off the blocks, open to a street at its start.
+        assert blocks.intersection(lane.buffer(half - 0.25, cap_style="flat")).area < 1.0
+        assert blocks.buffer(half + 1.0).contains(shapely.Point(lane.coords[0]))
+    # A close stops inside its block: blocks lie beyond its head.
+    heads = [np.asarray(c.coords[-1]) for c in layout.closes]
+    assert sum(blocks.distance(shapely.Point(h)) < half + 1.0 for h in heads) == len(heads)
+    # Lots fronting the lanes never overlap the block's other lots.
+    for b in layout.blocks:
+        if len(b.lots) > 1:
+            assert shapely.union_all(list(b.lots)).area == pytest.approx(sum(g.area for g in b.lots), rel=1e-3)
+    pt = np.asarray(layout.closes[0].interpolate(0.5, normalized=True).coords[0])
+    assert describe_at(layout, _site(), pt, 2) == "Close"
+
+
+def test_lanes_cut_in_from_a_side_or_down_the_middle():
+    deep = box(0, 0, 120, 70)
+    params = SettlementLayoutParams()
+    pieces, closes, alleys = lanes_of(deep, 22.0, np.random.default_rng(1), params, planned=False)
+    assert closes or alleys
+    assert sum(g.area for g in pieces) < deep.area
+    for c in closes:                       # across the block, from one long side, a lot short of the other
+        y0, y1 = c.coords[0][1], c.coords[-1][1]
+        assert min(y0, y1) == pytest.approx(0.0, abs=1.0) or max(y0, y1) == pytest.approx(70.0, abs=1.0)
+        assert c.length < 70.0 - 20.0
+    pieces, closes, alleys = lanes_of(deep, 22.0, np.random.default_rng(1), params, planned=True)
+    assert not closes and len(alleys) == 1 and len(pieces) == 2
+    assert alleys[0].length == pytest.approx(120.0, abs=1.0)
+    # A block two lots deep keeps itself.
+    shallow = box(0, 0, 120, 45)
+    assert lanes_of(shallow, 22.0, np.random.default_rng(1), params, planned=False) == ([shallow], [], [])
+
+
+def test_lanes_open_onto_the_street_on_a_skewed_block():
+    # A parallelogram: the cut runs across the long axis, meeting the sheared sides 30° off square.
+    shear = math.tan(math.radians(30.0))
+    block = Polygon([(0, 0), (140, 0), (140 + 75 * shear, 75), (75 * shear, 75)])
+    params = SettlementLayoutParams(alley_share=0.5)
+    half = 0.5 * params.lane_m
+    for seed in range(6):
+        pieces, closes, alleys = lanes_of(block, 22.0, np.random.default_rng(seed), params, planned=False)
+        left = shapely.union_all(pieces)
+        for lane, ends in [*((c, (0,)) for c in closes), *((a, (0, -1)) for a in alleys)]:
+            xy = np.asarray(lane.coords)
+            for k in ends:
+                end, inner = xy[k], xy[1 if k == 0 else -2]
+                outward = LineString([end, 2.0 * end - inner])     # the lane carried on into the street
+                gap = shapely.union_all([lane, outward]).buffer(half - 0.1, cap_style="flat")
+                mouth = shapely.Point(end).buffer(2.0 * params.lane_m)
+                assert left.intersection(gap).intersection(mouth).area < 0.5
 
 
 def test_noxious_trades_go_downwind(layout):

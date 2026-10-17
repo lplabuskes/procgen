@@ -45,7 +45,9 @@ a village are different places, not one plan at three sizes.  Villages:
    its market, quay, two leading trades, its churchyard and — only by a castle
    — an elite quarter.
 8. **Lots**: strips along each block's long sides; wells in the core, shrines
-   along the streets.
+   along the streets.  Blocks too deep for their lots (yards in the middle) are
+   opened up by closes and alleys (:func:`lanes_of`) with lots fronting them
+   (:func:`lane_lots`).
 
 :func:`describe_at` names what is at a point (for hover).  No names
 (Decision 9).  Seeded per (world, settlement).  Qt-free.
@@ -62,7 +64,7 @@ import shapely
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import dijkstra
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, Polygon
-from shapely.ops import nearest_points
+from shapely.ops import nearest_points, substring
 
 from core.params import param_field as _f, paramclass
 from settlegen.docks import Docks, DockSpec, build_docks
@@ -94,6 +96,10 @@ CRAFTS: dict[str, tuple[str, bool, bool]] = {
 }
 # Districts with no lots.
 OPEN_DISTRICTS = ("graveyard", "square")
+# Districts whose deep blocks are opened up by closes and alleys.
+LANE_DISTRICTS = ("residential", "suburb", *sorted({v[0] for v in CRAFTS.values()}))
+# A block this many lot depths deep has yards in its middle (``lots_of``'s rows stop short).
+_DEEP_BLOCK = 2.6
 DISTRICTS = ("market", "quay", "elite", "residential", "suburb", "gardens", "graveyard", "square",
              *sorted({v[0] for v in CRAFTS.values()}))
 
@@ -136,6 +142,11 @@ class SettlementLayoutParams:
     lot_depth_m: float = _f(22.0, label="Lot depth (m)", min=5.0, max=100.0, step=1.0)
     suburb_lot_mult: float = _f(1.5, label="Suburb lot (×)", min=1.0, max=5.0, step=0.1)
     garden_lot_mult: float = _f(3.0, label="Garden lot (×)", min=1.0, max=10.0, step=0.1)
+    # Lanes into blocks too deep for their frontage: closes (dead ends) and alleys (through).
+    lane_m: float = _f(3.0, label="Close / alley width (m)", min=1.0, max=10.0, step=0.5)
+    lane_spacing_block_m: float = _f(60.0, label="Closes along a deep block every (m)", min=15.0, max=500.0,
+                                     step=5.0)
+    alley_share: float = _f(0.3, label="Share of lanes running through (alleys)", min=0.0, max=1.0, step=0.05)
     elite_share: float = _f(0.12, label="Elite share of core blocks", min=0.0, max=0.5, step=0.01)
     craft_share: float = _f(0.06, label="Craft quarter share of blocks (per weight)", min=0.0, max=0.5, step=0.01)
     quay_m: float = _f(40.0, label="Quay reach from the water (m)", min=5.0, max=200.0, step=5.0)
@@ -216,6 +227,10 @@ class SettlementLayout:
     # Per arterial: "main", "wall" (inside the walls) or "secondary"; empty — all main.
     arterial_kinds: list[str] = field(default_factory=list)
     secondary_m: float = 7.0
+    # Lanes into deep blocks: centre lines of the dead ends and the through ways.
+    closes: list[LineString] = field(default_factory=list)
+    alleys: list[LineString] = field(default_factory=list)
+    lane_m: float = 3.0
 
     def arterial_width(self, i: int) -> float:
         kind = self.arterial_kinds[i] if i < len(self.arterial_kinds) else "main"
@@ -666,6 +681,138 @@ def lots_of(block: Polygon, frontage: float, depth: float, rng: np.random.Genera
     keep = area >= 0.3 * frontage * min(depth, d)
     return np.asarray([g if isinstance(g, Polygon) else max(shapely.get_parts(g), key=lambda p: p.area)
                        for g in lots[keep] if not g.is_empty], dtype=object)
+
+
+def _run_on(line: LineString, by: float, start: bool = True, end: bool = True) -> LineString:
+    """``line`` carried straight on ``by`` m past its ``start`` and/or ``end``: a lane cut
+    through to the street even where it meets the block's edge off square."""
+    xy = np.asarray(line.coords, dtype=np.float64)
+    if start:
+        t = xy[0] - xy[1]
+        xy = np.vstack([xy[0] + by * t / max(float(np.linalg.norm(t)), 1e-9), xy])
+    if end:
+        t = xy[-1] - xy[-2]
+        xy = np.vstack([xy, xy[-1] + by * t / max(float(np.linalg.norm(t)), 1e-9)])
+    return LineString(xy)
+
+
+def lanes_of(
+    block: Polygon, depth: float, rng: np.random.Generator, params: SettlementLayoutParams, planned: bool,
+) -> tuple[list[Polygon], list[LineString], list[LineString]]:
+    """Lanes into ``block`` if it is too deep for ``depth``-deep lots round its edge:
+    ``(pieces, closes, alleys)``.  Organic places cut lanes in across the block every
+    ``lane_spacing_block_m`` from a random long side — closes stopping a lot short of the far
+    side, or (``alley_share``) alleys through; a ``planned`` one runs a back alley down the
+    middle, between the back-to-back rows.  A block too shallow keeps itself, lane-less."""
+    centre, u, v, length, d = _axes(block)
+    if d < _DEEP_BLOCK * depth or length < 2.0 * depth:
+        return [block], [], []
+    half = 0.5 * float(params.lane_m)
+    reach = length + d
+    run = 2.0 * float(params.lane_m) + 2.0          # past the block's edge at an open end
+    if planned:
+        cut = LineString([centre - reach * u, centre + reach * u]).intersection(block)
+        alleys = [g for g in shapely.get_parts(cut) if isinstance(g, LineString) and g.length > depth]
+        if not alleys:
+            return [block], [], []
+        cuts = [_run_on(g, run) for g in alleys]
+        pieces = _multi(block.difference(shapely.union_all(cuts).buffer(half, cap_style="flat")))
+        return list(pieces.geoms), [], alleys
+    n = max(1, int(round(length / float(params.lane_spacing_block_m))))
+    span = length - 1.2 * depth                         # keep a lot's depth clear of each end
+    if span <= 0:
+        return [block], [], []
+    closes: list[LineString] = []
+    alleys = []
+    exterior = block.exterior
+    for i in range(n):
+        a = -0.5 * span + (i + 0.5 + 0.3 * rng.uniform(-1.0, 1.0)) * span / n
+        side = 1.0 if rng.random() < 0.5 else -1.0
+        tilt = math.radians(8.0) * rng.uniform(-1.0, 1.0)
+        w = -side * (v * math.cos(tilt) + u * math.sin(tilt))      # inward, from the ``side`` edge
+        start = centre + a * u + side * (0.5 * d + 10.0) * v
+        line = LineString([start, start + (d + 20.0) * w]).intersection(block)
+        parts = [g for g in shapely.get_parts(line) if isinstance(g, LineString) and g.length > 1.0]
+        if not parts:
+            continue
+        first = min(parts, key=lambda g: g.distance(Point(start)))
+        xy = np.asarray(first.coords)
+        if np.linalg.norm(xy[0] - start) > np.linalg.norm(xy[-1] - start):
+            xy = xy[::-1]
+        lane = LineString(xy)
+        if exterior.distance(Point(xy[0])) > 1.0 or lane.length < 1.5 * depth:
+            continue
+        through = rng.random() < float(params.alley_share) and exterior.distance(Point(xy[-1])) < 1.0
+        if through:
+            alleys.append(lane)
+        else:
+            close = substring(lane, 0.0, lane.length - depth)
+            if isinstance(close, LineString):
+                closes.append(close)
+    if not closes and not alleys:
+        return [block], [], []
+    cuts = [_run_on(g, run, end=False) for g in closes] + [_run_on(g, run) for g in alleys]
+    cut = shapely.union_all(cuts).buffer(half, cap_style="flat")
+    pieces = [g for g in _multi(block.difference(cut)).geoms if g.area > 0.5 * depth * depth]
+    return pieces, closes, alleys
+
+
+def yards_of(block: Polygon, depth: float):  # type: ignore[no-untyped-def]
+    """What :func:`lots_of`'s ``depth``-deep rows leave in the middle of ``block`` (None
+    when they fill it)."""
+    centre, u, v, length, d = _axes(block)
+    if d < _DEEP_BLOCK * depth:
+        return None
+    a, b = 0.5 * length + 1.0, 0.5 * d - depth
+    rect = Polygon([centre + p * u + q * v for p, q in ((-a, -b), (a, -b), (a, b), (-a, b))])
+    yards = block.intersection(rect)
+    return None if yards.is_empty else yards
+
+
+def lane_lots(
+    yards, lanes: Sequence[LineString], frontage: float, depth: float, half_lane: float,  # type: ignore[no-untyped-def]
+    rng: np.random.Generator, planned: bool,
+) -> np.ndarray:
+    """Lots fronting ``lanes`` in a block's ``yards`` (see :func:`yards_of`): ``frontage``
+    along the lane, up to ``depth`` back from it either side, and one facing down from a
+    close's head."""
+    free = yards
+    j = 0.05 if planned else 0.3
+    boxes = []
+    for lane in lanes:                              # straight, from the street inward
+        xy = np.asarray(lane.coords)
+        length = float(np.linalg.norm(xy[-1] - xy[0]))
+        t = (xy[-1] - xy[0]) / max(length, 1e-9)
+        nrm = np.array([-t[1], t[0]])
+        a = 0.5 * depth                             # the street's rows take what they hold
+        while a < length - 0.3 * frontage:
+            a1 = min(a + frontage * rng.uniform(1.0 - j, 1.0 + j), length)
+            p0, p1 = xy[0] + a * t, xy[0] + a1 * t
+            for s in (1.0, -1.0):
+                q0, q1 = p0 + s * half_lane * nrm, p1 + s * half_lane * nrm
+                boxes.append([q0, q1, q1 + s * depth * nrm, q0 + s * depth * nrm, q0])
+            a = a1
+        if not free.contains(Point(xy[-1] + 2.0 * half_lane * t)):
+            continue                                # an alley: out onto the street
+        head = xy[-1] + half_lane * t               # a close's head: a lot facing down it
+        boxes.append([head - frontage * nrm, head + frontage * nrm, head + frontage * nrm + depth * t,
+                      head - frontage * nrm + depth * t, head - frontage * nrm])
+    if not boxes:
+        return np.zeros(0, dtype=object)
+    cut = np.asarray(shapely.intersection(shapely.polygons(np.asarray(boxes)), free), dtype=object)
+    out: list[Polygon] = []
+    for g in cut:                                   # first come first served where two lanes' lots meet
+        if g.is_empty or g.area < 0.4 * frontage * depth:
+            continue
+        hits = [o for o in out if o.intersects(g)]
+        if hits:
+            g = g.difference(shapely.union_all(hits))
+        parts = [q for q in shapely.get_parts(g) if isinstance(q, Polygon) and not q.is_empty]
+        if parts:
+            q = max(parts, key=lambda q: q.area)
+            if q.area >= 0.4 * frontage * depth:
+                out.append(q)
+    return np.asarray(out, dtype=object)
 
 
 # ── districts ────────────────────────────────────────────────────────────────
@@ -1121,19 +1268,33 @@ def build_layout(
 
     # ── lots ──
     out_blocks: list[Block] = []
+    closes: list[LineString] = []
+    alleys: list[LineString] = []
+    planned = bool(profile.planned)
     for poly, dist, is_core, is_burgage in zip(blocks, districts, in_core, burgage):
         if dist in OPEN_DISTRICTS:
-            lots = np.zeros(0, dtype=object)
-        elif is_burgage:
-            lots = lots_of(poly, float(params.burgage_frontage_m), 1.4 * float(params.burgage_depth_m), rng,
-                           bool(profile.planned))
-        else:
-            g = outward(poly)
-            mult = float(params.garden_lot_mult) if dist == "gardens" or g < 0 else \
-                1.0 if dist in ("market", "quay") else 1.0 + (float(params.suburb_lot_mult) - 1.0) * g
-            lots = lots_of(poly, float(params.lot_frontage_m) * mult, float(params.lot_depth_m) * math.sqrt(mult),
-                           rng, bool(profile.planned))
-        out_blocks.append(Block(polygon=poly, district=dist, core=bool(is_core), lots=lots))
+            out_blocks.append(Block(polygon=poly, district=dist, core=bool(is_core), lots=np.zeros(0, dtype=object)))
+            continue
+        if is_burgage:
+            lots = lots_of(poly, float(params.burgage_frontage_m), 1.4 * float(params.burgage_depth_m), rng, planned)
+            out_blocks.append(Block(polygon=poly, district=dist, core=bool(is_core), lots=lots))
+            continue
+        g = outward(poly)
+        mult = float(params.garden_lot_mult) if dist == "gardens" or g < 0 else \
+            1.0 if dist in ("market", "quay") else 1.0 + (float(params.suburb_lot_mult) - 1.0) * g
+        frontage, depth = float(params.lot_frontage_m) * mult, float(params.lot_depth_m) * math.sqrt(mult)
+        pieces, c, a = lanes_of(poly, depth, rng, params, planned) if dist in LANE_DISTRICTS and g >= 0 \
+            else ([poly], [], [])
+        closes += c
+        alleys += a
+        for piece in pieces:
+            lots = lots_of(piece, frontage, depth, rng, planned)
+            near = [ln for ln in (*c, *a) if ln.distance(piece) < float(params.lane_m)]
+            yards = yards_of(piece, depth) if near else None
+            if yards is not None:
+                extra = lane_lots(yards, near, frontage, depth, 0.5 * float(params.lane_m), rng, planned)
+                lots = np.concatenate([lots, extra]) if len(extra) else lots
+            out_blocks.append(Block(polygon=piece, district=dist, core=bool(is_core), lots=lots))
 
     # ── wells and shrines on the streets ──
     lanes_all = streets or [g for g in arterials]
@@ -1147,7 +1308,7 @@ def build_layout(
         anchors=anchors, core=core, walls=walls, citadel=citadel, plaza=plaza, precinct=precinct,
         arterials=arterials, bridges=bridges, streets=streets, blocks=out_blocks, points=points,
         arterial_m=float(params.arterial_m), quays=docks.quays, piers=docks.piers, footprint=grown,
-        arterial_kinds=kinds, secondary_m=secondary_m,
+        arterial_kinds=kinds, secondary_m=secondary_m, closes=closes, alleys=alleys, lane_m=float(params.lane_m),
     )
 
 
@@ -1219,6 +1380,9 @@ def describe_at(layout: SettlementLayout, site: "SettlementSite", xy: np.ndarray
             kind = layout.arterial_kinds[i] if i < len(layout.arterial_kinds) else "main"
             return "Village street" if village else {"wall": "Wall street", "secondary": "Through street"}.get(
                 kind, "Main street")
+    for lanes, label in ((layout.closes, "Close"), (layout.alleys, "Alley")):
+        if any(ln.distance(pt) <= 0.5 * layout.lane_m + 0.5 for ln in lanes):
+            return label
     block = block_at(layout, xy)
     if block is not None:
         label = district_label(block.district, tier)

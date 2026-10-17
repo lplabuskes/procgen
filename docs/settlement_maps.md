@@ -243,7 +243,12 @@ slope, so it is tested on hand-built sites.
    graveyards, squares; the rest houses, gardens on sparse ground. Towns keep to
    two trades, a churchyard and — only by a castle — an elite quarter.
 8. **Plots**: strips along each block's long sides, 8 × 22 m (suburb × 1.5,
-   gardens × 3); wells and shrines on the streets.
+   gardens × 3); wells and shrines on the streets. **Closes and alleys** (3 m)
+   open up blocks ≥ 2.6 plots deep (whose middles the rows leave as yards) in
+   houses, suburbs and craft quarters: organic places cut lanes in from a random
+   long side every ~60 m — closes stopping a plot short of the far side, 30%
+   alleys running through; planned ones a back alley down the middle. Plots
+   front the lanes in the yards (one facing down each close from its head).
 
 **Villages** (`village_layout.py`): households (`P / 5`) as tofts fronting a
 street, sized from the footprint (300–3,000 m², 2.5:1). Forms: a fishing village
