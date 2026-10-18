@@ -6,11 +6,10 @@ import pytest
 
 from localmap.params import LocalParams
 from localmap.store import MapStore
-from localmap.test.conftest import local_params
+from localmap.test.fixtures import local_params
 from localmap.villages import VillageParams
 from region.params import RegionParams
 from region.test.test_builder import land_towns
-from region.test.test_resources import globe  # noqa: F401  (fixture)
 
 REGION_ID = 40
 SMALL_REGION = dataclasses.replace(
@@ -19,7 +18,7 @@ SMALL_LOCAL = LocalParams(
     upsample=local_params(), villages=VillageParams(village_min=20_000.0, village_max=100_000.0, spacing_km=15.0))
 
 
-def small_store(globe, **kwargs) -> MapStore:  # noqa: F811
+def small_store(globe, **kwargs) -> MapStore:
     store = MapStore(globe, **kwargs)
     store.set_region_params(SMALL_REGION)
     store.set_local_params(SMALL_LOCAL)
@@ -27,14 +26,14 @@ def small_store(globe, **kwargs) -> MapStore:  # noqa: F811
 
 
 @pytest.fixture
-def towns(globe):  # noqa: F811
+def towns(globe):
     towns = land_towns(globe)
     globe.add_feature("towns", towns)
     yield towns
     globe.remove_feature("towns")
 
 
-def test_maps_are_built_once_while_held(globe, towns):  # noqa: F811
+def test_maps_are_built_once_while_held(globe, towns):
     store = small_store(globe)
     region = store.region(REGION_ID)
     assert store.region(REGION_ID) is region
@@ -43,7 +42,7 @@ def test_maps_are_built_once_while_held(globe, towns):  # noqa: F811
     assert store.builds == [("region", REGION_ID), ("local", (REGION_ID, 0))]
 
 
-def test_least_recently_used_maps_go_first(globe, towns):  # noqa: F811
+def test_least_recently_used_maps_go_first(globe, towns):
     store = small_store(globe, local_capacity=2)
     store.local(REGION_ID, 0)
     store.local(REGION_ID, 1)
@@ -52,7 +51,7 @@ def test_least_recently_used_maps_go_first(globe, towns):  # noqa: F811
     assert store.has_local(REGION_ID, 0) and store.has_local(REGION_ID, 2) and not store.has_local(REGION_ID, 1)
 
 
-def test_local_params_drop_local_maps_and_local_refinement(globe, towns):  # noqa: F811
+def test_local_params_drop_local_maps_and_local_refinement(globe, towns):
     store = small_store(globe)
     store.region(REGION_ID)
     store.local(REGION_ID, 0)
@@ -64,7 +63,7 @@ def test_local_params_drop_local_maps_and_local_refinement(globe, towns):  # noq
     np.testing.assert_array_equal(towns.positions, towns.region_positions)
 
 
-def test_region_params_keep_fields_unless_the_detail_changes(globe, towns):  # noqa: F811
+def test_region_params_keep_fields_unless_the_detail_changes(globe, towns):
     store = small_store(globe)
     fields = store.region(REGION_ID).fields
     store.local(REGION_ID, 0)
@@ -80,7 +79,7 @@ def test_region_params_keep_fields_unless_the_detail_changes(globe, towns):  # n
     assert store.region(REGION_ID).fields is not fields
 
 
-def test_a_new_globe_drops_everything(globe, towns):  # noqa: F811
+def test_a_new_globe_drops_everything(globe, towns):
     store = small_store(globe)
     store.region(REGION_ID)
     store.set_globe(globe)

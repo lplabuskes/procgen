@@ -5,7 +5,6 @@ import shapely
 from shapely.geometry import MultiLineString, MultiPolygon
 
 from region.rivers import RegionRivers
-from region.test.test_resources import globe  # noqa: F401  (fixture)
 from settlegen.chain.builder import SettlementRef
 from realmgen.towns.types import Towns
 from settlegen.site.footprint import (
@@ -13,11 +12,7 @@ from settlegen.site.footprint import (
     _small_islands, wet_texels,
 )
 from settlegen.site.params import SettlementFootprintParams
-from settlegen.frame import Frame
-from settlegen.test.conftest import inner_center, lake_hex, lake_local, region, settlement_params, side_km  # noqa: F401
-from settlegen.terrain.builder import build_settlement_fields
 from settlegen.site.types import SiteWater
-from settlegen.site.water import shorelines, water_regions
 
 
 def test_the_claim_takes_the_best_allowed_texels():
@@ -68,17 +63,6 @@ def test_notches_narrower_than_the_disc_are_filled():
     wet = np.zeros_like(claimed)
     filled = _notches(claimed, wet, 3)
     assert filled[10:20, 18:21].all() and not filled[:5].any()
-
-
-@pytest.fixture(scope="module")
-def site(globe, lake_local, inner_center, side_km):  # noqa: F811
-    """A frame on the synthetic lake, with its water."""
-    fields = build_settlement_fields(globe, [lake_local], inner_center, side_km, settlement_params(side_km))
-    frame = Frame(fields.geometry, side_km * 1000.0)  # type: ignore[arg-type]
-    sea, lakes = water_regions(fields, frame)
-    water = SiteWater(sea=sea, lakes=lakes, shorelines=shorelines(lakes, frame), lines=[], channels=MultiPolygon(),
-                      rivers=RegionRivers(region_id=0, paths=[]))
-    return fields, frame, water
 
 
 class _Globe:

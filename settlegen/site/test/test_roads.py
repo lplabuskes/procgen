@@ -8,7 +8,6 @@ from region.geometry import ecef_to_cell
 from region.rivers import RegionRivers
 from region.roads import RegionRoads
 from region.test.test_builder import land_towns
-from region.test.test_resources import globe  # noqa: F401  (fixture)
 from settlegen.builder import build_settlement_map
 from settlegen.chain.builder import SettlementRef
 from settlegen.frame import Frame
@@ -18,7 +17,6 @@ from settlegen.site.crossings import crossings, gates
 from settlegen.site.landings import _landings, _quays, _split_at_coast
 from settlegen.site.road_chain import _chain, _Piece
 from settlegen.site.types import RoadLine
-from settlegen.test.conftest import lake_hex, lake_local, region  # noqa: F401
 from settlegen.terrain.builder import SettlementUpsampleParams
 from settlegen.site.types import RiverLine, SiteWater
 
@@ -59,7 +57,7 @@ def test_roads_on_one_map_or_too_far_apart_stay_apart():
 
 
 @pytest.fixture(scope="module")
-def frame(lake_local, lake_hex):  # noqa: F811
+def frame(lake_local, lake_hex):
     c = lake_local.grid.centers[lake_hex] if len(lake_local.grid.centers) > lake_hex else lake_local.grid.centers[0]
     geometry = SettlementGeometry(lake_local.geometry, np.asarray(c), 0.05)
     return Frame(geometry, 4000.0)
@@ -157,14 +155,14 @@ def test_no_crossing_under_a_lake():
 
 
 @pytest.fixture
-def towns(globe):  # noqa: F811
+def towns(globe):
     towns = land_towns(globe)
     globe.add_feature("towns", towns)
     yield towns
     globe.remove_feature("towns")
 
 
-def test_town_sites_have_valid_roads(globe, towns):  # noqa: F811
+def test_town_sites_have_valid_roads(globe, towns):
     store = small_store(globe)
     here = np.flatnonzero(ecef_to_cell(towns.site_positions, globe.antimeridian) == REGION_ID)
     params = SettlementMapParams(upsample=SettlementUpsampleParams(texel_m=200.0))

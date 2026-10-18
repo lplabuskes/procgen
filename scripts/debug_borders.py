@@ -30,19 +30,20 @@ from pathlib import Path
 import numpy as np
 
 import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
-from matplotlib.collections import LineCollection, PolyCollection  # noqa: E402
+import matplotlib.pyplot as plt
+from matplotlib.collections import LineCollection, PolyCollection
 
-from core.pipeline import BuildContext  # noqa: E402
-from realmgen.builder import RealmPipeline  # noqa: E402
-from realmgen.refine.fill import WATER, UNCLAIMED, _polity_color_map  # noqa: E402
-from realmgen.polity.types import UNCLAIMED_COLOR  # noqa: E402
-from worldgen.geology.channels import OCEAN_MASK  # noqa: E402
-from worldgen.geology.display import OCEAN_COLOR  # noqa: E402
-from worldgen.hydrology.channels import LAKE_MASK  # noqa: E402
+from core.pipeline import BuildContext
+from realmgen.builder import RealmPipeline
+from realmgen.refine.fill import WATER, UNCLAIMED, _polity_color_map
+from realmgen.polity.types import UNCLAIMED_COLOR
+from worldgen.geology.channels import OCEAN_MASK
+from worldgen.geology.display import OCEAN_COLOR
+from worldgen.hydrology.channels import LAKE_MASK
 
-from _common import add_seed_args, add_set_arg, get_physical_world, realm_params, resolve_seeds  # noqa: E402
+from _common import add_seed_args, add_set_arg, get_physical_world, realm_params, resolve_seeds
+
+matplotlib.use("Agg")    # render to files, never a window
 
 DEFAULT_SEEDS = [4]
 DEPTH_COLORS = ["black", "#d62728", "#1f77b4", "#2ca02c", "#9467bd", "#8c564b"]

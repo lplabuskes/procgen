@@ -26,30 +26,31 @@ from typing import Optional
 import numpy as np
 
 import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
-from matplotlib.patches import PathPatch  # noqa: E402
-from matplotlib.path import Path as MplPath  # noqa: E402
-from scipy.spatial import KDTree  # noqa: E402
+import matplotlib.pyplot as plt
+from matplotlib.patches import PathPatch
+from matplotlib.path import Path as MplPath
+from scipy.spatial import KDTree
 
-from core.display import TextureRecipe  # noqa: E402
-from localmap import (  # noqa: E402
+from core.display import TextureRecipe
+from localmap import (
     LocalMap, LocalParams, build_local_fields, build_local_map, local_conservation_report,
     village_budget_report,
 )
-from localmap.geometry import PARENT_CENTER, PARENT_RADIUS  # noqa: E402
-from localmap.villages import VILLAGE_KIND_NAMES  # noqa: E402
-from realmgen.towns.builder import rural_density_recipe  # noqa: E402
-from region.geometry import RegionGeometry, ecef_to_cell  # noqa: E402
-from region.grid import RegionHexGrid  # noqa: E402
-from region.rivers import build_region_rivers, river_length_km  # noqa: E402
-from region.wetlands import add_riparian_wetland  # noqa: E402
-from region.streams import build_region_streams  # noqa: E402
-from region.roads import build_region_roads  # noqa: E402
-from region.upsample import SMALL_LAKE_KEY, RegionFields, RegionUpsampleParams, build_region_fields  # noqa: E402
-from utils.sphere import EARTH_RADIUS_KM  # noqa: E402
-from debug_region import LAYERS, draw_region  # noqa: E402  (shared with the region check)
-from _common import get_realm_world  # noqa: E402
+from localmap.geometry import PARENT_CENTER, PARENT_RADIUS
+from localmap.villages import VILLAGE_KIND_NAMES
+from realmgen.towns.builder import rural_density_recipe
+from region.geometry import RegionGeometry, ecef_to_cell
+from region.grid import RegionHexGrid
+from region.rivers import build_region_rivers, river_length_km
+from region.wetlands import add_riparian_wetland
+from region.streams import build_region_streams
+from region.roads import build_region_roads
+from region.upsample import SMALL_LAKE_KEY, RegionFields, RegionUpsampleParams, build_region_fields
+from utils.sphere import EARTH_RADIUS_KM
+from debug_region import LAYERS, draw_region  # shared with the region check
+from _common import get_realm_world
+
+matplotlib.use("Agg")    # render to files, never a window
 
 RESULTS_DIR = Path(__file__).parent / "results"
 # Village dot colours, as the viewer draws them (viz/mapview/overlays.py).

@@ -3,13 +3,18 @@ region: the lake hex's local map and its neighbour's, and frames inside one
 and across the seam between them."""
 import numpy as np
 import pytest
+from shapely.geometry import MultiPolygon
 
-from localmap.test.conftest import lake_hex, local_params, region  # noqa: F401
+from localmap.test.fixtures import local_params
 from localmap.upsample import build_local_fields
 from region.geometry import ecef_to_cell
-from region.test.conftest import synthetic_globe  # noqa: F401
-from region.test.test_resources import globe  # noqa: F401
-from settlegen.terrain.builder import SettlementUpsampleParams, km_per_local_unit, with_local_detail
+from region.rivers import RegionRivers
+from settlegen.frame import Frame
+from settlegen.site.types import SiteWater
+from settlegen.site.water import shorelines, water_regions
+from settlegen.terrain.builder import (
+    SettlementUpsampleParams, build_settlement_fields, km_per_local_unit, with_local_detail,
+)
 
 # Texels across a test frame.
 FRAME_TEXELS = 32
@@ -22,7 +27,7 @@ def settlement_params(side_km: float, **overrides) -> SettlementUpsampleParams:
 
 
 @pytest.fixture(scope="module")
-def neighbour_hex(region, lake_hex, globe) -> int:  # noqa: F811
+def neighbour_hex(region, lake_hex, globe) -> int:
     """The lake hex's nearest neighbour with its centre in the region's own cell."""
     centers = region.grid.centers
     here = ecef_to_cell(region.geometry.local_to_ecef(centers[:, 0], centers[:, 1]), globe.antimeridian)
@@ -32,12 +37,12 @@ def neighbour_hex(region, lake_hex, globe) -> int:  # noqa: F811
 
 
 @pytest.fixture(scope="module")
-def lake_local(globe, region, lake_hex):  # noqa: F811
+def lake_local(globe, region, lake_hex):
     return build_local_fields(globe, region, lake_hex, local_params())
 
 
 @pytest.fixture(scope="module")
-def neighbour_local(globe, region, neighbour_hex):  # noqa: F811
+def neighbour_local(globe, region, neighbour_hex):
     return build_local_fields(globe, region, neighbour_hex, local_params())
 
 
@@ -48,13 +53,24 @@ def side_km(lake_local) -> float:
 
 
 @pytest.fixture(scope="module")
-def inner_center(region, lake_hex) -> np.ndarray:  # noqa: F811
+def inner_center(region, lake_hex) -> np.ndarray:
     c = region.grid.centers[lake_hex]
     return region.geometry.local_to_ecef(c[:1], c[1:])[0]
 
 
 @pytest.fixture(scope="module")
-def seam_center(region, lake_hex, neighbour_hex) -> np.ndarray:  # noqa: F811
+def seam_center(region, lake_hex, neighbour_hex) -> np.ndarray:
     """The midpoint of the edge the two hexes share."""
     c = 0.5 * (region.grid.centers[lake_hex] + region.grid.centers[neighbour_hex])
     return region.geometry.local_to_ecef(c[:1], c[1:])[0]
+
+
+@pytest.fixture(scope="module")
+def site(globe, lake_local, inner_center, side_km):
+    """A frame on the synthetic lake, with its water."""
+    fields = build_settlement_fields(globe, [lake_local], inner_center, side_km, settlement_params(side_km))
+    frame = Frame(fields.geometry, side_km * 1000.0)  # type: ignore[arg-type]
+    sea, lakes = water_regions(fields, frame)
+    water = SiteWater(sea=sea, lakes=lakes, shorelines=shorelines(lakes, frame), lines=[], channels=MultiPolygon(),
+                      rivers=RegionRivers(region_id=0, paths=[]))
+    return fields, frame, water

@@ -4,52 +4,13 @@ import pytest
 
 from region.resources import FaceFanField
 from region.sampling import GlobalSampler
+from region.test.fixtures import RESOURCE_KEYS
 from region.upsample import RegionUpsampleParams, build_region_fields, conservation_report
 from utils.raster import box_mean, texture_slope
 from utils.resample import anchor_means
 
 REGION_ID = 40
 TEX_SIZE = 16
-_KEYS = ("fertility", "forest_density", "dominant_crop", "rural_density", "fishing_density", "mining_density")
-
-
-@pytest.fixture(scope="module")
-def globe(synthetic_globe):
-    """The synthetic globe plus smooth resource layers and a sparse danger field,
-    removed again after the module."""
-    mesh = synthetic_globe.mesh
-    pos = mesh.face_texture_positions(*mesh.face_textures["elevation"].shape[1:3])
-    x, y, z = pos[..., 0], pos[..., 1], pos[..., 2]
-    water = (mesh.face_textures["ocean_mask"][..., 0] > 0.5) | (mesh.face_textures["lake_mask"][..., 0] > 0.5)
-    fert = np.where(water, 0.3, 0.5 + 0.3 * np.sin(5.0 * x) * np.cos(3.0 * y)).astype(np.float32)
-    forest = np.where(water, 0.0, np.clip(0.6 + 0.4 * np.cos(4.0 * z + x), 0.0, 1.0)).astype(np.float32)
-    rho = np.where(water, 0.0, 20.0 * fert ** 2).astype(np.float32)
-    mesh.set_face_textures("fertility", fert[..., None], n_channels=1)
-    mesh.set_face_textures("forest_density", forest[..., None], n_channels=1)
-    mesh.set_face_textures("dominant_crop", np.ones_like(fert, dtype=np.uint8)[..., None], n_channels=1)
-    mesh.set_face_textures("rural_density", rho[..., None], n_channels=1)
-    mesh.set_face_textures("fishing_density", (0.3 * rho)[..., None], n_channels=1)
-    # Miners on a few land texels of the region, each beside its deposit.
-    from region.geometry import ecef_to_cell
-    flat = pos.reshape(-1, 3)
-    unit = flat / np.linalg.norm(flat, axis=1, keepdims=True)
-    cand = np.flatnonzero((ecef_to_cell(unit, synthetic_globe.antimeridian) == REGION_ID) & (rho.reshape(-1) > 1.0))
-    picks = cand[:: max(len(cand) // 6, 1)][:6]
-    mine = np.zeros(rho.size, dtype=np.float32)
-    mine[picks] = 0.5 * rho.reshape(-1)[picks]
-    mesh.set_face_textures("mining_density", mine.reshape(rho.shape)[..., None], n_channels=1)
-    synthetic_globe.add_feature("minerals", (unit[picks], np.zeros(len(picks), dtype=np.int8),
-                                             np.ones(len(picks), dtype=np.float32)))
-    synthetic_globe.add_feature("mine_workers", np.full(len(picks), 1_000.0))
-    rng = np.random.default_rng(5)
-    danger = np.where(rng.random(len(mesh.faces)) < 0.3, rng.random(len(mesh.faces)), 0.0).astype(np.float32)
-    synthetic_globe.add_feature("danger", danger)
-    yield synthetic_globe
-    for key in _KEYS:
-        mesh.face_textures.pop(key, None)
-    synthetic_globe.remove_feature("danger")
-    synthetic_globe.remove_feature("minerals")
-    synthetic_globe.remove_feature("mine_workers")
 
 
 @pytest.fixture(scope="module")
@@ -64,7 +25,7 @@ def _land(fields) -> np.ndarray:
 
 def test_the_resource_layers_are_refined(fields):
     m, t = fields.n_hexes, fields.tex_size
-    for key in (*_KEYS, "danger"):
+    for key in (*RESOURCE_KEYS, "danger"):
         assert fields.textures[key].shape == (m, t, t, 1), key
 
 

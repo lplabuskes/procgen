@@ -7,8 +7,6 @@ from shapely.geometry import MultiPolygon, box
 from localmap.test.test_store import REGION_ID, small_store
 from region.geometry import ecef_to_cell
 from region.test.test_builder import land_towns
-from region.test.test_resources import globe  # noqa: F401  (fixture)
-from settlegen.test.conftest import inner_center, lake_hex, lake_local, region, side_km  # noqa: F401
 from settlegen.builder import build_settlement_map
 from settlegen.chain.builder import SettlementRef
 from settlegen.params import SettlementMapParams
@@ -44,14 +42,14 @@ def test_a_piece_too_far_is_left_alone():
 
 
 @pytest.fixture
-def towns(globe):  # noqa: F811
+def towns(globe):
     towns = land_towns(globe)
     globe.add_feature("towns", towns)
     yield towns
     globe.remove_feature("towns")
 
 
-def test_town_sites_have_valid_water(globe, towns):  # noqa: F811
+def test_town_sites_have_valid_water(globe, towns):
     store = small_store(globe)
     here = np.flatnonzero(ecef_to_cell(towns.site_positions, globe.antimeridian) == REGION_ID)
     params = SettlementMapParams(upsample=SettlementUpsampleParams(texel_m=200.0))
@@ -75,10 +73,10 @@ def test_town_sites_have_valid_water(globe, towns):  # noqa: F811
     assert checked > 0
 
 
-def test_lake_polygons_follow_the_refined_mask(globe, lake_local, inner_center, side_km):  # noqa: F811
+def test_lake_polygons_follow_the_refined_mask(globe, lake_local, inner_center, side_km):
     """A frame on the synthetic lake: the polygon is the mask's water, with shores off the texel grid."""
     from settlegen.frame import Frame
-    from settlegen.test.conftest import settlement_params
+    from settlegen.test.fixtures import settlement_params
     from settlegen.terrain.builder import build_settlement_fields
     from settlegen.site.water import shorelines, water_regions
 

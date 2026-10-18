@@ -7,8 +7,8 @@ import pytest
 from localmap.banks import Channels, covered_texels, crossing_pairs, onto_banks
 from localmap.cities import city_footprints
 from localmap.farmland import FARM_VILLAGE, FarmlandParams, place_farmland
-from localmap.test.conftest import local_params
-from localmap.test.test_farmland import _people, _water, sites  # noqa: F401
+from localmap.test.fixtures import local_params
+from localmap.test.test_farmland import _people
 from localmap.upsample import build_local_fields
 from utils.sphere import EARTH_RADIUS_KM
 
@@ -34,7 +34,7 @@ def _texel_km(local) -> float:
 
 
 @pytest.fixture(scope="module")
-def river(local, sites):  # noqa: F811
+def river(local, sites):
     """Three texels wide, straight through the first site."""
     return _line(local, float(_s(local, sites[:1])[0]), 3.0 * _texel_km(local))
 
@@ -50,7 +50,7 @@ def _edge_km(channels: Channels, points: np.ndarray) -> np.ndarray:
     return np.array(out) * EARTH_RADIUS_KM
 
 
-def test_settlements_move_just_past_the_bank_on_their_side(local, river, sites):  # noqa: F811
+def test_settlements_move_just_past_the_bank_on_their_side(local, river, sites):
     s0 = float(_s(local, sites[:1])[0])
     texel = local.grid.radius * 2.0 / local.tex_size
     t = np.array([0.4, 0.5, 0.6, 0.5])
@@ -72,7 +72,7 @@ def test_covered_texels_are_those_under_the_channel(local, river):
     np.testing.assert_array_equal(covered, edge < 0.0)
 
 
-def test_crossing_pairs(local, river, sites):  # noqa: F811
+def test_crossing_pairs(local, river, sites):
     s0 = float(_s(local, sites[:1])[0])
     texel = local.grid.radius * 2.0 / local.tex_size
     origin = local.geometry.local_to_ecef(np.array([s0 - 3 * texel]), np.array([0.5]))
@@ -82,14 +82,14 @@ def test_crossing_pairs(local, river, sites):  # noqa: F811
     np.testing.assert_array_equal(cross, [False, True, False])
 
 
-def test_city_footprints_skip_the_river(local, river, sites):  # noqa: F811
+def test_city_footprints_skip_the_river(local, river, sites):
     covered = covered_texels(local, river)
     fp = city_footprints(local, sites[:1], np.array([60_000.0]), seed=2, river_covered=covered)
     assert (fp.owner >= 0).any()
     assert not ((fp.owner >= 0) & covered).any()
 
 
-def test_village_fields_keep_to_their_bank_of_a_wide_river(local, river, sites):  # noqa: F811
+def test_village_fields_keep_to_their_bank_of_a_wide_river(local, river, sites):
     covered = covered_texels(local, river)
     village = onto_banks(river, sites[:1], clearance_km=0.1)
     s0 = float(_s(local, sites[:1])[0])

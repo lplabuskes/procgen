@@ -6,7 +6,7 @@ import pytest
 from scipy import ndimage
 
 from localmap.upsample import build_local_fields, path_segments
-from localmap.test.conftest import local_params
+from localmap.test.fixtures import local_params
 from region.lakes import drain_nodes
 from region.rivers import build_region_rivers
 from region.upsample import SMALL_LAKE_KEY, RegionUpsampleParams, build_region_fields
@@ -18,7 +18,7 @@ OPEN: dict[str, Any] = dict(
 
 
 @pytest.fixture(scope="module")
-def region(globe):  # noqa: F811
+def region(globe):
     return build_region_fields(globe, REGION_ID, RegionUpsampleParams(n_cols=6, tex_size=16, **OPEN))
 
 
@@ -33,7 +33,7 @@ def _parent(local, region, key):
     return (flat[local.parent_anchors.reshape(-1)] > 0.5).reshape(local.parent_anchors.shape)
 
 
-def test_region_small_lakes_carry_down(globe, region, pond_hex):  # noqa: F811
+def test_region_small_lakes_carry_down(globe, region, pond_hex):
     local = build_local_fields(globe, region, pond_hex, local_params(small_lakes=False))
     small = local.textures[SMALL_LAKE_KEY][..., 0] > 0.5
     parent = _parent(local, region, SMALL_LAKE_KEY) & local.domain
@@ -43,14 +43,14 @@ def test_region_small_lakes_carry_down(globe, region, pond_hex):  # noqa: F811
     assert not (small & ~(local.textures["lake_mask"][..., 0] > 0.5)).any()
 
 
-def test_local_maps_add_their_own(globe, region, pond_hex):  # noqa: F811
+def test_local_maps_add_their_own(globe, region, pond_hex):
     off = build_local_fields(globe, region, pond_hex, local_params(small_lakes=False))
     on = build_local_fields(globe, region, pond_hex, local_params(**OPEN))
     count = [(f.textures[SMALL_LAKE_KEY][..., 0] > 0.5).sum() for f in (off, on)]
     assert count[1] > count[0]
 
 
-def test_no_small_lake_on_a_region_river(globe, region):  # noqa: F811
+def test_no_small_lake_on_a_region_river(globe, region):
     rivers = build_region_rivers(region, globe)
     assert rivers.paths
     segments = path_segments(rivers.paths)

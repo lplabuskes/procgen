@@ -5,7 +5,7 @@ import pytest
 
 from localmap.builder import build_local_map
 from localmap.params import LocalParams
-from localmap.test.conftest import local_params
+from localmap.test.fixtures import local_params
 from localmap.upsample import build_local_fields
 from localmap.villages import VillageParams, place_villages, village_budget_report
 from utils.sphere import EARTH_RADIUS_KM

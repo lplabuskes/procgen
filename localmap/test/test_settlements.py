@@ -6,7 +6,7 @@ from localmap.builder import build_local_map
 from localmap.params import LocalParams
 from localmap.rivers import build_local_rivers
 from localmap.settlements import LocalSettlementParams, local_owned, refine_local_cities, refine_local_towns
-from localmap.test.conftest import local_params
+from localmap.test.fixtures import local_params
 from localmap.upsample import build_local_fields
 from realmgen.placement.types import SITE_KIND_LAKE_COAST
 from realmgen.test.conftest import _settlement

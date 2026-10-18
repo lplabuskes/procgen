@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from localmap.test.conftest import local_params
+from localmap.test.fixtures import local_params
 from localmap.upsample import build_local_fields, local_conservation_report
 
 

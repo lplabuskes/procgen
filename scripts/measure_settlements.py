@@ -170,7 +170,7 @@ def main() -> None:
         for ref in refs:
             try:
                 row = measure(store, ref, params)
-            except Exception as exc:  # noqa: BLE001  (a measurement run reports, it doesn't stop)
+            except Exception as exc:  # a measurement run reports, it doesn't stop
                 print(f"  seed {seed} {ref.kind} {ref.index}: FAILED {type(exc).__name__}: {exc}")
                 continue
             row["seed"] = seed

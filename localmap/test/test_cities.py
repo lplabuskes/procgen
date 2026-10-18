@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 from localmap.cities import CityParams, city_footprints
-from localmap.test.conftest import local_params
+from localmap.test.fixtures import local_params
 from localmap.upsample import build_local_fields
 from utils.sphere import EARTH_RADIUS_KM
 

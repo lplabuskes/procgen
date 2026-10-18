@@ -9,7 +9,6 @@ from region.builder import build_region_map
 from region.geometry import ecef_to_cell
 from region.params import RegionParams
 from region.streams import RegionStreamParams
-from region.test.conftest import synthetic_globe  # noqa: F401  (fixture)
 from region.upsample import RegionUpsampleParams
 
 REGION_ID = 40
@@ -32,14 +31,14 @@ def land_towns(globe) -> Towns:
 
 
 @pytest.fixture
-def towns(synthetic_globe):  # noqa: F811
+def towns(synthetic_globe):
     towns = land_towns(synthetic_globe)
     synthetic_globe.add_feature("towns", towns)
     yield towns
     synthetic_globe.remove_feature("towns")
 
 
-def test_builds_the_region_and_refines_its_towns(synthetic_globe, towns):  # noqa: F811
+def test_builds_the_region_and_refines_its_towns(synthetic_globe, towns):
     region = build_region_map(synthetic_globe, REGION_ID, small_params())
     assert region.region_id == REGION_ID and region.fields.grid.n_cols == 6
     assert region.rivers.paths
@@ -47,7 +46,7 @@ def test_builds_the_region_and_refines_its_towns(synthetic_globe, towns):  # noq
     assert here.any() and towns.refined[here].all() and not towns.refined[~here].any()
 
 
-def test_rebuilds_identically(synthetic_globe, towns):  # noqa: F811
+def test_rebuilds_identically(synthetic_globe, towns):
     first = build_region_map(synthetic_globe, REGION_ID, small_params())
     positions = towns.positions.copy()
     towns.reset_refinement()
@@ -62,7 +61,7 @@ def test_rebuilds_identically(synthetic_globe, towns):  # noqa: F811
         np.testing.assert_array_equal(tex, again.fields.textures[key])
 
 
-def test_streams_are_cached_per_params(synthetic_globe, towns):  # noqa: F811
+def test_streams_are_cached_per_params(synthetic_globe, towns):
     region = build_region_map(synthetic_globe, REGION_ID, small_params())
     params = RegionStreamParams()
     first = region.streams(synthetic_globe, params)

@@ -1,16 +1,13 @@
 """ParamsDialog filtering (basic patterns, DERIVED) and the app's coupled params."""
 import dataclasses
-import os
 from fnmatch import fnmatchcase
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+import pytest
+from PySide6.QtWidgets import QApplication
 
-import pytest  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
-
-from main import BASIC_PARAMS, AppParams  # noqa: E402
-from localmap.upsample import SHARED_WITH_REGION  # noqa: E402
-from viz.params_dialog import ParamsDialog  # noqa: E402
+from main import BASIC_PARAMS, AppParams
+from localmap.upsample import SHARED_WITH_REGION
+from viz.params_dialog import ParamsDialog
 
 
 @pytest.fixture(scope="module")

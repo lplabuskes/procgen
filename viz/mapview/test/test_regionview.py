@@ -1,18 +1,14 @@
 """RegionView zoom/pan: the cursor anchor, clamping, and reset on a new region."""
-import os
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+import numpy as np
+import pytest
+from PySide6.QtCore import QPointF
+from PySide6.QtGui import QImage
+from PySide6.QtWidgets import QApplication
 
-import numpy as np  # noqa: E402
-import pytest  # noqa: E402
-from PySide6.QtCore import QPointF  # noqa: E402
-from PySide6.QtGui import QImage  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
-
-from region.geometry import RegionGeometry  # noqa: E402
-from region.test.conftest import synthetic_globe  # noqa: E402, F401  (fixture)
-from viz.mapview.mapview import MapWindow  # noqa: E402
-from viz.mapview.regionview import RegionView, _RegionProjector  # noqa: E402
+from region.geometry import RegionGeometry
+from viz.mapview.mapview import MapWindow
+from viz.mapview.regionview import RegionView, _RegionProjector
 
 
 @pytest.fixture(scope="module")
@@ -184,7 +180,7 @@ def test_forts_draw_in_every_view_as_keeps(app):
         assert merlon.alpha() == 255 and gap.alpha() == 0   # crenellated, not a disc
 
 
-def test_new_params_refine_the_region_again(app, synthetic_globe):  # noqa: F811
+def test_new_params_refine_the_region_again(app, synthetic_globe):
     """Entering a region refines its towns into the world feature. New params
     re-refine it: upsample params rebuild the fields (keeping the view), river
     and town params only the rivers and towns — and every town refined before
@@ -231,7 +227,7 @@ def test_new_params_refine_the_region_again(app, synthetic_globe):  # noqa: F811
         synthetic_globe.remove_feature("towns")
 
 
-def test_the_view_builds_through_build_region_map(app, synthetic_globe):  # noqa: F811
+def test_the_view_builds_through_build_region_map(app, synthetic_globe):
     """The viewer and the Qt-free builder build the same region (and re-site towns alike)."""
     from region.builder import build_region_map
     from region.test.test_builder import land_towns
@@ -283,7 +279,7 @@ def test_river_widths_are_physical_on_a_local_map():
     assert w[0] > 1.0  # too narrow for a pixel — still drawn as a hairline
 
 
-def test_region_draws_each_deposit_as_its_workings(app, synthetic_globe):  # noqa: F811
+def test_region_draws_each_deposit_as_its_workings(app, synthetic_globe):
     from region.geometry import ecef_to_cell
     centroids = np.asarray(synthetic_globe.mesh.face_centroids, dtype=np.float64)
     here = np.flatnonzero(ecef_to_cell(centroids, synthetic_globe.antimeridian) == 40)[:2]
@@ -310,7 +306,7 @@ def test_region_draws_each_deposit_as_its_workings(app, synthetic_globe):  # noq
         synthetic_globe.remove_feature("mineral_sites")
 
 
-def test_region_borders_are_its_own_and_cached(app, synthetic_globe):  # noqa: F811
+def test_region_borders_are_its_own_and_cached(app, synthetic_globe):
     """With Polity Borders on, the region draws lines contoured from its own fill (over
     the rivers it routed), rebuilt only when its rivers change."""
     from realmgen.polity.types import Polity

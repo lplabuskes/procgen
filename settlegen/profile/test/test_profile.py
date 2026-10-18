@@ -6,7 +6,6 @@ from localmap.test.test_store import REGION_ID, small_store
 from realmgen.placement.types import SITE_KIND_CONFLUENCE, SITE_KIND_LAKE_COAST, SITE_KIND_RIVER
 from region.geometry import ecef_to_cell
 from region.test.test_builder import land_towns
-from region.test.test_resources import globe  # noqa: F401  (fixture)
 from settlegen.chain.builder import SettlementRef
 from settlegen.profile.builder import (
     Industry, city_kind, founding_age, march_score, material_shares, merge_industries, percentile_of, wind_in_frame,
@@ -82,14 +81,14 @@ def test_wind_points_where_it_blows_with_its_steadiness():
 
 
 @pytest.fixture
-def towns(globe):  # noqa: F811
+def towns(globe):
     towns = land_towns(globe)
     globe.add_feature("towns", towns)
     yield towns
     globe.remove_feature("towns")
 
 
-def test_a_town_gets_a_whole_profile_without_realm_features(globe, towns):  # noqa: F811
+def test_a_town_gets_a_whole_profile_without_realm_features(globe, towns):
     from settlegen.builder import build_settlement_map
     from settlegen.params import SettlementMapParams
     from settlegen.terrain.builder import SettlementUpsampleParams

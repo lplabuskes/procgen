@@ -9,7 +9,7 @@ from localmap.cities import city_footprints
 from localmap.farmland import (
     FARM_CITY, FARM_TOWN, FARM_VILLAGE, FarmlandParams, farmland_rgba, garden_ring_km, place_farmland,
 )
-from localmap.test.conftest import local_params
+from localmap.test.fixtures import local_params, water_mask
 from localmap.upsample import build_local_fields
 from utils.sphere import EARTH_RADIUS_KM
 
@@ -17,23 +17,6 @@ from utils.sphere import EARTH_RADIUS_KM
 @pytest.fixture(scope="module")
 def local(globe, region, lake_hex):
     return build_local_fields(globe, region, lake_hex, local_params())
-
-
-def _water(local) -> np.ndarray:
-    return (local.textures["ocean_mask"][..., 0] > 0.5) | (local.textures["lake_mask"][..., 0] > 0.5)
-
-
-@pytest.fixture(scope="module")
-def sites(local):
-    """Three dry texels with plenty of dry ground around them, well apart."""
-    dry = local.positions[local.in_hex & ~_water(local)]
-    spacing = local.grid.texel_spacing_rad(local.tex_size)
-    d = np.linalg.norm(dry[:, None, :] - dry[None, :, :], axis=2)
-    roomy = (d < 6.0 * spacing).sum(axis=1)
-    first = int(np.argmax(roomy))
-    second = int(np.argmin(np.abs(d[first] - 8.0 * spacing) - 0.01 * roomy))
-    third = int(np.argmax(np.minimum(d[first], d[second]) * (roomy > 0.5 * roomy.max())))
-    return dry[[first, second, third]]
 
 
 def _people(local, n_texels, ha=FarmlandParams().ha_per_farmer) -> np.ndarray:
@@ -57,7 +40,7 @@ def test_fields_stay_off_water_and_out_of_the_city(local, sites):
     fm = place_farmland(local, sites[1:], _people(local, [40, 40]), np.zeros((0, 3)), np.zeros(0), fp, seed=2)
     farmed = fm.kind >= 0
     assert farmed.any()
-    assert not (farmed & _water(local)).any()
+    assert not (farmed & water_mask(local)).any()
     assert not (farmed & (fp.owner >= 0)).any()
     assert not (farmed & ~local.in_hex).any()
 
@@ -123,8 +106,8 @@ def test_fields_prefer_fertile_ground(local, sites):
 def test_neighbours_share_the_ground_between_them(local, sites):
     """Two villages side by side: neither is starved, whichever comes first."""
     spacing = local.grid.texel_spacing_rad(local.tex_size)
-    d = np.linalg.norm(local.positions[local.in_hex & ~_water(local)] - sites[0], axis=1)
-    near = local.positions[local.in_hex & ~_water(local)][np.argmin(np.abs(d - 3.0 * spacing))]
+    d = np.linalg.norm(local.positions[local.in_hex & ~water_mask(local)] - sites[0], axis=1)
+    near = local.positions[local.in_hex & ~water_mask(local)][np.argmin(np.abs(d - 3.0 * spacing))]
     pair = np.stack([sites[0], near])
     for order in (pair, pair[::-1]):
         fm = place_farmland(local, order, _people(local, [25, 25]), np.zeros((0, 3)), np.zeros(0), None, 5)

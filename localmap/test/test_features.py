@@ -7,7 +7,7 @@ from scipy.spatial import KDTree
 
 from localmap.rivers import _starts_on_path, build_local_rivers
 from localmap.roads import build_local_roads
-from localmap.test.conftest import local_params
+from localmap.test.fixtures import local_params
 from localmap.upsample import build_local_fields
 from region.rivers import RegionRivers
 from region.roads import RegionRoads

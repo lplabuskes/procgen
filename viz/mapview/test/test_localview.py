@@ -1,30 +1,25 @@
 """Local maps in the viewer: picking a hex in a region, the local view, its
 cache, settlement hover, and the window's local → region → world navigation."""
 import dataclasses
-import os
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+import numpy as np
+import pytest
+from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtGui import QImage
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication
 
-import numpy as np  # noqa: E402
-import pytest  # noqa: E402
-from PySide6.QtCore import QPoint, QPointF, Qt  # noqa: E402
-from PySide6.QtGui import QImage  # noqa: E402
-from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
-
-from localmap.params import LocalParams  # noqa: E402
-from localmap.test.conftest import local_params  # noqa: E402
-from localmap.villages import VillageParams  # noqa: E402
-from realmgen.test.conftest import _settlement  # noqa: E402
-from realmgen.towns.types import TOWN_MARKET, TOWN_RIVER, Towns  # noqa: E402
-from region.geometry import RegionGeometry  # noqa: E402
-from region.params import RegionParams  # noqa: E402
-from region.test.conftest import synthetic_globe  # noqa: E402, F401  (fixture)
-from region.test.test_resources import globe  # noqa: E402, F401  (fixture)
-from viz.mapview.mapview import MapWindow, _WorldProjector  # noqa: E402
-from viz.mapview.overlays import settlement_markers  # noqa: E402
-from settlegen.chain.builder import SettlementRef  # noqa: E402
-from viz.mapview.regionview import RegionView  # noqa: E402
+from localmap.params import LocalParams
+from localmap.test.fixtures import local_params
+from localmap.villages import VillageParams
+from realmgen.test.conftest import _settlement
+from realmgen.towns.types import TOWN_MARKET, TOWN_RIVER, Towns
+from region.geometry import RegionGeometry
+from region.params import RegionParams
+from viz.mapview.mapview import MapWindow, _WorldProjector
+from viz.mapview.overlays import settlement_markers
+from settlegen.chain.builder import SettlementRef
+from viz.mapview.regionview import RegionView
 
 REGION_ID = 40
 # Test-sized tiers (see localmap/test): coarse grids, villages scaled to match.
@@ -80,7 +75,7 @@ def _land_hex(view: RegionView) -> int:
     return int(np.argmax(land.sum(axis=(1, 2))))
 
 
-def test_a_click_picks_a_hex_but_a_drag_does_not(app, globe):  # noqa: F811
+def test_a_click_picks_a_hex_but_a_drag_does_not(app, globe):
     view = _region_view(globe)
     picked: list[int] = []
     view.set_hex_click_callback(picked.append)
@@ -99,7 +94,7 @@ def test_a_click_picks_a_hex_but_a_drag_does_not(app, globe):  # noqa: F811
     assert picked == [h]
 
 
-def test_the_local_view_shows_the_hexs_local_map(app, globe):  # noqa: F811
+def test_the_local_view_shows_the_hexs_local_map(app, globe):
     region = _region_view(globe)
     h = _land_hex(region)
     view = _local_view(region)
@@ -123,7 +118,7 @@ def _xy(p: QPoint) -> tuple[float, float]:
     return float(p.x()), float(p.y())
 
 
-def test_local_maps_are_cached_until_the_params_change(app, globe):  # noqa: F811
+def test_local_maps_are_cached_until_the_params_change(app, globe):
     region = _region_view(globe)
     h = _land_hex(region)
     view = _local_view(region)
@@ -146,7 +141,7 @@ def test_local_maps_are_cached_until_the_params_change(app, globe):  # noqa: F81
     assert view.local_map is not second
 
 
-def test_hovering_a_village_describes_it(app, globe):  # noqa: F811
+def test_hovering_a_village_describes_it(app, globe):
     region = _region_view(globe)
     view = _local_view(region)
     view.set_local(region, _land_hex(region))
@@ -162,7 +157,7 @@ def test_hovering_a_village_describes_it(app, globe):  # noqa: F811
 
 
 @pytest.fixture
-def settled(globe):  # noqa: F811
+def settled(globe):
     """Three towns and a city on land texels of the region's landiest hex,
     installed for one test; yields that hex."""
     probe = _region_view(globe)
@@ -200,7 +195,7 @@ def _hover_at(view: RegionView, ecef) -> None:
     view._mouse = _xy(_screen(view, float(s[0]), float(t[0])))
 
 
-def test_region_hover_names_the_city_and_counts_the_hexs_towns(app, globe, settled):  # noqa: F811
+def test_region_hover_names_the_city_and_counts_the_hexs_towns(app, globe, settled):
     view = _show_settlements(_region_view(globe))
     city = globe.get_feature("settlements")[0]
     _hover_at(view, view._on_land("settlements", city.position[None]))
@@ -221,7 +216,7 @@ def test_region_hover_names_the_city_and_counts_the_hexs_towns(app, globe, settl
     assert view.towns_in_hex(other) == []
 
 
-def test_local_hover_names_the_town_under_the_cursor(app, globe, settled):  # noqa: F811
+def test_local_hover_names_the_town_under_the_cursor(app, globe, settled):
     region = _region_view(globe)
     view = _local_view(region)
     view.set_local(region, settled)
@@ -238,7 +233,7 @@ def test_local_hover_names_the_town_under_the_cursor(app, globe, settled):  # no
     assert view.towns_in_hex(0) == []
 
 
-def test_the_window_steps_back_one_tier_at_a_time(app, globe):  # noqa: F811
+def test_the_window_steps_back_one_tier_at_a_time(app, globe):
     window = MapWindow()
     window.set_region_params(_REGION)
     window.set_local_params(_LOCAL)
@@ -257,7 +252,7 @@ def test_the_window_steps_back_one_tier_at_a_time(app, globe):  # noqa: F811
     assert window._stack.currentWidget() is window._map
 
 
-def test_farmland_follows_its_settlements_overlays(app, globe):  # noqa: F811
+def test_farmland_follows_its_settlements_overlays(app, globe):
     region = _region_view(globe)
     view = _local_view(region)
     view.set_local(region, _land_hex(region))
@@ -276,7 +271,7 @@ def test_farmland_follows_its_settlements_overlays(app, globe):  # noqa: F811
     _painted(view)
 
 
-def test_region_and_local_hover_name_the_fort_and_its_garrison(app, globe, settled):  # noqa: F811
+def test_region_and_local_hover_name_the_fort_and_its_garrison(app, globe, settled):
     from realmgen.polity.forts import Forts
     probe = _region_view(globe)
     fields = probe.fields
@@ -307,7 +302,7 @@ def test_region_and_local_hover_name_the_fort_and_its_garrison(app, globe, settl
         globe.remove_feature("forts")
 
 
-def _settlement_window(globe):  # noqa: F811
+def _settlement_window(globe):
     from settlegen.params import SettlementMapParams
     from settlegen.terrain.builder import SettlementUpsampleParams
 
@@ -321,7 +316,7 @@ def _settlement_window(globe):  # noqa: F811
     return window
 
 
-def test_clicking_a_town_on_a_local_map_opens_its_settlement_map(app, globe, settled):  # noqa: F811
+def test_clicking_a_town_on_a_local_map_opens_its_settlement_map(app, globe, settled):
     window = _settlement_window(globe)
     window._region_view.set_region(RegionGeometry(REGION_ID, globe.antimeridian), globe)
     window._stack.setCurrentWidget(window._region_view)
@@ -350,7 +345,7 @@ def test_clicking_a_town_on_a_local_map_opens_its_settlement_map(app, globe, set
     assert window._back_btn.text() == "← Region"
 
 
-def test_villages_open_their_settlement_maps(app, globe, settled):  # noqa: F811
+def test_villages_open_their_settlement_maps(app, globe, settled):
     window = _settlement_window(globe)
     window._region_view.set_region(RegionGeometry(REGION_ID, globe.antimeridian), globe)
     window._stack.setCurrentWidget(window._region_view)
@@ -367,7 +362,7 @@ def test_villages_open_their_settlement_maps(app, globe, settled):  # noqa: F811
     assert shown is not None and shown.chain.keys[0] == (REGION_ID, settled)
 
 
-def test_towns_and_cities_open_from_the_region_and_cities_from_the_world(app, globe, settled):  # noqa: F811
+def test_towns_and_cities_open_from_the_region_and_cities_from_the_world(app, globe, settled):
     window = _settlement_window(globe)
     region = window._region_view
     region.set_region(RegionGeometry(REGION_ID, globe.antimeridian), globe)
@@ -398,7 +393,7 @@ def test_towns_and_cities_open_from_the_region_and_cities_from_the_world(app, gl
     assert window._stack.currentWidget() is world and window._back_btn.isHidden()
 
 
-def test_settlement_maps_draw_their_site_and_offer_debug_overlays_only_in_debug(app, globe, settled):  # noqa: F811
+def test_settlement_maps_draw_their_site_and_offer_debug_overlays_only_in_debug(app, globe, settled):
     for debug in (False, True):
         window = _settlement_window(globe)
         window.set_debug(debug)

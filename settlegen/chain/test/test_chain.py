@@ -6,24 +6,23 @@ import pytest
 from localmap.test.test_store import REGION_ID, small_store
 from region.geometry import ecef_to_cell
 from region.test.test_builder import land_towns
-from region.test.test_resources import globe  # noqa: F401  (fixture)
 from settlegen.chain.builder import SettlementRef, ensure_local_maps, frame_keys, region_of
 
 
 @pytest.fixture
-def towns(globe):  # noqa: F811
+def towns(globe):
     towns = land_towns(globe)
     globe.add_feature("towns", towns)
     yield towns
     globe.remove_feature("towns")
 
 
-def _a_town(globe, towns) -> SettlementRef:  # noqa: F811
+def _a_town(globe, towns) -> SettlementRef:
     here = np.flatnonzero(ecef_to_cell(towns.site_positions, globe.antimeridian) == REGION_ID)
     return SettlementRef("town", int(here[0]))
 
 
-def test_a_settlement_builds_its_region_and_local_map_once(globe, towns):  # noqa: F811
+def test_a_settlement_builds_its_region_and_local_map_once(globe, towns):
     store = small_store(globe)
     ref = _a_town(globe, towns)
     first = ensure_local_maps(store, ref)
@@ -36,7 +35,7 @@ def test_a_settlement_builds_its_region_and_local_map_once(globe, towns):  # noq
     np.testing.assert_array_equal(towns.positions[ref.index], position)
 
 
-def test_maps_the_viewer_built_are_not_rebuilt(globe, towns):  # noqa: F811
+def test_maps_the_viewer_built_are_not_rebuilt(globe, towns):
     store = small_store(globe)
     ref = _a_town(globe, towns)
     probe = ensure_local_maps(small_store(globe), ref)       # which maps it needs, in another store
@@ -47,7 +46,7 @@ def test_maps_the_viewer_built_are_not_rebuilt(globe, towns):  # noqa: F811
     assert ensure_local_maps(store, ref).built == []
 
 
-def test_the_frame_reaches_exactly_the_maps_whose_ground_it_covers(globe, towns):  # noqa: F811
+def test_the_frame_reaches_exactly_the_maps_whose_ground_it_covers(globe, towns):
     store = small_store(globe)
     region = store.region(REGION_ID)
     grid = region.fields.grid
@@ -72,12 +71,12 @@ def test_the_frame_reaches_exactly_the_maps_whose_ground_it_covers(globe, towns)
     assert {k[0] for k in keys} - {REGION_ID}
 
 
-def test_the_region_is_the_site_cell(globe, towns):  # noqa: F811
+def test_the_region_is_the_site_cell(globe, towns):
     ref = _a_town(globe, towns)
     assert region_of(globe, ref) == REGION_ID
 
 
-def test_build_settlement_map_refines_the_frame_from_its_maps(globe, towns):  # noqa: F811
+def test_build_settlement_map_refines_the_frame_from_its_maps(globe, towns):
     from settlegen.builder import build_settlement_map
     from settlegen.params import SettlementMapParams
     from settlegen.terrain.builder import SettlementUpsampleParams

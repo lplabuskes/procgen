@@ -4,14 +4,11 @@ import shapely
 from shapely.geometry import MultiPolygon, Point
 
 from localmap.farmland import FarmlandParams
-from region.test.test_resources import globe  # noqa: F401  (fixture)
 from settlegen.site.anchors import build_anchor_candidates
 from settlegen.site.params import SettlementAnchorParams
 from settlegen.chain.builder import SettlementRef
 from settlegen.site.hinterland import Neighbour, build_hinterland
 from settlegen.site.types import RoadLine, SiteRoads
-from settlegen.test.conftest import inner_center, lake_hex, lake_local, region, side_km  # noqa: F401
-from settlegen.site.test.test_footprint import site  # noqa: F401  (fixture)
 from settlegen.site.types import _as_multipolygon, RiverLine, SiteWater
 from region.roads import RegionRoads
 
@@ -21,7 +18,7 @@ def _neighbour(xy, people):
                      mining=False, fields=MultiPolygon())
 
 
-def _dry_spot(site, frac):  # noqa: F811
+def _dry_spot(site, frac):
     """A dry point ``frac`` of the way from the frame's centre to its corner."""
     fields, frame, water = site
     still = shapely.union_all([water.sea, water.lakes])
@@ -37,7 +34,7 @@ def _quota_ha(people, p=FarmlandParams()):
     return people * p.ha_per_farmer
 
 
-def test_fields_are_shared_never_overlap_and_keep_off_water_and_the_footprint(site, globe):  # noqa: F811
+def test_fields_are_shared_never_overlap_and_keep_off_water_and_the_footprint(site, globe):
     fields, frame, water = site
     px_ha = (frame.side_m / fields.tex_size) ** 2 / 1e4
     a, b = _dry_spot(site, 0.5), _dry_spot(site, 0.7)
@@ -59,7 +56,7 @@ def test_fields_are_shared_never_overlap_and_keep_off_water_and_the_footprint(si
         assert abs(p.area / 1e4 - _quota_ha(people)) < 0.25 * _quota_ha(people)
 
 
-def test_a_village_farms_only_its_own_bank_of_a_wide_river(site, globe):  # noqa: F811
+def test_a_village_farms_only_its_own_bank_of_a_wide_river(site, globe):
     fields, frame, water = site
     h = frame.half
     river = RiverLine(xy=np.array([[0.0, -h], [0.0, h]]), flows=np.ones(1), width_m=np.array([120.0]),
@@ -81,7 +78,7 @@ def test_a_village_farms_only_its_own_bank_of_a_wide_river(site, globe):  # noqa
     assert got.intersection(shapely.box(-h, -h, 0.0, h)).area < 1e-6 * got.area
 
 
-def test_anchor_candidates_lie_where_their_kind_belongs(site):  # noqa: F811
+def test_anchor_candidates_lie_where_their_kind_belongs(site):
     fields, frame, water = site
     h = frame.half
     footprint = _as_multipolygon(shapely.box(-0.6 * h, -0.6 * h, 0.6 * h, 0.6 * h).difference(water.lakes))
@@ -111,7 +108,7 @@ def test_anchor_candidates_lie_where_their_kind_belongs(site):  # noqa: F811
         assert cand["waterfront"] and all(a.detail["water"] == "lake" for a in cand["waterfront"])
 
 
-def test_only_a_villages_farmers_grow_its_hinterland(site, globe):  # noqa: F811
+def test_only_a_villages_farmers_grow_its_hinterland(site, globe):
     fields, frame, water = site
     px_ha = (frame.side_m / fields.tex_size) ** 2 / 1e4
     people = 40 * px_ha / FarmlandParams().ha_per_farmer

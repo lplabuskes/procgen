@@ -9,7 +9,7 @@ from scipy.ndimage import label
 
 from region.upsample import SMALL_LAKE_KEY
 from settlegen.terrain.source import LocalMapsSource
-from settlegen.test.conftest import FRAME_TEXELS, settlement_params
+from settlegen.test.fixtures import FRAME_TEXELS, settlement_params
 from settlegen.frame import Frame
 from settlegen.terrain.builder import (
     build_settlement_fields, clear_thin_land, join_ocean_saddles, ocean_saddles, settlement_conservation_report,

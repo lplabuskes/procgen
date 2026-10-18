@@ -28,7 +28,7 @@ No build step. Run the linter, type checker, and test suite with the venv's inte
 .venv/bin/python -m pytest          # all configured test paths (see pyproject.toml)
 ```
 
-Each module and sub-module has a `test/` directory with its own tests, all wired into the `pytest` testpaths in `pyproject.toml`.
+Each module and sub-module has a `test/` directory with its own tests, all wired into the `pytest` testpaths in `pyproject.toml`. Fixtures shared across packages (the synthetic globe, its region, local maps and settlement frames) live in `region/test/fixtures.py`, `localmap/test/fixtures.py` and `settlegen/test/fixtures.py`; the root `conftest.py` registers them for every test (and sets Qt offscreen), so request them by name — never import a fixture.
 
 
 ## Script Utilities

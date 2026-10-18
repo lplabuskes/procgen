@@ -33,13 +33,11 @@ from pathlib import Path
 
 import numpy as np
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from settlegen.builder import SettlementMap, build_settlement_map  # noqa: E402
-from settlegen.chain.builder import SettlementRef, population  # noqa: E402
-from settlegen.layout.describe import summary  # noqa: E402
-from settlegen.terrain.builder import settlement_conservation_report  # noqa: E402
-from _common import get_map_store, settlement_map_params  # noqa: E402
+from settlegen.builder import SettlementMap, build_settlement_map
+from settlegen.chain.builder import SettlementRef, population
+from settlegen.layout.describe import summary
+from settlegen.terrain.builder import settlement_conservation_report
+from _common import get_map_store, settlement_map_params
 
 RESULTS_DIR = Path(__file__).parent / "results"
 OVERLAYS = ("rivers", "trade_routes", "settlements", "towns", "villages")
@@ -141,7 +139,9 @@ def render(m: SettlementMap, store, params, zoom: float, out: Path,  # type: ign
     from core.display import SchemeSpec
     from viz.mapview.regionview import RegionView
     from worldgen.geology.elevation_builder import ELEVATION_RECIPE
-    app = QApplication.instance() or QApplication([])  # noqa: F841  (kept alive while rendering)
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    if QApplication.instance() is None:
+        QApplication([])                      # PySide keeps the application alive
     view = RegionView()
     view.resize(1000, 1000)
     view.set_store(store)

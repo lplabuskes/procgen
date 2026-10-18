@@ -24,26 +24,27 @@ from typing import Optional
 import numpy as np
 
 import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
-from matplotlib.patches import Polygon  # noqa: E402
+import matplotlib.pyplot as plt
+from matplotlib.patches import Polygon
 
-from core.display import SchemeSpec, TextureRecipe  # noqa: E402
-from region.display import build_layer_texture  # noqa: E402
-from region.geometry import N_REGIONS, ecef_to_cell  # noqa: E402
-from region.upsample import (  # noqa: E402
+from core.display import SchemeSpec, TextureRecipe
+from region.display import build_layer_texture
+from region.geometry import N_REGIONS, ecef_to_cell
+from region.upsample import (
     SMALL_LAKE_KEY, RegionFields, RegionUpsampleParams, build_region_fields, conservation_report,
 )
-from worldgen.climate.display import (  # noqa: E402
+from worldgen.climate.display import (
     ANNUAL_TEMPERATURE_RECIPE, BIOME_RECIPE, PRECIPITATION_RECIPE,
     SUMMER_TEMPERATURE_RECIPE, WINTER_TEMPERATURE_RECIPE,
 )
-from worldgen.danger.display import DANGER_RECIPE  # noqa: E402
-from worldgen.geology.display import ELEVATION_RECIPE  # noqa: E402
-from worldgen.resources.display import (  # noqa: E402
+from worldgen.danger.display import DANGER_RECIPE
+from worldgen.geology.display import ELEVATION_RECIPE
+from worldgen.resources.display import (
     DOMINANT_CROP_RECIPE, FERTILITY_RECIPE, FOREST_DENSITY_RECIPE,
 )
-from _common import get_physical_world  # noqa: E402
+from _common import get_physical_world
+
+matplotlib.use("Agg")    # render to files, never a window
 
 # The world-map layers a region refines, by scheme name (the stages' own recipes).
 LAYERS: dict[str, TextureRecipe] = {

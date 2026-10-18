@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from localmap.test.conftest import REGION_ID, TEX_SIZE, local_params
+from localmap.test.fixtures import REGION_ID, TEX_SIZE, local_params
 from localmap.upsample import build_local_fields, local_conservation_report
 from region.upsample import SEA_LEVEL_KM, RegionUpsampleParams, build_region_fields
 

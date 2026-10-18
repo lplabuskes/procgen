@@ -1,20 +1,17 @@
 """Measuring tape: great-circle distances, formatting, the click cycle, and clicks on the views."""
 import math
-import os
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+import numpy as np
+import pytest
+from PySide6.QtCore import QEvent, QPointF, Qt
+from PySide6.QtGui import QImage, QMouseEvent
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication
 
-import numpy as np  # noqa: E402
-import pytest  # noqa: E402
-from PySide6.QtCore import QEvent, QPointF, Qt  # noqa: E402
-from PySide6.QtGui import QImage, QMouseEvent  # noqa: E402
-from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
-
-from region.geometry import RegionGeometry  # noqa: E402
-from utils.sphere import EARTH_RADIUS_KM, great_circle_km  # noqa: E402
-from viz.mapview.measure import MeasureTape, arc_points, format_distance  # noqa: E402
-from viz.mapview.regionview import RegionView  # noqa: E402
+from region.geometry import RegionGeometry
+from utils.sphere import EARTH_RADIUS_KM, great_circle_km
+from viz.mapview.measure import MeasureTape, arc_points, format_distance
+from viz.mapview.regionview import RegionView
 
 
 @pytest.fixture(scope="module")
