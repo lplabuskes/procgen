@@ -73,6 +73,7 @@ def build_settlement_map(
         local_road_raster_texels=float(store.local_params.roads.raster_texels),
         land=world.cost.land if world is not None else None,
         danger_scale=float(realm.danger.movement_scale) if realm is not None else 2.0,
+        parcels=params.parcels,
     )
     lap("site")
     profile = build_profile(globe, fields, site.frame, chain, params.profile)

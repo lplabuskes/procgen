@@ -43,6 +43,8 @@ from settlegen.display import (
 )
 from settlegen.layout.describe import describe_at, summary as layout_summary
 from settlegen.layout.types import SettlementLayout
+from settlegen.site.hinterland import Hinterland
+from settlegen.site.parcels import FieldParcels
 from worldgen.climate.classification import BIOME_NAMES
 from worldgen.geology.display import ELEVATION_RECIPE
 from worldgen.resources.minerals import mineral_workings
@@ -52,6 +54,10 @@ if TYPE_CHECKING:
     from realmgen.builder import RealmParams
     from worldgen.builder import GlobeParams
 
+# Parcels: drawn as one image this wide (px) while the view is no finer than it, else as
+# paths per tile of a _PARCEL_TILES² grid over the frame, only the tiles in view.
+_PARCEL_IMAGE_PX = 2048
+_PARCEL_TILES = 8
 # The overlays a local map's farmland follows: village fields, town fields, market gardens.
 _FARM_OVERLAYS = ("villages", "towns", "settlements")
 
@@ -128,6 +134,9 @@ class RegionView(QWidget):
         self._settlement_land_texels = 0
         # (layout id, district → path, lots path, …) in frame metres, built once per layout.
         self._layout_paths: Optional[tuple[int, dict]] = None
+        # (parcels id, {"tiles": [(bounds, (overlay, shade) → path)], "images": overlays → image}),
+        # in frame metres, built once per hinterland.
+        self._parcel_paths: Optional[tuple[int, dict]] = None
         self._road_paths: Optional[tuple[tuple[int, bool], QPainterPath]] = None
         self._settlement_click_callback: Optional[Callable[[SettlementRef], None]] = None
         # Region mode: clicking a hex opens its local map.
@@ -244,6 +253,7 @@ class RegionView(QWidget):
         over it.  ``land_texels``: how far (texels) markers on water are moved onto land."""
         self._settlement = settlement
         self._layout_paths = None
+        self._parcel_paths = None
         self._settlement_land_texels = int(land_texels)
         self._local = None
         self._region_map = None
@@ -1242,14 +1252,17 @@ class RegionView(QWidget):
         # The hinterland, with the overlay of who farms it (as the local map's farmland).
         painter.setPen(Qt.PenStyle.NoPen)
         hint = site.hinterland
-        plots = [(hint.own, overlay, FARM_CITY if hint.own_kind == "gardens" else
-                  FARM_TOWN if ref.kind == "town" else FARM_VILLAGE)]
-        plots += [(n.fields, _KIND_OVERLAY[n.kind], FARM_TOWN if n.kind == "town" else FARM_VILLAGE)
-                  for n in hint.neighbours]
-        for geom, toggle, farm in plots:
-            if not geom.is_empty and self._overlay_visible.get(toggle, True):
-                painter.setBrush(QColor.fromRgbF(*FARM_KIND_COLORS[farm]))
-                painter.drawPath(_site_path(geom, to_px))
+        if hint.parcels is not None:
+            self._draw_parcels(painter, hint, overlay, x0, y0, size, side)
+        else:
+            plots = [(hint.own, overlay, FARM_CITY if hint.own_kind == "gardens" else
+                      FARM_TOWN if ref.kind == "town" else FARM_VILLAGE)]
+            plots += [(n.fields, _KIND_OVERLAY[n.kind], FARM_TOWN if n.kind == "town" else FARM_VILLAGE)
+                      for n in hint.neighbours]
+            for geom, toggle, farm in plots:
+                if not geom.is_empty and self._overlay_visible.get(toggle, True):
+                    painter.setBrush(QColor.fromRgbF(*FARM_KIND_COLORS[farm]))
+                    painter.drawPath(_site_path(geom, to_px))
         if self._overlay_visible.get("buildable", False):
             # Ground too steep to build on (debug): the frame less the buildable ground and the water.
             blocked = site.frame.box().difference(site.buildable).difference(site.water.bodies)
@@ -1337,6 +1350,90 @@ class RegionView(QWidget):
         fill.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         painter.setPen(fill)
         painter.drawPath(path)
+        painter.restore()
+
+    def _parcel_cache(self, hint: Hinterland, overlay: str) -> dict:
+        """The hinterland's parcels as painter paths in frame metres, per tile of the frame
+        (so a zoomed-in view fills only the tiles it shows), built once per hinterland;
+        and the images of them at a glance, per set of overlays shown (built when first wanted)."""
+        parcels = hint.parcels
+        assert parcels is not None
+        if self._parcel_paths is not None and self._parcel_paths[0] == id(parcels):
+            return self._parcel_paths[1]
+        toggles = [overlay] + [_KIND_OVERLAY[n.kind] for n in hint.neighbours]
+        half = 0.5 * self._settlement.site.frame.side_m if self._settlement is not None else 1.0
+        polys = np.array(parcels.polygons, dtype=object)
+        bounds = shapely.bounds(polys).reshape(-1, 4)
+        mid = 0.5 * (bounds[:, :2] + bounds[:, 2:])
+        tile = np.clip(((mid + half) / (2.0 * half) * _PARCEL_TILES).astype(int), 0, _PARCEL_TILES - 1)
+        tile_id = tile[:, 0] * _PARCEL_TILES + tile[:, 1]
+        ident = lambda xy: np.asarray(xy, dtype=np.float64).reshape(-1, 2)  # noqa: E731
+        tiles = []
+        for t in np.unique(tile_id):
+            members = np.flatnonzero(tile_id == t)
+            lo, hi = bounds[members, :2].min(axis=0), bounds[members, 2:].max(axis=0)
+            groups: dict[tuple[str, int], list] = {}
+            for i in members:
+                groups.setdefault((toggles[int(parcels.owner[i])], int(parcels.shade[i])), []).append(polys[i])
+            tiles.append((QRectF(float(lo[0]), float(lo[1]), float(hi[0] - lo[0]), float(hi[1] - lo[1])),
+                          {k: _site_path(MultiPolygon(v), ident) for k, v in groups.items()}))
+        cache: dict = {"tiles": tiles, "images": {}}
+        self._parcel_paths = (id(parcels), cache)
+        return cache
+
+    def _fill_parcels(self, painter: QPainter, parcels: FieldParcels, tiles: list, shown: tuple[str, ...],
+                      view: Optional[QRectF], edges: bool) -> None:
+        """Fill the parcel paths of the ``shown`` overlays (in the tiles meeting ``view``, frame metres)."""
+        for rect, paths in tiles:
+            if view is not None and not rect.intersects(view):
+                continue
+            for (toggle, shade), path in paths.items():
+                if toggle not in shown:
+                    continue
+                painter.setBrush(QColor.fromRgbF(*(float(c) for c in parcels.palette[shade])))
+                painter.setPen(_cosmetic_pen(QColor.fromRgbF(*(float(c) for c in parcels.edge[shade])))
+                               if edges else Qt.PenStyle.NoPen)
+                painter.drawPath(path)
+
+    def _draw_parcels(self, painter: QPainter, hint: Hinterland, overlay: str, x0: float, y0: float,
+                      size: float, side: float) -> None:
+        """The hinterland's parcels, each owner's with its overlay, in their crop's shades:
+        an image of them while the view is coarser than it, else the paths in view, with
+        the balks between them once a parcel spans a few pixels."""
+        parcels = hint.parcels
+        assert parcels is not None
+        cache = self._parcel_cache(hint, overlay)
+        shown = tuple(sorted({k[0] for _, paths in cache["tiles"] for k in paths
+                              if self._overlay_visible.get(k[0], True)}))
+        if not shown:
+            return
+        t = painter.worldTransform()
+        dpr = painter.device().devicePixelRatioF() if painter.device() is not None else 1.0
+        px_per_m = math.hypot(t.m11(), t.m12()) * size / side
+        image_px_per_m = _PARCEL_IMAGE_PX / side
+        if px_per_m * dpr <= image_px_per_m:
+            image = cache["images"].get(shown)
+            if image is None:
+                image = QImage(_PARCEL_IMAGE_PX, _PARCEL_IMAGE_PX, QImage.Format.Format_ARGB32_Premultiplied)
+                image.fill(Qt.GlobalColor.transparent)
+                p = QPainter(image)
+                p.setRenderHint(QPainter.RenderHint.Antialiasing)
+                p.translate(0.5 * _PARCEL_IMAGE_PX, 0.5 * _PARCEL_IMAGE_PX)
+                p.scale(_PARCEL_IMAGE_PX / side, -_PARCEL_IMAGE_PX / side)
+                self._fill_parcels(p, parcels, cache["tiles"], shown, None, image_px_per_m * parcels.strip_m >= 4.0)
+                p.end()
+                cache["images"][shown] = image
+            painter.save()
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            painter.drawImage(QRectF(x0, y0, size, size), image)
+            painter.restore()
+            return
+        painter.save()
+        painter.translate(x0 + 0.5 * size, y0 + 0.5 * size)
+        painter.scale(size / side, -size / side)
+        inverse, ok = painter.worldTransform().inverted()
+        view = inverse.mapRect(QRectF(self.rect())) if ok else None
+        self._fill_parcels(painter, parcels, cache["tiles"], shown, view, px_per_m * parcels.strip_m >= 4.0)
         painter.restore()
 
     def _layout_cache(self, layout: SettlementLayout) -> dict:

@@ -19,7 +19,7 @@ One subpackage per pipeline step, as in `worldgen/` and `realmgen/`: each has a
 `builder.py` (its params and build function), its helpers and its own `test/`.
 
 - `settlegen/builder.py` — `SettlementMap` (`chain`, `fields`, `site`, `profile`, `layout`), `build_settlement_map`
-- `settlegen/params.py` — `SettlementMapParams`: `upsample`, `rivers`, `roads`, `footprint`, `anchors`, `profile`, `layout` (`AppParams.settlement`, advanced only)
+- `settlegen/params.py` — `SettlementMapParams`: `upsample`, `rivers`, `roads`, `footprint`, `anchors`, `parcels`, `profile`, `layout` (`AppParams.settlement`, advanced only)
 - `settlegen/geometry.py`, `grid.py`, `frame.py` — `SettlementGeometry`, `SettlementGrid` (one cell), `Frame` (metres ↔ ECEF)
 - `settlegen/display.py` — the Elevation layer at street scale (`relief_rgba`), water and district colours
 - `settlegen/chain/`
@@ -41,6 +41,7 @@ One subpackage per pipeline step, as in `worldgen/` and `realmgen/`: each has a
   - `footprint.py` — `Footprint`, `base_density_per_ha`, `build_footprint`, `site_slope`
   - `anchors.py` — `AnchorCandidates`, `Anchor`
   - `hinterland.py` — `Hinterland`, `Neighbour`
+  - `parcels.py` — `SettlementParcelParams`, `FieldParcels`, `CropStyle`, `build_parcels`: the hinterland cut into parcels by crop
   - `contour.py` — marching squares on a smooth field → shapely polygons
 - `settlegen/profile/`
   - `builder.py` — `SettlementProfileParams`, `SettlementProfile`, `PolityRelation`, `Industry`, `settlement_key`
@@ -208,6 +209,38 @@ first, then the cheapest (settlement, texel) pair; never water, a channel or the
 footprint; villages farm their own bank of a river ≥ 50 m. Only farmers grow
 fields (`Villages.farming_share`). On a ≤ 320² raster, traced to polygons. A
 town's fields usually outgrow its frame: the hinterland is what lies inside it.
+
+**Parcels** (`settlegen/site/parcels.py`, `Hinterland.parcels`; display texture,
+`SettlementParcelParams`: on/off, size ×, opacity, arable share). Each farmer's fields are cut
+into furlongs (Voronoi cells of a jittered grid) and each furlong into strips,
+shaped and coloured by the frame's `dominant_crop` (`CROP_STYLES`):
+
+| Crop | Furlong · strip (m) | Strips run | States |
+|---|---|---|---|
+| Wheat, Barley | 220 · 18, furlong-long | downslope | three great fields: sectors round each farmer (winter, spring, fallow) |
+| None | 200 · 40 | grain | grazing, mostly |
+| Rice | 160 · 28 × 55 paddies | contour | flooded, transplanted, ripening; pale bunds |
+| Maize, Millet, Cotton | 160–180 · 40–50 | downslope / grain | by furlong |
+| Sugarcane | 300 · 100 | grain | standing, cut |
+| Coffee | 120 · 25 × 80 terraces | contour | by furlong |
+| a city's own ring | 90 · 25 × 40 (`GARDEN_STYLE`) | grain | orchards, vegetables, pasture, dug earth |
+
+Only `arable_share` (0.67: `ha_per_farmer`'s 1.5 ha is ~1 ha cropland plus meadow
+and pasture) of each farmer's fields is cropland. The rest, whole furlongs scored by
+distance from the farmer (0–1) + 0.5 × steepness (saturating at 0.15) + 0.25 × noise
+smooth over 500 m, is meadow and pasture: merged into unstriped, hedged commons
+(`PASTURE_STYLE`). A city's market gardens have no such share (their own mix holds
+dairy pasture).
+
+On the flat (< 1% slope) strips follow a grain that drifts over ~800 m, a third
+of furlongs turned square to it. A furlong's state holds for its parcels, but a
+`mix` share of parcels takes its own; brightness is jittered and quantised to 5
+levels, so the viewer fills one path per (overlay, shade). Zoomed out it blits one
+2048² image of them (built once per set of overlays shown); finer than that, it
+fills only the paths of the 8×8 frame tiles in view. Balks are drawn once a strip
+spans 4 px (in the image, 4 image px). A big city's ~64k garden plots cost ~1.5 s
+to cut and ~1.6 s for the first paint; repaints then cost what the map does without them. Strips are cut on a 1 cm grid (GEOS mis-overlays the
+near-coincident corners of neighbouring strips otherwise).
 
 ## Profile (`settlegen/profile/builder.py`)
 

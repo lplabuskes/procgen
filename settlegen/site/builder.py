@@ -24,7 +24,9 @@ from settlegen.site.footprint import build_footprint, buildable_ground
 from settlegen.site.params import SettlementFootprintParams
 from settlegen.frame import Frame
 from settlegen.geometry import SettlementGeometry
+from settlegen.site.footprint import _seed
 from settlegen.site.hinterland import Hinterland, build_hinterland, village_farming
+from settlegen.site.parcels import SettlementParcelParams, build_parcels
 from settlegen.site.params import SettlementRoadParams
 from settlegen.site.roads import build_site_roads, set_gates
 from settlegen.site.types import SiteRoads
@@ -36,6 +38,8 @@ if TYPE_CHECKING:
     from core.world import World
     from settlegen.chain.builder import SettlementMaps
     from worldgen.cost.builder import LandCostParams
+
+_PARCEL_STREAM = 7
 
 
 @dataclass
@@ -58,10 +62,11 @@ def build_site(
     roads: Optional[SettlementRoadParams] = None, footprint: Optional[SettlementFootprintParams] = None,
     anchors: Optional[SettlementAnchorParams] = None, *, farmland: Optional[FarmlandParams] = None,
     local_road_raster_texels: float = 2.0, land: Optional["LandCostParams"] = None, danger_scale: float = 2.0,
+    parcels: Optional[SettlementParcelParams] = None,
 ) -> SettlementSite:
     """The site of ``chain``'s settlement map, with terrain ``fields``: water, then roads,
     then the footprint (it grows along the roads), then the gates on it, the anchor
-    candidates and the hinterland (``farmland``: the local tier's rules)."""
+    candidates and the hinterland (``farmland``: the local tier's rules), cut into parcels."""
     geometry = fields.geometry
     assert isinstance(geometry, SettlementGeometry)
     roads = roads or SettlementRoadParams()
@@ -84,6 +89,8 @@ def build_site(
         globe, fields, frame, water, built.polygon, maps, chain.keys, chain.ref, chain.population,
         mining=_is_mining(globe, chain), params=farmland, farming_share=_farming_share(chain),
     )
+    hinterland.parcels = build_parcels(
+        fields, frame, hinterland, _seed(int(globe.seed or 0), chain.ref, _PARCEL_STREAM), parcels)
     return SettlementSite(
         frame=frame, water=water, footprint=built.polygon, density_per_ha=built.density_per_ha, sparse=built.sparse,
         buildable=buildable_ground(fields, frame, water, footprint), roads=site_roads,

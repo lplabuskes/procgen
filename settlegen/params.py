@@ -4,6 +4,7 @@ from __future__ import annotations
 from core.params import field, paramclass
 from settlegen.site.params import SettlementAnchorParams
 from settlegen.site.params import SettlementFootprintParams
+from settlegen.site.parcels import SettlementParcelParams
 from settlegen.layout.params import SettlementLayoutParams
 from settlegen.profile.builder import SettlementProfileParams
 from settlegen.site.params import SettlementRoadParams
@@ -24,6 +25,8 @@ class SettlementMapParams:
         default_factory=SettlementFootprintParams, metadata={"label": "Footprint"})
     anchors: SettlementAnchorParams = field(
         default_factory=SettlementAnchorParams, metadata={"label": "Anchor candidates"})
+    parcels: SettlementParcelParams = field(
+        default_factory=SettlementParcelParams, metadata={"label": "Field parcels"})
     profile: SettlementProfileParams = field(
         default_factory=SettlementProfileParams, metadata={"label": "Profile"})
     layout: SettlementLayoutParams = field(

@@ -53,6 +53,7 @@ from utils.raster import texture_slope
 if TYPE_CHECKING:
     from core.world import World
     from settlegen.chain.builder import SettlementRef
+    from settlegen.site.parcels import FieldParcels
 
 # Widest hinterland raster, in texels.
 _MAX_TEXELS = 320
@@ -82,6 +83,7 @@ class Hinterland:
     own_kind: Literal["gardens", "fields"]
     own_target_ha: float                   # what it wanted (a city: its whole ring)
     neighbours: list[Neighbour]
+    parcels: Optional["FieldParcels"] = None   # all of it cut into parcels (settlegen.site.parcels)
 
 
 def neighbours_in_frame(
