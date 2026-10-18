@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 
 from core.display import TextureRecipe
-from viz.color_stops import gradient_texture
+from utils.color import gradient_texture, interp_stops_scalar
 from worldgen.geology.display import apply_water_masks
 
 # Dry (stone) → damp (olive) → wetland (teal, the Wetland biome colour).
@@ -19,7 +19,6 @@ _WETLAND_STOPS = [
 def wetland_color(meta: dict) -> tuple:
     """Per-face fallback: the face's wetland share."""
     from worldgen.geology.display import OCEAN_COLOR, is_ocean_face
-    from viz.color_stops import interp_stops_scalar
     if is_ocean_face(meta):
         return OCEAN_COLOR
     return interp_stops_scalar(float(meta.get("wetland_fraction", 0.0)), _WETLAND_STOPS)

@@ -6,9 +6,8 @@ from collections import deque
 from typing import Dict, List, Tuple, TYPE_CHECKING
 
 import numpy as np
-from scipy.sparse import coo_matrix
-from scipy.sparse.csgraph import connected_components
 
+from utils.graph import edge_components
 from utils.simplex import fbm_sum, make_perm
 from core.mesh import PolygonMesh
 
@@ -481,10 +480,7 @@ def compute_ocean_mask_texture(
         ids[:, :, 1:].ravel(), ids[:, 1:, :].ravel(), (fb.astype(np.int64) * H + rb) * W + cb,
     ])
     keep = wet[src] & wet[dst]
-    graph = coo_matrix(
-        (np.ones(int(keep.sum()), dtype=np.int8), (src[keep], dst[keep])), shape=(N * H * W, N * H * W),
-    )
-    n_comp, label = connected_components(graph, directed=False)
+    n_comp, label = edge_components(src, dst, N * H * W, keep)
     seeded = np.zeros(n_comp, dtype=bool)
     seeded[label.reshape(N, H, W)[is_core].ravel()] = True
     ocean_mask = seeded[label].reshape(N, H, W)

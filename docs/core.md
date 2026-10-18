@@ -160,7 +160,17 @@ Plain numpy/scipy helpers that know nothing of worlds, tiers or meshes; any pack
   `neighbour_min4` / `neighbour_min8`, `box_mean` / `box_filter` / `weighted_box_mean3`.
 - `utils/sphere.py` — `EARTH_RADIUS_KM` (the one definition), `unit`, `km_to_rad`, `km_to_chord`, `arc_km`,
   `great_circle_km`, `polyline_length_km`, `cumulative_chord`, `densify_polyline(s)`, `laplacian_smooth_sphere`,
-  `slerp_points`.
+  `slerp_points`, `tangent_basis`.
 - `utils/spatial.py` — `position_key`, `kdtree`, `near_any`, `move_points`.
 - `utils/numeric.py` — `smoothstep`.
+- `utils/graph.py` — `adjacency_csr` (adjacency list → CSR), `edge_components` (connected components over a
+  masked edge list), `chain_edges` (undirected edges → polylines, stopping at junctions).
+- `utils/icosphere.py` — `icosphere_lattice(depth)` (vectorised, cached; the seamless lattice borders and ridges are
+  traced on), `unique_edges`, `ICOSA_EDGE_RAD`.
+- `utils/polyline.py` — `chaikin` corner-cutting (open lines keep their ends; `closed` rings).
+- `utils/hexagon.py` — `in_flat_hexagon`.
+- `utils/color.py` — stop-list colour interpolation. A stop list is `[(anchor, (r,g,b,a)), ...]`, ascending:
+  `interp_stops_scalar` (→ RGBA tuple, for scheme callables), `interp_stops` (→ `(…, 4)` float32),
+  `gradient_scheme` / `categorical_scheme` (`SchemeFn` over `meta[meta_key]`), `gradient_texture` /
+  `categorical_texture` (`(N,H,W,1)` → `(N,H,W,4)`), `palette_legend_entries`.
 - `utils/simplex.py` — vectorised 3-D simplex noise and fBm.

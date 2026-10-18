@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 import numpy as np
 from scipy.sparse import csr_matrix
-from scipy.sparse.csgraph import connected_components, dijkstra
+from scipy.sparse.csgraph import dijkstra
 
 from core.params import param_field as _f, paramclass
 from region.geometry import N_REGIONS, RegionGeometry
@@ -42,6 +42,7 @@ from region.grid import RegionHexGrid
 from region.lakes import find_small_lakes
 from region.resources import RefineContext, refine_resources
 from region.source import GlobalSource, Located, ParentSource
+from utils.graph import edge_components
 from utils.raster import box_filter, neighbour_min4, texture_slope
 from utils.resample import anchor_means, anchor_plan, anchor_residual, anchor_values, stencil_read
 from utils.simplex import fbm_sum, make_perm
@@ -759,9 +760,7 @@ def _ocean_pockets(
     """Ocean texels in a body cut off from the open sea (see :func:`connect_ocean`), and each texel's body."""
     wet = ocean[src] & ocean[dst]
     n = len(ocean)
-    _, label = connected_components(
-        csr_matrix((np.ones(int(wet.sum())), (src[wet], dst[wet])), shape=(n, n)), directed=False,
-    )
+    _, label = edge_components(src, dst, n, wet)
     if not ocean.any():
         return np.zeros(n, dtype=bool), label
     open_sea = np.zeros(label.max() + 1, dtype=bool)

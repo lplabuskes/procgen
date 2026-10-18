@@ -23,10 +23,9 @@ import datetime
 from pathlib import Path
 
 import numpy as np
-from scipy.sparse import csr_matrix
-from scipy.sparse.csgraph import connected_components
 
 from _common import add_seed_args, avg, get_physical_world, load_history, resolve_seeds, save_history
+from utils.graph import edge_components
 from worldgen.climate.classification import BIOME_NAMES, WETLAND_BIOME
 from worldgen.hydrology.rivers import inter_face_adjacency, texel_neighbor_csr
 from worldgen.wetland.builder import WetlandParams, _PetParams, wetland_score
@@ -74,8 +73,7 @@ def measure(seed: int, rebuild: bool, params: WetlandParams) -> dict:
     slot[ids] = np.arange(len(ids))
     src = np.repeat(np.arange(n * h * w), np.diff(indptr))
     keep = (slot[src] >= 0) & (slot[flat] >= 0)
-    graph = csr_matrix((np.ones(int(keep.sum())), (slot[src[keep]], slot[flat[keep]])), shape=(len(ids),) * 2)
-    _, label = connected_components(graph, directed=False)
+    _, label = edge_components(slot[src[keep]], slot[flat[keep]], len(ids))
     sizes = np.sort(np.bincount(label))[::-1] * texel_km2 if len(ids) else np.zeros(0)
 
     rain_fed = (terms["flat"] * terms["rain"] >= params.threshold) & wet

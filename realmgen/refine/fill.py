@@ -22,14 +22,13 @@ from functools import lru_cache
 from typing import List, Optional
 
 import numpy as np
-from scipy.sparse import coo_matrix
-from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
 
 from core.display import POSITIONS_KEY, RIVER_SEGMENTS_KEY, TextureRecipe
 from realmgen.refine.river_follow import RiverSwaps
 from realmgen.polity.display import make_polity_tree_color
 from realmgen.polity.types import UNCLAIMED_COLOR
+from utils.graph import edge_components
 from utils.simplex import fbm_sum, make_perm
 from worldgen.geology.display import OCEAN_COLOR
 
@@ -356,8 +355,7 @@ def find_specks(verts: np.ndarray, edges: np.ndarray, labels: np.ndarray, max_ve
     land = labels >= 0
     a, b = edges[:, 0], edges[:, 1]
     same = land[a] & (labels[a] == labels[b])
-    g = coo_matrix((np.ones(int(same.sum())), (a[same], b[same])), shape=(n, n))
-    _, comp = connected_components(g, directed=False)
+    _, comp = edge_components(a, b, n, same)
     size = np.bincount(comp[land], minlength=comp.max() + 1)
     small = np.zeros(comp.max() + 1, dtype=bool)
     small[np.flatnonzero((size > 0) & (size <= max_verts))] = True

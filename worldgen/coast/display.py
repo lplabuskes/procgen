@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 
 from core.display import TextureRecipe
-from viz.color_stops import gradient_texture
+from utils.color import gradient_texture
 from worldgen.geology.display import apply_water_masks, ocean_gradient_scheme
 
 # Rugged (dark slate) → smooth (sand).

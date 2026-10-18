@@ -10,9 +10,10 @@ from typing import Dict, Optional, Sequence, Tuple
 
 import numpy as np
 from scipy.sparse import csr_matrix
-from scipy.sparse.csgraph import connected_components, dijkstra as sp_dijkstra
+from scipy.sparse.csgraph import dijkstra as sp_dijkstra
 
 from realmgen.polity.types import ControlClass
+from utils.graph import edge_components
 
 
 class ProjectionDistances:
@@ -187,8 +188,7 @@ def merge_exclaves(
     ok = np.ones(n, dtype=bool) if eligible_mask is None else np.asarray(eligible_mask, dtype=bool)
     for _ in range(max(1, int(max_rounds))):
         same = (out[src] == out[dst]) & (out[src] >= 0)
-        g = csr_matrix((np.ones(int(same.sum())), (src[same], dst[same])), shape=(n, n))
-        _, comp = connected_components(g, directed=False)
+        _, comp = edge_components(src, dst, n, same)
         comp = np.where(out >= 0, comp, -1)
         seat_comp = np.zeros(comp.max() + 2, dtype=bool)
         seat_comp[comp[caps]] = True

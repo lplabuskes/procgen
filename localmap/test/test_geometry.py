@@ -5,9 +5,10 @@ import numpy as np
 import pytest
 
 from localmap.geometry import LocalGeometry
-from localmap.grid import LocalHexGrid, in_flat_hexagon
+from localmap.grid import LocalHexGrid
 from region.geometry import RegionGeometry
 from region.grid import RegionHexGrid
+from utils.hexagon import in_flat_hexagon
 
 REGION_ID = 40
 

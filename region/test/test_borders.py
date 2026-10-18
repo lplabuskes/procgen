@@ -6,11 +6,12 @@ import pytest
 
 from realmgen.polity.types import Polity
 from realmgen.refine.barriers import pack_river_segments
-from realmgen.refine.borders import _icosphere_lattice, trace_lattice_chains
+from realmgen.refine.borders import trace_lattice_chains
 from realmgen.refine.fill import PolityLabelField
 from realmgen.refine.river_follow import RiverFollowParams, build_river_swaps
 from region.borders import _square_lattice, view_polity_borders
 from region.upsample import RegionUpsampleParams, build_region_fields
+from utils.icosphere import icosphere_lattice
 from utils.sphere import EARTH_RADIUS_KM
 
 REGION_ID = 40   # has land (the conftest lake sits on its highland)
@@ -84,7 +85,7 @@ def test_lines_follow_the_rivers_the_view_draws(fields, split):
         return length[np.abs(mid @ axis - offset) < tol].sum() / length.sum()
 
     pols = [_pol(0), _pol(1)]
-    verts, tris, edges, tri_edges = _icosphere_lattice(5)
+    verts, tris, edges, tri_edges = icosphere_lattice(5)
     chains = trace_lattice_chains(verts, tris, edges, tri_edges, field.plain_land_labels(verts), pols,
                                   label_fn=field.plain_land_labels)
     # Coarse world (faces ~1000 km): reach and sampling scaled up to match.

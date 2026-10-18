@@ -10,14 +10,7 @@ from realmgen.polity.types import Polity
 from realmgen.test.conftest import _settlement
 from core.display import POSITIONS_KEY
 from core.mesh import Mesh
-from realmgen.refine.borders import (
-    _chaikin,
-    _chain_edges,
-    _icosphere_lattice,
-    lattice_depth_for,
-    smooth_polity_borders,
-    trace_lattice_borders,
-)
+from realmgen.refine.borders import lattice_depth_for, smooth_polity_borders, trace_lattice_borders
 from realmgen.refine.fill import (
     UNCLAIMED,
     WATER,
@@ -28,6 +21,9 @@ from realmgen.refine.fill import (
 )
 from realmgen.refine.settlements import refine_settlement_positions, remap_routes
 from realmgen.refine.sites import SiteField
+from utils.graph import chain_edges
+from utils.icosphere import icosphere_lattice
+from utils.polyline import chaikin
 from utils.raster import neighbour_any
 from utils.spatial import position_key
 from utils.sphere import densify_polylines
@@ -170,23 +166,23 @@ def test_remap_routes_moves_matching_endpoints():
 
 def test_chaikin_cuts_corner_keeps_open_endpoints():
     pts = [np.array([0.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0]), np.array([1.0, 1.0, 0.0])]
-    out = _chaikin(pts, 1, closed=False)
+    out = chaikin(pts, 1, closed=False)
     assert np.allclose(out[0], pts[0]) and np.allclose(out[-1], pts[-1])  # endpoints fixed
     assert len(out) > len(pts)                                            # corner cut in two
     assert not any(np.allclose(o, pts[1]) for o in out)                   # sharp corner gone
 
 
 def test_chain_edges_open_and_closed():
-    open_chains = _chain_edges({(0, 1), (1, 2), (2, 3)})
+    open_chains = chain_edges({(0, 1), (1, 2), (2, 3)})
     assert len(open_chains) == 1 and len(open_chains[0]) == 4
-    loop = _chain_edges({(0, 1), (1, 2), (2, 3), (3, 0)})
+    loop = chain_edges({(0, 1), (1, 2), (2, 3), (3, 0)})
     assert len(loop) == 1 and loop[0][0] == loop[0][-1]                   # closed ring
 
 
 def test_chain_edges_stops_at_given_vertices():
     # 0-1-2 is a degree-2 run, but a stop at 1 splits it (a junction held fixed
     # by another depth's line) and keeps 1 as a shared chain end.
-    chains = _chain_edges({(0, 1), (1, 2)}, stops=frozenset({1}))
+    chains = chain_edges({(0, 1), (1, 2)}, stops=frozenset({1}))
     assert sorted(len(c) for c in chains) == [2, 2]
     assert all(1 in (c[0], c[-1]) for c in chains)
 
@@ -196,7 +192,7 @@ def test_chain_edges_stops_at_given_vertices():
 
 def test_icosphere_lattice_is_a_closed_unit_mesh():
     d = 3
-    verts, tris, edges, tri_edges = _icosphere_lattice(d)
+    verts, tris, edges, tri_edges = icosphere_lattice(d)
     assert len(verts) == 10 * 4 ** d + 2
     assert len(tris) == 20 * 4 ** d
     assert len(edges) == 30 * 4 ** d
@@ -219,7 +215,7 @@ def test_lattice_depth_matches_texel_spacing():
 
 
 def _lattice(depth=3):
-    return _icosphere_lattice(depth)
+    return icosphere_lattice(depth)
 
 
 def _degrees(segs):

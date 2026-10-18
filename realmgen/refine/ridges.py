@@ -22,8 +22,10 @@ from typing import List, Optional
 
 import numpy as np
 
-from realmgen.refine.borders import _chain_edges, _icosphere_lattice, _lattice_links, lattice_depth_for
+from realmgen.refine.borders import _lattice_links, lattice_depth_for
 from realmgen.refine.fill import WATER
+from utils.graph import chain_edges
+from utils.icosphere import icosphere_lattice
 from utils.sphere import laplacian_smooth_sphere
 from worldgen.geology.channels import ELEVATION, OCEAN_MASK
 from worldgen.hydrology.channels import DRAINAGE_LANDING, FILLED_HEIGHT, LAKE_MASK
@@ -151,7 +153,7 @@ def ridge_lines(mesh, streams: Optional[StreamNetwork], river_texels: Optional[l
     h, w = int(ocean_tex.shape[1]), int(ocean_tex.shape[2])
     if lattice_depth is None:
         lattice_depth = max(0, lattice_depth_for(len(mesh.faces), w) + lattice_offset)
-    verts, tris, edges, tri_edges = _icosphere_lattice(int(lattice_depth))
+    verts, tris, edges, tri_edges = icosphere_lattice(int(lattice_depth))
 
     sampler = GlobalSampler(mesh)
     texel = sampler.anchors(*(located or sampler.locate(verts)), h, w)
@@ -180,7 +182,7 @@ def ridge_lines(mesh, streams: Optional[StreamNetwork], river_texels: Optional[l
     ids = ids[~(low[ids[:, 0]] | low[ids[:, 1]])]
     pairs = {(int(a), int(b)) if a < b else (int(b), int(a)) for a, b in ids}
     out: list = []
-    for line in _join_at_junctions(_chain_edges(pairs, stops=junctions), junctions, relief):
+    for line in _join_at_junctions(chain_edges(pairs, stops=junctions), junctions, relief):
         if len(line) < 3:
             continue
         k = np.asarray(line, dtype=np.int64)

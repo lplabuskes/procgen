@@ -232,7 +232,7 @@ class RiverGenerator:
         return face, rem // self.resolution, rem % self.resolution
 
     def _components(self, mask: np.ndarray, min_size: int = 1) -> List[List[int]]:
-        """``find_connected_components`` over the node graph, via the neighbour CSR."""
+        """Connected components of ``mask`` over the node graph (its neighbour CSR)."""
         return find_connected_components_csr(mask, self._nbr_indptr, self._nbr_flat, min_size=min_size)
 
     def _neighbors(self, node: int) -> List[int]:

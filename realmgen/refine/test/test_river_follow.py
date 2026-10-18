@@ -7,9 +7,10 @@ import pytest
 from core.mesh import Mesh
 from realmgen.polity.types import Polity
 from realmgen.refine.barriers import pack_river_segments
-from realmgen.refine.borders import _icosphere_lattice, trace_lattice_chains
+from realmgen.refine.borders import trace_lattice_chains
 from realmgen.refine.fill import PolityLabelField
 from realmgen.refine.river_follow import RiverFollowParams, _even_odd, build_river_swaps
+from utils.icosphere import icosphere_lattice
 from utils.sphere import EARTH_RADIUS_KM
 
 
@@ -43,7 +44,7 @@ def split():
     c = np.asarray(dual.face_centroids, dtype=np.float64)
     pof = np.where(c[:, 0] > 0, 0, 1)
     field = PolityLabelField(dual, pof, np.zeros(n, bool), np.ones(n))
-    verts, tris, edges, tri_edges = _icosphere_lattice(5)
+    verts, tris, edges, tri_edges = icosphere_lattice(5)
     chains = trace_lattice_chains(verts, tris, edges, tri_edges, field.plain_land_labels(verts),
                                   [_pol(0), _pol(1)], label_fn=field.plain_land_labels)
     return field, chains

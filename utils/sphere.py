@@ -14,6 +14,14 @@ def unit(v: np.ndarray) -> np.ndarray:
     return v / np.maximum(np.linalg.norm(v, axis=-1, keepdims=True), 1e-15)
 
 
+def tangent_basis(p: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Unit ``e1`` and ``e2 = p × e1`` spanning the tangent plane at unit vector ``p``
+    (referenced to the pole, or to x near the poles)."""
+    ref = np.array([0.0, 0.0, 1.0]) if abs(p[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
+    e1 = unit(np.cross(p, ref))
+    return e1, np.cross(p, e1)
+
+
 def km_to_rad(km: float) -> float:
     """Arc angle (radians on the unit sphere) of ``km`` of ground."""
     return float(km) / EARTH_RADIUS_KM

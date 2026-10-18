@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 
 from core.display import TextureRecipe
-from viz.color_stops import gradient_texture, categorical_texture, interp_stops_scalar, palette_legend_entries
+from utils.color import gradient_texture, categorical_texture, interp_stops_scalar, palette_legend_entries
 from worldgen.geology.display import apply_water_masks, is_ocean_face, ocean_gradient_scheme, ocean_categorical_scheme
 from worldgen.resources.crops import CROP_NAMES, N_CROPS
 from worldgen.resources.minerals import MINERAL_NAMES, MINERAL_PALETTE

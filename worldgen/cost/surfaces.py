@@ -19,6 +19,7 @@ from typing import List, TYPE_CHECKING
 
 import numpy as np
 
+from utils.graph import adjacency_csr
 from utils.sphere import EARTH_RADIUS_KM
 from worldgen.climate.classification import N_BIOMES
 
@@ -214,24 +215,6 @@ def navigable_river_mask(
     return (flow >= float(navigable_flow_min)) & (nav > 0.0) & ~water
 
 
-def _flatten_adjacency(mesh) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Flatten ``face_adjacency`` into directed edges (src, dst) and CSR ``indptr`` (edges leaving face i)."""
-    adj = mesh.face_adjacency
-    indptr = np.zeros(len(adj) + 1, dtype=np.int64)
-    src_list: List[int] = []
-    dst_list: List[int] = []
-    for i, nbrs in enumerate(adj):
-        for j in nbrs:
-            src_list.append(i)
-            dst_list.append(int(j))
-        indptr[i + 1] = indptr[i] + len(nbrs)
-    return (
-        np.asarray(src_list, dtype=np.int64),
-        np.asarray(dst_list, dtype=np.int64),
-        indptr,
-    )
-
-
 def build_land_edge_costs(
     mesh,
     land_cost: np.ndarray,
@@ -256,7 +239,8 @@ def build_land_edge_costs(
     ``settlement_mask`` faces have bridges: no ford penalty.  ``land_cost`` is the caller's base
     (worldgen: ``land_base_cost``; realmgen: base + danger).
     """
-    src, dst, indptr = _flatten_adjacency(mesh)
+    indptr, dst = adjacency_csr(mesh.face_adjacency)
+    src = np.repeat(np.arange(len(indptr) - 1, dtype=np.int64), np.diff(indptr))
     n = len(mesh.faces)
     if src.size == 0:
         return [np.empty(0, dtype=np.float64) for _ in range(n)]
@@ -528,7 +512,8 @@ def build_sea_edge_costs(
     :func:`compute_wind_mean_dir`, ~0 near coasts) scales by ``1 - direction_strength · align`` with the
     endpoints' mean wind: cheaper downwind, dearer upwind.
     """
-    src, dst, indptr = _flatten_adjacency(mesh)
+    indptr, dst = adjacency_csr(mesh.face_adjacency)
+    src = np.repeat(np.arange(len(indptr) - 1, dtype=np.int64), np.diff(indptr))
     n = len(mesh.faces)
     if src.size == 0:
         return [np.empty(0, dtype=np.float64) for _ in range(n)]

@@ -7,7 +7,7 @@ import numpy as np
 
 from core.display import TextureRecipe
 
-from viz.color_stops import interp_stops, interp_stops_scalar, gradient_scheme, categorical_scheme
+from utils.color import interp_stops, interp_stops_scalar, gradient_scheme, categorical_scheme
 
 
 OCEAN_COLOR = (0.25, 0.55, 0.85, 1.0)

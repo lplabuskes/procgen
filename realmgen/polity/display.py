@@ -5,7 +5,7 @@ import colorsys
 from typing import TYPE_CHECKING, List
 
 from realmgen.polity.types import ControlClass, POLITY_COLORS, UNCLAIMED_COLOR
-from viz.color_stops import interp_stops_scalar
+from utils.color import interp_stops_scalar
 from worldgen.geology.display import OCEAN_COLOR, is_water_meta as _is_water
 
 if TYPE_CHECKING:

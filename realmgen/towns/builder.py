@@ -46,7 +46,7 @@ from realmgen.towns.placement import (
 )
 from realmgen.towns.types import TOWN_KIND_COLORS, TOWN_KIND_NAMES, Towns
 from utils.sphere import EARTH_RADIUS_KM, densify_polylines
-from viz.color_stops import gradient_texture
+from utils.color import gradient_texture
 from worldgen.geology.channels import OCEAN_MASK
 from worldgen.geology.display import OCEAN_COLOR
 from worldgen.hydrology.channels import LAKE_MASK

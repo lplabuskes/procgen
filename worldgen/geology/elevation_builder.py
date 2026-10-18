@@ -21,7 +21,7 @@ from worldgen.geology.elevation import (
     smooth_elevation_seams,
 )
 from core.mesh import PolygonMesh
-from viz.color_stops import interp_stops_scalar
+from utils.color import interp_stops_scalar
 from worldgen.geology.channels import (
     BOUNDARY_TYPE,
     ELEVATION,

@@ -19,7 +19,7 @@ from scipy.spatial import KDTree
 
 from region.rivers import RegionRivers
 from region.upsample import RegionFields
-from utils.sphere import EARTH_RADIUS_KM
+from utils.sphere import EARTH_RADIUS_KM, tangent_basis
 from worldgen.hydrology.discharge import channel_width_km
 
 # Push iterations: a site pushed off one channel may land on another (a confluence).
@@ -158,9 +158,7 @@ def crossing_pairs(
             continue
         x = origins[o]
         # Tangent-plane coordinates at the origin.
-        e1 = np.cross(x, [0.0, 0.0, 1.0] if abs(x[2]) < 0.9 else [1.0, 0.0, 0.0])
-        e1 /= np.linalg.norm(e1)
-        e2 = np.cross(x, e1)
+        e1, e2 = tangent_basis(x)
         basis = np.stack([e1, e2], axis=1)                    # (3, 2)
         p = (targets[pairs] - x) @ basis                      # (n, 2); origin at 0
         segs = np.asarray(segs, dtype=np.int64)

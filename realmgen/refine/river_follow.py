@@ -49,7 +49,7 @@ from scipy.spatial import KDTree
 
 from realmgen.refine.barriers import flow_ramp
 from utils.simplex import fbm_sum, make_perm
-from utils.sphere import EARTH_RADIUS_KM, cumulative_chord, unit
+from utils.sphere import EARTH_RADIUS_KM, cumulative_chord, tangent_basis, unit
 
 # Nearest river segments examined per point.
 _K_NEAREST = 16
@@ -101,12 +101,6 @@ class RiverFollowParams:
 
 
 # ── geometry ─────────────────────────────────────────────────────────────────
-
-
-def _tangent_basis(c: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    ref = np.array([0.0, 0.0, 1.0]) if abs(c[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
-    e1 = unit(np.cross(c, ref))
-    return e1, np.cross(c, e1)
 
 
 def _gnomonic(p: np.ndarray, c: np.ndarray, e1: np.ndarray, e2: np.ndarray) -> np.ndarray:
@@ -323,7 +317,7 @@ class RiverSwap:
                       float(np.linalg.norm(body[-1] - self.border[-1])))
         ring = np.vstack([self.border, self.line[::-1]])
         self.centre = unit(ring.mean(axis=0))
-        self.e1, self.e2 = _tangent_basis(self.centre)
+        self.e1, self.e2 = tangent_basis(self.centre)
         self.ring2d = _gnomonic(ring, self.centre, self.e1, self.e2)
         self.radius = float(np.linalg.norm(ring - self.centre, axis=1).max())
         self.reach = self.radius + max(self.band, self.edge)

@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import numpy as np
 
+from utils.icosphere import icosphere_lattice
+
 
 # ── specks ──────────────────────────────────────────────────────────────────
 
 
 def _lattice_with_speck():
-    from realmgen.refine.borders import _icosphere_lattice
-    verts, _, edges, _ = _icosphere_lattice(3)
+    verts, _, edges, _ = icosphere_lattice(3)
     labels = np.where(verts[:, 2] > 0, 0, 1).astype(np.int64)    # two hemispheres
     speck = int(np.argmax(verts[:, 2]))                           # polity 1 at polity 0's pole
     labels[speck] = 1

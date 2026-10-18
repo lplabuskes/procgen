@@ -377,7 +377,7 @@ time); a load, which doesn't trace, pays ~2 s.
 Replaces `PolityStage`'s soup of hexagon edges with continuous polylines
 contoured from the label field. Face textures can't be contoured (grids don't
 line up across seams; a border *along* a seam is in neither), so the field is
-sampled on a fine seamless icosphere (`_icosphere_lattice`):
+sampled on a fine seamless icosphere (`utils.icosphere.icosphere_lattice`):
 
 - **Lattice.** Depth from `lattice_depth_for` so an edge ≤ a face texel: depth 9
   (~2.6 M vertices, ~15 km edges) by default; vectorised, cached per process.

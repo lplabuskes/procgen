@@ -5,38 +5,11 @@ Seam adjacency comes from the mesh's boundary pixel pairs
 """
 from __future__ import annotations
 
-from typing import Callable, List
+from typing import List
 
 import numpy as np
 
 from utils.jit import njit
-
-
-def find_connected_components(
-    mask: np.ndarray,
-    neighbors_fn: Callable[[int], List[int]],
-    n_nodes: int,
-    min_size: int = 1,
-) -> List[List[int]]:
-    """Return groups of node indices where mask is True, connected via neighbors_fn."""
-    visited = np.zeros(n_nodes, dtype=bool)
-    components: List[List[int]] = []
-    for start in np.where(mask)[0].tolist():
-        if visited[start]:
-            continue
-        comp: List[int] = []
-        stack = [start]
-        visited[start] = True
-        while stack:
-            node = stack.pop()
-            comp.append(node)
-            for nb in neighbors_fn(node):
-                if not visited[nb] and mask[nb]:
-                    visited[nb] = True
-                    stack.append(nb)
-        if len(comp) >= min_size:
-            components.append(comp)
-    return components
 
 
 def find_connected_components_csr(
@@ -45,10 +18,8 @@ def find_connected_components_csr(
     indices: np.ndarray,
     min_size: int = 1,
 ) -> List[List[int]]:
-    """:func:`find_connected_components` over a CSR neighbour graph.
-
-    Identical output (component and node order) to the callback version.
-    """
+    """Groups of node indices where ``mask`` is True, connected over a CSR neighbour graph;
+    components of fewer than ``min_size`` nodes are dropped."""
     mask = np.asarray(mask, dtype=bool)
     nodes, bounds = _components_kernel(mask, indptr, indices, int(min_size))
     return [nodes[bounds[i]:bounds[i + 1]].tolist() for i in range(len(bounds) - 1)]

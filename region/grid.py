@@ -19,6 +19,7 @@ import numpy as np
 from scipy.spatial import KDTree
 
 from region.geometry import RegionGeometry
+from utils.hexagon import in_flat_hexagon
 
 # Hex texture half-width in circumradii (1.0: smallest square containing the hexagon).
 _TEXTURE_HALF_WIDTH = 1.0
@@ -110,16 +111,7 @@ class RegionHexGrid:
         Only these count when aggregating, so the over-hang never double-counts.
         """
         local = self.texture_local(tex_size)
-        d = local - self.centers[:, None, None, :]
-        R = self.radius
-        x, y = np.abs(d[..., 0]), np.abs(d[..., 1])
-        sqrt3 = math.sqrt(3.0)
-        # Flat-top hexagon = intersection of three slabs.
-        return (
-            (y <= sqrt3 * 0.5 * R + 1e-12)
-            & (sqrt3 * x + y <= sqrt3 * R + 1e-12)
-            & (sqrt3 * x - y <= sqrt3 * R + 1e-12)
-        )
+        return in_flat_hexagon(local - self.centers[:, None, None, :], self.radius)
 
     def texel_at(self, s: float, t: float, tex_size: int) -> Optional[tuple[int, int, int]]:
         """``(hex, row, col)`` of the texel drawn at local point ``(s, t)``, or None.

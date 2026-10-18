@@ -6,7 +6,7 @@ from typing import Mapping
 import numpy as np
 
 from core.display import TextureRecipe
-from viz.color_stops import interp_stops, interp_stops_scalar, categorical_texture, palette_legend_entries
+from utils.color import interp_stops, interp_stops_scalar, categorical_texture, palette_legend_entries
 from worldgen.geology.display import (
     OCEAN_COLOR,
     apply_water_masks,

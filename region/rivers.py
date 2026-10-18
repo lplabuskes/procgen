@@ -41,7 +41,7 @@ from region.corridor import (
 )
 from region.distributaries import WATER_COST, DistributaryParams, add_distributaries
 from region.upsample import RegionFields
-from utils.sphere import EARTH_RADIUS_KM, laplacian_smooth_sphere
+from utils.sphere import EARTH_RADIUS_KM, laplacian_smooth_sphere, tangent_basis
 from worldgen.hydrology.rivers import main_stem_paths, stream_stem_ids
 from worldgen.hydrology.types import StreamNetwork
 
@@ -385,9 +385,7 @@ def _segment_crossings(a: np.ndarray, b: np.ndarray) -> list[tuple[int, float]]:
     either segment don't count.
     """
     ref = a[0] / np.linalg.norm(a[0])
-    e1 = np.cross(ref, [0.0, 0.0, 1.0] if abs(ref[2]) < 0.9 else [1.0, 0.0, 0.0])
-    e1 /= np.linalg.norm(e1)
-    e2 = np.cross(ref, e1)
+    e1, e2 = tangent_basis(ref)
     pa, pb = np.stack([a @ e1, a @ e2], axis=1), np.stack([b @ e1, b @ e2], axis=1)
     r, q = np.diff(pa, axis=0), np.diff(pb, axis=0)            # (M-1, 2), (K-1, 2)
     d = r[:, None, 0] * q[None, :, 1] - r[:, None, 1] * q[None, :, 0]

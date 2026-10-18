@@ -11,16 +11,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from utils.graph import adjacency_csr
 from utils.jit import njit
-
-
-def _adjacency_csr(face_adjacency: list) -> tuple[np.ndarray, np.ndarray]:
-    """``(indptr, indices)`` int64 CSR of an adjacency list, neighbour order kept."""
-    counts = np.fromiter((len(a) for a in face_adjacency), dtype=np.int64, count=len(face_adjacency))
-    indptr = np.zeros(len(face_adjacency) + 1, dtype=np.int64)
-    np.cumsum(counts, out=indptr[1:])
-    indices = np.fromiter((j for a in face_adjacency for j in a), dtype=np.int64, count=int(indptr[-1]))
-    return indptr, indices
 
 
 def evaporation_source(
@@ -64,7 +56,7 @@ def _build_wind_edges(
     Returns:
         (src, dst, weight) int32 / int32 / float32 arrays.
     """
-    indptr, indices = _adjacency_csr(face_adjacency)
+    indptr, indices = adjacency_csr(face_adjacency)
     src, dst, wt, n_out = _wind_edges_kernel(
         np.asarray(face_centroids, dtype=np.float64), indptr, indices,
         np.asarray(winds_k, dtype=np.float64),
@@ -185,7 +177,7 @@ def smooth_humidity(
         (N, K) float32 smoothed humidity.
     """
     q = q_air.astype(np.float32)
-    indptr, indices = _adjacency_csr(face_adjacency)
+    indptr, indices = adjacency_csr(face_adjacency)
     for _ in range(n_passes):
         q = _smooth_pass(q, indptr, indices, np.float32(alpha))
     return q

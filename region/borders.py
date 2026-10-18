@@ -14,9 +14,10 @@ from typing import List, Optional
 
 import numpy as np
 
-from realmgen.refine.borders import _unique_edges, trace_lattice_borders
+from realmgen.refine.borders import trace_lattice_borders
 from realmgen.refine.fill import WATER, PolityLabelField
 from region.upsample import RegionFields
+from utils.icosphere import unique_edges
 
 
 def _square_lattice(n: int) -> tuple[np.ndarray, np.ndarray]:
@@ -60,7 +61,7 @@ def view_polity_borders(fields: RegionFields, field: PolityLabelField, polities:
     labels = view.land_labels(verts)
     labels[water] = WATER
 
-    edges, tri_edges = _unique_edges(tris, len(verts))
+    edges, tri_edges = unique_edges(tris, len(verts))
     return trace_lattice_borders(verts, tris, edges, tri_edges, labels, polities,
                                  iterations=iterations, label_fn=view.land_labels,
                                  bisect_steps=bisect_steps)

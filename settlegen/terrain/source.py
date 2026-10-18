@@ -25,9 +25,9 @@ from typing import TYPE_CHECKING, Optional, Sequence
 import numpy as np
 
 from localmap.geometry import PARENT_CENTER, PARENT_RADIUS
-from localmap.grid import in_flat_hexagon
 from region.geometry import ecef_to_cell
 from region.source import Located, ParentSource, RegionSource
+from utils.hexagon import in_flat_hexagon
 from utils.raster import texture_slope
 from utils.resample import bilinear_stencil, settle_owners
 

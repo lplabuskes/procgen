@@ -40,7 +40,7 @@ from realmgen.trade.network import GOOD_RARITY_WEIGHTS, RARE_BIO_TYPE_OFFSET, Tr
 from realmgen.trade.water_links import (
     WaterAccess, build_water_access, mask_sea_edges, port_links, settlement_water_links,
 )
-from viz.color_stops import interp_stops_scalar
+from utils.color import interp_stops_scalar
 from worldgen.cost.channels import COST_SURFACES, IS_WATER
 from worldgen.geology.channels import IS_OCEAN, OCEAN_MASK
 from worldgen.geology.display import OCEAN_COLOR, is_water_meta

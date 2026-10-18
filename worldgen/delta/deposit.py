@@ -27,9 +27,10 @@ from typing import TYPE_CHECKING, List, Optional
 
 import numpy as np
 from scipy.sparse import csr_matrix
-from scipy.sparse.csgraph import connected_components, dijkstra
+from scipy.sparse.csgraph import dijkstra
 from scipy.spatial import KDTree
 
+from utils.graph import edge_components
 from utils.sphere import (
     EARTH_RADIUS_KM, arc_km, densify_polyline, km_to_chord, laplacian_smooth_sphere, polyline_length_km, unit,
 )
@@ -724,8 +725,7 @@ def _water_bodies(idx: TexelIndex, ocean: np.ndarray, lake: np.ndarray) -> np.nd
     pos = idx.positions[wet]
     tree = KDTree(pos)
     pairs = tree.query_pairs(_NEIGHBOUR_SPACINGS * idx.spacing, output_type="ndarray")
-    graph = csr_matrix((np.ones(len(pairs)), (pairs[:, 0], pairs[:, 1])), shape=(wet.size, wet.size))
-    _, labels = connected_components(graph, directed=False)
+    _, labels = edge_components(pairs[:, 0], pairs[:, 1], wet.size)
     body[wet] = labels + 1
     over = idx.ids[lake[idx.ids] & ~idx.inside[idx.ids]]
     if over.size:

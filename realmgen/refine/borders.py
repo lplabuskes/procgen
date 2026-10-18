@@ -17,85 +17,14 @@ texel spacing:
 """
 from __future__ import annotations
 
-from collections import defaultdict
-from functools import lru_cache
 from typing import Callable, List, NamedTuple, Optional
 
 import numpy as np
 
 from realmgen.refine.fill import WATER, PolityLabelField
-
-# Angle subtended by an icosahedron edge; each subdivision halves it.
-_ICOSA_EDGE_RAD = 1.1071487177940904
-
-
-def _chain_edges(edges, stops=frozenset()) -> List[list]:
-    """Chain undirected ``(a, b)`` edges into vertex polylines.
-
-    Walks stop at vertices of degree != 2 and in ``stops``; a closed loop comes
-    back as ``[v, ..., v]`` and junctions appear in every incident chain.
-    """
-    adj: dict = defaultdict(list)
-    for a, b in edges:
-        adj[a].append(b)
-        adj[b].append(a)
-
-    visited: set = set()
-
-    def ekey(a, b):
-        return (a, b) if a < b else (b, a)
-
-    def is_stop(v) -> bool:
-        return len(adj[v]) != 2 or v in stops
-
-    def walk(start, nxt) -> list:
-        chain = [start]
-        prev, cur = start, nxt
-        while True:
-            chain.append(cur)
-            visited.add(ekey(prev, cur))
-            if is_stop(cur):
-                break
-            nbrs = [w for w in adj[cur] if ekey(cur, w) not in visited]
-            if not nbrs:
-                break
-            prev, cur = cur, nbrs[0]
-        return chain
-
-    chains: List[list] = []
-    for v in [v for v in adj if is_stop(v)]:
-        for w in adj[v]:
-            if ekey(v, w) not in visited:
-                chains.append(walk(v, w))
-    # Remaining edges are pure cycles.
-    for a, b in edges:
-        if ekey(a, b) not in visited:
-            chains.append(walk(a, b))
-    return chains
-
-
-def _chaikin(points: List[np.ndarray], iterations: int, closed: bool) -> List[np.ndarray]:
-    """Chaikin corner-cutting; open chains keep their endpoints fixed so junctions stay joined."""
-    pts = points
-    for _ in range(max(iterations, 0)):
-        if len(pts) < 3:
-            break
-        new: List[np.ndarray] = []
-        if closed:
-            n = len(pts)
-            for i in range(n):
-                p, q = pts[i], pts[(i + 1) % n]
-                new.append(0.75 * p + 0.25 * q)
-                new.append(0.25 * p + 0.75 * q)
-        else:
-            new.append(pts[0])
-            for i in range(len(pts) - 1):
-                p, q = pts[i], pts[i + 1]
-                new.append(0.75 * p + 0.25 * q)
-                new.append(0.25 * p + 0.75 * q)
-            new.append(pts[-1])
-        pts = new
-    return pts
+from utils.graph import chain_edges
+from utils.icosphere import ICOSA_EDGE_RAD, icosphere_lattice
+from utils.polyline import chaikin
 
 
 # ── ancestor lookup ───────────────────────────────────────────────────────────
@@ -149,64 +78,11 @@ def _edge_border_depth(la: np.ndarray, lb: np.ndarray,
 # ── lattice ───────────────────────────────────────────────────────────────────
 
 
-def _unique_edges(tris: np.ndarray, n_verts: int) -> tuple[np.ndarray, np.ndarray]:
-    """``(edges (E, 2), tri_edges (F, 3))`` for a triangle array.
-
-    ``tri_edges[f, k]`` indexes the edge from corner ``k`` to corner ``(k + 1) % 3``.
-    """
-    a = tris
-    b = np.roll(tris, -1, axis=1)
-    lo = np.minimum(a, b).astype(np.int64)
-    hi = np.maximum(a, b).astype(np.int64)
-    keys = (lo * n_verts + hi).ravel()
-    uniq, inverse = np.unique(keys, return_inverse=True)
-    edges = np.stack([uniq // n_verts, uniq % n_verts], axis=1)
-    return edges, inverse.reshape(tris.shape)
-
-
-@lru_cache(maxsize=2)
-def _icosphere_lattice(depth: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """``(verts, tris, edges, tri_edges)`` of an icosphere subdivided ``depth`` times.
-
-    Vectorised because ``Mesh.icosphere`` is far too slow at ~10⁶ vertices.
-    """
-    phi = (1.0 + np.sqrt(5.0)) / 2.0
-    verts = np.array([
-        [-1, phi, 0], [1, phi, 0], [-1, -phi, 0], [1, -phi, 0],
-        [0, -1, phi], [0, 1, phi], [0, -1, -phi], [0, 1, -phi],
-        [phi, 0, -1], [phi, 0, 1], [-phi, 0, -1], [-phi, 0, 1],
-    ], dtype=np.float64)
-    verts /= np.linalg.norm(verts, axis=1, keepdims=True)
-    tris = np.array([
-        [0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
-        [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
-        [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
-        [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1],
-    ], dtype=np.int64)
-    for _ in range(depth):
-        n = len(verts)
-        edges, te = _unique_edges(tris, n)
-        mids = verts[edges[:, 0]] + verts[edges[:, 1]]
-        mids /= np.linalg.norm(mids, axis=1, keepdims=True)
-        m = te + n                     # midpoint vertex of edge (k, k+1)
-        a, b, c = tris[:, 0], tris[:, 1], tris[:, 2]
-        mab, mbc, mca = m[:, 0], m[:, 1], m[:, 2]
-        tris = np.concatenate([
-            np.stack([a, mab, mca], axis=1),
-            np.stack([mab, b, mbc], axis=1),
-            np.stack([mca, mbc, c], axis=1),
-            np.stack([mab, mbc, mca], axis=1),
-        ])
-        verts = np.vstack([verts, mids])
-    edges, te = _unique_edges(tris, len(verts))
-    return verts, tris, edges, te
-
-
 def lattice_depth_for(n_faces: int, tex_size: int) -> int:
     """Icosphere depth whose edge length is no longer than a face texel."""
     face_width = np.sqrt(4.0 * np.pi / max(n_faces, 1))
     spacing = face_width / max(tex_size - 1, 1)
-    return max(0, int(np.ceil(np.log2(_ICOSA_EDGE_RAD / spacing))))
+    return max(0, int(np.ceil(np.log2(ICOSA_EDGE_RAD / spacing))))
 
 
 # ── tracing ───────────────────────────────────────────────────────────────────
@@ -301,7 +177,7 @@ def trace_lattice_borders(verts: np.ndarray, tris: np.ndarray, edges: np.ndarray
     """Return ``{depth: (M, 6)}`` smoothed border segments contoured on a triangle lattice.
 
     ``labels`` per vertex are polity id, ``UNCLAIMED`` or ``WATER``;
-    ``edges``/``tri_edges`` come from ``_unique_edges(tris)``. ``label_fn`` is the
+    ``edges``/``tri_edges`` come from ``unique_edges(tris)``. ``label_fn`` is the
     land label field the labels came from, used to bisect crossings.
     """
     if not polities:
@@ -343,7 +219,7 @@ def trace_lattice_chains(verts: np.ndarray, tris: np.ndarray, edges: np.ndarray,
         if len(sel) == 0:
             continue
         edges_d = {(int(a), int(b)) if a < b else (int(b), int(a)) for a, b in sel}
-        for chain in _chain_edges(edges_d, stops=junctions):
+        for chain in chain_edges(edges_d, stops=junctions):
             if len(chain) < 3:
                 continue
             ids = np.asarray(chain, dtype=np.int64)
@@ -383,7 +259,7 @@ def lattice_base(mesh, field: PolityLabelField, ocean_tex: np.ndarray, lake_tex:
 
     if lattice_depth is None:
         lattice_depth = max(0, lattice_depth_for(len(mesh.faces), int(ocean_tex.shape[2])) + lattice_offset)
-    verts, tris, edges, tri_edges = _icosphere_lattice(int(lattice_depth))
+    verts, tris, edges, tri_edges = icosphere_lattice(int(lattice_depth))
 
     sampler = GlobalSampler(mesh)
     faces, u, v = sampler.locate(verts)
@@ -412,12 +288,12 @@ def _smooth_chains(ids: np.ndarray, points: np.ndarray, junctions: frozenset,
     """Chain ``(K, 2)`` point-id links into polylines, Chaikin-smooth, emit ``(M, 6)``."""
     edges = {(int(a), int(b)) if a < b else (int(b), int(a)) for a, b in ids}
     segs: list = []
-    for chain in _chain_edges(edges, stops=junctions):
+    for chain in chain_edges(edges, stops=junctions):
         closed = len(chain) > 3 and chain[0] == chain[-1] and chain[0] not in junctions
         keys = chain[:-1] if closed else chain
         if len(keys) < 2:
             continue
-        pts = _chaikin([points[k] for k in keys], iterations, closed)
+        pts = chaikin([points[k] for k in keys], iterations, closed)
         arr = np.asarray(pts)
         arr /= np.linalg.norm(arr, axis=1, keepdims=True)
         nxt = np.roll(arr, -1, axis=0) if closed else arr[1:]

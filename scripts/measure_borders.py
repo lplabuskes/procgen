@@ -25,14 +25,13 @@ import datetime
 from pathlib import Path
 
 import numpy as np
-from scipy.sparse import coo_matrix
-from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
 
 from core.pipeline import BuildContext
 from realmgen.builder import RealmPipeline
 from realmgen.channels import POLITY_ID, SOVEREIGN_ID
 from realmgen.refine.ridges import ridge_lines
+from utils.graph import adjacency_csr, edge_components
 from utils.sphere import EARTH_RADIUS_KM
 from worldgen.cost.channels import IS_WATER
 from worldgen.hydrology.channels import LAKE_MASK
@@ -45,16 +44,9 @@ RESULTS = Path(__file__).parent / "results" / "border_results.json"
 
 def _components(adj, mask: np.ndarray) -> np.ndarray:
     """Connected-component label per face over ``adj`` restricted to ``mask`` (-1 outside)."""
-    n = len(adj)
-    rows, cols = [], []
-    for i, nb in enumerate(adj):
-        if mask[i]:
-            for j in nb:
-                if mask[j]:
-                    rows.append(i)
-                    cols.append(j)
-    g = coo_matrix((np.ones(len(rows)), (rows, cols)), shape=(n, n)).tocsr()
-    _, lab = connected_components(g, directed=False)
+    indptr, dst = adjacency_csr(adj)
+    src = np.repeat(np.arange(len(adj)), np.diff(indptr))
+    _, lab = edge_components(src, dst, len(adj), mask[src] & mask[dst])
     return np.where(mask, lab, -1)
 
 

@@ -15,7 +15,6 @@ zoomed region / local-map view: [viz_regionview.md](viz_regionview.md).
 - `viz/mapview/main.py` — dev entry point
 - `viz/mesh/gui.py` — `MeshViewer`, `MainWindow` (3-D OpenGL globe)
 - `viz/params_dialog.py` — `ParamsDialog` (generic params UI)
-- `viz/color_stops.py` — colour interpolation utilities
 
 Antimeridian choice: `core/antimeridian.py` ([core.md](core.md)).
 
@@ -199,17 +198,3 @@ their owner); nested params → collapsible sections; wrapped in a `QScrollArea`
 the dialog to matching leaves and drops sections left empty; unshown fields keep their
 values. `result_params(base) → T` returns an updated copy. `main.py` uses
 `AppParamsDialog(AppParams, advanced=...)`: `main.BASIC_PARAMS` unless `--advanced`.
-
----
-
-## `viz/color_stops.py`
-
-Stop list: `[(anchor, (r,g,b,a)), ...]`, ascending.
-
-- `interp_stops_scalar(value, stops)` → RGBA tuple (scheme callables)
-- `interp_stops(values, stops)` → `(…, 4) float32` (texture builders)
-- `gradient_scheme(meta_key, stops, default=0.0)` → `SchemeFn` over `meta[meta_key]`
-- `categorical_scheme(meta_key, palette, n, default=0)` → `SchemeFn` palette lookup
-- `gradient_texture(channel_tex, stops)` → `(N,H,W,4)` from `(N,H,W,1)`
-- `categorical_texture(idx_tex, palette, n)` → `(N,H,W,4)` from int index
-- `palette_legend_entries(names, palette)` → `(name, rgba)` legend pairs
