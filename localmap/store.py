@@ -1,7 +1,7 @@
 """The region and local maps built so far for one world, shared by everything that needs them.
 
 A region or local map is built only when it isn't already held: the viewer and
-the settlement chain (:mod:`settlegen.chain`) ask the same store, so opening a
+the settlement chain (:mod:`settlegen.chain.builder`) ask the same store, so opening a
 region in the viewer and then a settlement in it builds each map once.  Each map
 is ~100 MB at defaults, so the store keeps the most recently used
 ``region_capacity`` regions and ``local_capacity`` local maps.

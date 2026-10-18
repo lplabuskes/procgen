@@ -23,7 +23,7 @@ from region.test.conftest import synthetic_globe  # noqa: E402, F401  (fixture)
 from region.test.test_resources import globe  # noqa: E402, F401  (fixture)
 from viz.mapview.mapview import MapWindow, _WorldProjector  # noqa: E402
 from viz.mapview.overlays import settlement_markers  # noqa: E402
-from settlegen.chain import SettlementRef  # noqa: E402
+from settlegen.chain.builder import SettlementRef  # noqa: E402
 from viz.mapview.regionview import RegionView  # noqa: E402
 
 REGION_ID = 40
@@ -309,7 +309,7 @@ def test_region_and_local_hover_name_the_fort_and_its_garrison(app, globe, settl
 
 def _settlement_window(globe):  # noqa: F811
     from settlegen.params import SettlementMapParams
-    from settlegen.upsample import SettlementUpsampleParams
+    from settlegen.terrain.builder import SettlementUpsampleParams
 
     window = MapWindow()
     window.resize(900, 700)

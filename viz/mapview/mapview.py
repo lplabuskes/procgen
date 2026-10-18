@@ -33,9 +33,9 @@ from viz.mapview.overlays import draw_overlays, settlement_markers
 from viz.mapview.projections import RobinsonProjection, Projection
 from localmap.store import MapStore
 from settlegen.builder import build_settlement_map
-from settlegen.chain import SettlementRef
+from settlegen.chain.builder import SettlementRef
 from settlegen.params import SettlementMapParams
-from settlegen.upsample import with_local_detail
+from settlegen.terrain.builder import with_local_detail
 from viz.mapview.regionview import RegionView
 
 # (face, uv, local) -> status fragments; see ``MapWindow.set_hover_parts``.

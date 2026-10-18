@@ -16,7 +16,7 @@ from realmgen.builder import RealmParams, RealmPipeline
 from localmap.params import LocalParams
 from localmap.upsample import with_region_detail
 from settlegen.params import SettlementMapParams
-from settlegen.upsample import with_local_detail
+from settlegen.terrain.builder import with_local_detail
 from region.params import RegionParams
 from worldgen import GlobePipeline, GlobeParams
 

@@ -32,7 +32,7 @@ back from a local map shows the region untouched.
 **Maps come from a `MapStore`** (`localmap/store.py`): the Qt-free holder of
 the region and local maps built so far, their params and the realm/world
 tuning. `MapWindow` gives both views one store (`set_store`), and the
-settlement chain (`settlegen.chain`) asks the same one, so a region or local
+settlement chain (`settlegen.chain.builder`) asks the same one, so a region or local
 map is built only if the store doesn't hold it — LRU, `REGION_CAPACITY` = 3,
 `LOCAL_CAPACITY` = 6 (~100 MB each). A view made alone
 has its own store.
@@ -82,8 +82,8 @@ footprint is not filled (its tofts and streets are the village); a green,
 quays (stone) and piers (timber, over the water) draw with it. Hover on a
 settlement map (`settlement_hover`): the settlement (`settlement_name`: `City 13`,
 `Village 3 (local map 50/115)`), then what of the layout is under the cursor
-(`settlegen.layout.describe_at`), the height in metres, sea/lake/biome — not the
-world face's readouts; the status line is the name and `settlegen.layout.summary`.
+(`settlegen.layout.describe.describe_at`), the height in metres, sea/lake/biome — not the
+world face's readouts; the status line is the name and `settlegen.layout.describe.summary`.
 Cartographic overlay sizes follow the local map's scale (`_equivalent_zoom`).
 `settlement_at_cursor` / `set_settlement_click_callback`: the settlement under a
 click at the scale on screen (region: towns, city markers; local or settlement

@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 from core.params import field, paramclass
-from settlegen.anchors import SettlementAnchorParams
-from settlegen.footprint import SettlementFootprintParams
-from settlegen.layout import SettlementLayoutParams
-from settlegen.profile import SettlementProfileParams
-from settlegen.roads import SettlementRoadParams
-from settlegen.upsample import SettlementUpsampleParams
-from settlegen.water import SettlementRiverParams
+from settlegen.site.params import SettlementAnchorParams
+from settlegen.site.params import SettlementFootprintParams
+from settlegen.layout.params import SettlementLayoutParams
+from settlegen.profile.builder import SettlementProfileParams
+from settlegen.site.params import SettlementRoadParams
+from settlegen.terrain.builder import SettlementUpsampleParams
+from settlegen.site.params import SettlementRiverParams
 
 
 @paramclass

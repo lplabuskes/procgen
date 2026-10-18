@@ -34,11 +34,12 @@ from realmgen.placement.types import TIER_NAMES, format_population, population_d
 from realmgen.towns.types import TOWN_KIND_NAMES, Towns
 from region.upsample import RegionFields
 from settlegen.builder import SettlementMap
-from settlegen.chain import SettlementRef
+from settlegen.chain.builder import SettlementRef
 from settlegen.display import (
     ARTERIAL_RGB, DISTRICT_RGB, OPEN_RGB, STREET_RGB, WATER_RGB, relief_legend, relief_rgba,
 )
-from settlegen.layout import SettlementLayout, describe_at, summary as layout_summary
+from settlegen.layout.describe import describe_at, summary as layout_summary
+from settlegen.layout.types import SettlementLayout
 from worldgen.climate.classification import BIOME_NAMES
 from worldgen.hydrology.discharge import EARTH_RADIUS_KM
 from worldgen.geology.display import ELEVATION_RECIPE

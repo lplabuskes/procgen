@@ -1,11 +1,11 @@
 """One settlement map, end to end: :func:`build_settlement_map` runs
 
-1. the chain to its local maps (:func:`settlegen.chain.ensure_local_maps`, through
+1. the chain to its local maps (:func:`settlegen.chain.builder.ensure_local_maps`, through
    the shared :class:`localmap.store.MapStore`: built only if not held);
-2. the frame's terrain (:func:`settlegen.upsample.build_settlement_fields`);
-3. the site, as vectors (:func:`settlegen.site.build_site`);
-4. the profile (:func:`settlegen.profile.build_profile`);
-5. the layout (:func:`settlegen.layout.build_layout`).  Qt-free.
+2. the frame's terrain (:func:`settlegen.terrain.builder.build_settlement_fields`);
+3. the site, as vectors (:func:`settlegen.site.builder.build_site`);
+4. the profile (:func:`settlegen.profile.builder.build_profile`);
+5. the layout (:func:`settlegen.layout.builder.build_layout`).  Qt-free.
 """
 from __future__ import annotations
 
@@ -14,13 +14,14 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
 from region.upsample import RegionFields
-from settlegen.chain import SettlementMaps, SettlementRef, ensure_local_maps
-from settlegen.footprint import site_slope
-from settlegen.layout import SettlementLayout, build_layout
+from settlegen.chain.builder import SettlementMaps, SettlementRef, ensure_local_maps
+from settlegen.site.footprint import site_slope
+from settlegen.layout.builder import build_layout
+from settlegen.layout.types import SettlementLayout
 from settlegen.params import SettlementMapParams
-from settlegen.profile import SettlementProfile, build_profile, settlement_key
-from settlegen.site import SettlementSite, build_site
-from settlegen.upsample import build_settlement_fields
+from settlegen.profile.builder import SettlementProfile, build_profile, settlement_key
+from settlegen.site.builder import SettlementSite, build_site
+from settlegen.terrain.builder import build_settlement_fields
 
 if TYPE_CHECKING:
     from localmap.store import MapStore
@@ -46,7 +47,7 @@ def build_settlement_map(
     timings: Optional[dict[str, float]] = None,
 ) -> SettlementMap:
     """Build ``ref``'s settlement map from ``store``'s local maps.  ``params.upsample``
-    is expected to carry the local tier's shared detail (:func:`settlegen.upsample.with_local_detail`).
+    is expected to carry the local tier's shared detail (:func:`settlegen.terrain.builder.with_local_detail`).
     ``timings``, if given, gets each step's wall-clock seconds (chain, terrain, site, profile, layout)."""
     params = params or SettlementMapParams()
     globe = store.globe

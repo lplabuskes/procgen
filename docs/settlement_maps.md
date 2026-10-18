@@ -14,24 +14,47 @@ never written back: the settlement map reads the world, region and local maps,
 and changing its params only rebuilds the map on screen.
 
 ## Files
+
+One subpackage per pipeline step, as in `worldgen/` and `realmgen/`: each has a
+`builder.py` (its params and build function), its helpers and its own `test/`.
+
 - `settlegen/builder.py` — `SettlementMap` (`chain`, `fields`, `site`, `profile`, `layout`), `build_settlement_map`
-- `settlegen/chain.py` — `SettlementRef`, `SettlementMaps`, `ensure_local_maps`, `frame_keys`, `population`
-- `settlegen/geometry.py`, `grid.py`, `frame.py` — `SettlementGeometry`, `SettlementGrid` (one cell), `Frame` (metres ↔ ECEF)
-- `settlegen/source.py` — `LocalMapsSource`: several local maps as one parent
-- `settlegen/upsample.py` — `SettlementUpsampleParams`, `build_settlement_fields`, `join_ocean_saddles`, `clear_thin_land`, `settlement_conservation_report`
-- `settlegen/site.py` — `SettlementSite`, `build_site`
-- `settlegen/contour.py` — marching squares on a smooth field → shapely polygons
-- `settlegen/water.py` — `SettlementRiverParams`, `SiteWater`, `RiverLine`, `natural_channels`
-- `settlegen/roads.py` — `SettlementRoadParams`, `SiteRoads`, `Gate`, `Landing`, `Crossing`
-- `settlegen/footprint.py` — `SettlementFootprintParams`, `Footprint`, `base_density_per_ha`, `build_footprint`, `site_slope`
-- `settlegen/anchors.py` — `SettlementAnchorParams`, `AnchorCandidates`, `Anchor`
-- `settlegen/hinterland.py` — `Hinterland`, `Neighbour`
-- `settlegen/profile.py` — `SettlementProfileParams`, `SettlementProfile`, `PolityRelation`, `Industry`, `settlement_key`
-- `settlegen/layout.py` — `SettlementLayoutParams`, `SettlementLayout`, `Walls`, `Block`, `build_layout`, `describe_at`, `summary`
-- `settlegen/village_layout.py` — villages' layouts (tofts along streets)
-- `settlegen/docks.py` — quays and piers
-- `settlegen/display.py` — the Elevation layer at street scale (`relief_rgba`)
 - `settlegen/params.py` — `SettlementMapParams`: `upsample`, `rivers`, `roads`, `footprint`, `anchors`, `profile`, `layout` (`AppParams.settlement`, advanced only)
+- `settlegen/geometry.py`, `grid.py`, `frame.py` — `SettlementGeometry`, `SettlementGrid` (one cell), `Frame` (metres ↔ ECEF)
+- `settlegen/display.py` — the Elevation layer at street scale (`relief_rgba`), water and district colours
+- `settlegen/chain/`
+  - `builder.py` — `SettlementRef`, `SettlementMaps`, `ensure_local_maps`, `frame_keys`, `population`
+- `settlegen/terrain/`
+  - `builder.py` — `SettlementUpsampleParams`, `build_settlement_fields`, `join_ocean_saddles`, `clear_thin_land`, `settlement_conservation_report`
+  - `source.py` — `LocalMapsSource`: several local maps as one parent
+- `settlegen/site/`
+  - `builder.py` — `SettlementSite`, `build_site`
+  - `params.py` — `SettlementRiverParams`, `SettlementRoadParams`, `SettlementFootprintParams`, `SettlementAnchorParams`
+  - `types.py` — `SiteWater`, `RiverLine`, `SiteRoads`, `RoadLine`, `Gate`, `Landing`, `Crossing`
+  - `water.py` — sea and lakes (`water_regions`, `shorelines`), `build_site_water`
+  - `river_chain.py` — the local maps' rivers and streams chained across seams (`parent_rivers`), as frame lines (`river_lines`)
+  - `channels.py` — `natural_channels`, `channel_polygons`
+  - `roads.py` — re-routing over the site (channels and banks), `build_site_roads`, `set_gates`
+  - `road_chain.py` — the local maps' roads and water legs chained across seams (`parent_roads`)
+  - `landings.py` — where water legs land: quays on sea, lake or river
+  - `crossings.py` — `crossings` (bridges, fords), `gates`
+  - `footprint.py` — `Footprint`, `base_density_per_ha`, `build_footprint`, `site_slope`
+  - `anchors.py` — `AnchorCandidates`, `Anchor`
+  - `hinterland.py` — `Hinterland`, `Neighbour`
+  - `contour.py` — marching squares on a smooth field → shapely polygons
+- `settlegen/profile/`
+  - `builder.py` — `SettlementProfileParams`, `SettlementProfile`, `PolityRelation`, `Industry`, `settlement_key`
+- `settlegen/layout/`
+  - `builder.py` — `build_layout`: anchors chosen, then streets, market, core and walls, docks, blocks, districts, lots
+  - `params.py` — `SettlementLayoutParams`
+  - `types.py` — `SettlementLayout`, `Walls`, `Block`
+  - `streets.py` — main streets on a route grid (`route_arterials`), `infill_arterials`, `wall_street`, `main_axis`, `radial_targets`
+  - `blocks.py` — `split_blocks`, `lots_of`, `lanes_of`, `lane_lots`, `burgage_band`
+  - `districts.py` — `CRAFTS`, `DISTRICTS`, `assign_districts`
+  - `geometry.py` — polygon helpers (`core_polygon`, `chaikin`, axes, blobs)
+  - `describe.py` — `describe_at`, `summary` (hover and status text)
+  - `village.py` — villages' layouts (tofts along streets)
+  - `docks.py` — quays and piers
 
 ## Scale (defaults)
 
@@ -51,13 +74,13 @@ and changing its params only rebuilds the map on screen.
 2. **terrain** (`build_settlement_fields`);
 3. **site** (`build_site`): water → roads → footprint → gates → anchors → hinterland;
 4. **profile** (`build_profile`);
-5. **layout** (`build_layout`; villages `village_layout`).
+5. **layout** (`build_layout`; villages `layout.village.village_layout`).
 
 `timings` (optional dict) gets each step's seconds. Seeded per (world, kind,
 index[, map]) (`settlement_key`), so a settlement looks the same whichever maps
 were opened first.
 
-## The chain (`settlegen/chain.py`)
+## The chain (`settlegen/chain/builder.py`)
 
 `SettlementRef(kind, index, map=None)`: a city or town by world index; a
 village by its index on a local map (`map = (region, hex)`), valid while that
@@ -76,7 +99,7 @@ map's params don't change. `ensure_local_maps`:
 
 The chain never resets a settlement; the store's params do.
 
-## Terrain (`settlegen/upsample.py`)
+## Terrain (`settlegen/terrain/builder.py`)
 
 Only the relief is refined: `region.upsample.refine_terrain` one tier down, with
 `LocalMapsSource` as parent (each point read from the local map whose regional
@@ -102,13 +125,13 @@ Seams: local maps conserve over a halo 2 regional texels past their hexagon
 ~1 m. A ~1 m step between one local map's own hexes is accepted (faintly
 visible in the exaggerated hillshade).
 
-## Site (`settlegen/site.py`)
+## Site (`settlegen/site/builder.py`)
 
 `SettlementSite`: `frame`, `water`, `footprint`, `density_per_ha`, `sparse`,
 `buildable`, `roads`, `anchors`, `hinterland` — all shapely geometry or arrays
 in frame metres.
 
-### Water (`settlegen/water.py`)
+### Water (`settlegen/site/water.py`)
 - **Sea and lakes**: traced (`contour.py`) at the water surface, sign forced to
   the refined masks; within 1 m of the water the smoothed mask places the shore
   (no staircase on flats). Area within 0.1% of the masks.
@@ -127,7 +150,7 @@ in frame metres.
   another line runs on two widths, so the band is cut there, not stopped.
   `channel_polygons` (the plain outline) is the hinterland's crossing barrier.
 
-### Roads (`settlegen/roads.py`)
+### Roads (`settlegen/site/roads.py`)
 - **Roads**: the local maps' roads, chained across seams, re-traced at 45 m. A
   river is a channel here, not a line: entering pays the world's ford cost, each
   step inside costs a 1 km/km climb (`channel_climb`), the along-river discount
@@ -142,7 +165,7 @@ in frame metres.
 - **Gates**: where a road leaves the footprint for good. Routes re-traced onto one
   way share a gate and crossing, flows summed.
 
-### Footprint (`settlegen/footprint.py`)
+### Footprint (`settlegen/site/footprint.py`)
 The settlement tier is the **authority for footprints** (the local map's coarse
 one stays a preview there). `population / density` of dry ground claimed by
 priority: nearness (the way there, each metre of water counting `crossing_cost`
@@ -161,7 +184,7 @@ Measured (18 cities, 9 towns, 9 villages): the dense area is 2–5% under
 tracing a few hundred texels rounds them off); cities 1–3 pieces (halves either
 side of a river or inlet); sparse ~9% of a city.
 
-### Anchors (`settlegen/anchors.py`)
+### Anchors (`settlegen/site/anchors.py`)
 Candidates, scored in [0, 1], `per_kind` (6) best per kind ≥ `separation_m`
 (150 m) apart, not chosen: **citadel** (knolls by height above a 300 m blur and
 steepness around; else the highest ground), **market** (along roads by the flow
@@ -169,7 +192,7 @@ within 75 m, nearness, flat ground), **waterfront** (footprint edge within 25 m
 of water, by water kind and width, flatness, landings), **sacred** (central high
 ground).
 
-### Hinterland (`settlegen/hinterland.py`)
+### Hinterland (`settlegen/site/hinterland.py`)
 The settlement's own fields (a city's market gardens — `garden_m2_per_person`
 per citizen, its cheapest free ground from the footprint's edge, all of it within
 `city_garden_ring_min_km`; a port's are cut short by the frame — a town's or village's
@@ -180,7 +203,7 @@ footprint; villages farm their own bank of a river ≥ 50 m. Only farmers grow
 fields (`Villages.farming_share`). On a ≤ 320² raster, traced to polygons. A
 town's fields usually outgrow its frame: the hinterland is what lies inside it.
 
-## Profile (`settlegen/profile.py`)
+## Profile (`settlegen/profile/builder.py`)
 
 `SettlementProfile`, derived only (every realm input optional):
 - **who**: `population`, `tier` (0–3 city display tiers, 4 town, 5 village),
@@ -198,7 +221,7 @@ town's fields usually outgrow its frame: the hinterland is what lies inside it.
 - **history stubs**: `founding_age` (lognormal about 100 y × (pop/500)^0.35,
   ×1.5 for a capital) and `planned` (chance by kind), for a later history layer.
 
-## Layout (`settlegen/layout.py`, `village_layout.py`, `docks.py`)
+## Layout (`settlegen/layout/`: `builder.py`, `village.py`, `docks.py`)
 
 Block subdivision, planned **by tier** — a city, a town and a village are
 different places, not one plan at three sizes. Reads only the site, profile and
@@ -254,7 +277,7 @@ slope, so it is tested on hand-built sites.
    alleys running through; planned ones a back alley down the middle. Plots
    front the lanes in the yards (one facing down each close from its head).
 
-**Villages** (`village_layout.py`): households (`P / 5`) as tofts fronting a
+**Villages** (`layout/village.py`): households (`P / 5`) as tofts fronting a
 street, sized from the footprint (300–3,000 m², 2.5:1). Forms: a fishing village
 within 300 m of the sea or a lake is a **harbour** village — rows of streets
 along the shore about its jetty; otherwise **street** (45%), **green** (30%) or

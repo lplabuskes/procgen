@@ -9,7 +9,7 @@ from localmap.upsample import build_local_fields
 from region.geometry import ecef_to_cell
 from region.test.conftest import synthetic_globe  # noqa: F401
 from region.test.test_resources import globe  # noqa: F401
-from settlegen.upsample import SettlementUpsampleParams, km_per_local_unit, with_local_detail
+from settlegen.terrain.builder import SettlementUpsampleParams, km_per_local_unit, with_local_detail
 
 # Texels across a test frame.
 FRAME_TEXELS = 32

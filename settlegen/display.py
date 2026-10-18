@@ -87,7 +87,7 @@ def relief_legend(fields: RegionFields, n: int = 5) -> list[tuple[str, tuple]]:
     return out
 
 
-# The layout's districts (settlegen.layout.DISTRICTS), muted so the lots read over them.
+# The layout's districts (settlegen.layout.districts.DISTRICTS), muted so the lots read over them.
 DISTRICT_RGB: dict[str, tuple[float, float, float]] = {
     "residential": (0.80, 0.66, 0.52),
     "suburb": (0.82, 0.74, 0.62),

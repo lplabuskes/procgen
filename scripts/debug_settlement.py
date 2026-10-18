@@ -36,9 +36,9 @@ import numpy as np
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from settlegen.builder import SettlementMap, build_settlement_map  # noqa: E402
-from settlegen.chain import SettlementRef, population  # noqa: E402
-from settlegen.layout import summary  # noqa: E402
-from settlegen.upsample import settlement_conservation_report  # noqa: E402
+from settlegen.chain.builder import SettlementRef, population  # noqa: E402
+from settlegen.layout.describe import summary  # noqa: E402
+from settlegen.terrain.builder import settlement_conservation_report  # noqa: E402
 from _common import get_map_store, settlement_map_params  # noqa: E402
 
 RESULTS_DIR = Path(__file__).parent / "results"

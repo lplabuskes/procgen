@@ -3,7 +3,7 @@ street-scale frame refine cleanly from its local map(s)?
 
 For the largest river cities and towns of a seed, plus settlements whose frame
 crosses its local map's edge, it takes each to its local maps through
-:func:`settlegen.chain.ensure_local_maps` (one shared :class:`MapStore`, so no
+:func:`settlegen.chain.builder.ensure_local_maps` (one shared :class:`MapStore`, so no
 map is built twice), refines the frame at ``texel_m`` with :mod:`settlegen`,
 and prints:
 
@@ -40,7 +40,7 @@ from settlegen import (
     LocalMapsSource, SettlementUpsampleParams, build_settlement_fields, settlement_conservation_report,
     with_local_detail,
 )
-from settlegen.chain import SettlementRef, position, ensure_local_maps, population
+from settlegen.chain.builder import SettlementRef, position, ensure_local_maps, population
 from _common import get_map_store
 
 if TYPE_CHECKING:

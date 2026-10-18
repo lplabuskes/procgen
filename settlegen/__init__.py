@@ -5,12 +5,12 @@ frame touches the way a local map refines its region.  See
 ``docs/plans/settlement_maps.md``.  Qt-free.
 """
 from settlegen.builder import SettlementMap, build_settlement_map
-from settlegen.chain import SettlementMaps, SettlementRef, ensure_local_maps
+from settlegen.chain.builder import SettlementMaps, SettlementRef, ensure_local_maps
 from settlegen.geometry import SettlementGeometry
 from settlegen.grid import SettlementGrid
 from settlegen.params import SettlementMapParams
-from settlegen.source import LocalMapsSource
-from settlegen.upsample import (
+from settlegen.terrain.source import LocalMapsSource
+from settlegen.terrain.builder import (
     SettlementUpsampleParams, build_settlement_fields, settlement_conservation_report, with_local_detail,
 )
 

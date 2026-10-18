@@ -37,8 +37,8 @@ from pathlib import Path
 import numpy as np
 
 from settlegen.builder import build_settlement_map
-from settlegen.chain import SettlementRef, population
-from settlegen.upsample import settlement_conservation_report
+from settlegen.chain.builder import SettlementRef, population
+from settlegen.terrain.builder import settlement_conservation_report
 from _common import (
     add_seed_args, avg, get_map_store, load_history, resolve_seeds, save_history, settlement_map_params,
 )
@@ -61,7 +61,7 @@ def pick(store, n_cities: int, n_towns: int, n_villages: int) -> list[Settlement
         refs += [SettlementRef("town", int(order[k])) for k in at]
     if n_villages > 0 and cities:
         # The largest city's chain gives its owning local map: its villages, spread over the list.
-        from settlegen.chain import ensure_local_maps
+        from settlegen.chain.builder import ensure_local_maps
         params = settlement_map_params(store)
         chain = ensure_local_maps(store, cities[0], float(params.upsample.margin_km), params.footprint)
         region, hex_index = chain.keys[0]
