@@ -8,12 +8,13 @@ Area farmed (medieval rules of thumb):
 - towns: ``town_farming_share`` of their people;
 - mining towns: only ``mining_farming_share`` (they buy food); so mining villages
   too when their farming share isn't given;
-- cities: no fields (fed by trade), just a ``city_garden_ring_km`` ring of market
-  gardens outside the footprint, wider over good ground, narrower over poor.
+- cities: no fields (fed by trade), just a ring of market gardens outside the
+  footprint: its nearest free ground, ``garden_m2_per_person`` for each citizen,
+  and all of it within ``city_garden_ring_min_km``; reaching farther over poor ground.
 
 Texels are claimed by distance stretched by ``1 + fertility_weight·(1 − fertility)
 + slope_weight·slope + forest_weight·forest`` (slope relative to
-``slope_saturation``) and jittered (``edge_roughness``).  Garden rings go first;
+``slope_saturation``) and jittered (``edge_roughness``).  Gardens go first;
 then towns and villages claim together, cheapest (settlement, texel) pair first,
 so neighbours share ground rather than first-served taking it.  Water, built-up
 texels and texels under a river's channel are never claimed, and a village farms
@@ -61,7 +62,9 @@ class FarmlandParams:
     town_farming_share: float = _f(0.5, label="Townspeople who farm", min=0.0, max=1.0, step=0.05)
     mining_farming_share: float = _f(
         0.1, label="Miners' settlements: people who farm", min=0.0, max=1.0, step=0.05)
-    city_garden_ring_km: float = _f(1.5, label="City garden ring (km)", min=0.0, max=5.0, step=0.25)
+    # Market gardens, orchards and dairy (von Thünen's inner ring) per citizen.
+    garden_m2_per_person: float = _f(100.0, label="City gardens per person (m²)", min=0.0, max=1000.0, step=5.0)
+    city_garden_ring_min_km: float = _f(0.5, label="City garden ring at least (km)", min=0.0, max=5.0, step=0.05)
     fertility_weight: float = _f(1.0, label="Poor-soil stretch", min=0.0, max=5.0, step=0.1)
     slope_weight: float = _f(2.0, label="Steep-slope stretch", min=0.0, max=10.0, step=0.1)
     forest_weight: float = _f(1.0, label="Forest stretch", min=0.0, max=5.0, step=0.1)
@@ -97,6 +100,18 @@ def _claim(order, who, texel, quota, owner):  # pragma: no cover - numba-compile
 
 def _flags(mask: Optional[np.ndarray], n: int) -> np.ndarray:
     return np.zeros(n, dtype=bool) if mask is None else np.asarray(mask, dtype=bool).reshape(-1)
+
+
+def garden_ring_km(
+    population: float, built_km2: float, params: FarmlandParams, perimeter_km: Optional[float] = None,
+) -> float:
+    """The width of a city's garden ring: ``garden_m2_per_person`` for each of its
+    people round ``built_km2`` of footprint (its ``perimeter_km``, else a disc's) —
+    ring area ``P·w + π·w²`` — and at least ``city_garden_ring_min_km``."""
+    area = max(float(population), 0.0) * float(params.garden_m2_per_person) * 1e-6
+    p = float(perimeter_km) if perimeter_km is not None else 2.0 * np.sqrt(np.pi * max(float(built_km2), 0.0))
+    w = (-p + np.sqrt(p * p + 4.0 * np.pi * area)) / (2.0 * np.pi)
+    return max(float(w), float(params.city_garden_ring_min_km))
 
 
 def _chord(km: float) -> float:
@@ -145,9 +160,10 @@ def place_farmland(
     areas: list[np.ndarray] = [np.zeros(len(v_pop)), np.zeros(len(t_pop)), np.zeros(n_cities)]
 
     def result() -> Farmland:
-        # Gardens have no quota: a city wants whatever its ring holds.
+        c_target = (np.asarray(footprints.population) * float(p.garden_m2_per_person) * 1e-6
+                    if footprints is not None else np.zeros(0))
         return Farmland(
-            kind=kind, owner=owner, target_km2=(v_target, t_target, areas[FARM_CITY].copy()),
+            kind=kind, owner=owner, target_km2=(v_target, t_target, c_target),
             area_km2=(areas[FARM_VILLAGE], areas[FARM_TOWN], areas[FARM_CITY]),
         )
 
@@ -181,19 +197,32 @@ def place_farmland(
     stretch *= 1.0 + float(p.edge_roughness) * rng.random(cells.size)
     taken = np.full(cells.size, -1, dtype=np.int64)
 
-    # ── market gardens: a ring round each city's footprint, nearest city first ──
-    ring = _chord(p.city_garden_ring_km)
-    if n_cities and ring > 0 and footprints is not None and len(footprints.city):
+    # ── market gardens: each city's cheapest free texels by its footprint, nearest city first ──
+    if n_cities and footprints is not None and len(footprints.city):
+        rings = np.array([garden_ring_km(footprints.population[c], footprints.target_km2[c], p)
+                          for c in range(n_cities)])
+        quota = np.round(np.asarray(footprints.population) * float(p.garden_m2_per_person) * 1e-6
+                         / texel_km2).astype(np.int64)
+        floor = _chord(p.city_garden_ring_min_km)
         fp_pos = local.positions.reshape(-1, 3)[np.flatnonzero(footprints.owner.reshape(-1) >= 0)]
         fp_city = footprints.owner.reshape(-1)[footprints.owner.reshape(-1) >= 0]
-        # Ring measured relative to the median stretch: wider over good land.
+        # Distance relative to the median stretch: wider over good land.  Search past the
+        # all-land ring: water and poor ground push gardens out.
         rel = stretch / float(np.median(stretch))
-        d, near = KDTree(fp_pos).query(pos, distance_upper_bound=ring / float(rel.min()) + 1e-12, workers=-1)
+        reach = 2.0 * _chord(float(rings.max())) / float(rel.min()) + 1e-12
+        d, near = KDTree(fp_pos).query(pos, distance_upper_bound=reach, workers=-1)
         hit = np.isfinite(d)
-        hit[hit] = d[hit] * rel[hit] <= ring
         city = np.where(hit, fp_city[np.minimum(near, len(fp_city) - 1)], -1)
-        taken[hit] = city[hit] + len(v_pop) + len(t_pop)
-        areas[FARM_CITY] = np.bincount(city[hit], minlength=n_cities) * texel_km2
+        cost = np.where(hit, d * rel, np.inf)
+        order = np.lexsort((cost, city))
+        order = order[hit[order]]
+        c_sorted = city[order]
+        starts = np.searchsorted(c_sorted, np.arange(n_cities))
+        rank = np.arange(order.size) - starts[c_sorted]
+        keep = (rank < quota[c_sorted]) | (cost[order] <= floor)
+        got = order[keep]
+        taken[got] = city[got] + len(v_pop) + len(t_pop)
+        areas[FARM_CITY] = np.bincount(city[got], minlength=n_cities) * texel_km2
 
     # ── towns and villages: cheapest (settlement, texel) pair first ─────────────
     s_pos = np.concatenate([v_pos, t_pos])

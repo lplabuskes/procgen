@@ -38,6 +38,8 @@ class CityFootprints:
     city: np.ndarray         # (K,) int — owning city of each claimed texel
     corners: np.ndarray      # (K, 4, 3) unit-sphere texel corners, in ring order
     area_km2: np.ndarray     # (C,) built-up area each city claimed
+    population: np.ndarray   # (C,) people of each city
+    target_km2: np.ndarray   # (C,) the area it wanted (population / density), as if on one map
 
     def __len__(self) -> int:
         return len(self.area_km2)
@@ -71,7 +73,11 @@ def city_footprints(
     shape = local.in_hex.shape
     owner = np.full(shape, -1, dtype=np.int32)
     area = np.zeros(n_cities, dtype=np.float64)
-    empty = CityFootprints(owner=owner, city=np.zeros(0, dtype=np.int64), corners=np.zeros((0, 4, 3)), area_km2=area)
+    texel_km2 = float(local.texel_area_km2)
+    density_km2 = max(float(params.density_per_ha), 1e-9) / _KM2_PER_HA
+    want = np.maximum(1, np.round(population / density_km2 / texel_km2)).astype(np.int64)
+    empty = CityFootprints(owner=owner, city=np.zeros(0, dtype=np.int64), corners=np.zeros((0, 4, 3)), area_km2=area,
+                           population=population, target_km2=want * texel_km2)
     if n_cities == 0:
         return empty
 
@@ -90,11 +96,9 @@ def city_footprints(
     jitter = 1.0 + float(params.edge_roughness) * rng.random(dry.size)
     claimed = np.zeros(dry.size, dtype=bool)
     flat_owner = owner.reshape(-1)
-    texel_km2 = float(local.texel_area_km2)
-    density_km2 = max(float(params.density_per_ha), 1e-9) / _KM2_PER_HA
 
     for c in np.argsort(-population, kind="stable"):
-        n = max(1, int(round(float(population[c]) / density_km2 / texel_km2)))
+        n = int(want[c])
         # Search well beyond the footprint: water, jitter and neighbours push the edge out.
         r_km = np.sqrt(n * texel_km2 / np.pi)
         reach = (3.0 * r_km + 2.0 * np.sqrt(texel_km2)) * (1.0 + float(params.edge_roughness)) / EARTH_RADIUS_KM
@@ -111,4 +115,5 @@ def city_footprints(
     texels = np.flatnonzero(flat_owner >= 0)
     return CityFootprints(
         owner=owner, city=flat_owner[texels].astype(np.int64), corners=_texel_corners(local, texels), area_km2=area,
+        population=population, target_km2=want * texel_km2,
     )

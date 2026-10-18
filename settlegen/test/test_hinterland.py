@@ -73,7 +73,8 @@ def test_a_village_farms_only_its_own_bank_of_a_wide_river(site, globe):  # noqa
     village = _neighbour([max(spot[0], 3.0 * np.sqrt(px_ha * 1e4)), spot[1]], people)
     hint = build_hinterland(globe, fields, frame, wet, MultiPolygon(), [], [], SettlementRef("city", 0), 0.0,
                             neighbours=[village],
-                            params=FarmlandParams(city_garden_ring_km=0.0, river_barrier_width_m=50.0))
+                            params=FarmlandParams(garden_m2_per_person=0.0, city_garden_ring_min_km=0.0,
+                                                  river_barrier_width_m=50.0))
     got = hint.neighbours[0].fields
     assert not got.is_empty
     assert got.intersection(shapely.box(-h, -h, 0.0, h)).area < 1e-6 * got.area

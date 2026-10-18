@@ -10,7 +10,8 @@ The farmland rules are the local tier's (:mod:`localmap.farmland`,
 ``LocalParams.farmland``):
 
 - the settlement itself farms from its footprint's edge: a city a ring of market
-  gardens ``city_garden_ring_km`` wide (wider over good ground), a town
+  gardens of ``garden_m2_per_person`` each, its nearest free ground (and all of it
+  within ``city_garden_ring_min_km``; reaching farther over poor ground), a town
   ``town_farming_share`` of its people (a mining town ``mining_farming_share``),
   a village its farmers (``Villages.farming_share``: fishers and miners need no
   fields), at ``ha_per_farmer`` each;
@@ -189,13 +190,16 @@ def build_hinterland(
         np.hypot(xy[..., 0], xy[..., 1])
     own_kind: Literal["gardens", "fields"] = "gardens" if ref.kind == "city" else "fields"
 
-    # ── a city's market gardens: the ring round its footprint, wider over good ground ──
+    # ── a city's market gardens: its cheapest free ground by the footprint, all within the floor ──
     if ref.kind == "city":
-        ring_m = float(p.city_garden_ring_km) * 1000.0
+        own_target_ha = max(float(population), 0.0) * float(p.garden_m2_per_person) / _M2_PER_HA
         rel = stretch / float(np.median(stretch[free])) if free.any() else stretch
-        garden = free & (from_footprint * rel <= ring_m)
-        taken[garden.reshape(-1)] = 0
-        own_target_ha = float(footprint.buffer(ring_m).difference(footprint).area) / _M2_PER_HA
+        cost = np.where(free, from_footprint * rel, np.inf).reshape(-1)
+        order = np.argsort(cost, kind="stable")
+        n_quota = int(round(own_target_ha / texel_ha))
+        garden = order[:n_quota][np.isfinite(cost[order[:n_quota]])]
+        taken[garden] = 0
+        taken[np.flatnonzero(cost <= float(p.city_garden_ring_min_km) * 1000.0)] = 0
     else:
         own_target_ha = _farmers_ha(ref.kind, population, mining, p, farming_share)
 

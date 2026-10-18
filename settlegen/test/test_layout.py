@@ -11,7 +11,7 @@ from settlegen.anchors import Anchor, AnchorCandidates
 from settlegen.frame import Frame
 from settlegen.layout import (
     OPEN_DISTRICTS, SettlementLayoutParams, build_layout, chaikin, core_polygon, describe_at, lanes_of, lots_of,
-    route_arterials, split_blocks,
+    radial_targets, route_arterials, split_blocks,
 )
 from settlegen.profile import Industry, PolityRelation, SettlementProfile
 from settlegen.roads import Gate, RoadLine, SiteRoads
@@ -264,6 +264,19 @@ def test_routing_avoids_steep_ground():
                             [np.array([500.0, 500.0])], params)
     net = shapely.union_all(lines)
     assert net.bounds[1] < -500.0           # went round by the pass
+
+
+def test_radials_leave_by_the_landward_edge_spread_along_it():
+    # A port: the market on the shore, sea to the east; the land front is the far
+    # (west) side, narrow as seen from the market.
+    part = box(-3000, -800, 0, 800)
+    sea = MultiPolygon([box(0, -5000, 5000, 5000)])
+    market = np.array([-50.0, 0.0])
+    out = radial_targets(part, market, [], 8, sea, 300.0)
+    assert len(out) >= 4
+    assert all(sea.distance(shapely.Point(*p)) > 100.0 for p in out)
+    gaps = [np.linalg.norm(a - b) for i, a in enumerate(out) for b in out[i + 1:]]
+    assert min(gaps) >= 300.0
 
 
 def test_chaikin_keeps_ends():

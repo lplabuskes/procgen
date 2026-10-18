@@ -38,7 +38,7 @@ and changing its params only rebuilds the map on screen.
 | | |
 |---|---|
 | Texel | 15 m (`texel_m`; local maps ~365 m: ~24×, 4–5 octaves of detail) |
-| Frame | 2·(footprint radius + garden ring + 0.5 km margin): villages ~4–4.5 km, towns ~4.5–5 km, large cities ~6.5–9 km; 300²–600² texels |
+| Frame | 2·(footprint radius + fields + 0.5 km margin) — a city's garden ring as if all land (`localmap.farmland.garden_ring_km`: 100 m²/person, ≥ 0.5 km), a town's or village's 1.5 km: villages ~4–4.5 km, towns ~4.5–5 km, cities ~3–14 km; up to ~920² texels |
 | Density | 70/ha at 1,000 people × (pop/1,000)^0.2, ×1.3 walled, lognormal σ 0.3, ×(buildable share)^-0.5 ≤ 2, 10–450/ha |
 | Time (`measure_settlements.py`, seeds 4/31/35) | after the chain: cities ~2.3 s (site 1.3, layout 0.7), towns and villages ~0.3 s; the chain adds ~3–7 s per region/local map not yet held |
 
@@ -170,7 +170,9 @@ of water, by water kind and width, flatness, landings), **sacred** (central high
 ground).
 
 ### Hinterland (`settlegen/hinterland.py`)
-The settlement's own fields (a city's market-garden ring, a town's or village's
+The settlement's own fields (a city's market gardens — `garden_m2_per_person`
+per citizen, its cheapest free ground from the footprint's edge, all of it within
+`city_garden_ring_min_km`; a port's are cut short by the frame — a town's or village's
 fields from its footprint's edge) and every neighbouring village's and town's in
 the frame, by the local tier's farmland rules (`LocalParams.farmland`): gardens
 first, then the cheapest (settlement, texel) pair; never water, a channel or the
@@ -209,8 +211,10 @@ slope, so it is tested on hand-built sites.
 2. **Main streets**: least-cost on a 20 m grid (slope, water, off the footprint;
    the site's roads cheap — they hold the crossings — but no plan needs one). A
    town's runs through its market along the footprint's long axis; a city's run
-   from the market to every gate and to the footprint's edge in the widest gaps
-   (3–8 by size). Bridges where they cross channels.
+   from the market to every gate and to the footprint's landward edge (not the
+   shore), each exit as far along it from the others as can be, ≥ 500 m apart
+   (3–8 ways by size) — so walls get a gate per main street on their land
+   front. Bridges where they cross channels.
    **Secondary arterials** (7 m) then fill the gaps: from the dense cell farthest
    from any arterial, least-cost to the nearest one and on, the other way
    (> 110° off, ends ≥ spacing/2 apart), to another or out to the footprint's

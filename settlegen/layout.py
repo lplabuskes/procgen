@@ -14,8 +14,9 @@ a village are different places, not one plan at three sizes.  Villages:
    the footprint; along the site's roads cheaply — they hold the river
    crossings — but not led by them).  A **town**'s main street runs through its
    market along the footprint's long axis (or to a gate near that line); a
-   **city**'s run out of its market to every gate, and to the footprint's edge
-   in the widest gaps between them until at least ``radial_streets`` leave it.
+   **city**'s run out of its market to every gate, and to the footprint's landward
+   edge (not the shore), each as far along it from the others as can be, until
+   at least ``radial_streets`` leave it (no nearer than ``radial_spacing_m``).
    Both reach the waterfront, citadel and sacred site.  Bridges where they
    cross a channel.  After the walls, **secondary arterials**
    (:func:`infill_arterials`) fill the gaps until the dense ground lies within
@@ -64,6 +65,7 @@ import shapely
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import dijkstra
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, Polygon
+from shapely.geometry.base import BaseGeometry
 from shapely.ops import nearest_points, substring
 
 from core.params import param_field as _f, paramclass
@@ -155,6 +157,8 @@ class SettlementLayoutParams:
     shrine_people: float = _f(1500.0, label="People per shrine", min=100.0, max=50000.0, step=100.0)
     well_ha: float = _f(1.5, label="Core hectares per well", min=0.1, max=20.0, step=0.1)
     radial_streets: int = _f(3, label="Main streets out of a city's market (at least)", min=0, max=12)
+    radial_spacing_m: float = _f(500.0, label="City main streets leave at least this far apart (m)", min=50.0,
+                                 max=5000.0, step=25.0)
     # Secondary arterials: through streets filling the gaps between the main ones, and the
     # street inside the walls.
     secondary_m: float = _f(7.0, label="Secondary arterial / wall street width (m)", min=2.0, max=40.0, step=0.5)
@@ -1006,34 +1010,41 @@ def main_axis(part: Polygon, centre: np.ndarray, gates: Sequence[np.ndarray], ma
     return best[1] if best is not None else u
 
 
-def radial_targets(part: Polygon, centre: np.ndarray, taken: Sequence[np.ndarray], n: int) -> list[np.ndarray]:
-    """Points on ``part``'s edge in the widest gaps between the ways already out of
-    ``centre`` (``taken``), until ``n`` ways leave it."""
-    angles = [math.atan2(float(p[1] - centre[1]), float(p[0] - centre[0])) for p in taken
-              if np.linalg.norm(np.asarray(p) - centre) > 1.0]
+def radial_targets(
+    part: Polygon, centre: np.ndarray, taken: Sequence[np.ndarray], n: int,
+    shore: Optional[MultiPolygon] = None, min_spacing_m: float = 500.0, shore_m: float = 100.0,
+) -> list[np.ndarray]:
+    """Points on ``part``'s landward edge (farther than ``shore_m`` from ``shore``), each
+    as far along it as can be from the ways already out (``taken``, then the points
+    chosen), until ``n`` ways leave or none is ``max(landward edge / 2n, min_spacing_m)``
+    from the rest.  With none taken, the first is the long axis's end."""
     radius = math.sqrt(part.area / math.pi)
+    edge: BaseGeometry = part.exterior
+    if shore is not None and not shore.is_empty:
+        edge = edge.difference(shore.buffer(shore_m))
+    lines = [g for g in shapely.get_parts(edge) if isinstance(g, LineString) and g.length > 0]
+    length = sum(g.length for g in lines)
+    if not lines or n <= 0:
+        return []
+    step = max(length / 2000.0, 10.0)
+    cand = np.concatenate([np.asarray([(p.x, p.y) for p in shapely.line_interpolate_point(
+        g, np.arange(0.5 * step, g.length, step))]).reshape(-1, 2) for g in lines])
+    cand = cand[np.linalg.norm(cand - centre, axis=1) > 0.3 * radius]
+    # Greedy farthest-point picks along a curve fall short of an even split: half of it.
+    spacing = max(0.5 * length / n, float(min_spacing_m))
+    ways = [np.asarray(p, dtype=np.float64) for p in taken]
     out: list[np.ndarray] = []
-    if not angles:
-        _, u, _, _, _ = _axes(part)
-        angles_new = [math.atan2(u[1], u[0])]
-    else:
-        angles_new = []
-    for _ in range(2 * n):
-        if len(angles) + len(angles_new) >= n:
-            break
-        if angles_new:
-            a = angles_new.pop()
-        else:
-            ring = np.sort(np.mod(angles, 2.0 * np.pi))
-            gaps = np.diff(np.append(ring, ring[0] + 2.0 * np.pi))
-            k = int(np.argmax(gaps))
-            if gaps[k] < 1.2 * 2.0 * np.pi / n:
+    while len(cand) and len(ways) < n:
+        if ways:
+            d = np.min(np.linalg.norm(cand[:, None, :] - np.asarray(ways)[None], axis=2), axis=1)
+            k = int(np.argmax(d))
+            if d[k] < spacing:
                 break
-            a = float(ring[k] + 0.5 * gaps[k])
-        angles.append(a)
-        end = ray_exit(part, centre, np.array([math.cos(a), math.sin(a)]))
-        if np.linalg.norm(end - centre) > 0.3 * radius:
-            out.append(end)
+        else:
+            _, u, _, _, _ = _axes(part)
+            k = int(np.argmax(np.abs((cand - centre) @ u)))
+        ways.append(cand[k])
+        out.append(cand[k])
     return out
 
 
@@ -1122,7 +1133,7 @@ def build_layout(
         others = [g for g in gates if all(np.linalg.norm(g - e) > 60.0 for e in ends)]
     else:
         n_radial = int(np.clip(max(int(params.radial_streets), round(2.0 + math.log2(max(pop, 1.0) / 5000.0))), 0, 8))
-        others = gates + radial_targets(part, market, gates, n_radial)
+        others = gates + radial_targets(part, market, gates, n_radial, water, float(params.radial_spacing_m))
     others += [anchors[k] for k in ("waterfront", "citadel", "sacred") if k in anchors]
     side = route_arterials(half, slope, water, footprint, roads, market, others, params)
     arterials = main + side

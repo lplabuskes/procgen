@@ -110,7 +110,8 @@ def _fmt(row: dict) -> str:
             f"{row['t_total']:>5.1f} s (chain {row['t_chain']:>4.1f}) · cons {row['conservation_max']:.1e} · "
             f"fp {row['footprint_error']:+5.1%} {row['pieces']}p · gates {row['gates']} br {row['bridges']} "
             f"fd {row['fords']} land {row['landings']} · blocks {row['blocks']:,} plots {row['lots']:,} "
-            f"piers {row['piers']}" + (f" · walls {row['wall_km']:.1f} km" if row["wall_km"] else ""))
+            f"piers {row['piers']}"
+            + (f" · walls {row['wall_km']:.1f} km, {row['wall_gates']} gates" if row["wall_km"] else ""))
 
 
 def summarise(rows: list[dict]) -> dict:
@@ -125,6 +126,7 @@ def summarise(rows: list[dict]) -> dict:
             "t_after_chain": avg([{"v": r["t_total"] - r["t_chain"]} for r in sub], "v"),
             "conservation_max": max(r["conservation_max"] for r in sub),
             "footprint_abs_error": avg([{"v": abs(r["footprint_error"])} for r in sub], "v"),
+            "wall_gates_walled": avg([r for r in sub if r["wall_km"]], "wall_gates"),
             **{k: avg(sub, k) for k in ("pieces", "sparse_share", "gates", "bridges", "fords", "landings",
                                         "anchors_citadel", "anchors_market", "anchors_waterfront",
                                         "anchors_sacred", "blocks", "lots", "piers", "wall_km", "walls_took_ha")},
@@ -138,12 +140,12 @@ def print_summary(summary: dict) -> None:
               f"terrain {s['t_terrain']:.2f}, site {s['t_site']:.2f}, layout {s['t_layout']:.2f}) · "
               f"conservation max {s['conservation_max']:.1e}")
         print(f"          footprint |error| {s['footprint_abs_error']:.1%}, {s['pieces']:.1f} pieces, "
-              f"sparse {s['sparse_share']:.0%} · gates {s['gates']:.1f} · bridges {s['bridges']:.1f}, "
+              f"sparse {s['sparse_share']:.0%} · road gates {s['gates']:.1f} · bridges {s['bridges']:.1f}, "
               f"fords {s['fords']:.1f}, landings {s['landings']:.1f}")
         print(f"          anchors citadel {s['anchors_citadel']:.1f} market {s['anchors_market']:.1f} "
               f"waterfront {s['anchors_waterfront']:.1f} sacred {s['anchors_sacred']:.1f} · blocks {s['blocks']:,.0f}, "
               f"plots {s['lots']:,.0f}, piers {s['piers']:.1f}, walls {s['wall_km']:.1f} km "
-              f"(took in {s['walls_took_ha']:.1f} ha)")
+              f"(took in {s['walls_took_ha']:.1f} ha; {s['wall_gates_walled']:.1f} gates per walled one)")
 
 
 def main() -> None:

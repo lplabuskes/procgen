@@ -1,11 +1,14 @@
 """Farmland: quotas by settlement kind, on dry unbuilt ground, preferring good land."""
 import dataclasses
+import math
 
 import numpy as np
 import pytest
 
 from localmap.cities import city_footprints
-from localmap.farmland import FARM_CITY, FARM_TOWN, FARM_VILLAGE, FarmlandParams, farmland_rgba, place_farmland
+from localmap.farmland import (
+    FARM_CITY, FARM_TOWN, FARM_VILLAGE, FarmlandParams, farmland_rgba, garden_ring_km, place_farmland,
+)
 from localmap.test.conftest import local_params
 from localmap.upsample import build_local_fields
 from region.upsample import EARTH_RADIUS_KM
@@ -63,7 +66,7 @@ def test_gardens_ring_the_city(local, sites):
     fp = city_footprints(local, sites[:1], np.array([60_000.0]), seed=3)
     # The test map's texels are coarse: a ring two and a half texels wide.
     ring_km = 2.5 * local.grid.texel_spacing_rad(local.tex_size) * EARTH_RADIUS_KM
-    params = FarmlandParams(city_garden_ring_km=ring_km, edge_roughness=0.0,
+    params = FarmlandParams(garden_m2_per_person=0.0, city_garden_ring_min_km=ring_km, edge_roughness=0.0,
                             fertility_weight=0.0, slope_weight=0.0, forest_weight=0.0)
     fm = place_farmland(local, np.zeros((0, 3)), np.zeros(0), np.zeros((0, 3)), np.zeros(0), fp, 3, params)
     gardens = local.positions[fm.kind == FARM_CITY]
@@ -74,8 +77,33 @@ def test_gardens_ring_the_city(local, sites):
     assert fm.area_km2[FARM_CITY][0] == pytest.approx(len(gardens) * local.texel_area_km2)
     # Without the ring a city has no farmland of its own.
     none = place_farmland(local, np.zeros((0, 3)), np.zeros(0), np.zeros((0, 3)), np.zeros(0), fp, 3,
-                          dataclasses.replace(params, city_garden_ring_km=0.0))
+                          dataclasses.replace(params, city_garden_ring_min_km=0.0))
     assert not (none.kind >= 0).any()
+
+
+def test_gardens_are_per_person(local, sites):
+    fp = city_footprints(local, sites[:1], np.array([60_000.0]), seed=3)
+    texels = 30
+    m2 = texels * local.texel_area_km2 * 1e6 / 60_000.0
+    params = FarmlandParams(garden_m2_per_person=m2, city_garden_ring_min_km=0.0)
+    fm = place_farmland(local, np.zeros((0, 3)), np.zeros(0), np.zeros((0, 3)), np.zeros(0), fp, 3, params)
+    assert (fm.kind == FARM_CITY).sum() == texels
+    assert fm.target_km2[FARM_CITY][0] == pytest.approx(texels * local.texel_area_km2)
+    double = place_farmland(local, np.zeros((0, 3)), np.zeros(0), np.zeros((0, 3)), np.zeros(0), fp, 3,
+                            dataclasses.replace(params, garden_m2_per_person=2.0 * m2))
+    assert (double.kind == FARM_CITY).sum() == 2 * texels
+
+
+def test_garden_ring_holds_its_people():
+    p = FarmlandParams(garden_m2_per_person=100.0, city_garden_ring_min_km=0.0)
+    for people, built in ((10_000.0, 0.9), (100_000.0, 5.7), (870_000.0, 32.0)):
+        w = garden_ring_km(people, built, p)
+        ring = math.pi * ((math.sqrt(built / math.pi) + w) ** 2 - built / math.pi)
+        assert ring == pytest.approx(people * 100.0 * 1e-6)
+    # Bigger cities, wider rings; a longer edge, a narrower one; never under the floor.
+    assert garden_ring_km(870_000.0, 32.0, p) > garden_ring_km(100_000.0, 5.7, p) > garden_ring_km(10_000.0, 0.9, p)
+    assert garden_ring_km(100_000.0, 5.7, p, perimeter_km=20.0) < garden_ring_km(100_000.0, 5.7, p)
+    assert garden_ring_km(10_000.0, 0.9, dataclasses.replace(p, city_garden_ring_min_km=0.5)) == 0.5
 
 
 def test_fields_prefer_fertile_ground(local, sites):

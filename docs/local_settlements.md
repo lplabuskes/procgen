@@ -81,14 +81,14 @@ Display-only; medieval rules of thumb:
 | Village | every villager who farms (`Villages.farming_share`) × `ha_per_farmer` (three-field rotation, fallow, meadow, pasture) | 1.5 ha |
 | Town | `town_farming_share` × `ha_per_farmer` (the rest eat from surrounding villages) | 0.5 |
 | Mining town | only `mining_farming_share` farm | 0.1 |
-| City | trade-fed; ring of market gardens/orchards `city_garden_ring_km` wide outside its footprint | 1.5 km |
+| City | trade-fed; market gardens/orchards outside its footprint, `garden_m2_per_person` per citizen on its nearest free ground, and all of it within `city_garden_ring_min_km` | 100 m², 0.5 km |
 
 - Claimed outward like a footprint, distance stretched by `1 +
   fertility_weight·(1 − fertility) + slope_weight·slope/slope_saturation +
   forest_weight·forest` (1, 2, 1; 0.15 km/km), jittered by `edge_roughness`
   (0.25) → fields fill valleys, skip steep/wooded ground.
-- Garden rings first (vs the map's median stretch, so nominal width on typical
-  ground); then towns and villages together, cheapest (settlement, texel) pair
+- Gardens first, each city its cheapest free texels by stretched distance from
+  its footprint (vs the map's median stretch) until its quota; then towns and villages together, cheapest (settlement, texel) pair
   first (numba), each until its quota — neighbours share ground.
 - Never water, built-up or under a river; village fields stop at rivers ≥
   `river_barrier_width_m` (see [River banks](#river-banks-localmapbankspy)).

@@ -12,7 +12,9 @@ one store):
    a local map's villages, named by that map (``SettlementRef.map``) and its
    index there, valid while that map's params don't change;
 3. the frame: a square centred where that local map draws the settlement, of side
-   ``2 · (footprint radius + garden ring + margin)``, the radius the settlement
+   ``2 · (footprint radius + garden ring + margin)`` (a city's garden ring by
+   :func:`localmap.farmland.garden_ring_km`; a town's or village's 1.5 km of
+   fields), the radius the settlement
    tier's own (its people at :func:`settlegen.footprint.base_density_per_ha`;
    the local map's footprint is only a preview there);
 4. every other local map whose ground the frame reaches (each regional hexagon,
@@ -31,6 +33,7 @@ import numpy as np
 from shapely.geometry import Polygon, box
 
 from localmap.builder import LocalMap
+from localmap.farmland import garden_ring_km
 from localmap.settlements import owning_hex
 from region.geometry import RegionGeometry, ecef_to_cell
 from region.grid import RegionHexGrid
@@ -141,6 +144,10 @@ def settlement_population(globe: "World", local: LocalMap, ref: SettlementRef) -
     return population(globe, ref)
 
 
+# The ground kept round a town's or village's footprint for its fields.
+_FIELDS_KM = 1.5
+
+
 def footprint_radius_km(population: float, density_per_ha: float) -> float:
     """The radius of a disc of ``population`` people at ``density_per_ha``."""
     area = max(float(population), 0.0) / (max(float(density_per_ha), 1e-9) / _KM2_PER_HA)
@@ -217,7 +224,9 @@ def ensure_local_maps(
     people = settlement_population(globe, owner, ref)
     density = base_density_per_ha(globe, ref, people, footprint)
     radius = footprint_radius_km(people, density)
-    side = frame_side_km(radius, local_params.farmland.city_garden_ring_km, margin_km)
+    ring = garden_ring_km(people, math.pi * radius ** 2, local_params.farmland) if ref.kind == "city" \
+        else _FIELDS_KM
+    side = frame_side_km(radius, ring, margin_km)
     keys = frame_keys(globe, owner, center, side, int(store.region_params.upsample.n_cols))
     maps = [owner] + [store.local(*key) for key in keys[1:]]
     return SettlementMaps(
