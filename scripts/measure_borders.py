@@ -33,8 +33,8 @@ from core.pipeline import BuildContext
 from realmgen.builder import RealmPipeline
 from realmgen.channels import POLITY_ID, SOVEREIGN_ID
 from realmgen.refine.ridges import ridge_lines
+from utils.sphere import EARTH_RADIUS_KM
 from worldgen.cost.channels import IS_WATER
-from worldgen.cost.surfaces import EARTH_RADIUS_KM
 from worldgen.hydrology.channels import LAKE_MASK
 from _common import (add_seed_args, add_set_arg, avg, get_physical_world, load_history, realm_params,
                      resolve_seeds, save_history)

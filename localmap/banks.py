@@ -18,7 +18,8 @@ import numpy as np
 from scipy.spatial import KDTree
 
 from region.rivers import RegionRivers
-from region.upsample import EARTH_RADIUS_KM, RegionFields
+from region.upsample import RegionFields
+from utils.sphere import EARTH_RADIUS_KM
 from worldgen.hydrology.discharge import channel_width_km
 
 # Push iterations: a site pushed off one channel may land on another (a confluence).

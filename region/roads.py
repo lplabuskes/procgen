@@ -26,7 +26,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
-from scipy.spatial import KDTree
 
 from core.params import param_field as _f, paramclass
 from region.corridor import (
@@ -40,11 +39,12 @@ from region.corridor import (
 from region.display import snap_to_land
 from region.rivers import RegionRivers
 from region.sampling import GlobalSampler
-from region.upsample import EARTH_RADIUS_KM, RegionFields
+from region.upsample import RegionFields
 from realmgen.trade.network import ROUTE_LAND, ROUTE_TRANSFER
+from utils.spatial import move_points, position_key
+from utils.sphere import EARTH_RADIUS_KM, laplacian_smooth_sphere
 from worldgen.cost.surfaces import BIOME_TRAVERSAL_COST
 from worldgen.geology.channels import IS_OCEAN
-from worldgen.hydrology.types import laplacian_smooth_sphere
 
 if TYPE_CHECKING:
     from core.world import World
@@ -92,27 +92,6 @@ class RegionRoads:
     water_polylines: list[np.ndarray] = field(default_factory=list)
     water_flows: list[np.ndarray] = field(default_factory=list)
     water_pins: list[tuple[bool, bool]] = field(default_factory=list)
-
-
-# Chord distance for a road end to match a settlement's old position (float32 round-off).
-_MOVE_TOLERANCE = 1e-6
-
-
-def move_points(points: np.ndarray, moved: Optional[tuple[np.ndarray, np.ndarray]]) -> np.ndarray:
-    """``points`` with any at an ``old`` position of ``moved = (old, new)`` replaced by its ``new``."""
-    if moved is None or len(moved[0]) == 0 or len(points) == 0:
-        return points
-    old, new = (np.asarray(a, dtype=np.float64).reshape(-1, 3) for a in moved)
-    dist, near = KDTree(old).query(points, workers=-1)
-    hit = dist < _MOVE_TOLERANCE
-    out = points.copy()
-    out[hit] = new[np.asarray(near)[hit]]
-    return out
-
-
-def _key(p: np.ndarray) -> tuple[float, float, float]:
-    from realmgen.refine.settlements import position_key
-    return position_key(p)
 
 
 # ── the cost ─────────────────────────────────────────────────────────────────
@@ -478,7 +457,7 @@ def build_region_roads(
     points: list[np.ndarray] = []
 
     def node(p: np.ndarray) -> int:
-        k = _key(p)
+        k = position_key(p)
         if k not in keys:
             keys[k] = len(points)
             points.append(np.asarray(p, dtype=np.float64))
@@ -530,7 +509,7 @@ def build_region_roads(
     smoothing = int(params.smoothing_iterations)
     # Routes pass through their settlements: chains end at them (a routed chain only lands on its ends).
     settlements = globe.get_feature("settlements") or []
-    settled = {_key(np.asarray(c.position, dtype=np.float64)) for c in settlements}
+    settled = {position_key(np.asarray(c.position, dtype=np.float64)) for c in settlements}
     at_settlement = np.array([k in settled for k in keys], dtype=bool)
     for chain, chain_flows in _chains(land_edges, len(points), at_settlement):
         for path, edge_flows, _ in route_polyline(

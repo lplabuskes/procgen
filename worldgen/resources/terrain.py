@@ -7,9 +7,8 @@ from collections import deque
 import numpy as np
 
 from core.mesh import PolygonMesh
+from utils.sphere import EARTH_RADIUS_KM
 from worldgen.geology.channels import VOLCANIC_ACTIVITY
-
-_EARTH_RADIUS_KM = 6371.0
 
 
 def face_elevation_range(elevation_tex: np.ndarray) -> np.ndarray:
@@ -26,8 +25,8 @@ def global_slope(mesh: PolygonMesh, elevation_tex: np.ndarray) -> np.ndarray:
     elev = np.asarray(elevation_tex, dtype=np.float64)[..., 0]        # (N, H, W)
     _, h, w = elev.shape
     frames = mesh.face_tangent_frames()
-    u_ranges = np.asarray(frames[4], dtype=np.float64) * _EARTH_RADIUS_KM
-    v_ranges = np.asarray(frames[5], dtype=np.float64) * _EARTH_RADIUS_KM
+    u_ranges = np.asarray(frames[4], dtype=np.float64) * EARTH_RADIUS_KM
+    v_ranges = np.asarray(frames[5], dtype=np.float64) * EARTH_RADIUS_KM
     d_v, d_u = np.gradient(elev, axis=(1, 2))
     du_km = np.maximum(u_ranges / max(w - 1, 1), 1e-9)[:, None, None]
     dv_km = np.maximum(v_ranges / max(h - 1, 1), 1e-9)[:, None, None]

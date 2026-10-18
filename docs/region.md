@@ -90,13 +90,13 @@ Defaults (`n_cols=14`, `tex_size=64`): 216 hexes ~286 km across, ~4.5 km texels.
   conservation target.
 - `owners(H, W)` — per global texel, the texel owning its *position*: itself if
   its centre is in its own face's territory, else the neighbour's texel there
-  (seam duplicates, over-hang). Made idempotent by `settle_owners` so every
+  (seam duplicates, over-hang). Made idempotent by `utils.resample.settle_owners` so every
   anchor owns itself — required for `conserve_smooth` to converge
   ([region_fields.md](region_fields.md#refinement-regionupsamplepy)).
-- `anchor_values(texture, anchors)` — exact global value.
-
-`anchor_means(values, anchors, weights, n_anchors)` reduces per anchor with
-over-hang weighted out. The refine stage's border tracer reuses the sampler
+The tier-agnostic resampling math is in `utils/resample.py`: `bilinear_plan` /
+`bilinear_read` / `bilinear_stencil`, `anchor_values(texture, anchors)` (exact
+parent value), `anchor_means(values, anchors, weights, n_anchors)` (per-anchor
+reduction with over-hang weighted out), `anchor_residual` (the conservation check). The refine stage's border tracer reuses the sampler
 ([realm_refine.md](realm_refine.md)).
 
 ## Parent sources (`region/source.py`)

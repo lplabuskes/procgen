@@ -40,17 +40,18 @@ from core.params import param_field as _f, paramclass
 from region.geometry import N_REGIONS, RegionGeometry
 from region.grid import RegionHexGrid
 from region.lakes import find_small_lakes
-from region.resources import RefineContext, refine_resources, refined_slope
-from region.sampling import GlobalSampler, anchor_means, anchor_plan, stencil_read
+from region.resources import RefineContext, refine_resources
 from region.source import GlobalSource, Located, ParentSource
+from utils.raster import box_filter, neighbour_min4, texture_slope
+from utils.resample import anchor_means, anchor_plan, anchor_residual, anchor_values, stencil_read
 from utils.simplex import fbm_sum, make_perm
+from utils.sphere import EARTH_RADIUS_KM
 from worldgen.resources.minerals import mineral_workings, site_workers
 
 if TYPE_CHECKING:
     from core.world import World
     from worldgen.resources.builder import ResourcesParams
 
-EARTH_RADIUS_KM = 6371.0
 
 # Hard-coded as the shore by worldgen.geology.elevation and worldgen.hydrology.builder.
 SEA_LEVEL_KM = 0.0
@@ -350,25 +351,6 @@ def coast_style(
     )
 
 
-def _box_filter(texture: np.ndarray, size: int) -> np.ndarray:
-    """``size``×``size`` mean over each hex texture of an ``(M, T, T, C)`` array.
-
-    Edges replicate; only the invisible over-hang corners see that.
-    """
-    if size <= 1:
-        return texture
-    r = size // 2
-    padded = np.pad(np.asarray(texture, dtype=np.float64), ((0, 0), (r, r), (r, r), (0, 0)), mode="edge")
-    _, h, w, _ = texture.shape
-    cols = np.zeros((padded.shape[0], h + 2 * r, w, padded.shape[3]), dtype=np.float64)
-    for j in range(size):
-        cols += padded[:, :, j:j + w, :]
-    total = np.zeros(texture.shape, dtype=np.float64)
-    for i in range(size):
-        total += cols[:, i:i + h, :, :]
-    return (total / float(size * size)).astype(texture.dtype)
-
-
 def _effective_slope(slope: np.ndarray, params: RegionUpsampleParams) -> np.ndarray:
     """Map raw slope (km/km) to the amplitude multiplier, floored and saturated."""
     ref = max(float(params.slope_reference), 1e-9)
@@ -391,15 +373,6 @@ def _shallow_water_damping(depth: np.ndarray, params: RegionUpsampleParams) -> n
 
 
 # ── water masks ──────────────────────────────────────────────────────────────
-
-
-def _neighbour_min(values: np.ndarray) -> np.ndarray:
-    """Per-texel minimum over the 4 neighbours of an ``(M, T, T)`` array (edge replicates)."""
-    padded = np.pad(values, ((0, 0), (1, 1), (1, 1)), mode="edge")
-    return np.minimum(
-        np.minimum(padded[:, :-2, 1:-1], padded[:, 2:, 1:-1]),
-        np.minimum(padded[:, 1:-1, :-2], padded[:, 1:-1, 2:]),
-    )
 
 
 def flood_to_level(
@@ -435,7 +408,7 @@ def _flood(
     water_level = np.where(seed, level, np.inf)
     forbidden = np.zeros_like(water) if blocked is None else np.asarray(blocked, dtype=bool)
     for _ in range(max(int(iterations), 0)):
-        nbr = _neighbour_min(np.where(water, water_level, np.inf))
+        nbr = neighbour_min4(np.where(water, water_level, np.inf))
         grow = ~water & ~forbidden & np.isfinite(nbr) & (elev <= nbr)
         if not grow.any():
             break
@@ -832,7 +805,7 @@ def _reshape_coasts(
     wide = e
     if blur > 1:
         size = blur | 1
-        wide = _box_filter(_box_filter(e.reshape(m, tex_size, tex_size, 1), size), size).reshape(-1)
+        wide = box_filter(box_filter(e.reshape(m, tex_size, tex_size, 1), size), size).reshape(-1)
     goal = wide + (e - wide) * (1.0 - style.smooth)
     w_rugged, w_smooth = float(params.coast_target_wander_rugged), float(params.coast_target_wander_smooth)
     wander = w_rugged + (w_smooth - w_rugged) * style.smooth
@@ -856,7 +829,7 @@ def _reshape_coasts(
     if lake_band is not None and lake_band.any():
         surface = np.where(water.lake, water.surface, np.inf).reshape(m, tex_size, tex_size)
         for _ in range(max(int(round(2.0 * n_t)), 1)):
-            surface = np.where(np.isfinite(surface), surface, _neighbour_min(surface))
+            surface = np.where(np.isfinite(surface), surface, neighbour_min4(surface))
         out = reshape_to_target(
             out, out + lake_band * (goal - out), groups, weights, n_groups,
             level=surface.reshape(-1), active=~water.ocean, **edit,
@@ -908,7 +881,7 @@ def _add_small_lakes(
         band = old_level
         n_t = source.spacing_rad / max(grid.texel_spacing_rad(elevation.shape[1]), 1e-12)
         for _ in range(max(int(np.ceil(n_t)), 1)):
-            band = np.where(np.isfinite(band) | water, band, _neighbour_min(band))
+            band = np.where(np.isfinite(band) | water, band, neighbour_min4(band))
         surface = np.where(new, surface, np.where(old, old_level, np.minimum(surface, band)))
         new = new | old
     if not new.any():
@@ -1115,7 +1088,7 @@ def refine_fields(
     if "temperature" in textures and "precipitation" in textures:
         from worldgen.climate.classification import classify_textures
         k = int(params.biome_smoothing)
-        climate_avg = (_box_filter(textures["temperature"], k), _box_filter(textures["precipitation"], k))
+        climate_avg = (box_filter(textures["temperature"], k), box_filter(textures["precipitation"], k))
         textures["biome"] = classify_textures(*climate_avg, np.zeros(m))
 
     # ── wetland: the parent's score refined by the relief, at this tier's threshold
@@ -1143,7 +1116,7 @@ def refine_fields(
             source=source, located=loc, anchors=anchors,
             weights=weights, n_anchors=n_anchors, shape=shape, positions=flat_pos,
             elevation=elevation[:, 0], elev_coarse=elev_coarse[:, 0],
-            slope=refined_slope(elevation[:, 0].reshape(shape), np.sqrt(texel_area_km2)).reshape(-1),
+            slope=texture_slope(elevation[:, 0].reshape(shape), np.sqrt(texel_area_km2)).reshape(-1),
             land=~water_now, anchor_land=~(water.ocean | water.lake),
             texel_km=float(np.sqrt(texel_area_km2)),
             mine_points=mine_points, climate_avg=climate_avg,
@@ -1254,7 +1227,7 @@ def anchor_residuals(
         if key in textures:
             water |= textures[key].reshape(-1) > 0.5
         if key in parent_textures:
-            anchor_water |= GlobalSampler.anchor_values(parent_textures[key], anchors)[:, 0] > 0.5
+            anchor_water |= anchor_values(parent_textures[key], anchors)[:, 0] > 0.5
     dry = in_hex * (~water & ~anchor_water)
     report: dict[str, dict[str, float]] = {}
     for key, weights in (
@@ -1263,15 +1236,6 @@ def anchor_residuals(
     ):
         if key not in textures or key not in parent_textures:
             continue
-        parent_tex = np.asarray(parent_textures[key], dtype=np.float64)
-        n_anchors = parent_tex.shape[0] * parent_tex.shape[1] * parent_tex.shape[2]
         values = textures[key].reshape(-1, textures[key].shape[3]).astype(np.float64)
-        means, counts = anchor_means(values, anchors, weights, n_anchors)
-        hit = counts > 0.0
-        residual = np.abs(means[hit] - parent_tex.reshape(n_anchors, -1)[hit])
-        report[key] = {
-            "max": float(residual.max()) if residual.size else 0.0,
-            "mean": float(residual.mean()) if residual.size else 0.0,
-            "n_anchors": int(hit.sum()),
-        }
+        report[key] = anchor_residual(values, anchors, weights, parent_textures[key])
     return report

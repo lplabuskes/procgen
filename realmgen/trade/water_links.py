@@ -22,7 +22,8 @@ from typing import Callable, Optional, Sequence
 
 import numpy as np
 
-from realmgen.refine.sites import SiteField, densify_polylines
+from realmgen.refine.sites import SiteField
+from utils.sphere import densify_polylines
 
 TAG_OCEAN = -1
 TAG_LAKE = -2

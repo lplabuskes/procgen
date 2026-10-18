@@ -19,12 +19,11 @@ from typing import List, TYPE_CHECKING
 
 import numpy as np
 
+from utils.sphere import EARTH_RADIUS_KM
 from worldgen.climate.classification import N_BIOMES
 
 if TYPE_CHECKING:
     from worldgen.cost.builder import SeaCostParams, StraitParams
-
-EARTH_RADIUS_KM = 6371.0
 
 
 # Relative overland difficulty per biome (index = BIOME_NAMES); temperate/steppe = 1.0.

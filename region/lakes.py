@@ -45,12 +45,13 @@ from scipy import ndimage
 
 from region.drainage import accumulate, priority_flood
 from region.grid import RegionHexGrid
+from utils.raster import neighbour_min8
+from utils.sphere import EARTH_RADIUS_KM
 from worldgen.hydrology.builder import HydrologyParams
 
 if TYPE_CHECKING:
     from region.source import ParentSource
 
-EARTH_RADIUS_KM = 6371.0
 
 # Fu's Budyko shape parameter (the global mean fit).
 _BUDYKO_W = 2.6
@@ -116,18 +117,6 @@ def drain_nodes(
     inside = (xs >= 0) & (xs < n) & (ys >= 0) & (ys < n)
     hit[ys[inside] * n + xs[inside]] = True
     return hit
-
-
-def _neighbour_min_2d(values: np.ndarray) -> np.ndarray:
-    """Per-node minimum over the 8 neighbours of an ``(n, n)`` array (edges: +inf)."""
-    padded = np.pad(values, 1, mode="constant", constant_values=np.inf)
-    n = values.shape[0]
-    out = np.full_like(values, np.inf)
-    for dr in (-1, 0, 1):
-        for dc in (-1, 0, 1):
-            if dr or dc:
-                out = np.minimum(out, padded[1 + dr:1 + dr + n, 1 + dc:1 + dc + n])
-    return out
 
 
 def smooth_land(elevation: np.ndarray, water: np.ndarray, sigma_nodes: float) -> np.ndarray:
@@ -301,10 +290,10 @@ def find_small_lakes(
     ).reshape(n, n)
     # Carry each surface a node onto its shore so texels between nodes see it
     # (not onto outlets: nothing stands on a drain).
-    levels = np.where(np.isfinite(levels) | outlet.reshape(n, n), levels, _neighbour_min_2d(levels))
+    levels = np.where(np.isfinite(levels) | outlet.reshape(n, n), levels, neighbour_min8(levels))
     band = levels
     for _ in range(max(int(np.ceil(n_t)), 1)):
-        band = np.where(np.isfinite(band) | outlet.reshape(n, n), band, _neighbour_min_2d(band))
+        band = np.where(np.isfinite(band) | outlet.reshape(n, n), band, neighbour_min8(band))
 
     local = grid.texture_local(tex).reshape(-1, 2)
     x, y = (local[:, 0] - lo) / step, (local[:, 1] - lo) / step

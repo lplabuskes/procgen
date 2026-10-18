@@ -62,6 +62,7 @@ from realmgen.towns.types import TOWN_KIND_NAMES, TOWN_MINING
 from region.upsample import RegionFields
 from settlegen.frame import Frame
 from settlegen.site.hinterland import village_farming
+from utils.sphere import EARTH_RADIUS_KM
 from worldgen.climate.classification import BIOME_NAMES
 from worldgen.resources.crops import CROP_NAMES
 from worldgen.resources.minerals import MARBLE, MINERAL_NAMES, SALT, mineral_workings
@@ -71,7 +72,6 @@ if TYPE_CHECKING:
     from core.world import World
     from settlegen.chain.builder import SettlementMaps, SettlementRef
 
-_EARTH_RADIUS_KM = 6371.0
 # RNG stream tags for the stubs.
 _FOUNDING_STREAM, _PLANNED_STREAM = 51, 52
 _KIND_CODE = {"city": 0, "town": 1, "village": 2}
@@ -299,7 +299,7 @@ def _nearness(center: np.ndarray, positions: np.ndarray, reach_km: float) -> np.
     p = np.asarray(positions, dtype=np.float64)
     p = p / np.linalg.norm(p, axis=1, keepdims=True)
     c = np.asarray(center, dtype=np.float64) / np.linalg.norm(center)
-    d_km = np.arccos(np.clip(p @ c, -1.0, 1.0)) * _EARTH_RADIUS_KM
+    d_km = np.arccos(np.clip(p @ c, -1.0, 1.0)) * EARTH_RADIUS_KM
     return np.clip(1.0 - d_km / reach_km, 0.0, 1.0)
 
 

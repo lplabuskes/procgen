@@ -10,7 +10,7 @@ from region.geometry import ecef_to_cell
 from region.rivers import build_region_rivers
 from region.towns import RegionSettlementParams, _river_points, refine_region_towns
 from region.upsample import RegionUpsampleParams, build_region_fields
-from worldgen.cost.surfaces import EARTH_RADIUS_KM
+from utils.sphere import EARTH_RADIUS_KM
 
 REGION_ID = 40
 

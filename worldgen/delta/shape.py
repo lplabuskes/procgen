@@ -23,12 +23,13 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 from scipy.spatial import KDTree
 
+from utils.numeric import smoothstep
+from utils.sphere import EARTH_RADIUS_KM, unit
 from worldgen.hydrology.types import REFERENCE_FLOW
 
 if TYPE_CHECKING:
     from worldgen.delta.builder import DeltaParams
 
-EARTH_RADIUS_KM = 6371.0
 # Wave power is counted in units of this wind speed cubed (the trades).
 _REFERENCE_WIND = 7.0
 # Bearings sampled across the seaward half-plane.
@@ -41,17 +42,8 @@ BIRDFOOT, ARCUATE, CUSPATE = "birdfoot", "arcuate", "cuspate"
 SHAPE_NAMES = {BIRDFOOT: "bird's-foot", ARCUATE: "arcuate", CUSPATE: "cuspate"}
 
 
-def _unit(v: np.ndarray) -> np.ndarray:
-    return v / max(float(np.linalg.norm(v)), 1e-15)
-
-
 def _tangent(v: np.ndarray, at: np.ndarray) -> np.ndarray:
-    return _unit(v - at * float(at @ v))
-
-
-def _smoothstep(lo: float, hi: float, x: float) -> float:
-    t = float(np.clip((x - lo) / (hi - lo), 0.0, 1.0)) if hi != lo else float(x >= hi)
-    return t * t * (3.0 - 2.0 * t)
+    return unit(v - at * float(at @ v))
 
 
 class WaveField:
@@ -80,7 +72,7 @@ class WaveField:
     def power(self, mouth: np.ndarray, axis: np.ndarray, params: "DeltaParams",
               body: int = 0, swell: bool = True) -> float:
         """Wave power at ``mouth`` from water body ``body`` in front of it, in ``(7 m/s)³``."""
-        mouth = _unit(np.asarray(mouth, dtype=np.float64))
+        mouth = unit(np.asarray(mouth, dtype=np.float64))
         a = _tangent(np.asarray(axis, dtype=np.float64), mouth)
         b = np.cross(mouth, a)
         cap = float(params.fetch_cap_km) / EARTH_RADIUS_KM
@@ -155,9 +147,9 @@ def make_shape(dominance: float, head: np.ndarray, axis: np.ndarray, flow: float
                params: "DeltaParams", rng: np.random.Generator) -> DeltaShape:
     """Blend weights for ``dominance``, and the fingers a bird's-foot would grow."""
     h = 0.5 * float(params.shape_blend)
-    bird = 1.0 - _smoothstep(float(params.birdfoot_below) - h, float(params.birdfoot_below) + h, dominance)
-    cusp = _smoothstep(float(params.cuspate_above) - h, float(params.cuspate_above) + h, dominance)
-    at = _unit(np.asarray(head, dtype=np.float64))
+    bird = 1.0 - float(smoothstep(float(params.birdfoot_below) - h, float(params.birdfoot_below) + h, dominance))
+    cusp = float(smoothstep(float(params.cuspate_above) - h, float(params.cuspate_above) + h, dominance))
+    at = unit(np.asarray(head, dtype=np.float64))
     shape = DeltaShape(wave_dominance=float(dominance), birdfoot=bird, cuspate=cusp, head=at)
     if bird <= 0.0:
         return shape

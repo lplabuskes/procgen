@@ -30,7 +30,6 @@ from scipy.spatial import KDTree
 
 from core.params import param_field as _f, paramclass
 from realmgen.population.builder import PopulationParams
-from realmgen.refine.sites import densify_polylines
 from realmgen.towns.builder import RURAL_DENSITY_TEXTURE, TownParams, town_site_context
 from realmgen.towns.placement import SPACING_EXPONENT, site_log_weight_and_kind
 from realmgen.towns.types import TOWN_PORT, TOWN_RIVER, Towns
@@ -39,6 +38,9 @@ from region.rivers import RegionRivers
 from region.roads import RegionRoads
 from region.sampling import GlobalSampler
 from region.upsample import SMALL_LAKE_KEY, RegionFields
+from utils.raster import neighbour_any
+from utils.spatial import kdtree, near_any
+from utils.sphere import densify_polylines
 
 if TYPE_CHECKING:
     from core.world import World
@@ -57,27 +59,6 @@ class RegionSettlementParams:
     # Max move from the world site, in global texels.
     refine_radius_global_texels: float = _f(
         1.0, label="Refinement radius (global texels)", min=0.0, max=2.0, step=0.25)
-
-
-def _neighbour_any(mask: np.ndarray) -> np.ndarray:
-    """True where any 4-neighbour inside the same hex texture is True, ``(M, T, T)``."""
-    out = np.zeros_like(mask)
-    out[:, 1:, :] |= mask[:, :-1, :]
-    out[:, :-1, :] |= mask[:, 1:, :]
-    out[:, :, 1:] |= mask[:, :, :-1]
-    out[:, :, :-1] |= mask[:, :, 1:]
-    return out
-
-
-def _near(tree: Optional[KDTree], points: np.ndarray, radius: float) -> np.ndarray:
-    if tree is None or points.shape[0] == 0:
-        return np.zeros(points.shape[0], dtype=bool)
-    # Bounded: points farther than ``radius`` from every tree point come back as inf, sooner.
-    return tree.query(points, workers=-1, distance_upper_bound=radius)[0] < radius
-
-
-def _tree(points: Optional[np.ndarray]) -> Optional[KDTree]:
-    return KDTree(points) if points is not None and len(points) else None
 
 
 def _river_points(rivers: RegionRivers, step: float, streams: bool = False) -> Optional[np.ndarray]:
@@ -145,20 +126,20 @@ def tier_sites(
                  else np.zeros(len(pos)))
     spacing = fields.grid.texel_spacing_rad(fields.tex_size)
     snap = float(river_threshold_factor) * spacing
-    conf = _near(_tree(rivers.confluences), pos, snap)
-    coast_ocean = _neighbour_any(ocean)[dry]
+    conf = near_any(kdtree(rivers.confluences), pos, snap)
+    coast_ocean = neighbour_any(ocean)[dry]
     # Harbours are on the sea and the globe's lakes, not on small lakes.
-    coast_lake = _neighbour_any(lake & ~small)[dry]
+    coast_lake = neighbour_any(lake & ~small)[dry]
     no = np.zeros(len(pos), dtype=bool)
     return _Sites(
         positions=pos, face=face, rho=rho, fertility=fertility,
         coast=coast_ocean | coast_lake, coast_ocean=coast_ocean, coast_lake=coast_lake,
-        river=_near(_tree(_river_points(rivers, 0.5 * spacing)), pos, snap) & ~conf,
+        river=near_any(kdtree(_river_points(rivers, 0.5 * spacing)), pos, snap) & ~conf,
         confluence=conf,
-        route=no if sc is None else _near(
-            _tree(sc.route_points if roads is None else _route_points(roads, 0.5 * sc.route_radius)),
+        route=no if sc is None else near_any(
+            kdtree(sc.route_points if roads is None else _route_points(roads, 0.5 * sc.route_radius)),
             pos, sc.route_radius),
-        mine=no if sc is None else _near(_tree(sc.mineral_points), pos, sc.mining_radius),
+        mine=no if sc is None else near_any(kdtree(sc.mineral_points), pos, sc.mining_radius),
     )
 
 
@@ -232,7 +213,7 @@ def refine_towns(
     town_radii = sc.town_spacing * (towns.population / float(p.town_min)) ** SPACING_EXPONENT
     max_pair = max(float(town_radii.max()), float(sc.city_radii.max()) if len(sc.city_radii) else 0.0)
     parent_tree = KDTree(parents)
-    city_tree = _tree(city_pos)
+    city_tree = kdtree(city_pos)
     candidate_tree = KDTree(sites.positions) if len(sites.positions) else None
 
     # Largest first, like the stage.

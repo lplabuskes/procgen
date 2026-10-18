@@ -46,9 +46,8 @@ from region.rivers import build_region_rivers, river_length_km  # noqa: E402
 from region.wetlands import add_riparian_wetland  # noqa: E402
 from region.streams import build_region_streams  # noqa: E402
 from region.roads import build_region_roads  # noqa: E402
-from region.upsample import (  # noqa: E402
-    EARTH_RADIUS_KM, SMALL_LAKE_KEY, RegionFields, RegionUpsampleParams, build_region_fields,
-)
+from region.upsample import SMALL_LAKE_KEY, RegionFields, RegionUpsampleParams, build_region_fields  # noqa: E402
+from utils.sphere import EARTH_RADIUS_KM  # noqa: E402
 from debug_region import LAYERS, draw_region  # noqa: E402  (shared with the region check)
 from _common import get_realm_world  # noqa: E402
 

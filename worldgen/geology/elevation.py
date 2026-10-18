@@ -12,11 +12,7 @@ from scipy.sparse.csgraph import connected_components
 from utils.simplex import fbm_sum, make_perm
 from core.mesh import PolygonMesh
 
-try:
-    from numba import njit
-except ImportError:  # pragma: no cover - numba is an optional accelerator
-    def njit(func=None, **_):  # type: ignore[misc]
-        return func if func is not None else (lambda f: f)
+from utils.jit import njit
 
 if TYPE_CHECKING:
     from scipy.sparse import csr_matrix

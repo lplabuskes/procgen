@@ -27,9 +27,9 @@ import numpy as np
 from localmap.geometry import PARENT_CENTER, PARENT_RADIUS
 from localmap.grid import in_flat_hexagon
 from region.geometry import ecef_to_cell
-from region.resources import refined_slope
-from region.sampling import settle_owners
-from region.source import Located, ParentSource, RegionSource, _bilinear_stencil
+from region.source import Located, ParentSource, RegionSource
+from utils.raster import texture_slope
+from utils.resample import bilinear_stencil, settle_owners
 
 if TYPE_CHECKING:
     from region.upsample import RegionFields
@@ -92,7 +92,7 @@ class LocalMapsSource(ParentSource):
         cached = self._per_anchor.get(key)
         if cached is None:
             if key == "slope":
-                parts = [refined_slope(f.textures["elevation"][..., 0], math.sqrt(max(f.texel_area_km2, 1e-9)))
+                parts = [texture_slope(f.textures["elevation"][..., 0], math.sqrt(max(f.texel_area_km2, 1e-9)))
                          .reshape(-1, 1) for f in self.maps]
             else:
                 parts = [np.asarray(f.textures[key], dtype=np.float64).reshape(s.n_anchors, -1)
@@ -166,7 +166,7 @@ class LocalMapsSource(ParentSource):
             hexes, x, y = sub.data
             t = self.maps[i].tex_size
             # The map's bilinear corners as flat texels of this space, re-owned across maps.
-            corners, weights = _bilinear_stencil(hexes, x, y, t, t, np.arange(self.sources[i].n_anchors))
+            corners, weights = bilinear_stencil(hexes, x, y, t, t, np.arange(self.sources[i].n_anchors))
             idx_out[idx] = self.owners()[corners + self.offsets[i]]
             w_out[idx] = weights
         if len(self._stencils) >= 4:

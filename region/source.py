@@ -18,32 +18,15 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 from scipy.spatial import KDTree
 
-from region.resources import _danger_field, refined_slope
-from region.sampling import GlobalSampler, bilinear_plan, bilinear_read, settle_owners, stencil_read
+from region.resources import _danger_field
+from region.sampling import GlobalSampler
+from utils.raster import texture_slope
+from utils.resample import anchor_values, bilinear_plan, bilinear_read, bilinear_stencil, settle_owners, stencil_read
 from worldgen.resources.terrain import global_slope
 
 if TYPE_CHECKING:
     from core.world import World
     from region.upsample import RegionFields
-
-EARTH_RADIUS_KM = 6371.0
-
-
-def _bilinear_stencil(
-    tiles: np.ndarray, x: np.ndarray, y: np.ndarray, h: int, w: int, owner: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Corners and weights of a bilinear read at texel coords ``(x, y)`` of ``(N, h, w)`` textures.
-
-    Corners are mapped through ``owner`` (flat texel → anchor)."""
-    x0 = np.clip(np.floor(x).astype(np.int64), 0, max(w - 2, 0))
-    y0 = np.clip(np.floor(y).astype(np.int64), 0, max(h - 2, 0))
-    x1 = np.minimum(x0 + 1, w - 1)
-    y1 = np.minimum(y0 + 1, h - 1)
-    fx, fy = x - x0, y - y0
-    base = tiles * (h * w)
-    idx = np.stack([base + y0 * w + x0, base + y0 * w + x1, base + y1 * w + x0, base + y1 * w + x1], axis=1)
-    weights = np.stack([(1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy], axis=1)
-    return owner[idx], weights
 
 
 @dataclass
@@ -155,7 +138,7 @@ class GlobalSource(ParentSource):
         faces, u, v = loc.data
         gh, gw = self._hw
         x, y = GlobalSampler._texel_coords(u, v, gh, gw)
-        return _bilinear_stencil(faces, x, y, gh, gw, self.owners())
+        return bilinear_stencil(faces, x, y, gh, gw, self.owners())
 
     def locate(self, points: np.ndarray) -> Located:
         faces, u, v = self.sampler.locate(points)
@@ -165,7 +148,7 @@ class GlobalSource(ParentSource):
         return self.sampler.sample(self.mesh.face_textures[key], *loc.data)
 
     def anchor_values(self, key: str, loc: Located) -> np.ndarray:
-        return GlobalSampler.anchor_values(self.mesh.face_textures[key], loc.anchors)
+        return anchor_values(self.mesh.face_textures[key], loc.anchors)
 
     def slope(self, loc: Located) -> np.ndarray:
         elev = np.asarray(self.mesh.face_textures["elevation"], dtype=np.float64)
@@ -209,7 +192,7 @@ class RegionSource(ParentSource):
     def stencil(self, loc: Located) -> tuple[np.ndarray, np.ndarray]:
         hexes, x, y = loc.data
         t = self.fields.tex_size
-        return _bilinear_stencil(hexes, x, y, t, t, self.owners())
+        return bilinear_stencil(hexes, x, y, t, t, self.owners())
 
     def locate(self, points: np.ndarray) -> Located:
         # Anchor on the texel owning the nearest one, as GlobalSampler.anchors does.
@@ -248,13 +231,13 @@ class RegionSource(ParentSource):
         return self._bilinear(self.fields.textures[key], loc)
 
     def anchor_values(self, key: str, loc: Located) -> np.ndarray:
-        return GlobalSampler.anchor_values(self.fields.textures[key], loc.anchors)
+        return anchor_values(self.fields.textures[key], loc.anchors)
 
     def slope(self, loc: Located) -> np.ndarray:
         if self._slope is None:
             f = self.fields
             elev = f.textures["elevation"][..., 0]
-            self._slope = refined_slope(elev, math.sqrt(max(f.texel_area_km2, 1e-9)))[..., None]
+            self._slope = texture_slope(elev, math.sqrt(max(f.texel_area_km2, 1e-9)))[..., None]
         return self._bilinear(self._slope, loc)[:, 0]
 
     def danger(self, loc: Located, positions: np.ndarray) -> Optional[tuple[np.ndarray, Optional[np.ndarray]]]:

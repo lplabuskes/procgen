@@ -26,13 +26,14 @@ import numpy as np
 from scipy.spatial import KDTree
 
 from core.params import param_field as _f, paramclass
-from realmgen.refine.sites import densify_polylines
 from realmgen.towns.placement import SPACING_EXPONENT, draw_town_sizes
-from region.resources import refined_slope
 from region.rivers import RegionRivers
 from region.roads import RegionRoads
-from region.towns import _near, _neighbour_any, _river_points
-from region.upsample import EARTH_RADIUS_KM, RegionFields
+from region.towns import _river_points
+from region.upsample import RegionFields
+from utils.raster import neighbour_any, texture_slope
+from utils.spatial import near_any
+from utils.sphere import densify_polylines, km_to_rad
 
 VILLAGE_FARM, VILLAGE_RIVER, VILLAGE_COAST, VILLAGE_ROAD, VILLAGE_MINING = range(5)
 VILLAGE_KIND_NAMES = ("Farming village", "River village", "Fishing village", "Roadside village", "Mining village")
@@ -89,10 +90,6 @@ class Villages:
         return int(self.positions.shape[0])
 
 
-def _chord(km: float) -> float:
-    return float(km) / EARTH_RADIUS_KM
-
-
 def place_villages(
     local: RegionFields,
     rivers: Optional[RegionRivers],
@@ -133,22 +130,22 @@ def place_villages(
     cand_budget = np.searchsorted(budget_anchor, anchors[dry])
     cand_rho = rho[dry]
     spacing = local.grid.texel_spacing_rad(local.tex_size)
-    coast = (dry & _neighbour_any(water))[dry]
+    coast = (dry & neighbour_any(water))[dry]
     near_river = np.zeros(len(cand_pos), dtype=bool)
     confluence = np.zeros(len(cand_pos), dtype=bool)
     # Rivers and the region's streams alike (see localmap/rivers.py).
     if rivers is not None and len(cand_pos):
         river_pts = _river_points(rivers, 0.5 * spacing, streams=True)
         if river_pts is not None:
-            near_river = _near(KDTree(river_pts), cand_pos, _chord(p.water_reach_km))
+            near_river = near_any(KDTree(river_pts), cand_pos, km_to_rad(p.water_reach_km))
         if len(rivers.confluences):
-            confluence = _near(KDTree(rivers.confluences), cand_pos, _chord(p.water_reach_km))
+            confluence = near_any(KDTree(rivers.confluences), cand_pos, km_to_rad(p.water_reach_km))
     near_road = np.zeros(len(cand_pos), dtype=bool)
     if roads is not None and roads.polylines and len(cand_pos):
         road_pts = densify_polylines(roads.polylines, 0.5 * spacing)
         if road_pts is not None:
-            near_road = _near(KDTree(road_pts), cand_pos, _chord(p.road_reach_km))
-    slope = refined_slope(tex["elevation"][..., 0], np.sqrt(local.texel_area_km2))[dry]
+            near_road = near_any(KDTree(road_pts), cand_pos, km_to_rad(p.road_reach_km))
+    slope = texture_slope(tex["elevation"][..., 0], np.sqrt(local.texel_area_km2))[dry]
     slope_n = np.clip(slope / max(float(p.slope_saturation), 1e-9), 0.0, 1.0)
 
     mean_rho = np.bincount(cand_budget, weights=cand_rho, minlength=budget_anchor.size) / np.maximum(
@@ -204,7 +201,7 @@ def place_villages(
     blocked = np.zeros(len(cand_pos), dtype=bool)
     tree = KDTree(cand_pos) if len(cand_pos) else None
     if tree is not None and len(settlement_positions):
-        radii = _chord(p.settlement_clearance_km) * (
+        radii = km_to_rad(p.settlement_clearance_km) * (
             np.maximum(np.asarray(settlement_populations, dtype=np.float64), 1.0) / _CLEARANCE_REFERENCE_POP
         ) ** SPACING_EXPONENT
         for pos, r in zip(np.asarray(settlement_positions, dtype=np.float64), radii):
@@ -212,7 +209,7 @@ def place_villages(
 
     placed_pos, placed_pop, placed_kind, placed_anchor, placed_farming = [], [], [], [], []
     placed = np.zeros(budget_anchor.size)
-    base_radius = _chord(p.spacing_km)
+    base_radius = km_to_rad(p.spacing_km)
     for size, b, _ in requests:
         cand = by_budget[b]
         if cand.size == 0 or tree is None:

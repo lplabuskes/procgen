@@ -10,7 +10,7 @@ from realmgen.refine.barriers import pack_river_segments
 from realmgen.refine.borders import _icosphere_lattice, trace_lattice_chains
 from realmgen.refine.fill import PolityLabelField
 from realmgen.refine.river_follow import RiverFollowParams, _even_odd, build_river_swaps
-from worldgen.cost.surfaces import EARTH_RADIUS_KM
+from utils.sphere import EARTH_RADIUS_KM
 
 
 def _unit(v):

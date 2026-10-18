@@ -147,3 +147,20 @@ to a `MapWindow`.
 `|n_z| ≥ 0.9`, above ~64°), so U is east and V north for ~90% of faces. D4 grid
 walks produce N-S/E-W bias; `rivers.py` avoids it with D-infinity accumulation
 and smoothed polylines.
+
+## `utils/` — Domain-agnostic helpers
+
+Plain numpy/scipy helpers that know nothing of worlds, tiers or meshes; any package may import them.
+
+- `utils/jit.py` — `njit` / `prange` / `HAVE_NUMBA`: numba when installed, else no-op fallbacks.
+- `utils/resample.py` — resampling between tiers on `(N, H, W, C)` textures: `bilinear_plan` / `bilinear_read`,
+  `bilinear_stencil`, `stencil_read`, `settle_owners`, and the anchor reductions `anchor_values`, `anchor_plan`,
+  `anchor_means`, `anchor_residual`. Numba kernels in `utils/_resample_kernels.py`, bit-identical to the numpy paths.
+- `utils/raster.py` — filters over stacks of square textures: `texture_slope`, `neighbour_any`,
+  `neighbour_min4` / `neighbour_min8`, `box_mean` / `box_filter` / `weighted_box_mean3`.
+- `utils/sphere.py` — `EARTH_RADIUS_KM` (the one definition), `unit`, `km_to_rad`, `km_to_chord`, `arc_km`,
+  `great_circle_km`, `polyline_length_km`, `cumulative_chord`, `densify_polyline(s)`, `laplacian_smooth_sphere`,
+  `slerp_points`.
+- `utils/spatial.py` — `position_key`, `kdtree`, `near_any`, `move_points`.
+- `utils/numeric.py` — `smoothstep`.
+- `utils/simplex.py` — vectorised 3-D simplex noise and fBm.

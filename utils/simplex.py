@@ -8,16 +8,7 @@ available, else a numpy loop.  The two paths are bit-identical.
 
 import numpy as np
 
-try:
-    from numba import njit, prange
-    _HAVE_NUMBA = True
-except ImportError:  # pragma: no cover - numba is an optional accelerator
-    _HAVE_NUMBA = False
-
-    def njit(func=None, **_):  # type: ignore[misc]
-        return func if func is not None else (lambda f: f)
-
-    prange = range  # type: ignore[assignment]
+from utils.jit import HAVE_NUMBA as _HAVE_NUMBA, njit, prange
 
 _GRAD3 = np.array([
     [1, 1, 0], [-1, 1, 0], [1, -1, 0], [-1, -1, 0],

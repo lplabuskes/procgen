@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+from utils.sphere import laplacian_smooth_sphere
 from worldgen.hydrology.crossings import resolve_self_crossings
 from worldgen.hydrology.routing import (
     accumulate_flow,
@@ -18,13 +19,7 @@ from worldgen.hydrology.routing import (
     priority_flood,
 )
 from worldgen.hydrology.stitching import find_connected_components_csr
-from worldgen.hydrology.types import (
-    River,
-    RiverNode,
-    RiverSegment,
-    StreamNetwork,
-    laplacian_smooth_sphere,
-)
+from worldgen.hydrology.types import River, RiverNode, RiverSegment, StreamNetwork
 from core.mesh import PolygonMesh
 
 

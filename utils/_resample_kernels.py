@@ -1,4 +1,4 @@
-"""numba kernels for :mod:`region.sampling` (imported only where numba is installed).
+"""numba kernels for :mod:`utils.resample` (imported only where numba is installed).
 
 Each repeats its numpy counterpart's arithmetic operation for operation, so
 results are bit-identical with or without numba.
@@ -25,7 +25,7 @@ def counting_order(anchors, indptr):  # pragma: no cover - compiled
 
 @njit(cache=True, parallel=True)
 def planned_anchor_sums(vals, w, order, indptr):  # pragma: no cover - compiled
-    """:func:`region.sampling._weighted_anchor_sums` plus each anchor's weight (as ``np.bincount``),
+    """:func:`utils.resample._weighted_anchor_sums` plus each anchor's weight (as ``np.bincount``),
     anchors in parallel, each summed in index order."""
     n = indptr.shape[0] - 1
     c_n = vals.shape[1]
@@ -42,7 +42,7 @@ def planned_anchor_sums(vals, w, order, indptr):  # pragma: no cover - compiled
 
 @njit(cache=True, inline="always")
 def _blend(t00, t01, t10, t11, gx, gy):  # pragma: no cover - compiled
-    """:func:`region.sampling.bilinear_read`'s blend, operation for operation."""
+    """:func:`utils.resample.bilinear_read`'s blend, operation for operation."""
     top = t00 * (1.0 - gx) + t01 * gx
     bot = t10 * (1.0 - gx) + t11 * gx
     return top * (1.0 - gy) + bot * gy
@@ -50,7 +50,7 @@ def _blend(t00, t01, t10, t11, gx, gy):  # pragma: no cover - compiled
 
 @njit(cache=True, parallel=True)
 def bilinear_read(flat, corners, fx, fy):  # pragma: no cover - compiled
-    """:func:`region.sampling.bilinear_read` fused over its four gathers."""
+    """:func:`utils.resample.bilinear_read` fused over its four gathers."""
     p_n, c_n = corners.shape[1], flat.shape[1]
     out = np.empty((p_n, c_n))
     for p in prange(p_n):
@@ -77,7 +77,7 @@ def _half(h):  # pragma: no cover - compiled
 
 @njit(cache=True, parallel=True)
 def bilinear_read_f16(bits, corners, fx, fy):  # pragma: no cover - compiled
-    """:func:`_bilinear_read` of a float16 texture viewed as uint16."""
+    """:func:`utils.resample.bilinear_read` of a float16 texture viewed as uint16."""
     p_n, c_n = corners.shape[1], bits.shape[1]
     out = np.empty((p_n, c_n))
     for p in prange(p_n):
@@ -100,7 +100,7 @@ def _fma(typingctx, a, b, c):  # pragma: no cover - compiled
 
 @njit(cache=True, parallel=True)
 def stencil_read(w, idx, vals):  # pragma: no cover - compiled
-    """:func:`region.sampling.stencil_read` for ``C > 1``: ``k`` in order, fused multiply-adds."""
+    """:func:`utils.resample.stencil_read` for ``C > 1``: ``k`` in order, fused multiply-adds."""
     p_n, k_n = idx.shape
     c_n = vals.shape[1]
     out = np.empty((p_n, c_n))

@@ -39,8 +39,9 @@ from realmgen.towns.types import TOWN_MINING
 from region.display import snap_to_land
 from region.rivers import RegionRivers, RiverPath, snap_deltas
 from region.wetlands import add_riparian_wetland
-from region.roads import RegionRoads, move_points
+from region.roads import RegionRoads
 from region.upsample import RegionFields
+from utils.spatial import move_points
 from worldgen.hydrology.discharge import discharge_per_flow_unit
 
 if TYPE_CHECKING:

@@ -94,7 +94,7 @@ Top-level orchestrator: `GlobePipeline` in `worldgen/builder.py`. Each stage is 
 
 Stage reference docs (read the relevant one before working on a stage):
 
-- [docs/core.md](docs/core.md) — `core/` infrastructure (pipeline, channels, params, display, mesh cache, mesh data structures)
+- [docs/core.md](docs/core.md) — `core/` infrastructure (pipeline, channels, params, display, mesh cache, mesh data structures) and the domain-agnostic `utils/` helpers
 - [docs/viz.md](docs/viz.md) — `viz/` layer (MapWidget, MapWindow, overlay renderers, projections, registry adapter, MeshViewer, ParamsDialog, color_stops)
 - [docs/viz_regionview.md](docs/viz_regionview.md) — `RegionView`, the zoomed region / local-map viewer (wiring, drawing, hover, refined overlays)
 - [docs/region.md](docs/region.md) — `region/` regional maps overview (cubed-sphere cells, hex grid, global sampling, parent sources, params, display)

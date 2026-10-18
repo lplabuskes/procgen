@@ -29,6 +29,7 @@ import numpy as np
 
 from core.pipeline import BuildContext
 from core.world import World
+from utils.sphere import EARTH_RADIUS_KM
 from worldgen import GlobeParams
 from worldgen.climate.builder import ClimateBuilder
 from worldgen.geology.channels import OCEAN_MASK
@@ -41,7 +42,6 @@ RESULTS_DIR = Path(__file__).parent / "results"
 JSON_PATH = RESULTS_DIR / "rivers_results.json"
 MD_PATH = RESULTS_DIR / "rivers_results.md"
 
-EARTH_RADIUS_KM = 6371.0
 
 # Length thresholds (km) we count rivers above, with rough global anchor counts.
 LENGTH_THRESHOLDS = [1000, 2000, 3000, 4000]

@@ -9,7 +9,8 @@ import pytest
 from region.distributaries import DistributaryParams, mouth_count
 from region.rivers import RegionRiverParams, build_region_rivers
 from region.sampling import GlobalSampler
-from region.upsample import EARTH_RADIUS_KM, RegionUpsampleParams, build_region_fields
+from region.upsample import RegionUpsampleParams, build_region_fields
+from utils.sphere import EARTH_RADIUS_KM
 from worldgen.delta.deposit import DeltaFan
 from worldgen.delta.shape import BIRDFOOT, CUSPATE
 

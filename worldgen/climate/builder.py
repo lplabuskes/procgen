@@ -12,6 +12,7 @@ from core.display import DisplayRegistry
 from core.pipeline import BuildContext, Stage
 from core.world import World
 
+from utils.sphere import EARTH_RADIUS_KM
 from worldgen.climate.classification import (
     N_BIOMES,
     classify_textures,
@@ -70,7 +71,6 @@ from core.params import field, param_field as _f, paramclass
 SEASON_LABELS = ["Spring", "Summer", "Autumn", "Winter"]
 
 
-EARTH_RADIUS_KM = 6371.0
 N_SEASONS = 4
 
 

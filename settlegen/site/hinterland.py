@@ -42,13 +42,13 @@ from localmap.builder import LocalMap
 from localmap.farmland import FarmlandParams, _claim
 from localmap.villages import VILLAGE_MINING
 from realmgen.towns.types import TOWN_MINING
-from region.resources import refined_slope
 from region.upsample import RegionFields
 from settlegen.site.footprint import _trace
 from settlegen.frame import Frame
 from settlegen.terrain.source import LocalMapsSource
 from settlegen.site.channels import channel_polygons
 from settlegen.site.types import _as_multipolygon, SiteWater
+from utils.raster import texture_slope
 
 if TYPE_CHECKING:
     from core.world import World
@@ -175,7 +175,7 @@ def build_hinterland(
 
     # The local stretch: poor soil, slope (relative to its saturation), forest; jittered.
     tex = fields.textures
-    slope = refined_slope(tex["elevation"][..., 0], fine_texel / 1000.0)[0]
+    slope = texture_slope(tex["elevation"][..., 0], fine_texel / 1000.0)[0]
     slope = slope[np.ix_(idx, idx)]
     stretch = 1.0 + float(p.slope_weight) * np.clip(slope / max(float(p.slope_saturation), 1e-9), 0.0, 1.0)
     if "fertility" in tex:

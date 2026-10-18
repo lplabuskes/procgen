@@ -5,6 +5,7 @@ from typing import Sequence, TYPE_CHECKING
 
 import numpy as np
 
+from utils.sphere import EARTH_RADIUS_KM
 from worldgen.climate._gradient import _tangent_frames, _tangent_gradient
 
 if TYPE_CHECKING:
@@ -12,7 +13,6 @@ if TYPE_CHECKING:
 
 
 SEASON_PHASES = np.array([0.0, np.pi / 2, np.pi, 3 * np.pi / 2], dtype=np.float64)
-EARTH_RADIUS_KM = 6371.0
 
 
 def zonal_winds(face_centroids: np.ndarray,

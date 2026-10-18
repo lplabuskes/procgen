@@ -13,7 +13,8 @@ import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFontMetricsF, QPainter, QPen, QPolygonF
 
-from worldgen.hydrology.discharge import EARTH_RADIUS_KM
+from utils.sphere import EARTH_RADIUS_KM, great_circle_km, slerp_points
+
 
 # Arc samples per radian of ground (~one per 0.25°), so the line bends with the projection.
 _SAMPLES_PER_RAD = 230.0
@@ -66,29 +67,15 @@ class MeasureTape:
         return None if self.start is None or b is None else (self.start, b)
 
 
-def distance_km(a: np.ndarray, b: np.ndarray) -> float:
-    """Great-circle ground distance (km) between two unit vectors."""
-    a = np.asarray(a, dtype=np.float64)
-    b = np.asarray(b, dtype=np.float64)
-    angle = math.atan2(float(np.linalg.norm(np.cross(a, b))), float(np.dot(a, b)))
-    return angle * EARTH_RADIUS_KM
-
-
 def arc_points(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """``(N, 3)`` points along the great circle from ``a`` to ``b`` (both included)."""
     a = np.asarray(a, dtype=np.float64)
     b = np.asarray(b, dtype=np.float64)
-    angle = distance_km(a, b) / EARTH_RADIUS_KM
+    angle = great_circle_km(a, b) / EARTH_RADIUS_KM
     n = int(min(_MAX_SAMPLES, max(2, math.ceil(angle * _SAMPLES_PER_RAD) + 1)))
-    t = np.linspace(0.0, 1.0, n)[:, None]
     if angle < 1e-9:
         return np.repeat(a[None, :], n, axis=0)
-    # Slerp; (near-)antipodal ends have no unique great circle — any one will do.
-    s = math.sin(angle)
-    if s < 1e-9:
-        return np.vstack([a, b])
-    pts = (np.sin((1.0 - t) * angle) * a + np.sin(t * angle) * b) / s
-    return pts / np.linalg.norm(pts, axis=1, keepdims=True)
+    return slerp_points(a, b, np.linspace(0.0, 1.0, n), angle)
 
 
 def format_distance(km: float) -> str:
@@ -150,7 +137,7 @@ def draw_tape(painter: QPainter, tape: MeasureTape, projector: _Projector) -> No
     # The label sits beside the moving (or second) end.
     sx, sy, keep = projector.points(b[None, :])
     if keep[0]:
-        _draw_label(painter, format_distance(distance_km(a, b)), float(sx[0]), float(sy[0]))
+        _draw_label(painter, format_distance(great_circle_km(a, b)), float(sx[0]), float(sy[0]))
 
 
 def _draw_ends(painter: QPainter, projector: _Projector, pts: np.ndarray) -> None:

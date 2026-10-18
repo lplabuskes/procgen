@@ -16,7 +16,8 @@ import numpy as np
 from scipy.spatial import KDTree
 
 from core.params import param_field as _f, paramclass
-from region.upsample import EARTH_RADIUS_KM, RegionFields
+from region.upsample import RegionFields
+from utils.sphere import EARTH_RADIUS_KM
 
 _KM2_PER_HA = 0.01
 _CITY_STREAM = 13   # RNG stream tag for the edge jitter

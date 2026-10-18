@@ -24,10 +24,11 @@ import numpy as np
 
 from realmgen.refine.borders import _chain_edges, _icosphere_lattice, _lattice_links, lattice_depth_for
 from realmgen.refine.fill import WATER
+from utils.sphere import laplacian_smooth_sphere
 from worldgen.geology.channels import ELEVATION, OCEAN_MASK
 from worldgen.hydrology.channels import DRAINAGE_LANDING, FILLED_HEIGHT, LAKE_MASK
 from worldgen.hydrology.rivers import stream_stem_ids
-from worldgen.hydrology.types import StreamNetwork, laplacian_smooth_sphere
+from worldgen.hydrology.types import StreamNetwork
 
 # The basin of texels draining to the sea / an endorheic sink before any channel.
 COASTAL = -1

@@ -26,7 +26,8 @@ from core.params import param_field as _f, paramclass
 from region.corridor import centreline, node_spacing_rad, raster_frame, sample_raster
 from region.drainage import accumulate, priority_flood
 from region.rivers import RegionRivers, RiverPath
-from region.upsample import EARTH_RADIUS_KM, RegionFields
+from region.upsample import RegionFields
+from utils.sphere import EARTH_RADIUS_KM
 from worldgen.hydrology.rivers import main_stem_paths
 
 if TYPE_CHECKING:

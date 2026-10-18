@@ -26,12 +26,11 @@ from realmgen.refine.fill import (
     domain_warp,
     polity_fill_recipe,
 )
-from realmgen.refine.settlements import (
-    position_key,
-    refine_settlement_positions,
-    remap_routes,
-)
-from realmgen.refine.sites import SiteField, _neighbor_any, densify_polylines
+from realmgen.refine.settlements import refine_settlement_positions, remap_routes
+from realmgen.refine.sites import SiteField
+from utils.raster import neighbour_any
+from utils.spatial import position_key
+from utils.sphere import densify_polylines
 
 
 # ── Stub mesh ──────────────────────────────────────────────────────────────────
@@ -61,13 +60,13 @@ def _refine(settlements, mesh, ocean, lake=None, rivers=None, **kw):
 _REFINE_POS = np.array([10.0, 10.0, 10.0])
 
 
-# ── _neighbor_any ────────────────────────────────────────────────────────────
+# ── neighbour_any ────────────────────────────────────────────────────────────
 
 
 def test_neighbor_any_orthogonal_only():
     m = np.zeros((3, 3), dtype=bool)
     m[1, 1] = True
-    out = _neighbor_any(m)
+    out = neighbour_any(m)
     assert out[0, 1] and out[2, 1] and out[1, 0] and out[1, 2]
     assert not out[0, 0] and not out[1, 1]  # diagonals / self excluded
 

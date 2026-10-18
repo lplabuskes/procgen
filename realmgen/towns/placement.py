@@ -10,11 +10,7 @@ from typing import TYPE_CHECKING, Optional, Sequence
 import numpy as np
 from scipy.spatial import KDTree
 
-try:
-    from numba import njit
-except ImportError:  # pragma: no cover - numba is an optional accelerator
-    def njit(func=None, **_):  # type: ignore[misc]
-        return func if func is not None else (lambda f: f)
+from utils.jit import njit
 
 from realmgen.refine.sites import SiteField
 from realmgen.towns.types import TOWN_MARKET, TOWN_MINING, TOWN_PORT, TOWN_RIVER, TOWN_ROUTE, Towns

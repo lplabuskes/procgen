@@ -9,9 +9,9 @@ from __future__ import annotations
 import numpy as np
 
 from core.mesh import PolygonMesh
+from utils.sphere import EARTH_RADIUS_KM
 from worldgen.climate.channels import PRECIPITATION
 
-EARTH_RADIUS_KM = 6371.0
 SECONDS_PER_YEAR = 3.156e7
 # Share of precipitation leaving as river flow (Earth: ~40k of ~110k km³/yr).
 RUNOFF_RATIO = 0.36

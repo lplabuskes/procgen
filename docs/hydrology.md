@@ -5,7 +5,7 @@ Original design: `docs/plans/river_generation_spec.md`.
 ## Files
 - `worldgen/hydrology/builder.py` — stage + params
 - `worldgen/hydrology/rivers.py` — `RiverGenerator`
-- `worldgen/hydrology/types.py` — dataclasses, `laplacian_smooth_sphere`
+- `worldgen/hydrology/types.py` — dataclasses (river smoothing: `utils.sphere.laplacian_smooth_sphere`)
 - `worldgen/hydrology/routing.py` — Priority-Flood, D-infinity, accumulation
 - `worldgen/hydrology/stitching.py` — connected components
 - `worldgen/hydrology/crossings.py` — arc crossings, self-crossing removal

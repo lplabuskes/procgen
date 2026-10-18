@@ -23,6 +23,7 @@ from realmgen.placement.types import (
 )
 from realmgen.refine.sites import SiteField
 from realmgen.trade.water_links import water_link_mask
+from utils.spatial import position_key
 
 SITE_OCEAN = 3.0
 SITE_LAKE = 2.0
@@ -31,12 +32,6 @@ SITE_RIVER = 1.5
 SITE_FERTILITY = 1.0
 SITE_CENTRE = 0.5
 SITE_JITTER = 0.3
-
-
-def position_key(pos: np.ndarray) -> tuple[float, float, float]:
-    """Hashable key for a unit-sphere position, stable for centroid-derived points."""
-    p = np.asarray(pos, dtype=np.float64).ravel()
-    return (round(float(p[0]), 9), round(float(p[1]), 9), round(float(p[2]), 9))
 
 
 def site_kind(sites, i: int) -> int:

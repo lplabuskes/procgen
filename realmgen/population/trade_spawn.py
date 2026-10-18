@@ -16,11 +16,7 @@ from scipy.sparse.csgraph import dijkstra as sp_dijkstra
 
 from realmgen.placement.types import Settlement
 
-try:
-    from numba import njit
-except ImportError:  # pragma: no cover - numba is an optional accelerator
-    def njit(func=None, **_):  # type: ignore[misc]
-        return func if func is not None else (lambda f: f)
+from utils.jit import njit
 
 
 @njit(cache=True)

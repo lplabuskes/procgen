@@ -19,6 +19,7 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 from scipy.sparse.csgraph import dijkstra as sp_dijkstra
 
+from utils.sphere import EARTH_RADIUS_KM
 from worldgen.climate._gradient import _tangent_frames, _tangent_gradient
 from core.mesh import PolygonMesh
 
@@ -26,7 +27,6 @@ if TYPE_CHECKING:
     from worldgen.climate.builder import CurrentsParams
 
 
-EARTH_RADIUS_KM = 6371.0
 EARTH_ROTATION_RAD_S = 7.292e-5
 
 

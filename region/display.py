@@ -12,8 +12,8 @@ from typing import TYPE_CHECKING, Callable, Sequence
 import numpy as np
 
 from core.display import POSITIONS_KEY, RIVER_SEGMENTS_KEY, SchemeSpec
-from region.sampling import GlobalSampler
 from region.upsample import RegionFields
+from utils.resample import anchor_values
 
 if TYPE_CHECKING:
     from core.mesh import PolygonMesh
@@ -79,7 +79,7 @@ def sample_global_layer(
     """
     shape = fields.faces.shape
     if texture_key is not None and texture_key in mesh.face_textures:
-        rgba = GlobalSampler.anchor_values(mesh.face_textures[texture_key], fields.anchors.reshape(-1))
+        rgba = anchor_values(mesh.face_textures[texture_key], fields.anchors.reshape(-1))
         return np.ascontiguousarray(rgba.reshape(*shape, -1), dtype=np.float32)
     if scheme_fn is None:
         raise ValueError("layer has neither a face texture nor a color scheme")

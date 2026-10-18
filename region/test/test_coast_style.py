@@ -2,7 +2,6 @@
 import numpy as np
 import pytest
 
-from region.sampling import anchor_means
 from region.upsample import (
     SEA_LEVEL_KM,
     RegionUpsampleParams,
@@ -12,6 +11,7 @@ from region.upsample import (
     conservation_report,
     reshape_to_target,
 )
+from utils.resample import anchor_means
 
 REGION_ID = 40   # coast *and* a lake (see conftest)
 TEX_SIZE = 16

@@ -40,8 +40,9 @@ from region.rivers import build_region_rivers
 from region.wetlands import add_riparian_wetland
 from region.streams import build_region_streams
 from region.roads import build_region_roads
-from region.upsample import EARTH_RADIUS_KM, RegionUpsampleParams, build_region_fields
+from region.upsample import RegionUpsampleParams, build_region_fields
 from localmap.builder import build_local_map
+from utils.sphere import EARTH_RADIUS_KM
 from debug_local import hex_of_face, land_face_density
 from _common import add_seed_args, avg, get_realm_world, load_history, resolve_seeds, save_history
 

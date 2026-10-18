@@ -11,11 +11,7 @@ from __future__ import annotations
 
 import numpy as np
 
-try:
-    from numba import njit
-except ImportError:  # pragma: no cover - numba is an optional accelerator
-    def njit(func=None, **_):  # type: ignore[misc]
-        return func if func is not None else (lambda f: f)
+from utils.jit import njit
 
 
 def _adjacency_csr(face_adjacency: list) -> tuple[np.ndarray, np.ndarray]:

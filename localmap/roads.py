@@ -26,10 +26,11 @@ from region.roads import (
     _segments,
     _water_cost,
     _wet_nodes,
-    move_points,
     route_polyline,
 )
-from region.upsample import EARTH_RADIUS_KM, RegionFields
+from region.upsample import RegionFields
+from utils.spatial import move_points
+from utils.sphere import EARTH_RADIUS_KM
 
 if TYPE_CHECKING:
     from core.world import World

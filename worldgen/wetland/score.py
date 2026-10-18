@@ -20,21 +20,13 @@ from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
+from utils.numeric import smoothstep
 from worldgen.hydrology.types import REFERENCE_FLOW
 
 if TYPE_CHECKING:
     from worldgen.wetland.builder import WetlandParams
 
-try:
-    from numba import njit
-except ImportError:  # pragma: no cover - numba is an optional accelerator
-    def njit(func=None, **_):  # type: ignore[misc]
-        return func if func is not None else (lambda f: f)
-
-
-def smoothstep(lo: float, hi: float, x: np.ndarray) -> np.ndarray:
-    t = np.clip((np.asarray(x, dtype=np.float64) - lo) / max(hi - lo, 1e-12), 0.0, 1.0)
-    return t * t * (3.0 - 2.0 * t)
+from utils.jit import njit
 
 
 def flood_height_m(flow: np.ndarray, params: "WetlandParams") -> np.ndarray:

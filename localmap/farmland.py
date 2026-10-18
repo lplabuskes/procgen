@@ -33,14 +33,11 @@ from scipy.spatial import KDTree
 from core.params import param_field as _f, paramclass
 from localmap.banks import Channels, crossing_pairs
 from localmap.cities import CityFootprints
-from region.resources import refined_slope
-from region.upsample import EARTH_RADIUS_KM, RegionFields
+from region.upsample import RegionFields
 
-try:
-    from numba import njit
-except ImportError:  # pragma: no cover - numba is an optional accelerator
-    def njit(func=None, **_):  # type: ignore[misc]
-        return func if func is not None else (lambda f: f)
+from utils.jit import njit
+from utils.raster import texture_slope
+from utils.sphere import EARTH_RADIUS_KM, km_to_rad
 
 FARM_VILLAGE, FARM_TOWN, FARM_CITY = range(3)
 FARM_KIND_NAMES = ("Village fields", "Town fields", "Market gardens")
@@ -114,10 +111,6 @@ def garden_ring_km(
     return max(float(w), float(params.city_garden_ring_min_km))
 
 
-def _chord(km: float) -> float:
-    return float(km) / EARTH_RADIUS_KM
-
-
 def place_farmland(
     local: RegionFields,
     village_positions: np.ndarray, village_population: np.ndarray,
@@ -188,7 +181,7 @@ def place_farmland(
         fert = np.clip(tex["fertility"][..., 0].reshape(-1)[cells].astype(np.float64), 0.0, 1.0)
         stretch += float(p.fertility_weight) * (1.0 - fert)
     if "elevation" in tex:
-        slope = refined_slope(tex["elevation"][..., 0], np.sqrt(texel_km2)).reshape(-1)[cells]
+        slope = texture_slope(tex["elevation"][..., 0], np.sqrt(texel_km2)).reshape(-1)[cells]
         stretch += float(p.slope_weight) * np.clip(slope / max(float(p.slope_saturation), 1e-9), 0.0, 1.0)
     if "forest_density" in tex:
         forest = np.clip(tex["forest_density"][..., 0].reshape(-1)[cells].astype(np.float64), 0.0, 1.0)
@@ -203,13 +196,13 @@ def place_farmland(
                           for c in range(n_cities)])
         quota = np.round(np.asarray(footprints.population) * float(p.garden_m2_per_person) * 1e-6
                          / texel_km2).astype(np.int64)
-        floor = _chord(p.city_garden_ring_min_km)
+        floor = km_to_rad(p.city_garden_ring_min_km)
         fp_pos = local.positions.reshape(-1, 3)[np.flatnonzero(footprints.owner.reshape(-1) >= 0)]
         fp_city = footprints.owner.reshape(-1)[footprints.owner.reshape(-1) >= 0]
         # Distance relative to the median stretch: wider over good land.  Search past the
         # all-land ring: water and poor ground push gardens out.
         rel = stretch / float(np.median(stretch))
-        reach = 2.0 * _chord(float(rings.max())) / float(rel.min()) + 1e-12
+        reach = 2.0 * km_to_rad(float(rings.max())) / float(rel.min()) + 1e-12
         d, near = KDTree(fp_pos).query(pos, distance_upper_bound=reach, workers=-1)
         hit = np.isfinite(d)
         city = np.where(hit, fp_city[np.minimum(near, len(fp_city) - 1)], -1)

@@ -9,7 +9,7 @@ zoomed region / local-map view: [viz_regionview.md](viz_regionview.md).
 - `viz/mapview/regionview.py` — `RegionView`, `_RegionProjector` ([viz_regionview.md](viz_regionview.md))
 - `viz/mapview/overlays.py` — `OverlayProjector`, `draw_overlays`, per-feature renderers (shared by every view)
 - `viz/mapview/legend.py` — `legend_size`, `draw_legend`
-- `viz/mapview/measure.py` — `MeasureTape`, `distance_km`, `format_distance`, `draw_tape` (measuring tape)
+- `viz/mapview/measure.py` — `MeasureTape`, `arc_points`, `format_distance`, `draw_tape` (measuring tape)
 - `viz/mapview/projections.py` — four map projections
 - `viz/mapview/registry.py` — `apply_registry` (Qt adapter for `DisplayRegistry`)
 - `viz/mapview/main.py` — dev entry point
@@ -136,7 +136,7 @@ view, clears that view's tape.
 - `MeasureTape` — `start` / `end` / `cursor` as ECEF unit vectors (`click`, `clear`, `waiting`, `ends`).
   Each view finds the ground under a click with its `ecef_at_screen(mx, my)` (world: unprojected;
   zoomed: inverse screen transform → `(s, t)` inside the map's outline → `local_to_ecef`).
-- `distance_km(a, b)` — great-circle distance on the 6,371 km globe.
+- Distances are `utils.sphere.great_circle_km(a, b)` on the 6,371 km globe.
 - `format_distance(km)` — `"42 m"` under 1 km, `"3.46 km"`, `"42.0 km"`, `"12,346 km"`.
 - `draw_tape(painter, tape, projector)` — cased yellow line along the great circle (`arc_points`,
   ~0.25° samples; broken where the projector drops a segment, e.g. the antimeridian), end dots, and

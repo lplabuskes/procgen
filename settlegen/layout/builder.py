@@ -66,13 +66,14 @@ from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, P
 from settlegen.layout.blocks import burgage_band, lane_lots, lanes_of, lots_of, split_blocks, yards_of
 from settlegen.layout.districts import LANE_DISTRICTS, OPEN_DISTRICTS, assign_districts
 from settlegen.layout.docks import Docks, DockSpec, build_docks
-from settlegen.layout.geometry import _area_disc, _multi, _smoothstep, core_polygon, part_containing, ray_exit
+from settlegen.layout.geometry import _area_disc, _multi, core_polygon, part_containing, ray_exit
 from settlegen.layout.params import SettlementLayoutParams
 from settlegen.layout.streets import (
     infill_arterials, main_axis, radial_targets, route_arterials, route_grid, wall_street,
 )
 from settlegen.layout.types import Block, SettlementLayout, Walls
 from settlegen.profile.builder import SettlementProfile
+from utils.numeric import smoothstep
 
 if TYPE_CHECKING:
     from settlegen.site.builder import SettlementSite
@@ -295,7 +296,7 @@ def build_layout(
         if walled:
             return 0.0 if core.contains(c) else 1.0
         d = math.hypot(c.x - float(market[0]), c.y - float(market[1])) / max(radius, 1.0)
-        return float(_smoothstep((d - 0.4) / 0.6))
+        return float(smoothstep(0.0, 1.0, (d - 0.4) / 0.6))
 
     base = float(params.block_ha) * 1e4 * (float(params.town_block_mult) if town else 1.0)
 

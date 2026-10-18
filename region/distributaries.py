@@ -35,7 +35,8 @@ from core.params import field, param_field as _f, paramclass
 from region.corridor import (
     CROSS_COST, Raster, diagonal_corners, node_spacing_rad, raster_frame, route_corridor, sample_raster,
 )
-from region.upsample import EARTH_RADIUS_KM, RegionFields
+from region.upsample import RegionFields
+from utils.sphere import EARTH_RADIUS_KM
 from worldgen.delta.shape import BIRDFOOT, CUSPATE
 from worldgen.hydrology.types import REFERENCE_FLOW
 

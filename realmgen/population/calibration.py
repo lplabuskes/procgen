@@ -25,8 +25,8 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import dijkstra as sp_dijkstra
 
 from realmgen.placement.types import Settlement
+from utils.sphere import EARTH_RADIUS_KM
 
-EARTH_RADIUS_KM = 6371.0
 KM2_PER_STERADIAN = EARTH_RADIUS_KM ** 2  # ≈ 40.6 M km² per steradian
 
 

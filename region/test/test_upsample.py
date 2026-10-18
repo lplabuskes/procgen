@@ -4,13 +4,14 @@ import pytest
 
 from region.upsample import (
     RegionUpsampleParams,
-    _box_filter,
     build_region_fields,
     conservation_report,
     connect_ocean,
     flood_to_level,
 )
 from region.source import global_slope
+from utils.raster import box_filter
+from utils.sphere import EARTH_RADIUS_KM
 
 REGION_ID = 40   # the region conftest carves its lake into: coast *and* a lake
 BIOME_REGION = 20  # region 40's synthetic climate is all one biome; this one is not
@@ -44,7 +45,6 @@ def test_texel_area_matches_the_cell_not_the_hex_overspill(fields):
     # Hexes spill past the cell, so cell area / in-hex count would undercount.
     import math
     from region.geometry import N_REGIONS
-    from region.upsample import EARTH_RADIUS_KM
     cell_km2 = 4.0 * math.pi * EARTH_RADIUS_KM ** 2 / N_REGIONS
     covered_km2 = fields.texel_area_km2 * fields.in_hex.sum()
     assert covered_km2 > cell_km2
@@ -313,9 +313,9 @@ def test_biome_smoothing_leaves_the_climate_layers_sharp(synthetic_globe):
 def test_box_filter_preserves_the_mean_and_is_identity_when_disabled():
     rng = np.random.default_rng(0)
     tex = rng.normal(size=(3, 9, 9, 2))
-    assert _box_filter(tex, 1) is tex
-    assert _box_filter(tex, 0) is tex
-    blurred = _box_filter(tex, 3)
+    assert box_filter(tex, 1) is tex
+    assert box_filter(tex, 0) is tex
+    blurred = box_filter(tex, 3)
     assert blurred.shape == tex.shape
     assert blurred.std() < tex.std()
     # Edge replication biases the mean only slightly; the interior is exact.

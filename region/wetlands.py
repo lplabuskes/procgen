@@ -22,6 +22,8 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 from scipy.spatial import KDTree
 
+from utils.raster import texture_slope
+from utils.sphere import EARTH_RADIUS_KM
 from worldgen.hydrology.types import REFERENCE_FLOW
 from worldgen.wetland.builder import stamp_wetland
 
@@ -29,7 +31,6 @@ if TYPE_CHECKING:
     from region.rivers import RegionRivers
     from region.upsample import RegionFields, RegionUpsampleParams
 
-_EARTH_RADIUS_KM = 6371.0
 # Where the score and biome before any riparian marsh are kept, in ``fields.textures``.
 _BASE = "_pre_riparian_"
 
@@ -88,10 +89,9 @@ def add_riparian_wetland(fields: "RegionFields", rivers: "RegionRivers", params:
         return
     paths = list(rivers.paths) + list(rivers.streams)
     texel_km = float(np.sqrt(fields.texel_area_km2))
-    pts, flow = _densify(paths, 0.5 * texel_km / _EARTH_RADIUS_KM)
+    pts, flow = _densify(paths, 0.5 * texel_km / EARTH_RADIUS_KM)
     if not len(pts):
         return
-    from region.resources import refined_slope
 
     shape = fields.positions.shape[:3]
     q = np.maximum(flow, 1e-9) / REFERENCE_FLOW
@@ -99,16 +99,16 @@ def add_riparian_wetland(fields: "RegionFields", rivers: "RegionRivers", params:
                           float(params.wetland_riparian_min_width_texels) * texel_km)
     reach_km = float(width_km.max())
     pos = fields.positions.reshape(-1, 3)
-    dist, k_raw = KDTree(pts).query(pos, distance_upper_bound=reach_km / _EARTH_RADIUS_KM, workers=-1)
+    dist, k_raw = KDTree(pts).query(pos, distance_upper_bound=reach_km / EARTH_RADIUS_KM, workers=-1)
     dist, k = np.asarray(dist, dtype=np.float64), np.asarray(k_raw, dtype=np.int64)
     near = np.isfinite(dist)
     if not near.any():
         return
     # Each texel takes the width of its nearest river point.
     closeness = np.zeros(len(pos))
-    d_km = dist[near] * _EARTH_RADIUS_KM
+    d_km = dist[near] * EARTH_RADIUS_KM
     closeness[near] = np.clip(1.0 - d_km / np.maximum(width_km[k[near]], 1e-9), 0.0, 1.0)
-    slope = refined_slope(tex["elevation"][..., 0].reshape(shape), texel_km).reshape(-1)
+    slope = texture_slope(tex["elevation"][..., 0].reshape(shape), texel_km).reshape(-1)
     s = slope * 1000.0 / max(float(params.wetland_riparian_slope_m_per_km), 1e-9)
     boost = float(params.wetland_riparian_gain) * closeness / (1.0 + s * s)
 

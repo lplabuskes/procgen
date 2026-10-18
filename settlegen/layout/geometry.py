@@ -110,8 +110,3 @@ def ray_exit(part: Polygon, origin: np.ndarray, direction: np.ndarray) -> np.nda
     first = min(pieces, key=lambda g: g.distance(o))
     ends = np.asarray(first.coords)[[0, -1]]
     return ends[int(np.argmax(np.linalg.norm(ends - origin, axis=1)))]
-
-
-def _smoothstep(x: np.ndarray | float) -> np.ndarray | float:
-    x = np.clip(x, 0.0, 1.0)
-    return x * x * (3.0 - 2.0 * x)

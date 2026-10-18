@@ -11,14 +11,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-try:
-    from numba import njit
-    _HAVE_NUMBA = True
-except ImportError:  # pragma: no cover - numba is an optional accelerator
-    _HAVE_NUMBA = False
-
-    def njit(func=None, **_):  # type: ignore[misc]
-        return func if func is not None else (lambda f: f)
+from utils.jit import HAVE_NUMBA as _HAVE_NUMBA, njit
 
 
 _EPS = 1e-6

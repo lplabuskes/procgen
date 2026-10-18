@@ -26,26 +26,18 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 from scipy.spatial import KDTree
 
-from region.sampling import anchor_means, anchor_plan
 
-try:
-    from numba import njit
-    _HAVE_NUMBA = True
-except ImportError:  # pragma: no cover - numba is an optional accelerator
-    _HAVE_NUMBA = False
-
-    def njit(func=None, **_):  # type: ignore[misc]
-        return func if func is not None else (lambda f: f)
 from region.smooth import FaceFanField
+from utils.jit import HAVE_NUMBA as _HAVE_NUMBA, njit
+from utils.raster import box_filter, box_mean
+from utils.resample import anchor_means, anchor_plan
+from utils.sphere import EARTH_RADIUS_KM
 
 if TYPE_CHECKING:
     from core.mesh import PolygonMesh
     from region.source import Located, ParentSource
     from region.upsample import RegionUpsampleParams
     from worldgen.resources.builder import ResourcesParams
-
-
-_EARTH_RADIUS_KM = 6371.0
 
 
 @dataclass
@@ -194,26 +186,6 @@ def _or_fallback(ctx: RefineContext, w: np.ndarray, fallback: np.ndarray) -> np.
     return np.where(mass[ctx.anchors, 0] > 0.0, w, fallback)
 
 
-def _box_mean(values: np.ndarray, r: int) -> np.ndarray:
-    """``(2r+1)``² mean over each ``(M, T, T)`` hex texture, edges replicated."""
-    out = np.asarray(values, dtype=np.float64)
-    for axis in (1, 2):
-        pad = [(0, 0)] * 3
-        pad[axis] = (r + 1, r)
-        c = np.cumsum(np.pad(out, pad, mode="edge"), axis=axis)
-        n = out.shape[axis]
-        hi = np.take(c, np.arange(2 * r + 1, 2 * r + 1 + n), axis=axis)
-        lo = np.take(c, np.arange(n), axis=axis)
-        out = (hi - lo) / (2 * r + 1)
-    return out
-
-
-def refined_slope(elevation: np.ndarray, texel_km: float) -> np.ndarray:
-    """``(M, T, T)`` gradient magnitude (km/km) of refined elevation, per hex texture."""
-    dz_r, dz_c = np.gradient(np.asarray(elevation, dtype=np.float64), axis=(1, 2))
-    return np.hypot(dz_r, dz_c) / max(texel_km, 1e-9)
-
-
 def refine_resources(
     ctx: RefineContext,
     textures: dict[str, np.ndarray],
@@ -226,7 +198,6 @@ def refine_resources(
 
     ``danger`` is :meth:`ParentSource.danger`'s ``(base, targets)``, or None.
     """
-    from region.upsample import _box_filter
     from worldgen.resources.builder import ResourcesParams
     world = world or ResourcesParams()
     shape = ctx.shape
@@ -274,7 +245,7 @@ def refine_resources(
         from worldgen.resources.crops import classify_crops
         k = int(params.biome_smoothing)
         temperature, precipitation = ctx.climate_avg or (
-            _box_filter(textures["temperature"], k), _box_filter(textures["precipitation"], k))
+            box_filter(textures["temperature"], k), box_filter(textures["precipitation"], k))
         out["dominant_crop"] = classify_crops(
             temperature,
             precipitation,
@@ -305,7 +276,7 @@ def refine_resources(
             # Land weighted by a Gaussian about the nearest worked deposit; with
             # no such land, miners stay with the farmers.
             if ctx.mine_points is not None and len(ctx.mine_points):
-                camp_rad = float(params.mining_camp_km) / _EARTH_RADIUS_KM
+                camp_rad = float(params.mining_camp_km) / EARTH_RADIUS_KM
                 # Distances only where they are read: drawn land.
                 use = ctx.land & (ctx.weights > 0)
                 q = np.full(len(use), np.inf)
@@ -326,7 +297,7 @@ def refine_resources(
         if ctx.has("fishing_density"):
             # Land weighted by nearby water fraction; with no shore, fishers join the farmers.
             r = int(round(float(params.fishing_shore_km) / max(ctx.texel_km, 1e-9)))
-            near = _box_mean((~ctx.land).astype(np.float64).reshape(shape), max(r, 1)).reshape(-1)
+            near = box_mean((~ctx.land).astype(np.float64).reshape(shape), max(r, 1)).reshape(-1)
             ws = _or_fallback(ctx, np.where(ctx.land, near, 0.0), w)
             fish = ctx.conserve_mean(ws, fish_target, everywhere)
             out["fishing_density"] = texture(fish)
@@ -338,7 +309,7 @@ def refine_resources(
         base, targets = danger
         # Area-averaged (texel slope is too noisy); water scores as flat ground so shores aren't seams.
         score = np.where(ctx.land, slope_n + (forest if forest is not None else 0.0), 0.0)
-        score = _box_filter(score.reshape(*shape, 1), int(params.biome_smoothing)).reshape(-1)
+        score = box_filter(score.reshape(*shape, 1), int(params.biome_smoothing)).reshape(-1)
         nudged = base * np.exp(float(params.danger_terrain_gain) * score)
         if targets is None:
             means, _ = ctx.means(base, ctx.weights)

@@ -49,7 +49,7 @@ from scipy.spatial import KDTree
 
 from realmgen.refine.barriers import flow_ramp
 from utils.simplex import fbm_sum, make_perm
-from worldgen.cost.surfaces import EARTH_RADIUS_KM
+from utils.sphere import EARTH_RADIUS_KM, cumulative_chord, unit
 
 # Nearest river segments examined per point.
 _K_NEAREST = 16
@@ -103,13 +103,9 @@ class RiverFollowParams:
 # ── geometry ─────────────────────────────────────────────────────────────────
 
 
-def _unit(v: np.ndarray) -> np.ndarray:
-    return v / np.maximum(np.linalg.norm(v, axis=-1, keepdims=True), 1e-15)
-
-
 def _tangent_basis(c: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     ref = np.array([0.0, 0.0, 1.0]) if abs(c[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
-    e1 = _unit(np.cross(c, ref))
+    e1 = unit(np.cross(c, ref))
     return e1, np.cross(c, e1)
 
 
@@ -168,10 +164,6 @@ class _RingIndex:
         return out
 
 
-def _arc_lengths(pos: np.ndarray) -> np.ndarray:
-    return np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(pos, axis=0), axis=1))])
-
-
 def _polyline_query(x: np.ndarray, line: np.ndarray, tree: KDTree):
     """Nearest segment of ``line`` per point: ``(seg, t, dist)`` (k nearest midpoints, exact test)."""
     m = len(line) - 1
@@ -200,7 +192,7 @@ def _polyline_side(x: np.ndarray, line: np.ndarray, tree: KDTree):
     no side is defined.
     """
     seg, t, dist = _polyline_query(x, line, tree)
-    normal = _unit(np.cross(line[:-1], line[1:]))
+    normal = unit(np.cross(line[:-1], line[1:]))
     m = len(normal)
     n = normal[seg].copy()
     at_start = (t <= 0.0) & (seg > 0)
@@ -230,7 +222,7 @@ class _SideGrid:
         self.cell = span / n
         g = np.stack(np.meshgrid(np.arange(n + 1), np.arange(n + 1), indexing="ij"), -1).reshape(-1, 2)
         uv = self.lo + g * self.cell
-        x = _unit(sw.centre[None, :] + uv[:, :1] * sw.e1[None, :] + uv[:, 1:2] * sw.e2[None, :])
+        x = unit(sw.centre[None, :] + uv[:, :1] * sw.e1[None, :] + uv[:, 1:2] * sw.e2[None, :])
         claim, left, d = sw._classify(x)
         diag = float(np.hypot(*self.cell)) * 1.5      # gnomonic stretch margin
         clear = ((np.abs(d["line"] - sw.band) > diag) & (np.abs(d["border"] - sw.edge) > diag)
@@ -286,10 +278,10 @@ def _connector(p: np.ndarray, q: np.ndarray) -> np.ndarray:
     gap = float(np.linalg.norm(q - p))
     n = max(1, int(np.ceil(gap * EARTH_RADIUS_KM / _JOIN_STEP_KM)))
     t = np.arange(n) / n
-    base = _unit((1.0 - t)[:, None] * p + t[:, None] * q)
-    side = _unit(np.cross(base, q - p))
+    base = unit((1.0 - t)[:, None] * p + t[:, None] * q)
+    side = unit(np.cross(base, q - p))
     off = _JOIN_ROUGHNESS * gap * np.sin(np.pi * t) * fbm_sum(base, _JOIN_PERM, _BRIDGEHEAD_FREQS, _BRIDGEHEAD_AMPS)
-    return _unit(base + off[:, None] * side)
+    return unit(base + off[:, None] * side)
 
 
 @dataclass
@@ -321,7 +313,7 @@ class RiverSwap:
 
     def __post_init__(self) -> None:
         w = self.weight[:, None]
-        blend = _unit((1.0 - w) * self.border + w * self.foot)
+        blend = unit((1.0 - w) * self.border + w * self.foot)
         body = np.vstack([blend[:self.ia], self.river, blend[self.ib + 1:]])
         head = _connector(self.border[0], body[0]) if self.join_start and not self.open_start else body[:0]
         tail = _connector(self.border[-1], body[-1])[::-1] if self.join_end and not self.open_end else body[:0]
@@ -330,7 +322,7 @@ class RiverSwap:
         self.jumps = (float(np.linalg.norm(body[0] - self.border[0])),
                       float(np.linalg.norm(body[-1] - self.border[-1])))
         ring = np.vstack([self.border, self.line[::-1]])
-        self.centre = _unit(ring.mean(axis=0))
+        self.centre = unit(ring.mean(axis=0))
         self.e1, self.e2 = _tangent_basis(self.centre)
         self.ring2d = _gnomonic(ring, self.centre, self.e1, self.e2)
         self.radius = float(np.linalg.norm(ring - self.centre, axis=1).max())
@@ -474,7 +466,7 @@ class JunctionSwap(RiverSwap):
         line = self.line
         _, side, _ = _polyline_side(x, line, tree)
         seg, t, sd = _polyline_query(self.keep_pos, line, tree)
-        foot = _unit(line[seg] + t[:, None] * (line[seg + 1] - line[seg]))
+        foot = unit(line[seg] + t[:, None] * (line[seg + 1] - line[seg]))
         mine_left = self.left == self.polity
         # A ragged edge, not a drawn circle: a pure function of position, so tiers agree.
         rough = 1.0 + _BRIDGEHEAD_ROUGHNESS * fbm_sum(x, _BRIDGEHEAD_PERM, _BRIDGEHEAD_FREQS, _BRIDGEHEAD_AMPS)
@@ -540,7 +532,7 @@ class RiverSwaps:
         seg = np.asarray(segments, dtype=np.float64)
         if seg.shape[1] < 8:
             return self
-        a, b = _unit(seg[:, :3]), _unit(seg[:, 3:6])
+        a, b = unit(seg[:, :3]), unit(seg[:, 3:6])
         rid = seg[:, 7].astype(np.int64)
         joined = np.zeros(len(a), dtype=bool)
         joined[1:] = np.linalg.norm(a[1:] - b[:-1], axis=1) < 1e-9
@@ -588,7 +580,7 @@ def _drawn_core(core: np.ndarray, a: np.ndarray, b: np.ndarray, chain: np.ndarra
     """
     if len(core) < 2:
         return None
-    arc = _arc_lengths(core)
+    arc = cumulative_chord(core)
     tree = KDTree(0.5 * (core[:-1] + core[1:]))
     _, in_a, d_a = _param_on(core, arc, tree, a[idx])
     _, in_b, d_b = _param_on(core, arc, tree, b[idx])
@@ -616,7 +608,7 @@ def _drawn_core(core: np.ndarray, a: np.ndarray, b: np.ndarray, chain: np.ndarra
     u_ends, _, _ = _param_on(core, arc, tree, path[[0, -1]])
     if u_ends[0] > u_ends[1]:
         path, u_ends = path[::-1], u_ends[::-1]
-    path_arc = _arc_lengths(path)
+    path_arc = cumulative_chord(path)
     path_tree = KDTree(0.5 * (path[:-1] + path[1:]))
     seg, t, dist = _polyline_query(core[[0, -1]], path, path_tree)
     at = path_arc[seg] + t * (path_arc[seg + 1] - path_arc[seg])
@@ -633,7 +625,7 @@ def _drawn_core(core: np.ndarray, a: np.ndarray, b: np.ndarray, chain: np.ndarra
     out.append(drawn)
     if tail:
         out.append(core[arc > u_ends[1]])
-    return _unit(np.vstack(out))
+    return unit(np.vstack(out))
 
 
 def _onto(x: np.ndarray, a: np.ndarray, b: np.ndarray, reach: float) -> np.ndarray:
@@ -650,7 +642,7 @@ def _onto(x: np.ndarray, a: np.ndarray, b: np.ndarray, reach: float) -> np.ndarr
     j = np.argmin(dist, axis=1)
     rows = np.arange(len(x))
     near = dist[rows, j] <= reach
-    return np.where(near[:, None], _unit(foot[rows, j]), x)
+    return np.where(near[:, None], unit(foot[rows, j]), x)
 
 
 # ── run selection ────────────────────────────────────────────────────────────
@@ -702,7 +694,7 @@ class _Rivers:
             lines += [(len(rivers) + k, path, True) for k, path in enumerate(ridges or [])]
         self._parts: tuple[list, ...] = ([], [], [], [], [])    # a, b, line, segment, reach
         for fi, path, is_ridge in lines:
-            pos = _unit(np.asarray(path[0], dtype=np.float64))
+            pos = unit(np.asarray(path[0], dtype=np.float64))
             strength = np.asarray(path[1], dtype=np.float64)
             m = min(strength.size, len(pos) - 1)
             if m <= 0:
@@ -741,7 +733,7 @@ class _Rivers:
         r = len(self.pos)
         self.feature_index.append(fi)
         self.pos.append(pos)
-        self.arc.append(_arc_lengths(pos))
+        self.arc.append(cumulative_chord(pos))
         # Through lakes too: a run reaching a lake shore carries on along the river's
         # course across it (only land is labelled), instead of stopping at the outlet
         # with the border still beside the river and jumping onto it on a straight edge.
@@ -809,7 +801,7 @@ class _Rivers:
             reach = np.zeros(n)
             reach[rows] = self.reach[sg[m]]
             f = np.zeros((n, 3))
-            f[rows] = _unit(foot[m])
+            f[rows] = unit(foot[m])
             out[int(r)] = _Near(mask=mask, s=s_, d=d, reach=reach, foot=f)
         return out
 
@@ -819,7 +811,7 @@ class _Rivers:
         lo, hi = min(s0, s1), max(s0, s1)
         inner = np.flatnonzero((arc > lo) & (arc < hi))
         ss = np.concatenate([[lo], arc[inner], [hi]])
-        pts = _unit(np.column_stack([np.interp(ss, arc, pos[:, k]) for k in range(3)]))
+        pts = unit(np.column_stack([np.interp(ss, arc, pos[:, k]) for k in range(3)]))
         return pts if s0 <= s1 else pts[::-1]
 
 
@@ -1081,9 +1073,9 @@ def _candidate(r: int, nr: _Near, i0: int, i1: int, pts: np.ndarray, p: RiverFol
 
 def _sides(border: np.ndarray, la: int, lb: int, plain_labels: Callable, probe: float) -> tuple[int, int]:
     """``(left, right)``: which of ``la``/``lb`` lies left of the border run (majority of probes)."""
-    normal = _unit(np.cross(border, np.gradient(border, axis=0)))
-    left = plain_labels(_unit(border + probe * normal))
-    right = plain_labels(_unit(border - probe * normal))
+    normal = unit(np.cross(border, np.gradient(border, axis=0)))
+    left = plain_labels(unit(border + probe * normal))
+    right = plain_labels(unit(border - probe * normal))
     votes_a = int(np.sum((left == la) & (right == lb)))
     votes_b = int(np.sum((left == lb) & (right == la)))
     return (la, lb) if votes_a >= votes_b else (lb, la)
@@ -1174,7 +1166,7 @@ def _polygon_land(sw: RiverSwap, p: RiverFollowParams, plain_labels: Callable,
     xx, yy = np.meshgrid(gx, gy)
     flat = np.column_stack([xx.ravel(), yy.ravel()])
     flat = flat[_even_odd(flat, sw.ring2d)]
-    q = _unit(sw.centre[None, :] + flat[:, :1] * sw.e1[None, :] + flat[:, 1:2] * sw.e2[None, :])
+    q = unit(sw.centre[None, :] + flat[:, :1] * sw.e1[None, :] + flat[:, 1:2] * sw.e2[None, :])
     q = q[~is_water_at(q)] if len(q) else np.zeros((0, 3))
     return q, (plain_labels(q) if len(q) else np.zeros(0, dtype=np.int64))
 
@@ -1217,7 +1209,7 @@ def _walk(chains: Sequence[tuple], ends: dict, polity: int, k_a: int, from_end: 
             j = b_gap if e == 0 else len(q) - 1 - b_gap
             path.append(q[1:j + 1])
             spans.append((k, 0, b_gap) if e == 0 else (k, b_gap, len(q) - 1))
-            return _unit(np.vstack(path)), met, spans
+            return unit(np.vstack(path)), met, spans
         path.append(q[1:])
         spans.append((k, 0, len(q) - 1))
         cur, cur_end = k, 1 - e
@@ -1257,7 +1249,7 @@ def _walk_to_river(chains: Sequence[tuple], ends: dict, polity: int, k_a: int, f
                 j = int(back[0])
                 path.append(q[1:j + 1])
                 spans.append((k, 0, j) if e == 0 else (k, len(q) - 1 - j, len(q) - 1))
-                return _unit(np.vstack(path)), met, spans, float(nr.s[j])
+                return unit(np.vstack(path)), met, spans, float(nr.s[j])
         path.append(q[1:])
         spans.append((k, 0, len(q) - 1))
         cur, cur_end = k, 1 - e
@@ -1442,18 +1434,18 @@ def _on_boundary(sw: RiverSwap, plain_labels: Callable, step: float, bisect_step
     def lerp(x: np.ndarray) -> np.ndarray:
         return (1.0 - f) * x[lo] + f * x[lo + 1]
 
-    pts = _unit(lerp(border))
-    foot = _unit(lerp(sw.foot))
+    pts = unit(lerp(border))
+    foot = unit(lerp(sw.foot))
     weight = lerp(sw.weight[:, None])[:, 0]
     ia, ib = int(idx[sw.ia]), int(idx[sw.ib])
     weight[ia:ib + 1] = 1.0
 
     # Bracket each point across the local tangent, then bisect.
     tangent = np.gradient(pts, axis=0)
-    normal = _unit(np.cross(pts, tangent))
+    normal = unit(np.cross(pts, tangent))
     h = 2.0 * step
-    p0 = _unit(pts - h * normal)
-    p1 = _unit(pts + h * normal)
+    p0 = unit(pts - h * normal)
+    p1 = unit(pts + h * normal)
     if isinstance(sw, JunctionSwap):
         def key(x: np.ndarray) -> np.ndarray:      # its polity | anyone else
             return (plain_labels(x) == sw.polity).astype(np.int64)
@@ -1466,9 +1458,9 @@ def _on_boundary(sw: RiverSwap, plain_labels: Callable, step: float, bisect_step
     if ok.size:
         lo_p, hi_p, l_lo = p0[ok], p1[ok], k0[ok]
         for _ in range(bisect_steps):
-            mid = _unit(lo_p + hi_p)
+            mid = unit(lo_p + hi_p)
             same = key(mid) == l_lo
             lo_p = np.where(same[:, None], mid, lo_p)
             hi_p = np.where(same[:, None], hi_p, mid)
-        pts[ok] = _unit(lo_p + hi_p)
+        pts[ok] = unit(lo_p + hi_p)
     return replace(sw, border=pts, weight=weight, foot=foot, ia=ia, ib=ib)

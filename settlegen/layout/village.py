@@ -44,6 +44,7 @@ from settlegen.layout.params import SettlementLayoutParams
 from settlegen.layout.streets import main_axis, route_arterials
 from settlegen.layout.types import Block, SettlementLayout
 from settlegen.profile.builder import SettlementProfile
+from utils.sphere import unit
 
 if TYPE_CHECKING:
     from settlegen.site.builder import SettlementSite
@@ -59,15 +60,11 @@ _ARM_CAP_M = 300.0
 _MAX_ROWS = 6
 
 
-def _unit(v: np.ndarray) -> np.ndarray:
-    return v / max(float(np.linalg.norm(v)), 1e-12)
-
-
 def _plot(line: LineString, s: float, side: float, width: float, depth: float, offset: float) -> Polygon:
     """A ``width`` × ``depth`` rectangle fronting ``line`` at ``s``, ``offset`` back from its centre line."""
     a = np.asarray(line.interpolate(max(s - 4.0, 0.0)).coords[0])
     b = np.asarray(line.interpolate(min(s + 4.0, line.length)).coords[0])
-    t = _unit(b - a)
+    t = unit(b - a)
     n = side * np.array([-t[1], t[0]])
     p = np.asarray(line.interpolate(s).coords[0])
     w = 0.5 * width * t

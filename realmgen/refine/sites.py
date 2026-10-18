@@ -13,69 +13,8 @@ from typing import Callable, Optional
 import numpy as np
 from scipy.spatial import KDTree
 
-
-def _neighbor_any(mask: np.ndarray) -> np.ndarray:
-    """True where any 4-neighbour (no wrap) is True, over the last two axes of ``(..., H, W)``."""
-    out = np.zeros_like(mask)
-    out[..., 1:, :] |= mask[..., :-1, :]
-    out[..., :-1, :] |= mask[..., 1:, :]
-    out[..., :, 1:] |= mask[..., :, :-1]
-    out[..., :, :-1] |= mask[..., :, 1:]
-    return out
-
-
-def _box_mean(values: np.ndarray, weights: np.ndarray) -> np.ndarray:
-    """Weighted 3×3 box mean over the last two axes of ``(..., H, W)`` (edges use what exists)."""
-    num = np.zeros_like(values)
-    den = np.zeros_like(values)
-    vw = values * weights
-    h, w = values.shape[-2:]
-    for di in (-1, 0, 1):
-        for dj in (-1, 0, 1):
-            dst_i = slice(max(0, -di), h - max(0, di))
-            dst_j = slice(max(0, -dj), w - max(0, dj))
-            src_i = slice(max(0, di), h - max(0, -di))
-            src_j = slice(max(0, dj), w - max(0, -dj))
-            num[..., dst_i, dst_j] += vw[..., src_i, src_j]
-            den[..., dst_i, dst_j] += weights[..., src_i, src_j]
-    return np.where(den > 0, num / np.maximum(den, 1e-12), 0.0)
-
-
-def densify_polylines(polylines, max_step: float) -> Optional[np.ndarray]:
-    """All vertices of ``polylines`` plus interpolated points so no gap exceeds
-    ``max_step`` (chord). ``None`` when there are no points.
-
-    Per polyline: its vertices, then each split segment's interior points
-    ``1/n … (n-1)/n`` in turn.  Vectorised over all polylines at once.
-    """
-    lines = [p for p in (np.asarray(x, dtype=np.float64) for x in polylines) if p.ndim == 2 and p.shape[0] > 0]
-    if not lines:
-        return None
-    sizes = np.array([len(p) for p in lines], dtype=np.int64)
-    pts = np.concatenate(lines, axis=0)
-    if max_step <= 0 or len(pts) < 2:
-        return pts
-    line_of = np.repeat(np.arange(len(lines)), sizes)
-    # Segments between consecutive vertices of one polyline.
-    seg_ok = line_of[:-1] == line_of[1:]
-    a, b = pts[:-1], pts[1:]
-    n_sub = np.ceil(np.linalg.norm(b - a, axis=1) / max_step).astype(np.int64)
-    count = np.where(seg_ok & (n_sub > 1), n_sub - 1, 0)
-    if not count.any():
-        return pts
-    # Output rows: each polyline's vertices, then its interior points.
-    interior = np.bincount(line_of[:-1], weights=count, minlength=len(lines)).astype(np.int64)
-    start = np.cumsum(sizes + interior) - (sizes + interior)
-    out = np.empty((int((sizes + interior).sum()), 3))
-    out[start[line_of] + (np.arange(len(pts)) - np.repeat(np.cumsum(sizes) - sizes, sizes))] = pts
-    split = np.flatnonzero(count)
-    seg = np.repeat(split, count[split])
-    step = np.arange(len(seg)) - np.repeat(np.cumsum(count[split]) - count[split], count[split]) + 1
-    t = (step / n_sub[seg])[:, None]
-    # Rank of each interior point within its polyline's interior block.
-    rank = np.arange(len(seg)) - (np.cumsum(interior) - interior)[line_of[seg]]
-    out[start[line_of[seg]] + sizes[line_of[seg]] + rank] = a[seg] + t * (b[seg] - a[seg])
-    return out
+from utils.raster import neighbour_any, weighted_box_mean3
+from utils.sphere import densify_polylines
 
 
 def _build_confluence_tree(rivers, search_radius: float = 0.01) -> Optional[KDTree]:
@@ -245,11 +184,11 @@ class SiteField:
                 confluence = d < near
 
         if self._fertility is not None:
-            fert = _box_mean(self._fertility[faces], land2d.astype(np.float64)).reshape(n_f, t)
+            fert = weighted_box_mean3(self._fertility[faces], land2d.astype(np.float64)).reshape(n_f, t)
         else:
             fert = np.zeros(land.shape, dtype=np.float64)
-        coast_ocean = (land2d & _neighbor_any(ocean)).reshape(n_f, t)
-        coast_lake = (land2d & _neighbor_any(lake)).reshape(n_f, t)
+        coast_ocean = (land2d & neighbour_any(ocean)).reshape(n_f, t)
+        coast_lake = (land2d & neighbour_any(lake)).reshape(n_f, t)
         stream = (land2d & self._stream[faces]).reshape(n_f, t)
 
         for k, f in enumerate(faces.tolist()):

@@ -10,7 +10,7 @@ down ([local.md](local.md), [local_settlements.md](local_settlements.md)).
 - `region/rivers.py` — `RegionRiverParams`, `RegionRivers`, `build_region_rivers`, `route_stream_paths`, `snap_deltas`, `river_length_km`
 - `region/distributaries.py` — `DistributaryParams`, `add_distributaries`, `mouth_count`
 - `region/streams.py` — `RegionStreamParams`, `build_region_streams`: streams below the world's network, for local maps
-- `region/roads.py` — `RegionRoadParams`, `RegionRoads`, `build_region_roads`, `route_polyline`, `move_points`
+- `region/roads.py` — `RegionRoadParams`, `RegionRoads`, `build_region_roads`, `route_polyline` (endpoints remapped by `utils.spatial.move_points`)
 - `region/towns.py` — `RegionSettlementParams`, `refine_region_towns`, `refine_towns`, `tier_sites`, `REGION_TIER` / `LOCAL_TIER`
 - `region/cities.py` — `refine_region_cities`, `refine_cities`
 - `region/builder.py` — `RegionMap`, `build_region_map`, `refine_region_features`, `land_reach`: the whole region tier, Qt-free (as `localmap/builder.py` one tier down); `RegionView` builds through it

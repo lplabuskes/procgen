@@ -40,9 +40,10 @@ from region.corridor import (
     sample_raster,
 )
 from region.distributaries import WATER_COST, DistributaryParams, add_distributaries
-from region.upsample import EARTH_RADIUS_KM, RegionFields
+from region.upsample import RegionFields
+from utils.sphere import EARTH_RADIUS_KM, laplacian_smooth_sphere
 from worldgen.hydrology.rivers import main_stem_paths, stream_stem_ids
-from worldgen.hydrology.types import StreamNetwork, laplacian_smooth_sphere
+from worldgen.hydrology.types import StreamNetwork
 
 if TYPE_CHECKING:
     from core.world import World

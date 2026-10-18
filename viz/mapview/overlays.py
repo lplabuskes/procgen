@@ -16,6 +16,8 @@ import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, QPolygonF, QRegion
 
+from utils.spatial import position_key
+
 if TYPE_CHECKING:
     from core.world import World
 
@@ -670,11 +672,6 @@ def _draw_lakes(painter: QPainter, globe: "World", proj: OverlayProjector) -> No
             painter.drawPolygon(QPolygonF([QPointF(float(x), float(y)) for x, y in zip(sx, sy)]))
 
 
-def _position_key(pos) -> tuple[float, float, float]:
-    from realmgen.refine.settlements import position_key
-    return position_key(np.asarray(pos))
-
-
 def _moved_settlements(globe: "World", proj: OverlayProjector) -> dict:
     """``{position_key: drawn position}`` for settlements moved by ``proj.on_land``, so routes
     still end at their markers."""
@@ -684,7 +681,7 @@ def _moved_settlements(globe: "World", proj: OverlayProjector) -> dict:
     positions = np.array([s.position for s in feature], dtype=np.float64)
     drawn = proj.on_land("settlements", positions)
     return {
-        _position_key(p): q for p, q in zip(positions, drawn) if not np.array_equal(p, q)
+        position_key(p): q for p, q in zip(positions, drawn) if not np.array_equal(p, q)
     }
 
 
@@ -715,8 +712,8 @@ def _draw_trade_routes(
         if w < 0.3:
             continue
         if moved:
-            start_pos = moved.get(_position_key(start_pos), start_pos)
-            end_pos = moved.get(_position_key(end_pos), end_pos)
+            start_pos = moved.get(position_key(start_pos), start_pos)
+            end_pos = moved.get(position_key(end_pos), end_pos)
         pieces = proj.split_segment(np.asarray(start_pos), np.asarray(end_pos))
         if not pieces:
             continue

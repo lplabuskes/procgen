@@ -34,13 +34,13 @@ from localmap.store import MapStore
 from realmgen.placement.types import SITE_KIND_CONFLUENCE, SITE_KIND_RIVER
 from region.geometry import RegionGeometry, ecef_to_cell
 from region.grid import RegionHexGrid
-from region.resources import refined_slope
 from region.upsample import RegionFields
 from settlegen import (
     LocalMapsSource, SettlementUpsampleParams, build_settlement_fields, settlement_conservation_report,
     with_local_detail,
 )
 from settlegen.chain.builder import SettlementRef, position, ensure_local_maps, population
+from utils.raster import texture_slope
 from _common import get_map_store
 
 if TYPE_CHECKING:
@@ -90,11 +90,11 @@ def run_one(store: MapStore, ref: SettlementRef, sp: SettlementUpsampleParams) -
     report = settlement_conservation_report(fields, maps, world.antimeridian)
     source = LocalMapsSource(maps, world.antimeridian)
 
-    fine = refined_slope(fields.textures["elevation"][..., 0], math.sqrt(fields.texel_area_km2)).reshape(-1)
+    fine = texture_slope(fields.textures["elevation"][..., 0], math.sqrt(fields.texel_area_km2)).reshape(-1)
     lf = chain.owner.fields
     near = (np.linalg.norm(lf.positions.reshape(-1, 3) - chain.center, axis=1) * 6371.0 < 0.5 * chain.side_km) \
         & lf.domain.reshape(-1)
-    coarse = refined_slope(lf.textures["elevation"][..., 0], math.sqrt(lf.texel_area_km2)).reshape(-1)[near]
+    coarse = texture_slope(lf.textures["elevation"][..., 0], math.sqrt(lf.texel_area_km2)).reshape(-1)[near]
     water = np.zeros(fields.tex_size ** 2, dtype=bool)
     for key in ("ocean_mask", "lake_mask"):
         if key in fields.textures:

@@ -12,9 +12,9 @@ from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from region.geometry import RegionGeometry  # noqa: E402
-from viz.mapview.measure import MeasureTape, arc_points, distance_km, format_distance  # noqa: E402
+from utils.sphere import EARTH_RADIUS_KM, great_circle_km  # noqa: E402
+from viz.mapview.measure import MeasureTape, arc_points, format_distance  # noqa: E402
 from viz.mapview.regionview import RegionView  # noqa: E402
-from worldgen.hydrology.discharge import EARTH_RADIUS_KM  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -28,10 +28,10 @@ def _unit(lon_deg: float, lat_deg: float) -> np.ndarray:
 
 
 def test_distance_is_great_circle():
-    assert distance_km(_unit(0, 0), _unit(90, 0)) == pytest.approx(EARTH_RADIUS_KM * math.pi / 2)
-    assert distance_km(_unit(0, 0), _unit(0, 0)) == 0.0
+    assert great_circle_km(_unit(0, 0), _unit(90, 0)) == pytest.approx(EARTH_RADIUS_KM * math.pi / 2)
+    assert great_circle_km(_unit(0, 0), _unit(0, 0)) == 0.0
     # One degree of latitude is ~111 km.
-    assert distance_km(_unit(10, 40), _unit(10, 41)) == pytest.approx(111.19, abs=0.01)
+    assert great_circle_km(_unit(10, 40), _unit(10, 41)) == pytest.approx(111.19, abs=0.01)
 
 
 def test_arc_points_follow_the_great_circle():
@@ -39,8 +39,8 @@ def test_arc_points_follow_the_great_circle():
     arc = arc_points(a, b)
     assert np.allclose(arc[0], a) and np.allclose(arc[-1], b)
     assert np.allclose(np.linalg.norm(arc, axis=1), 1.0)
-    steps = [distance_km(p, q) for p, q in zip(arc[:-1], arc[1:])]
-    assert sum(steps) == pytest.approx(distance_km(a, b), rel=1e-9)
+    steps = [great_circle_km(p, q) for p, q in zip(arc[:-1], arc[1:])]
+    assert sum(steps) == pytest.approx(great_circle_km(a, b), rel=1e-9)
 
 
 def test_format_distance():
@@ -87,7 +87,7 @@ def test_region_view_clicks_measure_ground_distance(app):
     expected = [view.ecef_at_screen(p.x(), p.y()) for p in (p0.toPoint(), p1.toPoint())]
     assert expected[0] is not None and expected[1] is not None
     assert np.allclose(ends[0], expected[0]) and np.allclose(ends[1], expected[1])
-    assert distance_km(*ends) > 0.0
+    assert great_circle_km(*ends) > 0.0
     _painted(view)                    # draws without error
     # Leaving measure mode drops the tape; clicks outside the map place nothing.
     view.set_measure_mode(False)

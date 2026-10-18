@@ -24,7 +24,7 @@ from realmgen.refine.ridges import ridge_lines
 from realmgen.refine.river_follow import RiverFollowParams, build_river_swaps
 from realmgen.refine.settlements import refine_settlement_positions, remap_routes
 from realmgen.refine.sites import SiteField
-from worldgen.cost.surfaces import EARTH_RADIUS_KM
+from utils.sphere import EARTH_RADIUS_KM
 from worldgen.cost.channels import IS_WATER
 from worldgen.geology.channels import OCEAN_MASK
 from worldgen.hydrology.channels import LAKE_MASK

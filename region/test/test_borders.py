@@ -11,7 +11,7 @@ from realmgen.refine.fill import PolityLabelField
 from realmgen.refine.river_follow import RiverFollowParams, build_river_swaps
 from region.borders import _square_lattice, view_polity_borders
 from region.upsample import RegionUpsampleParams, build_region_fields
-from worldgen.cost.surfaces import EARTH_RADIUS_KM
+from utils.sphere import EARTH_RADIUS_KM
 
 REGION_ID = 40   # has land (the conftest lake sits on its highland)
 

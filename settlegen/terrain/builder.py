@@ -42,11 +42,12 @@ from scipy.ndimage import binary_opening, distance_transform_edt
 from core.params import param_field as _f, paramclass
 from localmap.upsample import LocalUpsampleParams
 from region.sampling import GlobalSampler
-from region.upsample import EARTH_RADIUS_KM, SMALL_LAKE_KEY, RegionFields, anchor_residuals, refine_terrain
+from region.upsample import SMALL_LAKE_KEY, RegionFields, anchor_residuals, refine_terrain
 from settlegen.frame import Frame
 from settlegen.geometry import SettlementGeometry
 from settlegen.grid import SettlementGrid
 from settlegen.terrain.source import LocalMapsSource
+from utils.sphere import EARTH_RADIUS_KM
 
 if TYPE_CHECKING:
     from core.world import World

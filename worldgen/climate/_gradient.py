@@ -5,7 +5,7 @@ from typing import Sequence
 
 import numpy as np
 
-EARTH_RADIUS_KM = 6371.0
+from utils.sphere import EARTH_RADIUS_KM
 
 
 def _tangent_frames(face_centroids: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

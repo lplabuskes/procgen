@@ -18,7 +18,7 @@ from realmgen.towns.placement import (
     compute_mining_density, compute_rural_density, draw_town_sizes, place_towns, shore_texels, texel_owners,
 )
 from realmgen.towns.types import TOWN_MINING, Towns
-from worldgen.cost.surfaces import EARTH_RADIUS_KM
+from utils.sphere import EARTH_RADIUS_KM
 
 TEX = 8
 

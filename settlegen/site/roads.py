@@ -40,13 +40,14 @@ from localmap.builder import LocalMap
 from region.corridor import Raster, corridor_reach, node_spacing_rad, raster_frame, sample_raster
 from region.display import snap_to_land
 from region.roads import RegionRoads, RouteSegment, _road_cost, _segments, _stretches, _water_cost, route_polyline
-from region.upsample import EARTH_RADIUS_KM, RegionFields
+from region.upsample import RegionFields
 from settlegen.frame import Frame
 from settlegen.site.crossings import crossings, gates
 from settlegen.site.landings import _land_at, _landings, _merge_landings, _quays
 from settlegen.site.params import SettlementRoadParams
 from settlegen.site.road_chain import parent_roads
 from settlegen.site.types import RoadLine, SiteRoads, SiteWater
+from utils.sphere import EARTH_RADIUS_KM
 
 if TYPE_CHECKING:
     from core.world import World

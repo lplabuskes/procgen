@@ -30,17 +30,17 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components, dijkstra
 from scipy.spatial import KDTree
 
+from utils.sphere import (
+    EARTH_RADIUS_KM, arc_km, densify_polyline, km_to_chord, laplacian_smooth_sphere, polyline_length_km, unit,
+)
 from worldgen.delta.sediment import downstream_order, mouth_node, sediment_load
 from worldgen.delta.shape import ARCUATE, DeltaShape, WaveField, finger_tips, make_shape, shape_metric, wave_dominance
-from worldgen.hydrology.types import (
-    REFERENCE_FLOW, River, RiverNode, RiverSegment, StreamNetwork, laplacian_smooth_sphere,
-)
+from worldgen.hydrology.types import REFERENCE_FLOW, River, RiverNode, RiverSegment, StreamNetwork
 
 if TYPE_CHECKING:
     from core.mesh import PolygonMesh
     from worldgen.delta.builder import DeltaParams
 
-EARTH_RADIUS_KM = 6371.0
 # Texel neighbours lie within this many texel spacings (8-neighbours and the
 # shared-edge duplicates across a seam).
 _NEIGHBOUR_SPACINGS = 1.6
@@ -84,50 +84,17 @@ class DeltaResult:
     fans: List[DeltaFan] = field(default_factory=list)
 
 
-def chord(km: float) -> float:
-    """Unit-sphere chord of an arc ``km`` long."""
-    return 2.0 * np.sin(0.5 * km / EARTH_RADIUS_KM)
-
-
-def _arc_km(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """Great-circle distance between unit vectors (rows), km."""
-    c = np.linalg.norm(np.asarray(a) - np.asarray(b), axis=-1)
-    return 2.0 * np.arcsin(np.clip(0.5 * c, 0.0, 1.0)) * EARTH_RADIUS_KM
-
-
-def _unit(v: np.ndarray) -> np.ndarray:
-    return v / max(float(np.linalg.norm(v)), 1e-15)
-
-
-def polyline_length_km(points: np.ndarray) -> float:
-    pts = np.asarray(points, dtype=np.float64)
-    if len(pts) < 2:
-        return 0.0
-    return float(_arc_km(pts[:-1], pts[1:]).sum())
-
-
 def _point_upstream(points: np.ndarray, distance_km: float) -> np.ndarray:
     """The point ``distance_km`` back up a polyline from its last vertex."""
     pts = np.asarray(points, dtype=np.float64)
     left = float(distance_km)
     for i in range(len(pts) - 1, 0, -1):
-        seg = float(_arc_km(pts[i], pts[i - 1]))
+        seg = float(arc_km(pts[i], pts[i - 1]))
         if seg >= left and seg > 0:
             f = left / seg
-            return _unit(pts[i] + f * (pts[i - 1] - pts[i]))
+            return unit(pts[i] + f * (pts[i - 1] - pts[i]))
         left -= seg
-    return _unit(pts[0])
-
-
-def _densify(points: np.ndarray, step_km: float) -> np.ndarray:
-    """Polyline resampled to at most ``step_km`` between points."""
-    pts = np.asarray(points, dtype=np.float64)
-    out = [pts[0]]
-    for a, b in zip(pts[:-1], pts[1:]):
-        k = max(int(np.ceil(float(_arc_km(a, b)) / max(step_km, 1e-9))), 1)
-        for j in range(1, k + 1):
-            out.append(_unit(a + (b - a) * (j / k)))
-    return np.asarray(out)
+    return unit(pts[0])
 
 
 class _BySlot:
@@ -179,7 +146,7 @@ class TexelIndex:
     def near(self, point: np.ndarray, radius_km: float, *, inside_only: bool = False) -> np.ndarray:
         """Flat ids of the texels within ``radius_km`` of ``point``."""
         tree, ids = (self.tree_inside, self.inside_ids) if inside_only else (self.tree_all, self.ids)
-        return ids[np.asarray(tree.query_ball_point(point, chord(radius_km)), dtype=np.int64)]
+        return ids[np.asarray(tree.query_ball_point(point, km_to_chord(radius_km)), dtype=np.int64)]
 
     def face_uv(self, flat: int) -> tuple[int, float, float]:
         face, rem = divmod(int(flat), self.h * self.w)
@@ -241,7 +208,7 @@ def _footprint(
     """
     area_target = target_area_km2(flow, params)
     size_km = float(np.sqrt(area_target))
-    mouth = _unit(river_pts[-1])
+    mouth = unit(river_pts[-1])
     apex = _point_upstream(river_pts, float(params.apex_distance) * size_km)
     # Seaward axis: apex → mouth, in the tangent plane at the apex.
     to_mouth = mouth - apex
@@ -251,16 +218,16 @@ def _footprint(
         to_mouth -= apex * float(apex @ to_mouth)
     if np.linalg.norm(to_mouth) < 1e-12:
         return None
-    axis = _unit(to_mouth)
+    axis = unit(to_mouth)
 
-    reach_km = float(_arc_km(apex, mouth)) + float(params.reach) * size_km
+    reach_km = float(arc_km(apex, mouth)) + float(params.reach) * size_km
     cand = idx.near(apex, reach_km, inside_only=True)
     if cand.size == 0:
         return None
     pos = idx.positions[cand]
     e = elev[cand] - level
     is_water = body[cand] == target
-    dist = _arc_km(pos, apex[None, :])
+    dist = arc_km(pos, apex[None, :])
     forward = (pos - apex[None, :]) @ axis * EARTH_RADIUS_KM
     cos_off = np.clip(forward / np.maximum(dist, 1e-9), -1.0, 1.0)
 
@@ -271,7 +238,7 @@ def _footprint(
     )
     # The shape metrics start at the shore: the river's last vertex on land.
     on_land = body[idx.nearest_inside(river_pts)] != target
-    head = _unit(river_pts[int(np.flatnonzero(on_land)[-1])]) if on_land.any() else mouth
+    head = unit(river_pts[int(np.flatnonzero(on_land)[-1])]) if on_land.any() else mouth
     shape = make_shape(dominance, head, axis, flow, size_km, params, rng or np.random.default_rng(0))
     arcuate = dist * (1.0 + float(params.lateral_cost) * (1.0 - cos_off))
     key = shape_metric(pos, apex, axis, arcuate, shape, idx.spacing_km, params) * np.where(
@@ -283,7 +250,7 @@ def _footprint(
     n = len(cand)
     if pairs.size == 0:
         return None
-    lengths = np.maximum(_arc_km(pos[pairs[:, 0]], pos[pairs[:, 1]]), 1e-6)
+    lengths = np.maximum(arc_km(pos[pairs[:, 0]], pos[pairs[:, 1]]), 1e-6)
     graph = csr_matrix(
         (np.concatenate([lengths, lengths]),
          (np.concatenate([pairs[:, 0], pairs[:, 1]]), np.concatenate([pairs[:, 1], pairs[:, 0]]))),
@@ -300,7 +267,7 @@ def _footprint(
         if tail and float((p - apex) @ axis) < 0:
             break
         tail.append(p)
-    seed_line = _densify(np.asarray([apex] + tail[::-1]), 0.5 * idx.spacing_km)
+    seed_line = densify_polyline(np.asarray([apex] + tail[::-1]), 0.5 * idx.spacing_km)
     _, seeds = tree.query(seed_line, workers=-1)
     seeds = np.unique(np.asarray(seeds, dtype=np.int64))
     seeds = seeds[allowed[seeds]]
@@ -389,7 +356,7 @@ def _apply(
     skirt_mask = (skirt_ring[role] > 0) & ~plain_set[role]
     in_skirt = around[skirt_mask]
 
-    s = np.clip(_arc_km(idx.positions[on_plain], fp.apex[None, :]) / max(fp.radius_km, 1e-9), 0.0, 1.0)
+    s = np.clip(arc_km(idx.positions[on_plain], fp.apex[None, :]) / max(fp.radius_km, 1e-9), 0.0, 1.0)
     top, toe = float(params.apex_height_km), float(params.front_height_km)
     surface = level + toe + (top - toe) * (1.0 - s)
     elev[on_plain] = surface
@@ -560,7 +527,7 @@ def _own_stream(streams: StreamNetwork, old_mouth: np.ndarray, now_plain: np.nda
                 idx: TexelIndex) -> Optional[int]:
     """The stream node at the delta river's old mouth: among the big nodes now on
     the plain within a texel and a half of it, the nearest."""
-    gap = _arc_km(streams.positions.astype(np.float64), old_mouth[None, :])
+    gap = arc_km(streams.positions.astype(np.float64), old_mouth[None, :])
     near = np.flatnonzero((gap <= 1.5 * idx.spacing_km) & now_plain[streams.nodes])
     if near.size == 0:
         return None
@@ -622,7 +589,7 @@ def _carry_across(
         if river is delta_river or river.mouth is None or not river.segments:
             continue
         end = np.asarray(river.as_polyline()[-1], dtype=np.float64)
-        if float(_arc_km(end, fp.apex)) > near_km:
+        if float(arc_km(end, fp.apex)) > near_km:
             continue
         if not now_plain[int(idx.nearest_inside(end[None, :])[0])]:
             continue
@@ -722,7 +689,7 @@ def lake_mouths(rivers: List[River], params: "DeltaParams") -> List[_Mouth]:
         if not entries:
             continue
         pts = np.stack(river.as_polyline()).astype(np.float64)
-        steps = np.concatenate([[0.0], np.cumsum(_arc_km(pts[:-1], pts[1:]))])
+        steps = np.concatenate([[0.0], np.cumsum(arc_km(pts[:-1], pts[1:]))])
         for k in entries:
             flow = float(segs[k].flow_rate)
             if flow >= float(params.min_flow) and steps[k + 1] >= float(params.min_length_km):
@@ -739,7 +706,7 @@ def _faces_around(mesh: "PolygonMesh", mouths: List[_Mouth], params: "DeltaParam
         size = float(np.sqrt(target_area_km2(m.flow, params)))
         reach = (float(params.apex_distance) + float(params.reach)) * size + 2.0 * face_km
         mouth = np.asarray(m.river.as_polyline()[m.end()], dtype=np.float64)
-        out.append(np.asarray(tree.query_ball_point(mouth, chord(reach)), dtype=np.int64))
+        out.append(np.asarray(tree.query_ball_point(mouth, km_to_chord(reach)), dtype=np.int64))
     return np.unique(np.concatenate(out)) if out else np.zeros(0, dtype=np.int64)
 
 
@@ -772,7 +739,7 @@ def _lake_texel(idx: TexelIndex, body: np.ndarray, point: np.ndarray) -> int:
     near = near[body[near] > SEA]
     if near.size == 0:
         return -1
-    return int(near[np.argmin(_arc_km(idx.positions[near], point[None, :]))])
+    return int(near[np.argmin(arc_km(idx.positions[near], point[None, :]))])
 
 
 class _Sediment:

@@ -8,10 +8,10 @@ from shapely.geometry import LineString, MultiPolygon, Point
 from shapely.ops import nearest_points
 
 from region.roads import RegionRoads
-from region.upsample import EARTH_RADIUS_KM
 from settlegen.frame import Frame
 from settlegen.site.crossings import _points
 from settlegen.site.types import Landing, RoadLine, SiteWater
+from utils.sphere import EARTH_RADIUS_KM
 
 
 def _split_at_coast(parent: RegionRoads, reach_m: float) -> tuple[list[np.ndarray], list[np.ndarray]]:

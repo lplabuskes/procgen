@@ -6,7 +6,7 @@ from its region's — see [local.md](local.md)).
 
 ## Files
 - `region/upsample.py` — `RegionUpsampleParams`, `RegionFields`, `refine_fields`, `build_region_fields`, conservation steps, water flood, coast style (`CoastStyle`, `coast_style`) and shore reshaping (`reshape_to_target`), `conservation_report` / `anchor_residuals`
-- `region/resources.py` — `RefineContext`, `refine_resources`, `refined_slope`
+- `region/resources.py` — `RefineContext`, `refine_resources`
 - `region/lakes.py` — `find_small_lakes`, `basin_lake_levels` (the tier's own small lakes)
 - `region/drainage.py` — `priority_flood`, `accumulate` (shared with `region/streams.py`)
 - `region/smooth.py` — `FaceFanField`
@@ -281,7 +281,7 @@ fertility_exponent=γ)` (viewer passes `GlobeParams.resources` and
 `PopulationParams.fertility_exponent`). `RefineContext` carries texels, anchors,
 refined/coarse elevation and slope, land masks.
 
-- **Refined slope** (`refined_slope`): gradient of refined elevation per hex
+- **Refined slope** (`utils.raster.texture_slope`): gradient of refined elevation per hex
   texture / `slope_saturation` (sub-grid slopes ~0.003–0.035 km/km on seed 4).
 - **Forest** = coarse × `(treeline(refined) + 0.05) / (treeline(coarse) + 0.05)`.
 - **Fertility** = coarse × `clip(1 − fertility_valley_gain · anomaly, 0.5, 1.5)`

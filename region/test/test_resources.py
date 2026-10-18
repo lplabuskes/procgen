@@ -2,9 +2,11 @@
 import numpy as np
 import pytest
 
-from region.resources import FaceFanField, refined_slope
-from region.sampling import GlobalSampler, anchor_means
+from region.resources import FaceFanField
+from region.sampling import GlobalSampler
 from region.upsample import RegionUpsampleParams, build_region_fields, conservation_report
+from utils.raster import box_mean, texture_slope
+from utils.resample import anchor_means
 
 REGION_ID = 40
 TEX_SIZE = 16
@@ -81,11 +83,10 @@ def test_fishers_are_conserved_and_stay_on_the_shore(fields, globe):
     assert np.all(fish <= rho + 1e-6)
     # Land beyond the shore band holds no fishers wherever its global texel has
     # shore of its own (then the band takes them all).
-    from region.resources import _box_mean
     land = _land(fields)
     params = RegionUpsampleParams(n_cols=6, tex_size=TEX_SIZE)
     r = max(int(round(params.fishing_shore_km / np.sqrt(fields.texel_area_km2))), 1)
-    near = _box_mean((~land).astype(np.float64), r) > 0
+    near = box_mean((~land).astype(np.float64), r) > 0
     anchors = fields.anchors
     has_shore = np.zeros(anchors.max() + 1, dtype=bool)
     has_shore[anchors[land & near & fields.in_hex]] = True
@@ -176,7 +177,7 @@ def test_danger_is_higher_on_rugged_ground(globe):
     the default so slope, not forest, dominates the score whatever the tuning."""
     params = RegionUpsampleParams(n_cols=6, tex_size=TEX_SIZE, biome_smoothing=0, relief_factor=3.0)
     fields = build_region_fields(globe, REGION_ID, params)
-    slope = refined_slope(fields.textures["elevation"][..., 0], np.sqrt(fields.texel_area_km2)).reshape(-1)
+    slope = texture_slope(fields.textures["elevation"][..., 0], np.sqrt(fields.texel_area_km2)).reshape(-1)
     d = fields.textures["danger"][..., 0].reshape(-1)
     keep = (_land(fields) & fields.in_hex).reshape(-1) & (d > 1e-3)
     anchors = fields.anchors.reshape(-1)

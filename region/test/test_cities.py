@@ -8,9 +8,9 @@ from realmgen.trade.water_links import TAG_OCEAN
 from region.cities import refine_region_cities
 from region.geometry import ecef_to_cell
 from region.rivers import build_region_rivers
-from region.roads import move_points
 from region.towns import global_texel_rad, tier_sites
 from region.upsample import RegionUpsampleParams, build_region_fields
+from utils.spatial import move_points
 
 REGION_ID = 40
 

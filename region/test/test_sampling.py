@@ -1,7 +1,7 @@
 import numpy as np
-import pytest
 
-from region.sampling import GlobalSampler, anchor_means, settle_owners
+from region.sampling import GlobalSampler
+from utils.resample import anchor_values
 
 
 def test_locate_returns_nearest_face(synthetic_globe):
@@ -64,7 +64,7 @@ def test_anchors_are_in_range_and_stable(synthetic_globe):
     # The anchor's value is its own texel's — usually in the located face, but
     # a point by a seam may belong to the neighbour's texel there.
     tex = mesh.face_textures["elevation"]
-    values = sampler.anchor_values(tex, anchors)
+    values = anchor_values(tex, anchors)
     a_faces = anchors // (h * w)
     rows = (anchors // w) % h
     cols = anchors % w
@@ -86,21 +86,3 @@ def test_owners_are_idempotent_and_mostly_self(synthetic_globe):
     assert np.array_equal(owner[owner], owner)
     # Only the seams and the over-hang past each polygon belong to a neighbour.
     assert 0.5 < np.mean(owner == np.arange(owner.size)) < 1.0
-
-
-def test_anchor_means_ignores_zero_weight_samples():
-    values = np.array([[1.0], [3.0], [100.0]])
-    anchors = np.array([0, 0, 0])
-    weights = np.array([1.0, 1.0, 0.0])
-    means, counts = anchor_means(values, anchors, weights, 2)
-    assert means[0, 0] == pytest.approx(2.0)
-    assert counts[0] == 2.0
-    assert counts[1] == 0.0
-
-
-def test_settle_owners_resolves_chains_and_cycles():
-    # 0 self; 1→0 chain; 2→3→4→2 cycle with 5→2 feeding it; 6↔7 two-cycle.
-    owner = np.array([0, 0, 3, 4, 2, 2, 7, 6])
-    settled = settle_owners(owner)
-    assert np.array_equal(settled[settled], settled)
-    assert np.array_equal(settled, [0, 0, 2, 2, 2, 2, 6, 6])

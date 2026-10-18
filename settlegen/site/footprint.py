@@ -61,12 +61,12 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import dijkstra
 from shapely.geometry import MultiPolygon
 
-from region.resources import refined_slope
 from region.upsample import RegionFields
 from settlegen.frame import Frame
 from settlegen.site.contour import regions_below
 from settlegen.site.params import SettlementFootprintParams
 from settlegen.site.types import SiteWater, _as_multipolygon
+from utils.raster import texture_slope
 
 if TYPE_CHECKING:
     from core.world import World
@@ -143,7 +143,7 @@ def wet_texels(fields: RegionFields, frame: Frame, water: SiteWater) -> np.ndarr
 def site_slope(fields: RegionFields, frame: Frame) -> np.ndarray:
     """``(T, T)`` ground slope (km/km)."""
     texel_km = frame.side_m / fields.tex_size / 1000.0
-    return refined_slope(fields.textures["elevation"][..., 0], texel_km)[0]
+    return texture_slope(fields.textures["elevation"][..., 0], texel_km)[0]
 
 
 def _noise(shape: tuple[int, int], sigma_texels: float, rng: np.random.Generator) -> np.ndarray:

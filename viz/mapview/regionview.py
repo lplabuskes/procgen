@@ -20,6 +20,7 @@ from localmap.villages import VILLAGE_KIND_NAMES
 from region.borders import view_polity_borders
 from region.display import build_layer_texture, snap_to_land
 from realmgen.refine.barriers import pack_river_segments
+from utils.sphere import EARTH_RADIUS_KM
 from viz.mapview.legend import draw_legend, legend_size
 from viz.mapview.measure import MeasureTape, draw_tape
 from viz.mapview.overlays import city_floor_radius, draw_overlays, fort_markers, settlement_markers, town_markers
@@ -41,7 +42,6 @@ from settlegen.display import (
 from settlegen.layout.describe import describe_at, summary as layout_summary
 from settlegen.layout.types import SettlementLayout
 from worldgen.climate.classification import BIOME_NAMES
-from worldgen.hydrology.discharge import EARTH_RADIUS_KM
 from worldgen.geology.display import ELEVATION_RECIPE
 from worldgen.resources.minerals import mineral_workings
 

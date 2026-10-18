@@ -34,7 +34,7 @@ from realmgen.polity.seeding import roll_walls
 from realmgen.population.builder import PopulationParams
 from realmgen.population.calibration import KM2_PER_STERADIAN
 from realmgen.refine.builder import RefineParams
-from realmgen.refine.sites import SiteField, densify_polylines
+from realmgen.refine.sites import SiteField
 from realmgen.scoring.suitability import _positions_to_face_ids
 from realmgen.towns.placement import (
     SPACING_EXPONENT,
@@ -45,8 +45,8 @@ from realmgen.towns.placement import (
     texel_owners,
 )
 from realmgen.towns.types import TOWN_KIND_COLORS, TOWN_KIND_NAMES, Towns
+from utils.sphere import EARTH_RADIUS_KM, densify_polylines
 from viz.color_stops import gradient_texture
-from worldgen.cost.surfaces import EARTH_RADIUS_KM
 from worldgen.geology.channels import OCEAN_MASK
 from worldgen.geology.display import OCEAN_COLOR
 from worldgen.hydrology.channels import LAKE_MASK
