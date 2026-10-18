@@ -46,7 +46,7 @@ Features: `add_feature`, `get_feature(name, default=None)`, `has_feature`,
 ## `core/mesh_cache.py` — Mesh cache
 
 - `MeshParams` (`@paramclass`, `GlobeParams.mesh`): `icosphere_depth`, `n_swaps`, `n_relax`, `stiffness`, `outer_iters` (as `Mesh.icosphere` + `deregularize` + `mesh_dual`).
-- `build(params, cache_dir, n, progress)` — generates `n` (5) deregularized duals into `mesh_cache/` *beside* the repo (`core/../../mesh_cache`). `load_random(seed, cache_dir, n)` picks `seed % n` (random if `None`). `is_populated()`.
+- `build(params, cache_dir, n, progress)` — generates `n` (5) deregularized duals into the repo's `mesh_cache/` (git-ignored). `load_random(seed, cache_dir, n)` picks `seed % n` (random if `None`). `is_populated()`.
 - `World.__init__` builds if unpopulated, then `load_random(seed)`. **Changing `MeshParams` does not rebuild an existing cache.**
 
 **Derived geometry.** A loaded mesh's `geometry_store` (`_SidecarStore`) persists

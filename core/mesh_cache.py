@@ -10,7 +10,7 @@ import numpy as np
 from core.mesh import Mesh, PolygonMesh
 from core.params import param_field as _f, paramclass
 
-_CACHE_DIR = Path(__file__).parent.parent.parent / "mesh_cache"
+_CACHE_DIR = Path(__file__).parent.parent / "mesh_cache"
 _N_CACHED = 5
 # Version of the derived geometry saved beside each mesh (texel positions, in-polygon
 # masks, boundary pixel pairs): bump whenever ``PolygonMesh`` changes how any is computed.
