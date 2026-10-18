@@ -71,6 +71,9 @@ def build_site(
     site_roads = build_site_roads(
         globe, fields, frame, maps, water, roads, always_bridge=chain.ref.kind == "city",
         local_road_raster_texels=local_road_raster_texels, land=land, danger_scale=danger_scale,
+        # A road through a town or village none reaches (the trade routes join cities).
+        through_within_m=float(chain.radius_km) * 1000.0
+        if roads.through_roads and chain.ref.kind != "city" else None,
     )
     built = build_footprint(
         fields, frame, water, chain.ref, chain.population, chain.density_per_ha, int(globe.seed or 0),

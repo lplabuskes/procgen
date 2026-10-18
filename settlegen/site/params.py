@@ -55,6 +55,9 @@ class SettlementRoadParams(LocalRoadParams):
     bank_m: float = _f(60.0, label="River bank band (m)", min=0.0, max=500.0, step=5.0)
     water_corridor_parent_texels: float = _f(
         1.5, label="Water corridor half-width (local texels)", min=0.25, max=6.0, step=0.25)
+    # Trade routes run city to city: a town or village no road reaches gets one through
+    # it, the way of the nearest land route, from frame edge to frame edge.
+    through_roads: bool = _f(True, label="Through road for roadless towns and villages", min=0, max=1)
 
 
 @paramclass

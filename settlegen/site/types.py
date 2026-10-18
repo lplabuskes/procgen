@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, Optional
 
 import numpy as np
 import shapely
@@ -102,3 +102,4 @@ class SiteRoads:
     crossings: list[Crossing]
     gates: list[Gate]
     roads: RegionRoads = field(repr=False)
+    through: Optional[np.ndarray] = None    # (2,) unit: the way of the road laid through a roadless place

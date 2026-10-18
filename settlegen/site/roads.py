@@ -33,7 +33,8 @@ from typing import TYPE_CHECKING, Optional, Sequence
 
 import numpy as np
 import shapely
-from shapely.geometry import MultiPolygon, Point, box
+from shapely.geometry import LineString, MultiPolygon, Point, box
+from shapely.geometry.base import BaseGeometry
 from shapely.ops import nearest_points
 
 from localmap.builder import LocalMap
@@ -191,13 +192,75 @@ def _route(
     return out
 
 
+def _route_direction(globe: "World", frame: Frame) -> Optional[tuple[np.ndarray, float]]:
+    """``(unit xy, flow)``: the way of the world's land trade-route hop nearest the frame's
+    centre, and the least flow a road is drawn at (the median hop's); None without routes."""
+    from realmgen.trade.network import ROUTE_LAND
+    routes = globe.get_feature("trade_routes") or []
+    if not routes:
+        return None
+    a = np.array([np.asarray(r[0], dtype=np.float64) for r in routes])
+    b = np.array([np.asarray(r[1], dtype=np.float64) for r in routes])
+    flow = float(np.median([float(r[2]) for r in routes]))
+    layers = globe.get_feature("trade_route_layers")
+    if layers is not None and len(layers) == len(routes) and (np.asarray(layers) == ROUTE_LAND).any():
+        land = np.asarray(layers) == ROUTE_LAND
+        a, b = a[land], b[land]
+    c = frame.to_ecef(np.zeros((1, 2)))[0]
+    ab = b - a
+    t = np.clip(np.einsum("ij,ij->i", c - a, ab) / np.maximum(np.einsum("ij,ij->i", ab, ab), 1e-18), 0.0, 1.0)
+    k = int(np.argmin(np.linalg.norm(a + t[:, None] * ab - c, axis=1)))
+    d = ab[k] - float(ab[k] @ c) * c                 # the hop's way in the tangent plane here
+    n = float(np.linalg.norm(d))
+    if n < 1e-12:
+        return None
+    eps = 0.1 * frame.side_m / (EARTH_RADIUS_KM * 1000.0)
+    u = frame.to_xy((c + eps * d / n)[None])[0] - frame.to_xy(c[None])[0]
+    return u / max(float(np.linalg.norm(u)), 1e-12), flow
+
+
+def through_road(
+    globe: "World", frame: Frame, water: SiteWater, step_m: float,
+) -> tuple[Optional[np.ndarray], list[tuple[np.ndarray, np.ndarray]]]:
+    """``(way, halves)``: a straight road through the frame's centre the way (unit xy) of
+    the nearest land trade route (:func:`_route_direction`), from frame edge to frame
+    edge, cut where it meets the sea or a lake, as ``(ecef (K, 3), flows (K - 1,))`` per
+    half.  Each half runs out from the centre, so the re-traced road keeps to the
+    settlement rather than wandering its corridor.  ``(None, [])`` if there is none."""
+    way = _route_direction(globe, frame)
+    if way is None:
+        return None, []
+    u, flow = way
+    reach = frame.half / max(float(np.abs(u).max()), 1e-9)
+    line: BaseGeometry = LineString([-reach * u, reach * u])
+    still = shapely.union_all([water.sea, water.lakes])
+    if not still.is_empty:
+        line = line.difference(still)
+    parts = [g for g in shapely.get_parts(line) if isinstance(g, LineString) and g.length > step_m]
+    if not parts:
+        return None, []
+    centre = Point(0.0, 0.0)
+    piece = min(parts, key=lambda g: g.distance(centre))
+    at = piece.project(centre)
+    out = []
+    for end in (0.0, piece.length):
+        if abs(end - at) <= step_m:
+            continue
+        d = np.linspace(at, end, max(int(np.ceil(abs(end - at) / step_m)), 1) + 1)
+        xy = np.asarray([(p.x, p.y) for p in shapely.line_interpolate_point(piece, d)])
+        out.append((frame.to_ecef(xy), np.full(len(xy) - 1, flow)))
+    return (u if out else None), out
+
+
 def build_site_roads(
     globe: "World", fields: RegionFields, frame: Frame, maps: Sequence[LocalMap], water: SiteWater,
     params: Optional[SettlementRoadParams] = None, *, always_bridge: bool = False,
     local_road_raster_texels: float = 2.0, land: Optional["LandCostParams"] = None, danger_scale: float = 2.0,
+    through_within_m: Optional[float] = None,
 ) -> SiteRoads:
     """The site's roads.  See the module docstring.  ``local_road_raster_texels`` is the
     local maps' road raster spacing (how far apart their vertices are, for joining at seams).
+    ``through_within_m``: if no road comes this near the centre, add :func:`through_road`.
     No gates yet: the footprint follows the roads (:func:`set_gates`)."""
     params = params or SettlementRoadParams()
     parent = parent_roads(maps, globe.antimeridian, local_road_raster_texels)
@@ -205,6 +268,14 @@ def build_site_roads(
     merge_m = merge_distance_m(params, frame, fields)
     landings, legs, polylines = _landings(parent, water, frame, float(params.landing_reach_km) * 1000.0, merge_m)
     parent.polylines = polylines
+    through: Optional[np.ndarray] = None
+    if through_within_m is not None and not any(
+            len(p) >= 2 and LineString(frame.to_xy(p)).distance(Point(0.0, 0.0)) <= through_within_m
+            for p in parent.polylines):
+        through, halves = through_road(globe, frame, water, 2.0 * merge_m)
+        for pos, flows in halves:
+            parent.polylines.append(pos)
+            parent.polyline_flows.append(flows)
     routed = _route(fields, maps[0].fields, parent, globe, frame, water, params, land, danger_scale,
                     4.0 * fields.grid.texel_spacing_rad(fields.tex_size))
 
@@ -241,7 +312,7 @@ def build_site_roads(
     return SiteRoads(
         lines=lines, water=water_legs, sea=legs, landings=landings,
         crossings=crossings(lines, water, float(params.bridge_width_m), always_bridge, merge_m),
-        gates=[], roads=roads,
+        gates=[], roads=roads, through=through,
     )
 
 

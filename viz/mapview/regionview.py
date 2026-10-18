@@ -9,7 +9,9 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPainterPath, QPen, QPixmap, QPolygonF, QTransform
 from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtWidgets import QWidget
-from shapely.geometry import MultiPolygon, Polygon
+import shapely
+from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon
+from shapely.geometry.base import BaseGeometry
 
 from core.display import SchemeSpec
 from localmap.builder import LocalMap
@@ -126,6 +128,7 @@ class RegionView(QWidget):
         self._settlement_land_texels = 0
         # (layout id, district → path, lots path, …) in frame metres, built once per layout.
         self._layout_paths: Optional[tuple[int, dict]] = None
+        self._road_paths: Optional[tuple[tuple[int, bool], QPainterPath]] = None
         self._settlement_click_callback: Optional[Callable[[SettlementRef], None]] = None
         # Region mode: clicking a hex opens its local map.
         self._local_pick = False
@@ -664,19 +667,27 @@ class RegionView(QWidget):
         out: dict = {}
         local = self._feature_local
         if local is not None:
+            ref = self._settlement.ref if self._settlement is not None else None
             out["villages"] = local.villages
+            if ref is not None and ref.kind == "village":
+                # This village is drawn as its site (_draw_site), not a dot.
+                keep = np.arange(len(local.villages)) != ref.index
+                out["villages"] = dataclasses.replace(
+                    local.villages, positions=local.villages.positions[keep],
+                    population=local.villages.population[keep], kind=local.villages.kind[keep])
             towns = self._globe.get_feature("towns") if self._globe is not None else None
             if towns is not None and len(towns):
-                idx = local.town_index
+                idx = np.asarray(local.town_index)
+                keep = idx != ref.index if ref is not None and ref.kind == "town" else np.ones(len(idx), dtype=bool)
+                idx = idx[keep]
                 out["towns"] = Towns(
-                    positions=local.town_positions, population=towns.population[idx],
+                    positions=np.asarray(local.town_positions)[keep], population=towns.population[idx],
                     face_id=towns.face_id[idx], parent=towns.parent[idx], kind=towns.kind[idx],
                     site_positions=towns.site_positions[idx], refined=towns.refined[idx],
                     has_walls=towns.has_walls[idx], wall_strength=towns.wall_strength[idx],
                 )
             if local.city_footprints is not None:
                 out["cities"] = (local.city_index, local.city_positions, local.city_footprints)
-                ref = self._settlement.ref if self._settlement is not None else None
                 if ref is not None and ref.kind == "city":
                     # This city is drawn as the site's footprint (_draw_site); others as on the local map.
                     out["cities"] = _without_city(*out["cities"], ref.index)
@@ -688,7 +699,9 @@ class RegionView(QWidget):
             borders = self._polity_borders()
             if borders is not None:
                 out["polity_borders"] = borders
-        if self._roads is not None:
+        if self._settlement is not None:
+            out["trade_routes"] = []        # its land roads drawn as tracks (_draw_site_roads); no water legs
+        elif self._roads is not None:
             out["trade_routes"] = self._roads.segments
         if self._deltas is not None:
             out["deltas"] = self._deltas
@@ -1269,21 +1282,61 @@ class RegionView(QWidget):
             painter.drawPath(_site_path(MultiPolygon(piers), to_px))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(_WATER_FILL)
-        if not self._overlay_visible.get("rivers", True):
-            painter.restore()
+        if self._overlay_visible.get("rivers", True):
+            if not water.channels.is_empty:
+                painter.drawPath(_site_path(water.channels, to_px))
+                if piers and self._overlay_visible.get(overlay, True):
+                    painter.setPen(_cosmetic_pen(QColor(60, 45, 30, 230)))
+                    painter.setBrush(QColor.fromRgbF(*OPEN_RGB["pier"]))
+                    painter.drawPath(_site_path(MultiPolygon(piers), to_px))
+            if not water.shorelines.is_empty:
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(_cosmetic_pen(_SHORE_PEN))
+                for line in water.shorelines.geoms:
+                    pts = to_px(np.asarray(line.coords))
+                    painter.drawPolyline(QPolygonF([QPointF(float(x), float(y)) for x, y in pts]))
+        if self._overlay_visible.get("trade_routes", True):
+            self._draw_site_roads(painter, x0, y0, size, side)
+        painter.restore()
+
+    def _draw_site_roads(self, painter: QPainter, x0: float, y0: float, size: float, side: float) -> None:
+        """The site's land roads outside the built-up area (inside, its streets carry them),
+        as rougher versions of its main streets: the street colour, broken edges.  River,
+        lake and sea legs aren't drawn."""
+        assert self._settlement is not None
+        settlement = self._settlement
+        layout = settlement.layout
+        clipped = bool(layout.blocks) and self._overlay_visible.get(_KIND_OVERLAY[settlement.ref.kind], True)
+        key = (id(settlement), clipped)
+        if self._road_paths is None or self._road_paths[0] != key:
+            lines: BaseGeometry = MultiLineString([ln.xy for ln in settlement.site.roads.lines if len(ln.xy) >= 2])
+            if clipped and not lines.is_empty:
+                built = layout.footprint if layout.footprint is not None else settlement.site.footprint
+                lines = lines.difference(built)
+            parts = [g for g in shapely.get_parts(lines) if isinstance(g, LineString)]
+            self._road_paths = (key, _lines_path(parts))
+        path = self._road_paths[1]
+        if path.isEmpty():
             return
-        if not water.channels.is_empty:
-            painter.drawPath(_site_path(water.channels, to_px))
-            if piers and self._overlay_visible.get(overlay, True):
-                painter.setPen(_cosmetic_pen(QColor(60, 45, 30, 230)))
-                painter.setBrush(QColor.fromRgbF(*OPEN_RGB["pier"]))
-                painter.drawPath(_site_path(MultiPolygon(piers), to_px))
-        if not water.shorelines.is_empty:
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(_cosmetic_pen(_SHORE_PEN))
-            for line in water.shorelines.geoms:
-                pts = to_px(np.asarray(line.coords))
-                painter.drawPolyline(QPolygonF([QPointF(float(x), float(y)) for x, y in pts]))
+        painter.save()
+        painter.translate(x0 + 0.5 * size, y0 + 0.5 * size)
+        painter.scale(size / side, -size / side)
+        t = painter.worldTransform()
+        px = 1.0 / max(math.hypot(t.m11(), t.m12()), 1e-9)           # metres per pixel
+        width = max(float(layout.arterial_m) if layout.blocks else 8.0, 2.0 * px)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        casing = QPen(QColor(120, 100, 80, 170), width + 2.0 * px)
+        casing.setStyle(Qt.PenStyle.CustomDashLine)
+        casing.setDashPattern([2.0, 1.5])
+        casing.setCapStyle(Qt.PenCapStyle.FlatCap)
+        casing.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(casing)
+        painter.drawPath(path)
+        fill = QPen(QColor.fromRgbF(*ARTERIAL_RGB, 0.75), width)
+        fill.setCapStyle(Qt.PenCapStyle.RoundCap)
+        fill.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(fill)
+        painter.drawPath(path)
         painter.restore()
 
     def _layout_cache(self, layout: SettlementLayout) -> dict:

@@ -277,9 +277,13 @@ def wall_street(core: MultiPolygon, walls: MultiLineString, offset: float, citad
     return [g for g in parts if isinstance(g, LineString) and g.length >= min_m]
 
 
-def main_axis(part: Polygon, centre: np.ndarray, gates: Sequence[np.ndarray], max_deg: float) -> np.ndarray:
-    """The footprint's long axis — or the way to a gate within ``max_deg`` of it."""
-    _, u, _, _, _ = _axes(part)
+def main_axis(
+    part: Polygon, centre: np.ndarray, gates: Sequence[np.ndarray], max_deg: float,
+    axis: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """The footprint's long axis (or ``axis``, the way of a through road) — or the way to
+    a gate within ``max_deg`` of it."""
+    u = np.asarray(axis, dtype=np.float64) if axis is not None else _axes(part)[1]
     best: Optional[tuple[float, np.ndarray]] = None
     for g in gates:
         d = np.asarray(g, dtype=np.float64) - centre

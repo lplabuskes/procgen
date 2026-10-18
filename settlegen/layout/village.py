@@ -12,7 +12,7 @@ more households, more streets.  Forms:
   deep, a lane up from the jetty through them and lanes joining their ends;
   rows lengthen and multiply where the land runs out (:func:`harbour_rows`);
 - otherwise, seeded: **street** (45%) — one street along the main axis (the
-  footprint's long axis, or the way to a gate near it); **green** (30%) — an
+  footprint's long axis or a through road's way, or the way to a gate near it); **green** (30%) — an
   oval green with the street round it and on along the axis both ways;
   **cluster** (25%) — three to six lanes out of the middle, frontages uneven.
   A street or green village short of room adds back lanes a plot-pair behind
@@ -258,7 +258,7 @@ def village_layout(
         form = "harbour"
         centre = shore                     # the village gathers about its jetty
         anchors["market"] = centre
-    u = main_axis(part, centre, gates, float(params.main_street_gate_deg))
+    u = main_axis(part, centre, gates, float(params.main_street_gate_deg), site.roads.through)
     half = site.frame.half
     roads = [ln.xy for ln in site.roads.lines]
     route = SettlementLayoutParams(**{**params.__dict__, "road_follow": 1.0})

@@ -1,8 +1,11 @@
 """A site's roads: chained across seams, landed on the shore, crossing rivers, leaving by gates."""
+from typing import cast
+
 import numpy as np
 import pytest
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, box
 
+from core.world import World
 from localmap.test.test_store import REGION_ID, small_store
 from region.geometry import ecef_to_cell
 from region.rivers import RegionRivers
@@ -16,6 +19,7 @@ from settlegen.params import SettlementMapParams
 from settlegen.site.crossings import crossings, gates
 from settlegen.site.landings import _landings, _quays, _split_at_coast
 from settlegen.site.road_chain import _chain, _Piece
+from settlegen.site.roads import through_road
 from settlegen.site.types import RoadLine
 from settlegen.terrain.builder import SettlementUpsampleParams
 from settlegen.site.types import RiverLine, SiteWater
@@ -112,6 +116,56 @@ def test_a_port_drawn_on_the_water_has_its_quay_on_the_nearest_bank(frame):
     out = _quays([leg], [(True, False)], _water(), channels, frame)
     assert len(out) == 1
     np.testing.assert_allclose(out[0].xy, [-100.0, 0.0], atol=1e-6)
+
+
+class _Routes:
+    """A globe holding only trade routes (and their layers)."""
+
+    def __init__(self, routes, layers=None):
+        self.features = {"trade_routes": routes, "trade_route_layers": layers}
+
+    def get_feature(self, name):
+        return self.features.get(name)
+
+
+def _globe(routes, layers=None) -> World:
+    return cast(World, _Routes(routes, layers))
+
+
+def _hop(frame, a_xy, b_xy, flow):
+    a, b = frame.to_ecef(np.array([a_xy, b_xy], dtype=np.float64))
+    return a, b, flow
+
+
+def test_a_through_road_takes_the_nearest_land_route_s_way_edge_to_edge(frame):
+    from realmgen.trade.network import ROUTE_LAND, ROUTE_WATER
+    globe = _globe([
+        _hop(frame, (-5000.0, 900.0), (5000.0, 1100.0), 4.0),   # nearest land hop, about east
+        _hop(frame, (0.0, -5000.0), (0.0, 5000.0), 9.0),        # nearer, but a water hop
+        _hop(frame, (-5000.0, -3000.0), (-5000.0, 3000.0), 1.0),
+    ], np.array([ROUTE_LAND, ROUTE_WATER, ROUTE_LAND], dtype=np.int8))
+    way, halves = through_road(globe, frame, _water(), step_m=100.0)
+    assert way is not None and abs(way[0]) > 0.99
+    assert len(halves) == 2
+    for pos, flows in halves:
+        xy = frame.to_xy(pos)
+        np.testing.assert_allclose(xy[0], [0.0, 0.0], atol=1e-3)        # each half runs out from the centre
+        assert abs(abs(xy[-1, 0]) - frame.half) < 1.0                   # to the frame's edge
+        assert len(flows) == len(xy) - 1 and np.all(flows == 4.0)       # the median hop's flow
+        assert np.all(np.linalg.norm(np.diff(xy, axis=0), axis=1) <= 100.0 + 1e-6)
+
+
+def test_a_through_road_stops_at_the_sea(frame):
+    globe = _globe([_hop(frame, (-5000.0, 0.0), (5000.0, 0.0), 2.0)])
+    water = _water(sea=MultiPolygon([box(800.0, -2000.0, 2000.0, 2000.0)]))
+    _, halves = through_road(globe, frame, water, step_m=100.0)
+    ends = sorted(float(frame.to_xy(pos)[-1, 0]) for pos, _ in halves)
+    assert len(ends) == 2
+    assert abs(ends[0] + frame.half) < 1.0 and abs(ends[1] - 800.0) < 1.0
+
+
+def test_no_routes_no_through_road(frame):
+    assert through_road(_globe([]), frame, _water(), step_m=100.0) == (None, [])
 
 
 def test_gates_lie_on_the_footprint_edge_and_face_out():

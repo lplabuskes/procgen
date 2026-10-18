@@ -162,6 +162,12 @@ in frame metres.
   shore and is cut there.
 - **Crossings**: planar intersections with river centrelines; a bridge if the
   channel is ≥ `bridge_width_m` (20 m) or the settlement is a city, else a ford.
+- **Through roads** (`through_road`, `through_roads` on): the trade routes join
+  cities, so a town or village no road comes within its footprint radius of gets
+  one — straight through the centre the way of the nearest land trade-route hop,
+  frame edge to frame edge, cut at the sea or a lake, at the median hop's flow (the
+  least drawn) — re-traced like the rest, as two halves out from the centre so it
+  keeps to the place. `SiteRoads.through` holds its way; the main street takes it.
 - **Gates**: where a road leaves the footprint for good. Routes re-traced onto one
   way share a gate and crossing, flows summed.
 
@@ -233,7 +239,8 @@ slope, so it is tested on hand-built sites.
    sacred site apart.
 2. **Main streets**: least-cost on a 20 m grid (slope, water, off the footprint;
    the site's roads cheap — they hold the crossings — but no plan needs one). A
-   town's runs through its market along the footprint's long axis; a city's run
+   town's runs through its market along the footprint's long axis (a through
+   road's way if it has one); a city's run
    from the market to every gate and to the footprint's landward edge (not the
    shore), each exit as far along it from the others as can be, ≥ 500 m apart
    (3–8 ways by size) — so walls get a gate per main street on their land

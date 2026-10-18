@@ -62,15 +62,17 @@ cell-layout pixels): hinterland fields and market gardens (toggled with whoever
 farms them, as on local maps), the footprint (with its own overlay: Settlements,
 Towns or Villages; a neutral built-up colour, its sparse part not drawn apart),
 the sea and lakes (always) and river channels (Rivers) in one water
-colour, and shorelines (Rivers); the site's roads and
-river/lake legs as trade routes; and its point features in screen pixels
+colour, and shorelines (Rivers); the site's land roads (`_draw_site_roads`, Trade
+Routes) as rougher main streets — street colour, the arterial width, dashed
+casing — outside the built-up area (no gold world routes, no river, lake or sea
+legs); and its point features in screen pixels
 (`_draw_site_markers`, Trade Routes): gates (a red bar across the road),
 bridges (light bars), fords (blue dots), landings (cyan diamonds). With
 `--debug` (`MapWindow.set_debug`) a settlement map also offers **Anchor
 candidates** (citadel ▲, market ■, waterfront ◆, sacred ✚, sized by score) and
 **Buildable ground** (the ground too steep to build on, tinted red), both off
 by default. The owning local map's other villages, towns and city footprints
-are drawn as markers; the settlement's own local footprint is not.
+are drawn as markers; the settlement's own marker (or local footprint) is not.
 **Layout** (`_draw_layout`, with the footprint's overlay): the footprint in the
 street colour, blocks filled by district (`settlegen.display.DISTRICT_RGB`), lot
 outlines once a lot spans ~4 px, plaza / precinct / citadel, arterials (cased,
@@ -161,7 +163,7 @@ global paths), except these, passed as `draw_overlays(..., refined={...})`:
 | key | region | local map |
 |---|---|---|
 | `rivers` | `RegionRivers.paths` | local rivers + streams (`paths` + `streams`) |
-| `trade_routes` | `RegionRoads.segments` | local roads |
+| `trade_routes` | `RegionRoads.segments` | local roads (settlement map: none — `_draw_site_roads`) |
 | `deltas` | snapped deltas | snapped onto local mouths |
 | `minerals` | each deposit as its workings (`mineral_sites`; deposit kind, size abundance × share), off refined water | same, off local water |
 | `towns` | — (refined positions live in the world feature) | `Towns` at drawn positions |

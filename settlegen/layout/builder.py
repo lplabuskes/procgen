@@ -13,7 +13,7 @@ a village are different places, not one plan at three sizes.  Villages:
 2. **Main streets**, least-cost on a ``route_step_m`` grid (slope, water, off
    the footprint; along the site's roads cheaply — they hold the river
    crossings — but not led by them).  A **town**'s main street runs through its
-   market along the footprint's long axis (or to a gate near that line); a
+   market along the footprint's long axis or a through road's way (or to a gate near that line); a
    **city**'s run out of its market to every gate, and to the footprint's landward
    edge (not the shore), each as far along it from the others as can be, until
    at least ``radial_streets`` leave it (no nearer than ``radial_spacing_m``).
@@ -166,7 +166,7 @@ def build_layout(
     gates = [np.asarray(g.xy, dtype=np.float64) for g in site.roads.gates]
     main: list[LineString] = []
     if town:
-        u = main_axis(part, market, gates, float(params.main_street_gate_deg))
+        u = main_axis(part, market, gates, float(params.main_street_gate_deg), site.roads.through)
         ends = [e for e in (ray_exit(part, market, u), ray_exit(part, market, -u))
                 if np.linalg.norm(e - market) > 30.0]
         main = route_arterials(half, slope, water, footprint, roads, market, ends, params)
