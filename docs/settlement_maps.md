@@ -95,9 +95,18 @@ map's params don't change. `ensure_local_maps`:
 2. its **owning local map**: the regional hex nearest its region position
    (`localmap.settlements.owning_hex`), which re-sites it locally; its position
    is final from here;
-3. the **frame**: a square centred where that map draws the settlement, sized
+3. the **frame**: a square round where that map draws the settlement, squared
+   to north (`a` due east, `b` due north on the ground at its centre, whatever
+   the local map's own axes — polar regions' are turned 45–180°), sized
    from the settlement tier's own footprint radius (its people at
-   `base_density_per_ha`; the local map's footprint is only a preview);
+   `base_density_per_ha`; the local map's footprint is only a preview).  It is
+   slid toward land (`land_shifted_center`): of 9×9 shifts up to `land_shift`
+   × the garden ring / fields east and north (so the footprint and margin stay
+   inside), the one holding the most land by the owning local map's water, less
+   5% of land per full shift — a coastal city's frame isn't half sea.  Frame
+   metres stay centred on the frame; `Frame.settlement_xy` is where the
+   settlement stands (footprint growth, hinterland, through road and parcels
+   measure from it), and the unrefined fields are still read there;
 4. every other local map whose ground the frame reaches (`frame_keys`: each
    regional hexagon, clipped to its region's cell, against the frame, with
    shapely), with their regions.

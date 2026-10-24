@@ -328,7 +328,8 @@ def build_footprint(
     wet = wet_texels(fields, frame, water)
     slope = site_slope(fields, frame)
     xy = frame.texel_xy(t)
-    dist = np.hypot(xy[..., 0], xy[..., 1])
+    sx, sy = frame.settlement_xy
+    dist = np.hypot(xy[..., 0] - sx, xy[..., 1] - sy)
 
     # The site's squeeze: the buildable share of the ground the unconstrained footprint would reach.
     def radius_m(density: float) -> float:
@@ -347,8 +348,7 @@ def build_footprint(
     # along them out to twice that.  Small islands are out.
     allowed = ~wet & ~_small_islands(wet, float(params.island_min_ha) * _M2_PER_HA / texel_m ** 2)
     if wet.any() and float(params.crossing_cost) > 1.0:
-        mid = frame.half / texel_m - 0.5                  # the frame's centre, in texels
-        centre = (mid, mid)
+        centre = ((frame.half - sy) / texel_m - 0.5, (sx + frame.half) / texel_m - 0.5)   # the settlement, in texels
         way = dist + _crossing_extra(wet, texel_m, centre, float(params.crossing_cost))
     else:
         way = dist

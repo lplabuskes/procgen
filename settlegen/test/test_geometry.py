@@ -3,6 +3,7 @@ import numpy as np
 import pytest
 
 from localmap.geometry import LocalGeometry
+from region.geometry import RegionGeometry
 from settlegen.geometry import SettlementGeometry
 from settlegen.grid import SettlementGrid
 
@@ -50,3 +51,23 @@ def test_neighbours_stop_only_at_the_frame_edge(geometry):
     idx = np.arange(t * t).reshape(t, t)
     assert nb[3, 3, 0] == idx[2, 3] and nb[3, 3, 1] == idx[4, 3]
     assert nb[3, 3, 2] == idx[3, 2] and nb[3, 3, 3] == idx[3, 4]
+
+
+@pytest.mark.parametrize("polar", [False, True])
+def test_frame_is_squared_to_north(geometry, polar):
+    """``b`` runs due north and ``a`` due east at the centre, equally long on the ground —
+    also on a polar region, whose own axes are turned 135° from north."""
+    if polar:
+        geometry = SettlementGeometry(RegionGeometry(38, 0.0), np.array([0.3, 0.6]), 0.01)
+    eps, c = 1e-4, 0.5
+    f = geometry.local_to_ecef
+    da = f(np.array([c + eps]), np.array([c]))[0] - f(np.array([c - eps]), np.array([c]))[0]
+    db = f(np.array([c]), np.array([c + eps]))[0] - f(np.array([c]), np.array([c - eps]))[0]
+    up = geometry.center_ecef()
+    north = np.array([0.0, 0.0, 1.0]) - up[2] * up
+    north /= np.linalg.norm(north)
+    assert np.dot(db, north) / np.linalg.norm(db) == pytest.approx(1.0, abs=1e-6)
+    assert np.dot(da, np.cross(north, up)) / np.linalg.norm(da) == pytest.approx(1.0, abs=1e-6)
+    assert np.linalg.norm(da) == pytest.approx(np.linalg.norm(db), rel=1e-6)
+    ds, dt = geometry.up_direction()
+    assert abs(ds) < 1e-6 * abs(dt) and dt > 0

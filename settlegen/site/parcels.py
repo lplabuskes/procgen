@@ -264,7 +264,7 @@ def build_parcels(
     fields: RegionFields, frame: Frame, hinterland: Hinterland, seed: list[int],
     params: Optional[SettlementParcelParams] = None,
 ) -> Optional[FieldParcels]:
-    """The hinterland's parcels (the settlement at the frame's centre).  See the module
+    """The hinterland's parcels (the settlement at ``frame.settlement_xy``).  See the module
     docstring.  ``None`` when switched off."""
     p = params or SettlementParcelParams()
     if not p.enabled:
@@ -301,7 +301,7 @@ def build_parcels(
         return (int(np.clip((frame.half - y) / frame.side_m * n, 0, n - 1)),
                 int(np.clip((x + frame.half) / frame.side_m * n, 0, n - 1)))
 
-    farmers = [(hinterland.own, np.zeros(2), own_style)]
+    farmers = [(hinterland.own, np.asarray(frame.settlement_xy, dtype=np.float64), own_style)]
     farmers += [(n.fields, np.asarray(n.xy, dtype=np.float64), crop_style) for n in hinterland.neighbours]
     polygons: list[Polygon] = []
     owners: list[int] = []

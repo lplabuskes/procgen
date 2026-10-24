@@ -66,7 +66,8 @@ def pick(store, n_cities: int, n_towns: int, n_villages: int) -> list[Settlement
         # The largest city's chain gives its owning local map: its villages, spread over the list.
         from settlegen.chain.builder import ensure_local_maps
         params = settlement_map_params(store)
-        chain = ensure_local_maps(store, cities[0], float(params.upsample.margin_km), params.footprint)
+        chain = ensure_local_maps(
+            store, cities[0], float(params.upsample.margin_km), params.footprint, float(params.upsample.land_shift))
         region, hex_index = chain.keys[0]
         k = len(store.local(region, hex_index).villages)
         at = np.unique(np.round(np.linspace(0.0, 1.0, n_villages) * max(k - 1, 0)).astype(int)) if k else []

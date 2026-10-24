@@ -144,6 +144,17 @@ def cell_border_polylines(antimeridian: float, samples: int = 100) -> list[np.nd
     return polys
 
 
+def north_tangent(position: np.ndarray, antimeridian: float) -> np.ndarray:
+    """Unit tangent toward geographic north at unit vector ``position``; on a pole,
+    the tangent toward the ``antimeridian``."""
+    z_hat = np.array([0.0, 0.0, 1.0])
+    target = z_hat - np.dot(z_hat, position) * position
+    norm = np.linalg.norm(target)
+    if norm < 1e-6:
+        return np.array([np.cos(antimeridian), np.sin(antimeridian), 0.0])
+    return target / norm
+
+
 class RegionGeometry:
     """Geometry of a single region cell: maps local ``[0, 1]**2`` <-> the sphere.
 
@@ -218,30 +229,19 @@ class RegionGeometry:
         """ECEF position of the cell centre (local ``(0.5, 0.5)``)."""
         return self.local_to_ecef(np.array([0.5]), np.array([0.5]))[0]
 
+    def jacobian(self, s: float, t: float, eps: float = 1e-4) -> np.ndarray:
+        """``(3, 2)`` ECEF displacement per unit of local ``s`` and ``t`` at ``(s, t)`` (central differences)."""
+        f = self.local_to_ecef
+        ds = f(np.array([s + eps]), np.array([t]))[0] - f(np.array([s - eps]), np.array([t]))[0]
+        dt = f(np.array([s]), np.array([t + eps]))[0] - f(np.array([s]), np.array([t - eps]))[0]
+        return np.column_stack([ds, dt]) / (2.0 * eps)
+
     def up_direction(self) -> np.ndarray:
         """Local ``(ds, dt)`` direction at the cell centre a renderer should treat as "up" (unnormalised).
 
         Geographic north; a cell centred on a pole (odd ``N_SUBDIV`` only) falls
         back to the tangent toward the antimeridian.
         """
-        eps = 1e-4
-        c = 0.5
-        center = self.local_to_ecef(np.array([c]), np.array([c]))[0]
-        ds = (
-            self.local_to_ecef(np.array([c + eps]), np.array([c]))[0]
-            - self.local_to_ecef(np.array([c - eps]), np.array([c]))[0]
-        )
-        dt = (
-            self.local_to_ecef(np.array([c]), np.array([c + eps]))[0]
-            - self.local_to_ecef(np.array([c]), np.array([c - eps]))[0]
-        )
-        z_hat = np.array([0.0, 0.0, 1.0])
-        target = z_hat - np.dot(z_hat, center) * center
-        norm = np.linalg.norm(target)
-        if norm < 1e-6:
-            target = np.array([np.cos(self.antimeridian), np.sin(self.antimeridian), 0.0])
-        else:
-            target = target / norm
-        jacobian = np.column_stack([ds, dt])   # (3, 2)
-        coeffs, *_ = np.linalg.lstsq(jacobian, target, rcond=None)
+        target = north_tangent(self.center_ecef(), self.antimeridian)
+        coeffs, *_ = np.linalg.lstsq(self.jacobian(0.5, 0.5), target, rcond=None)
         return coeffs

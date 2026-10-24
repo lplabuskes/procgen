@@ -1,12 +1,15 @@
 """The chain from a settlement to its local maps: built only when the store lacks
 them, the owning map first, and every map the frame reaches."""
+from dataclasses import replace
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
 from localmap.test.test_store import REGION_ID, small_store
 from region.geometry import ecef_to_cell
 from region.test.test_builder import land_towns
-from settlegen.chain.builder import SettlementRef, ensure_local_maps, frame_keys, region_of
+from settlegen.chain.builder import SettlementRef, ensure_local_maps, frame_keys, land_shifted_center, region_of
 
 
 @pytest.fixture
@@ -87,3 +90,32 @@ def test_build_settlement_map_refines_the_frame_from_its_maps(globe, towns):
     assert built.ref == ref
     assert built.fields.tex_size == int(np.ceil(built.chain.side_km * 1000.0 / 200.0))
     assert built.fields.region_id == built.chain.keys[0][0]
+
+
+def test_the_frame_slides_toward_land(globe, towns):
+    """Sea on one side (local ``s`` past the settlement): the frame centre moves off it,
+    by no more than the shift allowed; all land, it stays put."""
+    store = small_store(globe)
+    region = store.region(REGION_ID)
+    grid = region.fields.grid
+    h = int(np.argmin(np.hypot(*(grid.centers - 0.5).T)))
+    owner = store.local(REGION_ID, h)
+    geo = owner.fields.geometry
+    center = geo.local_to_ecef(np.array([0.5]), np.array([0.5]))[0]
+    s, _, _ = geo.ecef_to_local(owner.fields.positions.reshape(-1, 3).astype(np.float64))
+    shape = owner.fields.textures["ocean_mask"].shape
+
+    def with_sea(sea):
+        tex = {**owner.fields.textures, "ocean_mask": sea.reshape(shape).astype(np.float32),
+               "lake_mask": np.zeros(shape, dtype=np.float32)}
+        return SimpleNamespace(fields=replace(owner.fields, textures=tex))
+
+    dry = with_sea(np.zeros(s.shape))
+    np.testing.assert_array_equal(land_shifted_center(dry, center, 4.0, 1.0), center)    # type: ignore[arg-type]
+    wet = with_sea(s > 0.5)
+    moved = land_shifted_center(wet, center, 4.0, 1.0)                                    # type: ignore[arg-type]
+    ms, _, _ = geo.ecef_to_local(moved[None])
+    assert ms[0] < 0.5
+    km = float(np.arccos(np.clip(moved @ center, -1.0, 1.0))) * 6371.0
+    assert 0.0 < km <= 1.01 * np.sqrt(2.0)       # at most the shift each way (km per local unit is a mean)
+    np.testing.assert_array_equal(land_shifted_center(wet, center, 4.0, 0.0), center)    # type: ignore[arg-type]

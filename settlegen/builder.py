@@ -61,10 +61,12 @@ def build_settlement_map(
             timings[name] = now - clock[0]
         clock[0] = now
 
-    chain = ensure_local_maps(store, ref, float(params.upsample.margin_km), params.footprint)
+    chain = ensure_local_maps(
+        store, ref, float(params.upsample.margin_km), params.footprint, float(params.upsample.land_shift))
     lap("chain")
     fields = build_settlement_fields(
-        globe, [m.fields for m in chain.maps], chain.center, chain.side_km, params.upsample)
+        globe, [m.fields for m in chain.maps], chain.frame_center, chain.side_km, params.upsample,
+        settlement=chain.center)
     lap("terrain")
     realm, world = store.realm_params, store.world_params
     site = build_site(

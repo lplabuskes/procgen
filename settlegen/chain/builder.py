@@ -11,12 +11,14 @@ one store):
    position is final from here on.  A village has no world record: it is one of
    a local map's villages, named by that map (``SettlementRef.map``) and its
    index there, valid while that map's params don't change;
-3. the frame: a square centred where that local map draws the settlement, of side
+3. the frame: a square round where that local map draws the settlement, of side
    ``2 · (footprint radius + garden ring + margin)`` (a city's garden ring by
    :func:`localmap.farmland.garden_ring_km`; a town's or village's 1.5 km of
    fields), the radius the settlement
    tier's own (its people at :func:`settlegen.site.footprint.base_density_per_ha`;
-   the local map's footprint is only a preview there);
+   the local map's footprint is only a preview there).  Squared to north, and
+   slid toward land by up to ``land_shift`` of the ring (:func:`land_shifted_center`),
+   so a coastal settlement's frame isn't half sea; the footprint and margin stay inside;
 4. every other local map whose ground the frame reaches (each regional hexagon,
    within its own region's cell, the frame overlaps), with their regions.
 
@@ -37,6 +39,8 @@ from localmap.farmland import garden_ring_km
 from localmap.settlements import owning_hex
 from region.geometry import RegionGeometry, ecef_to_cell
 from region.grid import RegionHexGrid
+from region.source import RegionSource
+from settlegen.geometry import SettlementGeometry
 from settlegen.site.footprint import base_density_per_ha
 from settlegen.terrain.builder import km_per_local_unit
 
@@ -114,6 +118,7 @@ class SettlementMaps:
     keys: list[tuple[int, int]]          # (region_id, hex_index), owning map first
     maps: list[LocalMap]                 # in ``keys`` order
     center: np.ndarray                   # (3,) where the owning local map draws the settlement
+    frame_center: np.ndarray             # (3,) the frame's centre: ``center`` slid toward land
     radius_km: float                     # footprint radius at ``density_per_ha``
     population: float
     density_per_ha: float                # before the site's squeeze (settlegen.site.footprint)
@@ -158,22 +163,68 @@ def frame_side_km(radius_km: float, garden_ring_km: float, margin_km: float) -> 
     return 2.0 * (float(radius_km) + float(garden_ring_km) + float(margin_km))
 
 
+# Candidate shifts per axis, land samples across the frame, and the land share
+# a full shift must gain (less is spent on smaller shifts in proportion).
+_SHIFT_STEPS = 9
+_SHIFT_SAMPLES = 48
+_SHIFT_PENALTY = 0.05
+
+
+def land_shifted_center(owner: LocalMap, center: np.ndarray, side_km: float, max_shift_km: float) -> np.ndarray:
+    """The frame centre (unit vector): ``center`` moved east / north by at most
+    ``max_shift_km`` each way to the side ``side_km`` square holding the most land,
+    as the owning local map's water (bilinear, its over-hang past the hexagon
+    included) has it.  ``center`` itself unless the land gained pays for the move."""
+    center = np.asarray(center, dtype=np.float64).reshape(3)
+    if not max_shift_km > 0.0:
+        return center
+    f = owner.fields
+    s, t, _ = f.geometry.ecef_to_local(center[None])
+    ext = float(side_km) + 2.0 * float(max_shift_km)
+    reach = SettlementGeometry(f.geometry, np.array([s[0], t[0]]), ext / km_per_local_unit(f))
+    n = int(math.ceil(_SHIFT_SAMPLES * ext / float(side_km)))
+    c = (np.arange(n) + 0.5) / n
+    aa, bb = np.meshgrid(c, c)                                            # rows along b (north)
+    source = RegionSource(f)
+    loc = source.locate(reach.local_to_ecef(aa.ravel(), bb.ravel()))
+    wet = np.zeros(n * n)
+    for key in ("ocean_mask", "lake_mask"):
+        if source.has(key):
+            wet += source.coarse(key, loc)[:, 0]
+    wet = np.clip(wet, 0.0, 1.0).reshape(n, n)
+    xs = (c - 0.5) * ext                                                  # km from the settlement
+    best, shift = -np.inf, (0.0, 0.0)
+    steps = np.linspace(-max_shift_km, max_shift_km, _SHIFT_STEPS)
+    for dx in steps:
+        cols = np.abs(xs - dx) <= 0.5 * side_km
+        for dy in steps:
+            rows = np.abs(xs - dy) <= 0.5 * side_km
+            land = 1.0 - float(wet[np.ix_(rows, cols)].mean())
+            score = land - _SHIFT_PENALTY * math.hypot(dx, dy) / max_shift_km
+            if score > best + 1e-12:
+                best, shift = score, (dx, dy)
+    if shift == (0.0, 0.0):
+        return center
+    return reach.local_to_ecef(np.array([0.5 + shift[0] / ext]), np.array([0.5 + shift[1] / ext]))[0]
+
+
 def frame_keys(
     globe: "World", owner: LocalMap, center: np.ndarray, side_km: float, n_cols: int,
 ) -> list[tuple[int, int]]:
     """``(region_id, hex_index)`` of every local map whose ground the frame overlaps,
     the owning map first.  Exact on the regional hex grids (no region is built):
-    the frame square, in each touched region's ``(s, t)``, against that region's
+    the north-squared frame, in each touched region's ``(s, t)``, against that region's
     hexagons clipped to its cell ``[0, 1]²`` — the ground its local maps own."""
     geo = owner.fields.geometry
     s, t, _ = geo.ecef_to_local(np.asarray(center, dtype=np.float64).reshape(1, 3))
-    half = 0.5 * float(side_km) / km_per_local_unit(owner.fields)
-    edge = np.linspace(-half, half, _EDGE_SAMPLES, endpoint=False)
+    frame_geo = SettlementGeometry(geo, np.array([s[0], t[0]]), float(side_km) / km_per_local_unit(owner.fields))
+    edge = np.linspace(0.0, 1.0, _EDGE_SAMPLES, endpoint=False)
+    lo, hi = np.zeros_like(edge), np.ones_like(edge)
     ring = np.concatenate([
-        np.column_stack([edge, np.full_like(edge, -half)]), np.column_stack([np.full_like(edge, half), edge]),
-        np.column_stack([-edge, np.full_like(edge, half)]), np.column_stack([np.full_like(edge, -half), -edge]),
-    ]) + np.array([s[0], t[0]])
-    outline = geo.local_to_ecef(ring[:, 0], ring[:, 1])                  # (R, 3) frame boundary
+        np.column_stack([edge, lo]), np.column_stack([hi, edge]),
+        np.column_stack([1.0 - edge, hi]), np.column_stack([lo, 1.0 - edge]),
+    ])
+    outline = frame_geo.local_to_ecef(ring[:, 0], ring[:, 1])            # (R, 3) frame boundary
     owner_key = (owner.fields.region_id, owner.hex_index)
     keys = [owner_key]
     # A ≤10 km frame can't hold a whole region cell, so its outline meets every cell it touches.
@@ -198,7 +249,7 @@ def frame_keys(
 
 def ensure_local_maps(
     store: "MapStore", ref: SettlementRef, margin_km: float = 0.5,
-    footprint: Optional["SettlementFootprintParams"] = None,
+    footprint: Optional["SettlementFootprintParams"] = None, land_shift: float = 1.0,
 ) -> SettlementMaps:
     """Every local map ``ref``'s frame needs, from ``store``.  See the module docstring."""
     globe = store.globe
@@ -227,10 +278,11 @@ def ensure_local_maps(
     ring = garden_ring_km(people, math.pi * radius ** 2, local_params.farmland) if ref.kind == "city" \
         else _FIELDS_KM
     side = frame_side_km(radius, ring, margin_km)
-    keys = frame_keys(globe, owner, center, side, int(store.region_params.upsample.n_cols))
+    frame_center = land_shifted_center(owner, center, side, max(float(land_shift), 0.0) * ring)
+    keys = frame_keys(globe, owner, frame_center, side, int(store.region_params.upsample.n_cols))
     maps = [owner] + [store.local(*key) for key in keys[1:]]
     return SettlementMaps(
-        ref=ref, keys=keys, maps=maps, center=center, radius_km=radius, population=people,
+        ref=ref, keys=keys, maps=maps, center=center, frame_center=frame_center, radius_km=radius, population=people,
         density_per_ha=density, side_km=side,
         built=list(store.builds[builds_before:]),
     )

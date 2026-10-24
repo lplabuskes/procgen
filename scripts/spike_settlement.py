@@ -85,7 +85,7 @@ def run_one(store: MapStore, ref: SettlementRef, sp: SettlementUpsampleParams) -
     chain_s = time.perf_counter() - t0
     maps = [m.fields for m in chain.maps]
     t0 = time.perf_counter()
-    fields = build_settlement_fields(world, maps, chain.center, chain.side_km, sp)
+    fields = build_settlement_fields(world, maps, chain.frame_center, chain.side_km, sp, settlement=chain.center)
     seconds = time.perf_counter() - t0
     report = settlement_conservation_report(fields, maps, world.antimeridian)
     source = LocalMapsSource(maps, world.antimeridian)

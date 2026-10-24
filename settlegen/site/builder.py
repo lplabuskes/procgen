@@ -71,6 +71,7 @@ def build_site(
     assert isinstance(geometry, SettlementGeometry)
     roads = roads or SettlementRoadParams()
     frame = Frame(geometry, float(chain.side_km) * 1000.0)
+    frame = Frame(geometry, frame.side_m, frame.to_xy(chain.center)[0])
     maps = chain.maps
     water = build_site_water(globe, fields, frame, maps, rivers)
     site_roads = build_site_roads(

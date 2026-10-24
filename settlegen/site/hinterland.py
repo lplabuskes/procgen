@@ -190,7 +190,7 @@ def build_hinterland(
 
     taken = np.full(t * t, -1, dtype=np.int64)       # claimant per texel: 0 = the settlement, 1 + k = neighbour k
     from_footprint = (np.asarray(distance_transform_edt(~built)) * texel_m) if built.any() else \
-        np.hypot(xy[..., 0], xy[..., 1])
+        np.hypot(xy[..., 0] - frame.settlement_xy[0], xy[..., 1] - frame.settlement_xy[1])
     own_kind: Literal["gardens", "fields"] = "gardens" if ref.kind == "city" else "fields"
 
     # ── a city's market gardens: its cheapest free ground by the footprint, all within the floor ──

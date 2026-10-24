@@ -193,8 +193,8 @@ def _route(
 
 
 def _route_direction(globe: "World", frame: Frame) -> Optional[tuple[np.ndarray, float]]:
-    """``(unit xy, flow)``: the way of the world's land trade-route hop nearest the frame's
-    centre, and the least flow a road is drawn at (the median hop's); None without routes."""
+    """``(unit xy, flow)``: the way of the world's land trade-route hop nearest the
+    settlement, and the least flow a road is drawn at (the median hop's); None without routes."""
     from realmgen.trade.network import ROUTE_LAND
     routes = globe.get_feature("trade_routes") or []
     if not routes:
@@ -206,7 +206,7 @@ def _route_direction(globe: "World", frame: Frame) -> Optional[tuple[np.ndarray,
     if layers is not None and len(layers) == len(routes) and (np.asarray(layers) == ROUTE_LAND).any():
         land = np.asarray(layers) == ROUTE_LAND
         a, b = a[land], b[land]
-    c = frame.to_ecef(np.zeros((1, 2)))[0]
+    c = frame.to_ecef(np.asarray(frame.settlement_xy, dtype=np.float64)[None])[0]
     ab = b - a
     t = np.clip(np.einsum("ij,ij->i", c - a, ab) / np.maximum(np.einsum("ij,ij->i", ab, ab), 1e-18), 0.0, 1.0)
     k = int(np.argmin(np.linalg.norm(a + t[:, None] * ab - c, axis=1)))
@@ -222,24 +222,24 @@ def _route_direction(globe: "World", frame: Frame) -> Optional[tuple[np.ndarray,
 def through_road(
     globe: "World", frame: Frame, water: SiteWater, step_m: float,
 ) -> tuple[Optional[np.ndarray], list[tuple[np.ndarray, np.ndarray]]]:
-    """``(way, halves)``: a straight road through the frame's centre the way (unit xy) of
+    """``(way, halves)``: a straight road through the settlement the way (unit xy) of
     the nearest land trade route (:func:`_route_direction`), from frame edge to frame
     edge, cut where it meets the sea or a lake, as ``(ecef (K, 3), flows (K - 1,))`` per
-    half.  Each half runs out from the centre, so the re-traced road keeps to the
+    half.  Each half runs out from the settlement, so the re-traced road keeps to the
     settlement rather than wandering its corridor.  ``(None, [])`` if there is none."""
     way = _route_direction(globe, frame)
     if way is None:
         return None, []
     u, flow = way
-    reach = frame.half / max(float(np.abs(u).max()), 1e-9)
-    line: BaseGeometry = LineString([-reach * u, reach * u])
+    centre = Point(*frame.settlement_xy)
+    line: BaseGeometry = LineString([frame.settlement_xy - frame.side_m * u, frame.settlement_xy + frame.side_m * u])
+    line = line.intersection(frame.box())
     still = shapely.union_all([water.sea, water.lakes])
     if not still.is_empty:
         line = line.difference(still)
     parts = [g for g in shapely.get_parts(line) if isinstance(g, LineString) and g.length > step_m]
     if not parts:
         return None, []
-    centre = Point(0.0, 0.0)
     piece = min(parts, key=lambda g: g.distance(centre))
     at = piece.project(centre)
     out = []
@@ -260,7 +260,7 @@ def build_site_roads(
 ) -> SiteRoads:
     """The site's roads.  See the module docstring.  ``local_road_raster_texels`` is the
     local maps' road raster spacing (how far apart their vertices are, for joining at seams).
-    ``through_within_m``: if no road comes this near the centre, add :func:`through_road`.
+    ``through_within_m``: if no road comes this near the settlement, add :func:`through_road`.
     No gates yet: the footprint follows the roads (:func:`set_gates`)."""
     params = params or SettlementRoadParams()
     parent = parent_roads(maps, globe.antimeridian, local_road_raster_texels)
@@ -270,7 +270,7 @@ def build_site_roads(
     parent.polylines = polylines
     through: Optional[np.ndarray] = None
     if through_within_m is not None and not any(
-            len(p) >= 2 and LineString(frame.to_xy(p)).distance(Point(0.0, 0.0)) <= through_within_m
+            len(p) >= 2 and LineString(frame.to_xy(p)).distance(Point(*frame.settlement_xy)) <= through_within_m
             for p in parent.polylines):
         through, halves = through_road(globe, frame, water, 2.0 * merge_m)
         for pos, flows in halves:

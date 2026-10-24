@@ -1,13 +1,13 @@
 """The settlement map's planar frame: metres from its centre, along its axes.
 
 Everything a site or layout holds is geometry in these coordinates (plan
-Decision 8): ``x`` along the frame's ``a`` axis, ``y`` along ``b`` (screen-up
-unrotated; :meth:`SettlementGeometry.up_direction` gives north).  A frame spans
+Decision 8): ``x`` along the frame's ``a`` axis (east), ``y`` along ``b`` (north, so
+screen-up unrotated; see :class:`SettlementGeometry`).  A frame spans
 ≤10 km, where the gnomonic patch is flat to well under 0.1%.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from shapely.geometry import Polygon, box
@@ -17,10 +17,15 @@ from settlegen.geometry import SettlementGeometry
 
 @dataclass(frozen=True)
 class Frame:
-    """``[0, 1]²`` of ``geometry`` as a ``side_m`` square of metres centred on 0."""
+    """``[0, 1]²`` of ``geometry`` as a ``side_m`` square of metres centred on 0.
+
+    ``settlement_xy``: where the settlement stands in it — off 0 when the frame
+    was slid toward land (:func:`settlegen.chain.builder.land_shifted_center`).
+    """
 
     geometry: SettlementGeometry
     side_m: float
+    settlement_xy: np.ndarray = field(default_factory=lambda: np.zeros(2))
 
     @property
     def half(self) -> float:

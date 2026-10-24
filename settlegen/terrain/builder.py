@@ -66,6 +66,8 @@ class SettlementUpsampleParams(LocalUpsampleParams):
     texel_m: float = _f(15.0, label="Texel size (m)", min=2.0, max=100.0, step=1.0)
     # Ground kept around the footprint and garden ring.
     margin_km: float = _f(0.5, label="Frame margin (km)", min=0.0, max=5.0, step=0.1)
+    # How far the frame may slide toward land (share of the garden ring / fields) — 0 keeps the settlement centred.
+    land_shift: float = _f(1.0, label="Frame shift toward land", min=0.0, max=1.0, step=0.05)
     # Local slopes over ~365 m texels run to ~0.1–0.3 km/km in hills; the floor
     # keeps plains to a couple of metres.
     slope_reference: float = _f(
@@ -193,9 +195,10 @@ def build_settlement_fields(
     maps: Sequence[RegionFields],
     center: np.ndarray,
     side_km: float,
-    params: Optional[SettlementUpsampleParams] = None,
+    params: Optional[SettlementUpsampleParams] = None, settlement: Optional[np.ndarray] = None,
 ) -> RegionFields:
     """Refine the local maps ``maps`` onto a ``side_km`` square centred on ``center`` (unit vector).
+    ``settlement`` (default ``center``): where the unrefined fields are read for the whole frame.
 
     ``maps[0]`` is the owning local map: the frame is laid out in its ``(s, t)``.
     ``maps`` must cover the frame (every point inside some map's parent
@@ -235,7 +238,7 @@ def build_settlement_fields(
         near_small = source.coarse(SMALL_LAKE_KEY, loc)[:, 0].reshape(shape) > 0.0
         textures[SMALL_LAKE_KEY] = ((textures["lake_mask"][..., 0] > 0.5) & near_small)[..., None].astype(np.uint8)
     # Every other field: the owning map's value at the settlement, for the whole frame.
-    at_center = source.locate(np.asarray(center, dtype=np.float64).reshape(1, 3))
+    at_center = source.locate(np.asarray(center if settlement is None else settlement, dtype=np.float64).reshape(1, 3))
     for key, tex in owner.textures.items():
         if key in textures or not source.has(key):
             continue
