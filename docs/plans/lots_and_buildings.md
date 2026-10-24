@@ -179,3 +179,13 @@ with a house, the registry falls back to district.
   seed 4 city 36); roofs by material in the main view; hover; measure_settlements
   buildings + built share (and its lot-overlap metric now pairwise — a union of every
   lot lost ~269 m² to rounding). City 36 layout +1.6 s (place_buildings ~1.7 s).
+- 2026-10-24: review of seed 410665717 city 9: (1) open space — dense lots built back
+  (front house up to half the lot, ≤ `backland_depth_m` 14, and on `backland_share`
+  0.6 a rear range down one side), garden lots get cottages (`garden_cottage_chance`
+  0.6): residential plots 46% → 58% built; (2) the river cut mid-city was the region
+  router cutting across a loop of a great river (the corridors round both arms one) —
+  stems now pass through their world confluences and re-route on a missed vertex
+  (`region/rivers.py`); (3) wall bites — walls run round the core's convex hull,
+  bounded by `wall_closing` × radius; (4) pan/zoom — layout paths tiled (400 m) and
+  culled to the view: zoomed repaint 0.2 s → 0.08 s.
+

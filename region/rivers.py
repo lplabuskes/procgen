@@ -20,7 +20,7 @@ re-enters the same one is hidden for the whole stretch between.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Sequence
 
 import numpy as np
 from scipy.ndimage import distance_transform_edt
@@ -144,16 +144,64 @@ def _route_run(
     ends_here: bool,
     params: RegionRiverParams,
     node_factor: Optional[np.ndarray] = None,
+    through: Sequence[int] = (),
 ) -> Optional[np.ndarray]:
     """Least-cost node path along one in-raster stretch, within ``radius_nodes`` of the world line.
 
     With ``ends_here`` it ends on the cheapest ``sinks`` node within twice the
-    corridor of the mouth (the joined stem may sit a corridor width off).
+    corridor of the mouth (the joined stem may sit a corridor width off).  It passes
+    through each vertex in ``through`` (the world's confluences, :func:`_confluences`):
+    routed as legs meeting there.  Where the world line doubles back on itself the
+    corridor round both arms is one, and the cheapest path would cut across the loop:
+    a path missing one of the world line's vertices is routed again as two legs
+    meeting there (:func:`_first_missed`).
     """
-    return route_corridor(
-        raster, s, t, radius_nodes, _valley_cost(raster, float(params.valley_seeking), node_factor),
-        sinks=sinks if ends_here else None, mouth_radius=2.0 * radius_nodes,
-    )
+    cuts = [int(k) for k in through if 0 < k < len(s) - 1]
+    if cuts:
+        k = cuts[0]
+        head = _route_run(raster, s[:k + 1], t[:k + 1], radius_nodes, sinks, False, params, node_factor)
+        tail = _route_run(raster, s[k:], t[k:], radius_nodes, sinks, ends_here, params, node_factor,
+                          [c - k for c in cuts[1:]])
+        if head is not None and tail is not None:
+            return np.concatenate([head[:-1], tail])
+    cost = _valley_cost(raster, float(params.valley_seeking), node_factor)
+    nodes = route_corridor(raster, s, t, radius_nodes, cost, sinks=sinks if ends_here else None,
+                           mouth_radius=2.0 * radius_nodes)
+    k = _first_missed(raster, nodes, s, t, _MISSED_VERTEX * radius_nodes) if nodes is not None else None
+    if k is None:
+        return nodes
+    head = _route_run(raster, s[:k + 1], t[:k + 1], radius_nodes, sinks, False, params, node_factor)
+    tail = _route_run(raster, s[k:], t[k:], radius_nodes, sinks, ends_here, params, node_factor)
+    if head is None or tail is None:
+        return nodes
+    return np.concatenate([head[:-1], tail])
+
+
+# A route passing no nearer than this × the corridor to one of its world vertices has cut across.
+_MISSED_VERTEX = 1.5
+# A world flow rising by this share at a vertex: a tributary joins there.
+_CONFLUENCE_JUMP = 0.03
+
+
+def _confluences(edge_flows: np.ndarray) -> list[int]:
+    """The vertices of a world path where its flow jumps (a tributary joins)."""
+    f = np.asarray(edge_flows, dtype=np.float64)
+    if len(f) < 2:
+        return []
+    jump = f[1:] > f[:-1] * (1.0 + _CONFLUENCE_JUMP)
+    return (np.flatnonzero(jump) + 1).tolist()
+
+
+def _first_missed(raster: Raster, nodes: np.ndarray, s: np.ndarray, t: np.ndarray, reach: float) -> Optional[int]:
+    """The first interior world vertex ``nodes`` pass no nearer than ``reach`` (nodes) to, if any."""
+    if len(s) < 3:
+        return None
+    rows, cols = np.divmod(np.asarray(nodes, dtype=np.int64), raster.n)
+    x = (np.asarray(s[1:-1]) - raster.lo) / raster.step
+    y = (np.asarray(t[1:-1]) - raster.lo) / raster.step
+    d2 = (cols[None, :] - x[:, None]) ** 2 + (rows[None, :] - y[:, None]) ** 2
+    missed = np.flatnonzero(np.min(d2, axis=1) > reach * reach)
+    return int(missed[0]) + 1 if missed.size else None
 
 
 def _run_ids(raster: Raster, nodes: np.ndarray, s: np.ndarray, t: np.ndarray,
@@ -517,7 +565,8 @@ def route_stream_paths(
         if p.hidden_edges is not None:
             water = _water_factor(raster, s, t, p.hidden_edges, radius_nodes)
             factor = water if factor is None else factor * water
-        nodes = _route_run(raster, s, t, radius_nodes, sinks, p.ends_here, params, factor)
+        nodes = _route_run(raster, s, t, radius_nodes, sinks, p.ends_here, params, factor,
+                           () if p.starts_on_path else _confluences(p.edge_flows))
         if nodes is None or len(nodes) < 2:
             continue
         if not p.starts_on_path:

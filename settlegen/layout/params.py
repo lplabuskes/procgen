@@ -19,8 +19,10 @@ class SettlementLayoutParams:
     wall_m: float = _f(5.0, label="Wall width (m)", min=1.0, max=30.0, step=0.5)
     wall_water_m: float = _f(15.0, label="No wall within (m) of water", min=0.0, max=200.0, step=1.0)
     tower_spacing_m: float = _f(70.0, label="Tower spacing at strength 1 (m)", min=10.0, max=500.0, step=5.0)
-    # Walls are dear: the line spans notches narrower than this × the core's radius.
-    wall_closing: float = _f(0.35, label="Wall spans notches (× core radius)", min=0.0, max=1.0, step=0.05)
+    # Walls run straight round the core's convex hull, but no further than this × the core's
+    # radius beyond it.
+    wall_closing: float = _f(0.35, label="Wall strays from the core up to (× core radius)", min=0.0, max=1.0,
+                             step=0.05)
     # Open grounds scale with people, within _PLAZA_M2 / _CITADEL_M2 / _PRECINCT_M2.
     plaza_m2_per_person: float = _f(0.08, label="Market plaza (m² per person)", min=0.0, max=2.0, step=0.01)
     citadel_m2_per_person: float = _f(0.15, label="Citadel (m² per person)", min=0.0, max=5.0, step=0.01)
@@ -96,6 +98,11 @@ class SettlementLayoutParams:
     barn_depth_m: float = _f(8.0, label="Barn depth (m)", min=2.0, max=30.0, step=0.5)
     workshop_depth_m: float = _f(5.0, label="Workshop depth (m)", min=2.0, max=20.0, step=0.5)
     shed_chance: float = _f(0.3, label="Garden plots with a shed", min=0.0, max=1.0, step=0.05)
+    # Dense plots are built back: the front house up to half the plot deep, a range down one side.
+    backland_share: float = _f(0.6, label="Dense plots with a rear range", min=0.0, max=1.0, step=0.05)
+    backland_depth_m: float = _f(14.0, label="Dense front house up to (m deep)", min=3.0, max=40.0, step=0.5)
+    # Sparse ground (gardens, orchards) holds people too: cottages among the gardens.
+    garden_cottage_chance: float = _f(0.6, label="Garden plots with a cottage", min=0.0, max=1.0, step=0.05)
     # Docks.
     quay_width_m: float = _f(12.0, label="Quay width (m)", min=2.0, max=60.0, step=1.0)
     pier_spacing_m: float = _f(60.0, label="Pier spacing (m)", min=10.0, max=500.0, step=5.0)

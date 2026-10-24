@@ -67,7 +67,12 @@ local maps over the region's rivers ([local.md](local.md)).
 **Re-routing.**
 - Each stem: least-cost path through a corridor of `corridor_global_texels`
   either side of its world centreline (the global grid's positional
-  uncertainty).
+  uncertainty). It passes exactly through each world vertex where its flow
+  jumps ≥ 3% (a tributary joins: `_confluences`), routed as legs meeting there;
+  and where the world line doubles back so the corridors round both arms merge,
+  a route passing no nearer than 1.5 corridors to one of its vertices (cutting
+  across the loop, past the confluence towns on it) is routed again as two legs
+  meeting at that vertex (`_first_missed`).
 - Node cost `exp(valley_seeking · (anomaly − mean) / σ)`, anomaly = refined −
   coarse elevation, mean/σ over the corridor — finds the refined valley floor on
   plains and mountains alike, but can never change valley or basin.

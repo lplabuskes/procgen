@@ -1459,9 +1459,12 @@ class RegionView(QWidget):
                     by_district.setdefault(b.lot_district(i), []).append(lot)
             outlines = shapely.union_all([lot.boundary for b in layout.blocks for lot in b.lots])
             lot_lines = [g for g in shapely.get_parts(shapely.line_merge(outlines)) if isinstance(g, LineString)]
+        districts = [(d, g) for d, polys in by_district.items() for g in polys]
         cache: dict = {
-            "districts": {d: _site_path(MultiPolygon(polys), ident) for d, polys in by_district.items()},
-            "lots": _lines_path(lot_lines),
+            # Tiled (see _tiles): a paint draws only what is in view.
+            "districts": _tiles([g for _, g in districts], [d for d, _ in districts],
+                                lambda polys: _site_path(MultiPolygon(polys), ident)),
+            "lots": _tiles(lot_lines, [None] * len(lot_lines), _lines_path),
             "open": {k: _site_path(getattr(layout, k), ident)
                      for k in ("green", "quays", "plaza", "precinct", "citadel")},
             # (width, path): the secondary arterials and wall street under the main streets.
@@ -1473,15 +1476,14 @@ class RegionView(QWidget):
         self._layout_paths = (id(layout), cache)
         return cache
 
-    def _building_paths(self, layout: SettlementLayout, ident) -> dict:  # type: ignore[no-untyped-def]
-        """Colour → painter path of the layout's buildings, roofed in the place's material."""
+    def _building_paths(self, layout: SettlementLayout, ident) -> list:  # type: ignore[no-untyped-def]
+        """The layout's buildings, tiled (see :func:`_tiles`) by colour — roofed in the place's material."""
         profile = self._settlement.profile if self._settlement is not None else None
         material = profile.material if profile is not None else "timber"
         village = profile is not None and profile.tier == 5
-        by_rgb: dict[tuple, list] = {}
-        for poly, kind in zip(layout.buildings.polygons, layout.buildings.kinds):
-            by_rgb.setdefault(building_rgb(str(kind), material, village), []).append(poly)
-        return {rgb: _site_path(MultiPolygon(polys), ident) for rgb, polys in by_rgb.items()}
+        rgb = {k: building_rgb(str(k), material, village) for k in set(layout.buildings.kinds)}
+        return _tiles(layout.buildings.polygons, [rgb[k] for k in layout.buildings.kinds],
+                      lambda polys: _site_path(MultiPolygon(polys), ident))
 
     def _draw_layout(self, painter: QPainter, layout: SettlementLayout, x0: float, y0: float, size: float,
                      side: float) -> None:
@@ -1494,14 +1496,18 @@ class RegionView(QWidget):
         painter.scale(size / side, -size / side)
         t = painter.worldTransform()
         px_per_m = math.hypot(t.m11(), t.m12())
+        inverse, _ = t.inverted()
+        view = inverse.mapRect(QRectF(painter.viewport()))         # what is on screen, in metres
         painter.setPen(Qt.PenStyle.NoPen)
-        for district, path in cache["districts"].items():
-            painter.setBrush(QColor.fromRgbF(*DISTRICT_RGB.get(district, (0.8, 0.7, 0.6))))
-            painter.drawPath(path)
+        for paths in _in_view(cache["districts"], view):
+            for district, path in paths.items():
+                painter.setBrush(QColor.fromRgbF(*DISTRICT_RGB.get(district, (0.8, 0.7, 0.6))))
+                painter.drawPath(path)
         if px_per_m * 8.0 >= 4.0:
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.setPen(_cosmetic_pen(QColor(70, 50, 35, 150)))
-            painter.drawPath(cache["lots"])
+            for paths in _in_view(cache["lots"], view):
+                painter.drawPath(paths[None])
         painter.setPen(_cosmetic_pen(QColor(60, 50, 40, 200)))
         for key, path in cache["open"].items():
             painter.setBrush(QColor.fromRgbF(*OPEN_RGB[key]))
@@ -1509,9 +1515,10 @@ class RegionView(QWidget):
         if px_per_m * 6.0 >= 3.0:
             # Buildings once a house spans a few pixels, over the open grounds (the church on its precinct).
             painter.setPen(_cosmetic_pen(QColor(45, 35, 28, 200)))
-            for rgb, path in cache["buildings"].items():
-                painter.setBrush(QColor.fromRgbF(*rgb))
-                painter.drawPath(path)
+            for paths in _in_view(cache["buildings"], view):
+                for rgb, path in paths.items():
+                    painter.setBrush(QColor.fromRgbF(*rgb))
+                    painter.drawPath(path)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         # Every casing first, then every fill, so junctions between widths stay open.
         for width, path in cache["arterials"]:
@@ -1664,6 +1671,40 @@ def _without_city(city_index: np.ndarray, positions: np.ndarray, footprints, cit
         area_km2=footprints.area_km2[keep],
     )
     return np.asarray(city_index)[keep], np.asarray(positions)[keep], trimmed
+
+
+# The layout's lots, buildings and blocks are drawn in tiles this big (m): a paint draws
+# only the tiles in view.
+_TILE_M = 400.0
+
+
+def _tiles(geoms, keys, make) -> list[tuple[QRectF, dict]]:  # type: ignore[no-untyped-def]
+    """``geoms`` (each with a key: a district, a colour, None) grouped into ``_TILE_M`` tiles
+    by their centres: per tile, the bounds of what it holds and key → ``make(geoms)``."""
+    if not len(geoms):
+        return []
+    arr = np.asarray(geoms, dtype=object)
+    b = shapely.bounds(arr)
+    tx = np.floor(0.5 * (b[:, 0] + b[:, 2]) / _TILE_M).astype(np.int64)
+    ty = np.floor(0.5 * (b[:, 1] + b[:, 3]) / _TILE_M).astype(np.int64)
+    groups: dict[tuple[int, int], list[int]] = {}
+    for i, key in enumerate(zip(tx.tolist(), ty.tolist())):
+        groups.setdefault(key, []).append(i)
+    out = []
+    for idx in groups.values():
+        bb = b[idx]
+        rect = QRectF(QPointF(float(bb[:, 0].min()), float(bb[:, 1].min())),
+                      QPointF(float(bb[:, 2].max()), float(bb[:, 3].max()))).adjusted(-1.0, -1.0, 1.0, 1.0)
+        by_key: dict = {}
+        for i in idx:
+            by_key.setdefault(keys[i], []).append(arr[i])
+        out.append((rect, {k: make(v) for k, v in by_key.items()}))
+    return out
+
+
+def _in_view(tiles: list[tuple[QRectF, dict]], view: QRectF) -> list[dict]:
+    """The paths of the ``tiles`` (see :func:`_tiles`) overlapping ``view``."""
+    return [paths for rect, paths in tiles if rect.intersects(view)]
 
 
 def _site_path(geom, to_px) -> QPainterPath:  # type: ignore[no-untyped-def]

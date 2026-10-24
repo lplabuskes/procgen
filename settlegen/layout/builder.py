@@ -231,11 +231,13 @@ def _town_layout(
         core = _multi(shapely.union_all([core, citadel]))
     grown: Optional[MultiPolygon] = None
     if profile.walls and not core.is_empty and float(params.wall_closing) > 0.0:
-        # The wall takes the short way across a notch in the core's edge (and round the
-        # citadel); dry ground it takes in beyond the footprint is walled gardens.
+        # The wall runs straight: round each piece's convex hull, but no further than
+        # ``wall_closing`` × the core's radius beyond it (not across a bay); dry ground it
+        # takes in beyond the footprint is walled gardens.
         r = float(params.wall_closing) * math.sqrt(core.area / math.pi)
         dry = site.frame.box().difference(site.water.bodies)
-        closed = _multi(core.buffer(r, quad_segs=16).buffer(-r, quad_segs=16).intersection(dry))
+        hull = shapely.union_all([g.convex_hull for g in core.geoms]).intersection(core.buffer(r, quad_segs=16))
+        closed = _multi(hull.intersection(dry))
         biggest = max([g.area for g in closed.geoms] or [0.0])
         core = _multi(shapely.union_all([core, *(g for g in closed.geoms if g.area >= 0.05 * biggest)]))
         added = _multi(core.difference(footprint))

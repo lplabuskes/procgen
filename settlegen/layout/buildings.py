@@ -16,11 +16,14 @@ types (L-shaped farmhouses, courtyard houses, halls) are new entries.  First cut
 
 - **townhouse** (houses, market, quay): terraced — the whole frontage, at the street —
   on a narrow lot (≤ ``terrace_frontage_m``) in the core, the market or the quay; else
-  detached, a gap either side, set back a little;
+  detached, a gap either side, set back a little.  A dense lot is built back: the house
+  up to half the lot deep (``backland_depth_m`` at most) and, on ``backland_share`` of
+  them, a rear range down one side;
 - **workshop** (a trade's lot, a craft quarter): a townhouse and a workshop at the back;
 - **elite**: a house the whole frontage and a wing down one side behind it;
 - **suburb**: detached;
-- **garden**: now and then (``shed_chance``) a shed at the back;
+- **garden**: a cottage (``garden_cottage_chance``) and now and then (``shed_chance``) a
+  shed at the back — sparse ground holds people too;
 - a village's **farm**: a house along the street and a barn behind; **cottage**
   (fishers, miners): a small house; **craft**: a house and a workshop behind;
   **manor**: a hall set back and a wing.
@@ -171,12 +174,20 @@ def _houses(f: LotFrames, dense: np.ndarray, rng: np.random.Generator, p: Settle
     w = np.where(row, W, np.minimum(W - 2.0 * g, float(p.max_house_width_m)))
     x0 = g + rng.uniform(0.0, 1.0, k) * np.maximum(W - 2.0 * g - w, 0.0)
     y0 = np.where(row, 0.0, rng.uniform(0.0, 2.0, k))
-    y1 = y0 + np.minimum(float(p.house_depth_m) * rng.uniform(0.85, 1.15, k), 0.7 * D)
+    deep = np.where(dense, np.clip(0.5 * D, float(p.house_depth_m), float(p.backland_depth_m)), float(p.house_depth_m))
+    y1 = y0 + np.minimum(deep * rng.uniform(0.85, 1.15, k), 0.7 * D)
     return [_put(f, "row", row, x0, x0 + w, y0, y1), _put(f, "house", ~row, x0, x0 + w, y0, y1)], y1
 
 
 def _townhouse(f: LotFrames, dense: np.ndarray, rng: np.random.Generator, p: SettlementLayoutParams) -> Placed:
-    return _houses(f, dense, rng, p)[0]
+    """Town houses; a dense lot's back built up by a range down one side."""
+    placed, ends = _houses(f, dense, rng, p)
+    W, D = f.width, f.depth
+    back = dense & (rng.random(len(f)) < float(p.backland_share)) & (D - 1.5 - ends >= 4.0)
+    w = np.minimum(5.0, 0.5 * W)
+    left = rng.random(len(f)) < 0.5
+    x0 = np.where(left, 0.0, W - w)
+    return placed + [_put(f, "wing", back, x0, x0 + w, ends, D - 1.5)]
 
 
 def _suburb(f: LotFrames, dense: np.ndarray, rng: np.random.Generator, p: SettlementLayoutParams) -> Placed:
@@ -206,9 +217,17 @@ def _elite(f: LotFrames, dense: np.ndarray, rng: np.random.Generator, p: Settlem
 
 
 def _garden(f: LotFrames, dense: np.ndarray, rng: np.random.Generator, p: SettlementLayoutParams) -> Placed:
+    """A cottage at the front, now and then; a shed at the back, now and then."""
     W, D = f.width, f.depth
-    shed = rng.random(len(f)) < float(p.shed_chance)
-    return [_put(f, "shed", shed, W - 5.0, W - 1.0, D - 5.0, D - 1.0)]
+    k = len(f)
+    cottage = rng.random(k) < float(p.garden_cottage_chance)
+    w = np.minimum(W - 2.0, 8.0)
+    x0 = 1.0 + rng.uniform(0.0, 1.0, k) * np.maximum(W - 2.0 - w, 0.0)
+    y0 = rng.uniform(1.0, 4.0, k)
+    y1 = y0 + 0.75 * float(p.house_depth_m)
+    shed = (rng.random(k) < float(p.shed_chance)) & (~cottage | (D - 5.0 >= y1 + 1.0))
+    return [_put(f, "cottage", cottage, x0, x0 + w, y0, y1),
+            _put(f, "shed", shed, W - 5.0, W - 1.0, D - 5.0, D - 1.0)]
 
 
 def _village_house(f: LotFrames, rng: np.random.Generator, p: SettlementLayoutParams, widest: float,

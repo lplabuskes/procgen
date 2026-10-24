@@ -4,7 +4,8 @@ import pytest
 
 from region.corridor import Raster, diagonal_corners
 from region.rivers import (
-    RegionRiverParams, StreamPath, _avoid_factor, _hide_reentries, _join_at_first_touch, _meet_ids, _route_run,
+    RegionRiverParams, StreamPath, _avoid_factor, _confluences, _hide_reentries, _join_at_first_touch, _meet_ids,
+    _route_run,
     _segment_crossings, _start_on_drawn, _trim_crossed_head, _water_factor, build_region_rivers, meet_line,
 )
 from worldgen.hydrology.rivers import main_stem_paths, stream_river_ids
@@ -205,6 +206,37 @@ def test_a_later_path_keeps_off_an_earlier_one():
     factor = _avoid_factor(raster, taken, blocked, s, t, p, 3.0, float(params.separation))
     kept = _route_run(raster, s, t, 3.0, no_sinks, False, params, factor)
     assert kept is not None and not blocked[kept].any()
+
+
+def test_a_route_does_not_cut_across_a_hairpin():
+    # Up column 5, over, down column 9: the corridors round the two arms are one, and the
+    # cheapest way from start to end would cut across the bottom of the U.
+    n = 21
+    raster = _valley_raster(n)
+    raster.anomaly = np.zeros(n * n)
+    s = np.array([5.0, 5.0, 5.0, 9.0, 9.0, 9.0])
+    t = np.array([0.0, 9.0, 18.0, 18.0, 9.0, 2.0])
+    nodes = _route_run(raster, s, t, 3.0, np.zeros(n * n, dtype=bool), False, RegionRiverParams())
+    assert nodes is not None
+    rows = nodes // n
+    assert rows.max() >= 16                                   # round the bend, not across
+
+
+def test_a_stem_passes_through_its_confluences():
+    n = 21
+    raster = _valley_raster(n)
+    raster.anomaly = 0.1 * np.abs(np.arange(n * n) % n - 13.0)   # the valley floor two nodes off the line
+    s, t = np.full(3, 10.0), np.array([0.0, 10.0, 20.0])
+    no_sinks = np.zeros(n * n, dtype=bool)
+    free = _route_run(raster, s, t, 3.0, no_sinks, False, RegionRiverParams())
+    assert free is not None and 10 * n + 10 not in free.tolist()      # alone, it keeps to the valley floor
+    through = _route_run(raster, s, t, 3.0, no_sinks, False, RegionRiverParams(), through=[1])
+    assert through is not None and 10 * n + 10 in through.tolist()    # but meets its tributary where the world does
+
+
+def test_confluences_are_where_the_flow_jumps():
+    assert _confluences(np.array([10.0, 10.0, 10.1, 12.0, 12.0, 30.0])) == [3, 5]
+    assert _confluences(np.array([5.0])) == []
 
 
 def test_a_tributary_joins_where_it_first_meets_its_stem():

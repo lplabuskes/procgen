@@ -293,8 +293,9 @@ slope, so it is tested on hand-built sites.
    sacred precinct are open ground sized by people.
 4. **Old core**: a wobbly blob about the market (and citadel) holding
    `core_share` of the footprint (more for walls, youth, towns). **Walls only
-   when walled**: the core is first closed by `wall_closing` (0.35) × its radius
-   (walls are dear: the line spans notches and goes round the citadel), dry
+   when walled**: the wall runs straight round the core's convex hull (and the
+   citadel), no further than `wall_closing` (0.35) × its radius beyond the core
+   (not across a bay), dry
    ground it takes in beyond the footprint joining `SettlementLayout.footprint`
    as walled gardens; stone from strength 0.4 (towers every 70 m / strength),
    else palisade; open within 15 m of water; gates where main streets cross.
@@ -365,16 +366,19 @@ streets 1, closes and alleys 0; a burgage plot faces its market street), else it
 narrow side. A typology maps the lot's type (its use, else district and tier) to
 a placer laying rectangles in every such lot's frame at once, clipped to the lot
 (kept while ≥ 60% is left): **townhouse** terraced on narrow (≤ 10 m) lots in the
-core, market or quay, else detached (1.5 m gaps, set back ≤ 2 m), 10 m deep;
+core, market or quay, else detached (1.5 m gaps, set back ≤ 2 m), 10 m deep; a
+dense lot is built back — the house up to half the lot (≤ 14 m) and on 60% a rear
+range down one side;
 **workshop** (a trade, a craft quarter) adds a workshop across the back;
 **elite** a house the whole frontage plus a wing; **suburb** detached;
-**garden** a shed (30%); a village's **farm** a house along the street (≤ 14 m)
+**garden** a cottage (60%: sparse ground holds people too) and a shed (30%); a village's **farm** a house along the street (≤ 14 m)
 and a barn behind, **cottage**, **craft** a house and a workshop, **manor** a hall
 and a wing. The church stands on the precinct, nave east–west, chancel, a tower
 from 800 people, length 5 + people^0.45 (18–90 m) but no longer than the
 precinct, shrunk or turned to fit. Roofs by the place's main material (thatch in
 villages), outbuildings darker, the church in stone; hover names the building and
-its lot. `SettlementLayout.buildings` holds them as parallel arrays.
+its lot. `SettlementLayout.buildings` holds them as parallel arrays. The viewer
+tiles lots, buildings and block fills into 400 m tiles and draws only those in view.
 
 **Lots as boundaries** (all tiers): a `Block` stores its ground, the lines
 between its lots and along their backs (`dividers`) and a point in each lot
