@@ -11,9 +11,10 @@ from settlegen.site.anchors import Anchor, AnchorCandidates
 from settlegen.frame import Frame
 from settlegen.layout.blocks import lanes_of, lots_of, split_blocks
 from settlegen.layout.builder import build_layout
-from settlegen.layout.describe import describe_at
-from settlegen.layout.districts import OPEN_DISTRICTS
+from settlegen.layout.describe import describe_at, summary
+from settlegen.layout.districts import OPEN_DISTRICTS, TRADE_DISTRICTS
 from settlegen.layout.geometry import chaikin, core_polygon
+from settlegen.layout.households import TRADES, farm_toft_m2, households
 from settlegen.layout.params import SettlementLayoutParams
 from settlegen.layout.streets import radial_targets, route_arterials
 from settlegen.profile.builder import Industry, PolityRelation, SettlementProfile
@@ -348,7 +349,72 @@ def test_a_village_is_farmsteads_along_its_streets():
     streets = shapely.union_all(lay.arterials).buffer(0.5 * lay.arterial_m)
     assert all(t.intersection(streets).area < 1.0 for t in tofts)
     assert not lay.precinct.is_empty
-    assert str(describe_at(lay, site, np.asarray(tofts[0].representative_point().coords[0]), 5)).startswith("Farm")
+    farm = next(b.polygon for b in lay.blocks if b.use(0) == "farm")
+    assert str(describe_at(lay, site, np.asarray(farm.representative_point().coords[0]), 5)).startswith("Farm")
+
+
+def _village(population: float, kind: str = "farming", **overrides):  # type: ignore[no-untyped-def]
+    profile = _profile(tier=5, tier_name="Village", kind=kind, walls=False, wall_strength=0.0,
+                       population=population, polity=PolityRelation(), industries=[], **overrides)
+    site = _site()
+    site = dataclasses.replace(site, footprint=MultiPolygon([box(-200, -250, 200, 50)]),
+                               buildable=MultiPolygon(list(shapely.get_parts(
+                                   box(-HALF, -HALF, HALF, HALF).difference(site.water.channels)))))
+    return site, profile
+
+
+def test_village_craftsmen_live_on_small_plots_near_the_middle():
+    site, profile = _village(600.0)
+    lay = build_layout(site, profile, _slope(), (1, 2, 3))
+    centre = lay.anchors["market"]
+    trades = [b.polygon for b in lay.blocks if b.use(0) in TRADES and b.use(0) != "miller"]
+    farms = [b.polygon for b in lay.blocks if b.use(0) == "farm"]
+    assert 0.05 * len(lay.blocks) <= len(trades) <= 0.35 * len(lay.blocks)
+    assert np.median([t.area for t in trades]) < 0.6 * np.median([f.area for f in farms])
+
+    def dist(polys):  # type: ignore[no-untyped-def]
+        return np.median([np.linalg.norm(np.asarray(p.centroid.coords[0]) - centre) for p in polys])
+    assert dist(trades) < dist(farms)
+    trade = next(b for b in lay.blocks if b.use(0) in TRADES)
+    what = describe_at(lay, site, np.asarray(trade.polygon.representative_point().coords[0]), 5)
+    assert str(what).startswith(TRADES[trade.use(0)].label)
+    assert "craftsmen" in summary(lay, profile)
+
+
+def test_households_by_what_they_do():
+    rng = np.random.default_rng(0)
+    params = SettlementLayoutParams()
+    _, small = _village(80.0)
+    assert not any(h.trade for h in households(small, params, rng))          # too small for a smith
+    _, fishing = _village(1000.0, kind="fishing", farming_share=0.4)
+    homes = households(fishing, params, rng)
+    assert len(homes) == 200
+    trades = sum(h.trade for h in homes)
+    assert 0.1 * 200 <= trades <= 0.35 * 200
+    fishers = sum(h.use == "fisher" for h in homes)
+    assert fishers == round(0.6 * (200 - trades))
+    # The plots keep the village's ground between them.
+    ground = 1e5
+    farm = farm_toft_m2(homes, ground)
+    assert sum(h.scale for h in homes) * farm == pytest.approx(ground)
+
+
+def test_a_city_spreads_its_everyday_trades():
+    lay = build_layout(_site(), _profile(), _slope(), (1, 2, 3))
+    spots: dict[str, list] = {}
+    for b in lay.blocks:
+        for i, lot in enumerate(b.lots):
+            if b.use(i):
+                assert b.district in TRADE_DISTRICTS
+                spots.setdefault(b.use(i), []).append(np.asarray(lot.centroid.coords[0]))
+    assert {"smith", "baker", "alehouse"} <= set(spots)
+    assert not {"miller", "weaver", "butcher"} & set(spots)          # quarters' trades, not spread
+    for name, pts in spots.items():
+        if len(pts) < 2:
+            continue
+        xy = np.asarray(pts)
+        d = np.linalg.norm(xy[:, None] - xy[None], axis=2) + np.eye(len(xy)) * 1e9
+        assert d.min() > 15.0, name                                   # never next door to its own
 
 
 def test_hover_names_what_is_there(layout):

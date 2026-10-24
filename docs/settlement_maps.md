@@ -48,10 +48,11 @@ One subpackage per pipeline step, as in `worldgen/` and `realmgen/`: each has a
 - `settlegen/layout/`
   - `builder.py` — `build_layout`: anchors chosen, then streets, market, core and walls, docks, blocks, districts, lots
   - `params.py` — `SettlementLayoutParams`
-  - `types.py` — `SettlementLayout`, `Walls`, `Block`
+  - `types.py` — `SettlementLayout`, `Walls`, `Block` (lots, each with a `use`)
   - `streets.py` — main streets on a route grid (`route_arterials`), `infill_arterials`, `wall_street`, `main_axis`, `radial_targets`
   - `blocks.py` — `split_blocks`, `lots_of`, `lanes_of`, `lane_lots`, `burgage_band`
-  - `districts.py` — `CRAFTS`, `DISTRICTS`, `assign_districts`
+  - `districts.py` — `CRAFTS`, `DISTRICTS`, `assign_districts`, `disperse_trades`
+  - `households.py` — `TRADES`, `households`, `trade_counts`, `farm_toft_m2` (who lives there, by what they do)
   - `geometry.py` — polygon helpers (`core_polygon`, `chaikin`, axes, blobs)
   - `describe.py` — `describe_at`, `summary` (hover and status text)
   - `village.py` — villages' layouts (tofts along streets)
@@ -316,9 +317,21 @@ slope, so it is tested on hand-built sites.
    long side every ~60 m — closes stopping a plot short of the far side, 30%
    alleys running through; planned ones a back alley down the middle. Plots
    front the lanes in the yards (one facing down each close from its head).
+9. **Everyday trades** (`layout/households.py`): smiths, carpenters, alehouses,
+   bakers and cobblers, one per 200–400 people (× 1 + the weight of an industry
+   that leans on them), tag houses', suburbs', market and quay lots — at most
+   `urban_trade_share` (25%) — spread out: no two of a trade nearer than half
+   their even spacing, lots on the arterials and the market first
+   (`disperse_trades`). Millers, weavers, butchers, coopers and potters keep to
+   villages and the craft quarters.
 
 **Villages** (`layout/village.py`): households (`P / 5`) as tofts fronting a
-street, sized from the footprint (300–3,000 m², 2.5:1). Forms: a fishing village
+street. Not all farm: the everyday trades (also millers, weavers, butchers,
+coopers, potters; ≤ 35% of households) live on craft plots (0.4 × a farm toft)
+nearest the middle — the miller nearest running water — and the
+`1 − farming_share` fishers or miners on cottage plots (0.35 ×); the farm toft
+is solved so all the plots cover `toft_share` of the footprint (300–3,000 m²,
+2.5:1). Forms: a fishing village
 within 300 m of the sea or a lake is a **harbour** village — rows of streets
 along the shore about its jetty; otherwise **street** (45%), **green** (30%) or
 **cluster** (25%, 3–6 lanes). Arms stop at 300 m; short of room, back lanes a

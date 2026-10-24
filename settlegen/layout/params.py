@@ -75,6 +75,14 @@ class SettlementLayoutParams:
     household_people: float = _f(5.0, label="People per household", min=1.0, max=20.0, step=0.5)
     toft_share: float = _f(0.85, label="Tofts' share of a village footprint", min=0.1, max=2.0, step=0.05)
     village_street_m: float = _f(6.0, label="Village street width (m)", min=2.0, max=20.0, step=0.5)
+    # Households that don't farm (settlegen.layout.households): everyday trades on small plots,
+    # fishers' and miners' cottages; towns and cities spread their trades through the houses.
+    trade_people_mult: float = _f(1.0, label="Everyday trades (× per-capita counts)", min=0.0, max=5.0, step=0.1)
+    max_trade_share: float = _f(0.35, label="Trades at most this share of a village", min=0.0, max=1.0, step=0.05)
+    craft_plot_scale: float = _f(0.4, label="Craft plot (× farm toft)", min=0.05, max=1.0, step=0.05)
+    cottage_plot_scale: float = _f(0.35, label="Cottage plot (× farm toft)", min=0.05, max=1.0, step=0.05)
+    urban_trade_share: float = _f(0.25, label="Trades at most this share of a town's house plots", min=0.0,
+                                  max=1.0, step=0.05)
     # Docks.
     quay_width_m: float = _f(12.0, label="Quay width (m)", min=2.0, max=60.0, step=1.0)
     pier_spacing_m: float = _f(60.0, label="Pier spacing (m)", min=10.0, max=500.0, step=5.0)

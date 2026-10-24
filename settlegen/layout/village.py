@@ -40,6 +40,7 @@ from shapely.geometry.base import BaseGeometry
 from settlegen.layout.builder import _dock_spec, choose_anchors
 from settlegen.layout.docks import Docks, build_docks
 from settlegen.layout.geometry import _multi, part_containing
+from settlegen.layout.households import Household, farm_toft_m2, households
 from settlegen.layout.params import SettlementLayoutParams
 from settlegen.layout.streets import main_axis, route_arterials
 from settlegen.layout.types import Block, SettlementLayout
@@ -111,16 +112,13 @@ def tofts_along(
 
 
 def _trimmed(plots: Sequence[Polygon], cut, keep_all: bool = False) -> list:  # type: ignore[no-untyped-def]
-    """``plots`` less ``cut``: each its largest remaining part, dropped once under half its
+    """``plots`` less ``cut``: each its largest remaining part, None once under half its
     size — unless ``keep_all`` (the church, the manor), which keeps any part (None if none)."""
     out: list = []
     for p in plots:
         parts = [g for g in shapely.get_parts(p.difference(cut)) if isinstance(g, Polygon)]
         best = max(parts, key=lambda g: g.area) if parts else None
-        if best is not None and (keep_all or best.area >= 0.5 * p.area):
-            out.append(best)
-        elif keep_all:
-            out.append(None)
+        out.append(best if best is not None and (keep_all or best.area >= 0.5 * p.area) else None)
     return out
 
 
@@ -233,6 +231,33 @@ def back_lanes(
     return out
 
 
+def _mill_site(site: "SettlementSite", centre: np.ndarray, reach: float) -> Optional[np.ndarray]:
+    """Where the miller goes: the nearest running water within ``reach`` (None: a windmill, anywhere)."""
+    channels = site.water.channels
+    pt = Point(float(centre[0]), float(centre[1]))
+    if channels.is_empty or channels.distance(pt) > reach:
+        return None
+    return np.asarray(shapely.ops.nearest_points(channels, pt)[0].coords[0])
+
+
+def _household_groups(homes: Sequence[Household], rng: np.random.Generator, mill: Optional[np.ndarray],
+                      centre: np.ndarray) -> list[tuple[list[str], float, np.ndarray]]:
+    """``(uses to place, plot scale, placed nearest)`` per plot size, in the order they choose
+    their slots: the miller by the water, the trades (shuffled), cottages, farms."""
+    trades = [h for h in homes if h.trade]
+    out: list[tuple[list[str], float, np.ndarray]] = []
+    if mill is not None and any(h.use == "miller" for h in trades):
+        out.append((["miller"], next(h.scale for h in trades if h.use == "miller"), mill))
+        trades.remove(next(h for h in trades if h.use == "miller"))
+    if trades:
+        out.append(([trades[i].use for i in rng.permutation(len(trades))], trades[0].scale, centre))
+    for which in (lambda h: not h.trade and h.use != "farm", lambda h: h.use == "farm"):
+        group = [h for h in homes if which(h)]
+        if group:
+            out.append(([h.use for h in group], group[0].scale, centre))
+    return out
+
+
 def village_layout(
     site: "SettlementSite", profile: SettlementProfile, slope: np.ndarray, rng: np.random.Generator,
     params: SettlementLayoutParams,
@@ -243,9 +268,11 @@ def village_layout(
     centre = anchors["market"]
     anchors = {"market": centre}
     pop = float(profile.population)
-    households = max(int(round(pop / float(params.household_people))), 3)
-    toft_m2 = float(np.clip(float(params.toft_share) * footprint.area / households, 300.0, 3000.0))
+    homes = households(profile, params, rng)
+    toft_m2 = farm_toft_m2(homes, float(params.toft_share) * footprint.area)
     frontage = math.sqrt(toft_m2 / 2.5)
+    # Street frontage the plots need, in farm tofts' worth (a smaller plot fronts less).
+    span = sum(math.sqrt(h.scale) for h in homes)
     depth = 2.5 * frontage
     street_m = float(params.village_street_m)
     hs = 0.5 * street_m
@@ -263,7 +290,7 @@ def village_layout(
     roads = [ln.xy for ln in site.roads.lines]
     route = SettlementLayoutParams(**{**params.__dict__, "road_follow": 1.0})
     jitter = 0.4 if form == "cluster" else 0.2
-    reach = min(households * frontage / 4.0 * 1.25 + 40.0, _ARM_CAP_M)     # both sides of one street
+    reach = min(span * frontage / 4.0 * 1.25 + 40.0, _ARM_CAP_M)     # both sides of one street
 
     def run(ends: list[np.ndarray], start: np.ndarray = centre) -> list[LineString]:
         return route_arterials(half, slope, water, footprint, roads, start, ends, route)
@@ -273,7 +300,7 @@ def village_layout(
     if form == "harbour":
         still = shapely.union_all([site.water.sea, site.water.lakes])
         ground = site.buildable.difference(still.buffer(5.0)) if not still.is_empty else site.buildable
-        streets = harbour_rows(still, centre, households, frontage, depth, street_m, allowed=ground)
+        streets = harbour_rows(still, centre, int(math.ceil(span)), frontage, depth, street_m, allowed=ground)
         reach = max([float(np.max(np.linalg.norm(np.asarray(g.coords) - centre, axis=1))) for g in streets]
                     or [reach])
     elif form == "street":
@@ -289,25 +316,25 @@ def village_layout(
         oval = Polygon(ring).intersection(footprint.buffer(20.0)).difference(water)
         green = _multi(oval)
         loop = [LineString(g.exterior.coords) for g in _multi(green.buffer(hs)).geoms]
-        out = min(households * frontage / 0.85 / 4.0 + 20.0, _ARM_CAP_M - a)
+        out = min(span * frontage / 0.85 / 4.0 + 20.0, _ARM_CAP_M - a)
         arms = run([centre + (a + out) * u], centre + a * u) + run([centre - (a + out) * u], centre - a * u)
         streets = loop + arms
     else:
         # Enough lanes, each at most an arm long, for every household (both sides of each).
-        need = int(math.ceil(households * frontage / 0.85 / (2.0 * _ARM_CAP_M)))
+        need = int(math.ceil(span * frontage / 0.85 / (2.0 * _ARM_CAP_M)))
         k = int(np.clip(max(int(rng.integers(3, 5)), need), 3, 6))
         base = math.atan2(u[1], u[0])
         ends = []
         for j in range(k):
             ang = base + 2.0 * math.pi * j / k + math.radians(float(rng.uniform(-25.0, 25.0)))
-            lane = min(households * frontage / 0.85 / (2.0 * k) + 20.0, _ARM_CAP_M)
+            lane = min(span * frontage / 0.85 / (2.0 * k) + 20.0, _ARM_CAP_M)
             ends.append(centre + lane * np.array([math.cos(ang), math.sin(ang)]))
         streets = run(ends)
     streets = [g for g in streets if g.length > 1.0]
     street_geom = shapely.union_all(streets) if streets else LineString()
 
     # Where tofts may go: dry, buildable ground as far out as the streets run.
-    spread = max(1.6 * math.sqrt(households * toft_m2 / math.pi), reach) + depth
+    spread = max(1.6 * math.sqrt(sum(h.scale for h in homes) * toft_m2 / math.pi), reach) + depth
     allowed = site.buildable.intersection(Point(float(centre[0]), float(centre[1])).buffer(spread))
     if not water.is_empty:
         allowed = allowed.difference(water.buffer(5.0))
@@ -322,11 +349,35 @@ def village_layout(
                             [p for _, p in special])
         if manor:
             special.append(("manor", manor[0]))
-    tofts = tofts_along(streets, households, frontage, depth, hs, allowed, centre, rng, jitter,
-                        [p for _, p in special])
+    # Households by plot size, trades first (the miller nearest running water), then cottages, then farms.
+    groups = _household_groups(homes, rng, _mill_site(site, centre, spread), centre)
+    owner: dict[str, int] = {}                 # use → its group (for plots put back)
+    for gi, (queue, _, _) in enumerate(groups):
+        for use in queue:
+            owner.setdefault(use, gi)
+    placed: list[tuple[str, Polygon]] = []
+
+    def fill(lines: list[LineString]) -> None:
+        for queue, scale, at in groups:
+            if not queue:
+                continue
+            k = math.sqrt(scale)
+            got = tofts_along(lines, len(queue), frontage * k, depth * k, hs, allowed, at, rng, jitter,
+                              [*(p for _, p in placed), *(p for _, p in special)])
+            placed.extend((queue.pop(0), p) for p in got)
+
+    def trim(cut) -> None:  # type: ignore[no-untyped-def]
+        """Cut ``cut`` out of the placed plots; those losing over half go back in their queue."""
+        kept = _trimmed([p for _, p in placed], cut)
+        for (use, _), p in zip(placed, kept):
+            if p is None:
+                groups[owner[use]][0].append(use)
+        placed[:] = [(use, p) for (use, _), p in zip(placed, kept) if p is not None]
+
+    fill(streets)
     # Short of room on capped streets (a street or green village): back lanes a plot-pair behind, up to twice.
     for _ in range(2):
-        if not arms or len(tofts) >= 0.9 * households:
+        if not arms or len(placed) >= 0.9 * len(homes):
             break
         others = [g for g in streets if not any(g is a for a in arms)]
         extra = [g for g in back_lanes(arms, depth, street_m, others, green)
@@ -337,11 +388,10 @@ def village_layout(
         arms = [g for g in extra if g.length > 4.0 * depth]
         lanes_geom = shapely.union_all(extra).buffer(hs)
         allowed = allowed.difference(lanes_geom)
-        tofts = _trimmed(tofts, lanes_geom)
-        tofts += tofts_along(extra, households - len(tofts), frontage, depth, hs, allowed, centre, rng, jitter,
-                             [*tofts, *(p for _, p in special)])
+        trim(lanes_geom)
+        fill(extra)
     # The streets end a little past the last toft; lanes run on to the gates the roads come in by.
-    built = shapely.union_all([*tofts, *(p for _, p in special)])
+    built = shapely.union_all([*(p for _, p in placed), *(p for _, p in special)])
     if not built.is_empty:
         keep = built.convex_hull.buffer(frontage)
         green_lines = [g for g in streets if not green.is_empty and g.distance(green) < street_m]
@@ -369,10 +419,11 @@ def village_layout(
     # The lanes added after the plots (to gates and jetties) are cut out of them.
     if len(streets) > n_kept:
         lanes = shapely.union_all(streets[n_kept:]).buffer(hs + 0.5)
-        tofts = _trimmed(tofts, lanes)
+        trim(lanes)
         trimmed = _trimmed([p for _, p in special], lanes, keep_all=True)
         special = [(k, p) for (k, _), p in zip(special, trimmed) if p is not None]
-    blocks = [Block(polygon=t, district="residential", core=True, lots=np.asarray([t], dtype=object)) for t in tofts]
+    blocks = [Block(polygon=t, district="residential", core=True, lots=np.asarray([t], dtype=object),
+                    uses=np.asarray([use], dtype=object)) for use, t in placed]
     precinct = MultiPolygon()
     for kind, poly in special:
         if kind == "church":

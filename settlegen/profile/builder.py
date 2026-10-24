@@ -159,6 +159,7 @@ class SettlementProfile:
     founding_age: int             # STUB (history layer): years
     planned: bool                 # STUB (history layer)
     face_id: int = -1
+    farming_share: float = 1.0    # a village's people who farm (fishers, miners don't)
     detail: dict = field(default_factory=dict)
 
     @property
@@ -509,5 +510,5 @@ def build_profile(
         walls=walls, wall_strength=wall_strength, polity=polity, wealth=wealth, trade=trade,
         industries=industries, wind_xy=wind_xy, wind_steadiness=steadiness, materials=materials,
         danger=_at_center(fields, "danger"), biome=biome, founding_age=age, planned=planned, face_id=face,
-        detail={"relief_m": _relief_m(fields), "marble": marble, "planned_chance": chance},
+        farming_share=farming_share, detail={"relief_m": _relief_m(fields), "marble": marble, "planned_chance": chance},
     )

@@ -27,6 +27,12 @@ class Block:
     district: str
     core: bool                   # inside the old core
     lots: np.ndarray             # (k,) shapely polygons
+    # (k,) str per lot: a trade or a household's use (settlegen.layout.households); "" or
+    # None — the district's.
+    uses: Optional[np.ndarray] = None
+
+    def use(self, i: int) -> str:
+        return "" if self.uses is None else str(self.uses[i])
 
 
 @dataclass

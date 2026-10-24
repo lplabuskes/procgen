@@ -9,6 +9,7 @@ from shapely.geometry import Point
 
 from settlegen.layout.districts import OPEN_DISTRICTS
 from settlegen.layout.geometry import _axes
+from settlegen.layout.households import HOUSEHOLD_LABELS, TRADES, use_label
 from settlegen.layout.types import Block, SettlementLayout
 from settlegen.profile.builder import SettlementProfile
 
@@ -70,10 +71,11 @@ def describe_at(layout: SettlementLayout, site: "SettlementSite", xy: np.ndarray
     block = block_at(layout, xy)
     if block is not None:
         label = district_label(block.district, tier)
-        for lot in block.lots:
+        for i, lot in enumerate(block.lots):
             if lot.contains(pt):
                 _, _, _, length, depth = _axes(lot)
-                return f"{label} · plot ~{min(length, depth):.0f} × {max(length, depth):.0f} m"
+                what = use_label(block.use(i)) or label
+                return f"{what} · plot ~{min(length, depth):.0f} × {max(length, depth):.0f} m"
         return label if block.district in OPEN_DISTRICTS or not len(block.lots) else f"{label} · yard"
     if not site.water.channels.is_empty and site.water.channels.contains(pt):
         return "River"                   # the sea and lakes the ground's own readout names
@@ -91,10 +93,15 @@ def summary(layout: SettlementLayout, profile: SettlementProfile) -> str:
     if pol.march >= 0.3:
         rule += " march"
     walls = f"{layout.walls.kind} walls" if layout.walls is not None else "unwalled"
+    uses = [b.use(i) for b in layout.blocks for i in range(len(b.lots))]
+    trades = sum(u in TRADES for u in uses)
     if profile.tier == 5:
-        plan = f"{len(layout.blocks)} farmsteads"
+        counts = {k: uses.count(k) for k in HOUSEHOLD_LABELS}
+        plan = ", ".join([f"{counts['farm']} farmsteads", f"{trades} craftsmen"]
+                         + [f"{counts[k]} {k}s' cottages" for k in ("fisher", "miner") if counts[k]])
     else:
-        plan = f"{len(layout.blocks):,} blocks, {layout.n_lots:,} plots" + (" (planned)" if profile.planned else "")
+        plan = f"{len(layout.blocks):,} blocks, {layout.n_lots:,} plots ({trades:,} shops)" + \
+            (" (planned)" if profile.planned else "")
     n = len(layout.piers)
     docks = f" · {n} pier{'s' if n != 1 else ''}" if n else ""
     return f"{who}{rule} · {walls} · {plan}{docks}"

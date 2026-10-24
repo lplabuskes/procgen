@@ -13,8 +13,8 @@ local map (spread over its list), and reports per settlement and per kind:
     (the sparse ground holds the rest, so a few percent under is expected),
     pieces, sparse share, density;
   • gates, bridges and fords, landings; anchor candidates per kind;
-  • the layout: blocks or farmsteads, plots, piers, wall length and gates, and
-    the ground the walls took in beyond the site's footprint.
+  • the layout: blocks or farmsteads, plots (share held by trades), piers, wall length and
+    gates, and the ground the walls took in beyond the site's footprint.
 
 Usage:
     python3 scripts/measure_settlements.py                     # seeds 4, 31, 35
@@ -38,6 +38,7 @@ import numpy as np
 
 from settlegen.builder import build_settlement_map
 from settlegen.chain.builder import SettlementRef, population
+from settlegen.layout.households import TRADES
 from settlegen.terrain.builder import settlement_conservation_report
 from _common import (
     add_seed_args, avg, get_map_store, load_history, resolve_seeds, save_history, settlement_map_params,
@@ -96,6 +97,8 @@ def measure(store, ref: SettlementRef, params) -> dict:  # type: ignore[no-untyp
         "landings": len(site.roads.landings),
         **{f"anchors_{k}": len(v) for k, v in site.anchors.by_kind.items()},
         "blocks": len(layout.blocks), "lots": layout.n_lots, "piers": len(layout.piers),
+        "trade_share": sum(b.use(i) in TRADES for b in layout.blocks for i in range(len(b.lots)))
+        / max(layout.n_lots, 1),
         "wall_km": layout.walls.line.length / 1000.0 if layout.walls is not None else 0.0,
         "wall_gates": len(layout.walls.gates) if layout.walls is not None else 0,
         "walls_took_ha": (layout.footprint.difference(site.footprint).area / 1e4
@@ -110,7 +113,7 @@ def _fmt(row: dict) -> str:
             f"{row['t_total']:>5.1f} s (chain {row['t_chain']:>4.1f}) · cons {row['conservation_max']:.1e} · "
             f"fp {row['footprint_error']:+5.1%} {row['pieces']}p · gates {row['gates']} br {row['bridges']} "
             f"fd {row['fords']} land {row['landings']} · blocks {row['blocks']:,} plots {row['lots']:,} "
-            f"piers {row['piers']}"
+            f"({row['trade_share']:.0%} trades) piers {row['piers']}"
             + (f" · walls {row['wall_km']:.1f} km, {row['wall_gates']} gates" if row["wall_km"] else ""))
 
 
@@ -129,7 +132,8 @@ def summarise(rows: list[dict]) -> dict:
             "wall_gates_walled": avg([r for r in sub if r["wall_km"]], "wall_gates"),
             **{k: avg(sub, k) for k in ("pieces", "sparse_share", "gates", "bridges", "fords", "landings",
                                         "anchors_citadel", "anchors_market", "anchors_waterfront",
-                                        "anchors_sacred", "blocks", "lots", "piers", "wall_km", "walls_took_ha")},
+                                        "anchors_sacred", "blocks", "lots", "trade_share", "piers", "wall_km",
+                                        "walls_took_ha")},
         }
     return out
 
@@ -144,7 +148,8 @@ def print_summary(summary: dict) -> None:
               f"fords {s['fords']:.1f}, landings {s['landings']:.1f}")
         print(f"          anchors citadel {s['anchors_citadel']:.1f} market {s['anchors_market']:.1f} "
               f"waterfront {s['anchors_waterfront']:.1f} sacred {s['anchors_sacred']:.1f} · blocks {s['blocks']:,.0f}, "
-              f"plots {s['lots']:,.0f}, piers {s['piers']:.1f}, walls {s['wall_km']:.1f} km "
+              f"plots {s['lots']:,.0f} ({s['trade_share']:.0%} trades), piers {s['piers']:.1f}, "
+              f"walls {s['wall_km']:.1f} km "
               f"(took in {s['walls_took_ha']:.1f} ha; {s['wall_gates_walled']:.1f} gates per walled one)")
 
 

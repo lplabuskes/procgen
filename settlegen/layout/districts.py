@@ -1,14 +1,17 @@
-"""Districts per block: market, quay, elite, craft quarters by industry, graveyards, squares, houses."""
+"""Districts per block: market, quay, elite, craft quarters by industry, graveyards, squares, houses;
+and the everyday trades spread through the houses."""
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 import numpy as np
 import shapely
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon
+from shapely.geometry.base import BaseGeometry
 
 from settlegen.layout.params import SettlementLayoutParams
+from settlegen.layout.types import Block
 from settlegen.profile.builder import SettlementProfile
 
 if TYPE_CHECKING:
@@ -157,3 +160,54 @@ def assign_districts(
     outside = ~in_core[rest] & walled
     district[rest] = np.where(in_sparse[rest], "gardens", np.where(outside, "suburb", "residential"))
     return [str(d) for d in district]
+
+
+# Districts whose lots the everyday trades spread through.
+TRADE_DISTRICTS = ("residential", "suburb", "market", "quay")
+
+
+def disperse_trades(
+    blocks: Sequence[Block], counts: dict[str, int], fronts: BaseGeometry, rng: np.random.Generator,
+    max_share: float,
+) -> int:
+    """Tag lots of the houses (:data:`TRADE_DISTRICTS`) with ``counts`` of each trade, at most
+    ``max_share`` of them in all: each trade spread out over the place (no two of it nearer
+    than half the spacing its count would have evenly), preferring lots on ``fronts`` (the
+    arterials and the market).  Sets the blocks' ``uses``; the number tagged."""
+    refs = [(bi, li) for bi, b in enumerate(blocks) if b.district in TRADE_DISTRICTS for li in range(len(b.lots))]
+    total = sum(counts.values())
+    if not refs or total == 0:
+        return 0
+    lots = np.asarray([blocks[bi].lots[li] for bi, li in refs], dtype=object)
+    xy = shapely.get_coordinates(shapely.centroid(lots))
+    on_front = shapely.distance(lots, fronts) < 1.0 if not fronts.is_empty else np.zeros(len(refs), dtype=bool)
+    ground = float(shapely.area(lots).sum())
+    scale = min(1.0, max_share * len(refs) / total)
+    uses = np.full(len(refs), "", dtype=object)
+    for name in sorted(counts):
+        k = int(round(counts[name] * scale))
+        if k == 0:
+            continue
+        r = 0.5 * math.sqrt(ground / k)
+        grid: dict[tuple[int, int], list[np.ndarray]] = {}
+        got = 0
+        score = on_front + rng.uniform(0.0, 1.0, len(refs))
+        for i in np.argsort(-score, kind="stable"):
+            if uses[i]:
+                continue
+            cx, cy = int(xy[i, 0] // r), int(xy[i, 1] // r)
+            near = [p for dx in (-1, 0, 1) for dy in (-1, 0, 1) for p in grid.get((cx + dx, cy + dy), ())]
+            if any(float(np.hypot(*(p - xy[i]))) < r for p in near):
+                continue
+            uses[i] = name
+            grid.setdefault((cx, cy), []).append(xy[i])
+            got += 1
+            if got == k:
+                break
+    for (bi, li), use in zip(refs, uses):
+        if use:
+            b = blocks[bi]
+            if b.uses is None:
+                b.uses = np.full(len(b.lots), "", dtype=object)
+            b.uses[li] = use
+    return int(np.count_nonzero(uses))

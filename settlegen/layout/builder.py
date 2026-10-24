@@ -49,6 +49,11 @@ a village are different places, not one plan at three sizes.  Villages:
    along the streets.  Blocks too deep for their lots (yards in the middle) are
    opened up by closes and alleys (:func:`lanes_of`) with lots fronting them
    (:func:`lane_lots`).
+9. **Everyday trades** (smiths, bakers, alehouses …,
+   :mod:`settlegen.layout.households`) per head, spread through the houses'
+   lots, each trade apart from its own, on the arterials and the market by
+   preference (:func:`disperse_trades`); the noxious and wet ones keep to their
+   quarters.
 
 :func:`describe_at` names what is at a point (for hover).  No names
 (Decision 9).  Seeded per (world, settlement).  Qt-free.
@@ -64,9 +69,10 @@ import shapely
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, Polygon
 
 from settlegen.layout.blocks import burgage_band, lane_lots, lanes_of, lots_of, split_blocks, yards_of
-from settlegen.layout.districts import LANE_DISTRICTS, OPEN_DISTRICTS, assign_districts
+from settlegen.layout.districts import LANE_DISTRICTS, OPEN_DISTRICTS, assign_districts, disperse_trades
 from settlegen.layout.docks import Docks, DockSpec, build_docks
 from settlegen.layout.geometry import _area_disc, _multi, core_polygon, part_containing, ray_exit
+from settlegen.layout.households import trade_counts
 from settlegen.layout.params import SettlementLayoutParams
 from settlegen.layout.streets import (
     infill_arterials, main_axis, radial_targets, route_arterials, route_grid, wall_street,
@@ -265,10 +271,12 @@ def build_layout(
 
     # ── wards → blocks ──
     cut: list = [plaza, citadel, precinct, docks.quays]
+    fronts: list = [plaza]                     # where a trade would rather have its shop
     for which, width in ((("main",), float(params.arterial_m)), (("wall", "secondary"), secondary_m)):
         lines = [g for g, k in zip(arterials, kinds) if k in which]
         if lines:
             cut.append(shapely.union_all(lines).buffer(0.5 * width))
+            fronts.append(cut[-1])
     if walls is not None and not walls.line.is_empty:
         cut.append(walls.line.buffer(0.5 * float(params.wall_m)))
     land = _multi(footprint.difference(shapely.union_all(cut)))
@@ -346,6 +354,10 @@ def build_layout(
                 extra = lane_lots(yards, near, frontage, depth, 0.5 * float(params.lane_m), rng, planned)
                 lots = np.concatenate([lots, extra]) if len(extra) else lots
             out_blocks.append(Block(polygon=piece, district=dist, core=bool(is_core), lots=lots))
+
+    # ── the everyday trades, spread through the houses ──
+    disperse_trades(out_blocks, trade_counts(profile, params, rng, urban_only=True), shapely.union_all(fronts),
+                    rng, float(params.urban_trade_share))
 
     # ── wells and shrines on the streets ──
     lanes_all = streets or [g for g in arterials]
