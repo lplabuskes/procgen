@@ -48,9 +48,11 @@ One subpackage per pipeline step, as in `worldgen/` and `realmgen/`: each has a
 - `settlegen/layout/`
   - `builder.py` — `build_layout`: anchors chosen, then streets, market, core and walls, docks, blocks, districts, lots
   - `params.py` — `SettlementLayoutParams`
-  - `types.py` — `SettlementLayout`, `Walls`, `Block` (lots, each with a `use`)
+  - `types.py` — `SettlementLayout`, `Walls`, `Block` (ground + dividers + a seed per lot; lots derived, each with a `use`)
+  - `lots.py` — lots as boundaries: `derive_lots` (polygonize the ground cut by its dividers), `dividers_of`, `seeds_of`
+  - `frontage.py` — plots packed along streets as boundaries (`pack_frontage`, `ranked`, `street_grounds`, `cut_blocks`): villages
   - `streets.py` — main streets on a route grid (`route_arterials`), `infill_arterials`, `wall_street`, `main_axis`, `radial_targets`
-  - `blocks.py` — `split_blocks`, `lots_of`, `lanes_of`, `lane_lots`, `burgage_band`
+  - `blocks.py` — `split_blocks`, `strip_lots` (lots and their dividers), `lanes_of`, `lane_lots`, `burgage_band`
   - `districts.py` — `CRAFTS`, `DISTRICTS`, `assign_districts`, `disperse_trades`
   - `households.py` — `TRADES`, `households`, `trade_counts`, `farm_toft_m2` (who lives there, by what they do)
   - `geometry.py` — polygon helpers (`core_polygon`, `chaikin`, axes, blobs)
@@ -311,11 +313,12 @@ slope, so it is tested on hand-built sites.
    graveyards, squares; the rest houses, gardens on sparse ground. Towns keep to
    two trades, a churchyard and — only by a castle — an elite quarter.
 8. **Plots**: strips along each block's long sides, 8 × 22 m (suburb × 1.5,
-   gardens × 3); wells and shrines on the streets. **Closes and alleys** (3 m)
-   open up blocks ≥ 2.6 plots deep (whose middles the rows leave as yards) in
-   houses, suburbs and craft quarters: organic places cut lanes in from a random
-   long side every ~60 m — closes stopping a plot short of the far side, 30%
-   alleys running through; planned ones a back alley down the middle. Plots
+   gardens × 3; quay, market and elite plots run back to fill the block, up to
+   45 m — merchants' long plots); wells and shrines on the streets. **Closes
+   and alleys** (3 m) open up blocks ≥ 2.6 plots deep (whose middles the rows
+   leave as yards) in houses, suburbs, craft quarters, quays, markets and elite
+   quarters: organic places cut lanes in from a random long side every ~60 m —
+   closes stopping a plot short of the far side, 30% alleys running through; planned ones a back alley down the middle. Plots
    front the lanes in the yards (one facing down each close from its head).
 9. **Everyday trades** (`layout/households.py`): smiths, carpenters, alehouses,
    bakers and cobblers, one per 200–400 people (× 1 + the weight of an industry
@@ -331,7 +334,17 @@ coopers, potters; ≤ 35% of households) live on craft plots (0.4 × a farm toft
 nearest the middle — the miller nearest running water — and the
 `1 − farming_share` fishers or miners on cottage plots (0.35 ×); the farm toft
 is solved so all the plots cover `toft_share` of the footprint (300–3,000 m²,
-2.5:1). Forms: a fishing village
+2.5:1). **Packed as boundaries** (`layout/frontage.py`): streets meeting end
+to end are one line; longest first, each street claims the ground within a
+plot's depth of it that no street before it has — so where streets meet, the
+corner plots front the longer and the shorter's start behind them, cut square,
+not on a slant — one **run** per side; a plot is its run's ground between two
+dividers square off the street, out to its depth, never across a bend over 25°.
+Plots grow outward from each run's point nearest the middle, both ways, each
+taking the free slot nearest its target (the miller: the slot nearest the water,
+anywhere); neighbours share their divider, so plots tile and never overlap;
+skipped slots (12%) and the ground behind shallow plots stay open. A block is a
+run: its ground, dividers and backs, a seed per plot. Forms: a fishing village
 within 300 m of the sea or a lake is a **harbour** village — rows of streets
 along the shore about its jetty; otherwise **street** (45%), **green** (30%) or
 **cluster** (25%, 3–6 lanes). Arms stop at 300 m; short of room, back lanes a
@@ -341,8 +354,17 @@ middle, a manor at ≥ 400 people (50%). Seed 536582844 map 50/115: 39 of 40
 villages place ≥ 85% of households.
 
 `describe_at` names what is under a point (hover); `summary` is the status line.
-No names (Decision 9). Known: tofts crowd and overlap where village arms meet
-(deferred); houses within plots aren't drawn.
+No names (Decision 9). Known: houses within plots aren't drawn.
+
+**Lots as boundaries** (all tiers): a `Block` stores its ground, the lines
+between its lots and along their backs (`dividers`) and a point in each lot
+(`seeds`); the lots are the faces of the ground cut by the dividers that hold a
+seed (`layout/lots.py::derive_lots`, noded by snap-rounding to 1 µm). Town and
+city blocks get their dividers straight from `strip_lots` (the cross cuts and
+row backs) — `Block.of_lots` keeps the lots it was built with, which a test
+holds equal to what the dividers derive. The viewer draws lot lines once each:
+block outlines and dividers in towns and cities, the plots' merged outlines in
+villages (filled by plot, not by the street's whole ground).
 
 ## Tooling
 

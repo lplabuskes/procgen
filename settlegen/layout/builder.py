@@ -45,8 +45,9 @@ a village are different places, not one plan at three sizes.  Villages:
    houses (suburb outside walls, gardens on sparse ground).  A town keeps to
    its market, quay, two leading trades, its churchyard and — only by a castle
    — an elite quarter.
-8. **Lots**: strips along each block's long sides; wells in the core, shrines
-   along the streets.  Blocks too deep for their lots (yards in the middle) are
+8. **Lots**: strips along each block's long sides (quay, market and elite lots
+   run back to fill the block, up to ``merchant_lot_depth_m``); wells in the
+   core, shrines along the streets.  Blocks too deep for their lots (yards in the middle) are
    opened up by closes and alleys (:func:`lanes_of`) with lots fronting them
    (:func:`lane_lots`).
 9. **Everyday trades** (smiths, bakers, alehouses …,
@@ -68,11 +69,14 @@ import numpy as np
 import shapely
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, Polygon
 
-from settlegen.layout.blocks import burgage_band, lane_lots, lanes_of, lots_of, split_blocks, yards_of
-from settlegen.layout.districts import LANE_DISTRICTS, OPEN_DISTRICTS, assign_districts, disperse_trades
+from settlegen.layout.blocks import burgage_band, lane_lots, lanes_of, split_blocks, strip_lots, yards_of
+from settlegen.layout.districts import (
+    DEEP_LOT_DISTRICTS, LANE_DISTRICTS, OPEN_DISTRICTS, assign_districts, disperse_trades,
+)
 from settlegen.layout.docks import Docks, DockSpec, build_docks
-from settlegen.layout.geometry import _area_disc, _multi, core_polygon, part_containing, ray_exit
+from settlegen.layout.geometry import _area_disc, _axes, _multi, core_polygon, part_containing, ray_exit
 from settlegen.layout.households import trade_counts
+from settlegen.layout.lots import as_lines, dividers_of
 from settlegen.layout.params import SettlementLayoutParams
 from settlegen.layout.streets import (
     infill_arterials, main_axis, radial_targets, route_arterials, route_grid, wall_street,
@@ -332,28 +336,34 @@ def build_layout(
     planned = bool(profile.planned)
     for poly, dist, is_core, is_burgage in zip(blocks, districts, in_core, burgage):
         if dist in OPEN_DISTRICTS:
-            out_blocks.append(Block(polygon=poly, district=dist, core=bool(is_core), lots=np.zeros(0, dtype=object)))
+            out_blocks.append(Block(polygon=poly, district=dist, core=bool(is_core)))
             continue
         if is_burgage:
-            lots = lots_of(poly, float(params.burgage_frontage_m), 1.4 * float(params.burgage_depth_m), rng, planned)
-            out_blocks.append(Block(polygon=poly, district=dist, core=bool(is_core), lots=lots))
+            lots, lines = strip_lots(poly, float(params.burgage_frontage_m), 1.4 * float(params.burgage_depth_m),
+                                     rng, planned)
+            out_blocks.append(Block.of_lots(poly, dist, bool(is_core), lots, dividers=lines))
             continue
         g = outward(poly)
         mult = float(params.garden_lot_mult) if dist == "gardens" or g < 0 else \
             1.0 if dist in ("market", "quay") else 1.0 + (float(params.suburb_lot_mult) - 1.0) * g
         frontage, depth = float(params.lot_frontage_m) * mult, float(params.lot_depth_m) * math.sqrt(mult)
+        if dist in DEEP_LOT_DISTRICTS:
+            # Back to back across the block, up to the merchant depth (deeper blocks get lanes).
+            depth = float(np.clip(0.5 * _axes(poly)[4], depth, float(params.merchant_lot_depth_m)))
         pieces, c, a = lanes_of(poly, depth, rng, params, planned) if dist in LANE_DISTRICTS and g >= 0 \
             else ([poly], [], [])
         closes += c
         alleys += a
         for piece in pieces:
-            lots = lots_of(piece, frontage, depth, rng, planned)
+            lots, lines = strip_lots(piece, frontage, depth, rng, planned)
             near = [ln for ln in (*c, *a) if ln.distance(piece) < float(params.lane_m)]
             yards = yards_of(piece, depth) if near else None
             if yards is not None:
                 extra = lane_lots(yards, near, frontage, depth, 0.5 * float(params.lane_m), rng, planned)
-                lots = np.concatenate([lots, extra]) if len(extra) else lots
-            out_blocks.append(Block(polygon=piece, district=dist, core=bool(is_core), lots=lots))
+                if len(extra):
+                    lots = np.concatenate([lots, extra])
+                    lines = as_lines(shapely.union_all([lines, dividers_of(piece, extra)]))
+            out_blocks.append(Block.of_lots(piece, dist, bool(is_core), lots, dividers=lines))
 
     # ── the everyday trades, spread through the houses ──
     disperse_trades(out_blocks, trade_counts(profile, params, rng, urban_only=True), shapely.union_all(fronts),

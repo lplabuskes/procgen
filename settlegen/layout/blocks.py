@@ -7,14 +7,14 @@ from typing import Sequence
 
 import numpy as np
 import shapely
-from shapely.geometry import LineString, MultiPolygon, Point, Polygon
+from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, Polygon
 from shapely.ops import substring
 
 from settlegen.layout.geometry import _axes, _multi
 from settlegen.layout.params import SettlementLayoutParams
 
 
-# A block this many lot depths deep has yards in its middle (``lots_of``'s rows stop short).
+# A block this many lot depths deep has yards in its middle (``strip_lots``'s rows stop short).
 _DEEP_BLOCK = 2.6
 
 
@@ -65,20 +65,27 @@ def split_blocks(
     return blocks, streets
 
 
-def lots_of(block: Polygon, frontage: float, depth: float, rng: np.random.Generator, planned: bool) -> np.ndarray:
+def strip_lots(
+    block: Polygon, frontage: float, depth: float, rng: np.random.Generator, planned: bool,
+) -> tuple[np.ndarray, MultiLineString]:
     """Strips along ``block``'s long sides: ``frontage`` wide (jittered unless ``planned``),
     ``depth`` deep (one row through a thin block, two back to back in a middling one; a
-    deep one's middle left as yards)."""
+    deep one's middle left as yards).  ``(lots, the lines between them and along the rows'
+    backs, inside the block)``."""
     centre, u, v, length, d = _axes(block)
     if length <= 0 or d <= 0:
-        return np.zeros(0, dtype=object)
+        return np.zeros(0, dtype=object), MultiLineString()
     if d < 1.3 * depth:
         rows = [(-0.5 * d, 0.5 * d)]
+        backs: list[float] = []
     elif d < 2.6 * depth:
         rows = [(-0.5 * d, 0.0), (0.0, 0.5 * d)]
+        backs = [0.0]
     else:
         rows = [(-0.5 * d, -0.5 * d + depth), (0.5 * d - depth, 0.5 * d)]
+        backs = [-0.5 * d + depth, 0.5 * d - depth]
     boxes = []
+    cuts = []
     j = 0.05 if planned else 0.3
     for b0, b1 in rows:
         a = -0.5 * length
@@ -89,15 +96,26 @@ def lots_of(block: Polygon, frontage: float, depth: float, rng: np.random.Genera
                 a1 = 0.5 * length
             corners = [(a, b0), (a1, b0), (a1, b1), (a, b1), (a, b0)]
             boxes.append([centre + p * u + q * v for p, q in corners])
+            if a1 < 0.5 * length:
+                cuts.append([centre + a1 * u + b0 * v, centre + a1 * u + b1 * v])
             a = a1
     if not boxes:
-        return np.zeros(0, dtype=object)
+        return np.zeros(0, dtype=object), MultiLineString()
     rects = shapely.polygons(np.asarray(boxes))
     lots = np.asarray(shapely.intersection(rects, block), dtype=object)
     area = shapely.area(lots)
     keep = area >= 0.3 * frontage * min(depth, d)
-    return np.asarray([g if isinstance(g, Polygon) else max(shapely.get_parts(g), key=lambda p: p.area)
+    kept = np.asarray([g if isinstance(g, Polygon) else max(shapely.get_parts(g), key=lambda p: p.area)
                        for g in lots[keep] if not g.is_empty], dtype=object)
+    reach = 0.5 * length + 1.0
+    cuts += [[centre - reach * u + q * v, centre + reach * u + q * v] for q in backs]
+    if not cuts:
+        return kept, MultiLineString()
+    segs = np.asarray(shapely.linestrings(np.asarray(cuts)), dtype=object)
+    lines = shapely.intersection(shapely.multilinestrings(segs), block)
+    parts = shapely.get_parts(lines)
+    keep_line = (shapely.get_type_id(parts) == 1) & (shapely.length(parts) > 1e-6)
+    return kept, MultiLineString(list(parts[keep_line]))
 
 
 def _run_on(line: LineString, by: float, start: bool = True, end: bool = True) -> LineString:
@@ -175,7 +193,7 @@ def lanes_of(
 
 
 def yards_of(block: Polygon, depth: float):  # type: ignore[no-untyped-def]
-    """What :func:`lots_of`'s ``depth``-deep rows leave in the middle of ``block`` (None
+    """What :func:`strip_lots`'s ``depth``-deep rows leave in the middle of ``block`` (None
     when they fill it)."""
     centre, u, v, length, d = _axes(block)
     if d < _DEEP_BLOCK * depth:

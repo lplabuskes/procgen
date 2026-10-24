@@ -19,9 +19,10 @@ more households, more streets.  Forms:
   its arms (:func:`back_lanes`).
 
 Tofts go nearest the middle (the jetty) first, on dry, buildable ground as far
-as the streets run, clear of each other and of every street; ~12% of slots are
-skipped (gaps).  The parish church and churchyard take the slot nearest the
-middle; a village of ``_MANOR_PEOPLE`` or more may have a manor beside it.
+as the streets run, packed as boundaries (:mod:`settlegen.layout.frontage`: each
+street's runs of ground, divided between neighbours, so they tile); ~12% of
+slots are skipped (gaps).  The parish church and churchyard take the slot nearest
+the middle; a village of ``_MANOR_PEOPLE`` or more may have a manor beside it.
 Streets end a little past the last toft; lanes run to the road gates and the
 jetty (cut out of the plots they cross).  A well on the green, else mid-street.
 Streets off the shore are routed on the slope like a town's.  Qt-free.
@@ -39,13 +40,13 @@ from shapely.geometry.base import BaseGeometry
 
 from settlegen.layout.builder import _dock_spec, choose_anchors
 from settlegen.layout.docks import Docks, build_docks
+from settlegen.layout.frontage import PlotSpec, cut_blocks, pack_frontage
 from settlegen.layout.geometry import _multi, part_containing
 from settlegen.layout.households import Household, farm_toft_m2, households
 from settlegen.layout.params import SettlementLayoutParams
 from settlegen.layout.streets import main_axis, route_arterials
 from settlegen.layout.types import Block, SettlementLayout
 from settlegen.profile.builder import SettlementProfile
-from utils.sphere import unit
 
 if TYPE_CHECKING:
     from settlegen.site.builder import SettlementSite
@@ -59,67 +60,6 @@ _SHORE_REACH_M = 300.0
 # A street arm runs at most this far from the middle; more people, more streets.
 _ARM_CAP_M = 300.0
 _MAX_ROWS = 6
-
-
-def _plot(line: LineString, s: float, side: float, width: float, depth: float, offset: float) -> Polygon:
-    """A ``width`` × ``depth`` rectangle fronting ``line`` at ``s``, ``offset`` back from its centre line."""
-    a = np.asarray(line.interpolate(max(s - 4.0, 0.0)).coords[0])
-    b = np.asarray(line.interpolate(min(s + 4.0, line.length)).coords[0])
-    t = unit(b - a)
-    n = side * np.array([-t[1], t[0]])
-    p = np.asarray(line.interpolate(s).coords[0])
-    w = 0.5 * width * t
-    near, far = p + offset * n, p + (offset + depth) * n
-    return Polygon([near - w, near + w, far + w, far - w])
-
-
-def tofts_along(
-    lines: Sequence[LineString], n: int, frontage: float, depth: float, half_street: float, allowed,
-    centre: np.ndarray, rng: np.random.Generator, jitter: float, taken: Sequence[Polygon] = (),
-) -> list[Polygon]:
-    """Up to ``n`` plots fronting ``lines``, nearest ``centre`` first, inside ``allowed``,
-    clear of each other and of ``taken``."""
-    slots = []
-    for li, line in enumerate(lines):
-        k = int(line.length // frontage)
-        for j in range(k):
-            s = (j + 0.5) * line.length / max(k, 1)
-            p = np.asarray(line.interpolate(s).coords[0])
-            for side in (1.0, -1.0):
-                slots.append((float(np.linalg.norm(p - centre)) + float(rng.uniform(0.0, 0.5 * frontage)), li, s, side))
-    slots.sort(key=lambda x: x[0])
-    placed: list[Polygon] = []
-    blocked = shapely.union_all(list(taken)) if taken else Polygon()
-    for _, li, s, side in slots:
-        if len(placed) >= n:
-            break
-        if rng.random() < _GAP_CHANCE:
-            continue
-        w = frontage * float(rng.uniform(1.0 - jitter, 1.0 + jitter))
-        d = depth * float(rng.uniform(1.0 - 0.5 * jitter, 1.0 + 0.5 * jitter))
-        poly = _plot(lines[li], s, side, w, d, half_street + 0.5).intersection(allowed)
-        if not blocked.is_empty:
-            poly = poly.difference(blocked)
-        parts = [g for g in shapely.get_parts(poly) if isinstance(g, Polygon)]
-        if not parts:
-            continue
-        best = max(parts, key=lambda g: g.area)
-        if best.area < 0.55 * w * d:
-            continue
-        placed.append(best)
-        blocked = blocked.union(best.buffer(0.5))
-    return placed
-
-
-def _trimmed(plots: Sequence[Polygon], cut, keep_all: bool = False) -> list:  # type: ignore[no-untyped-def]
-    """``plots`` less ``cut``: each its largest remaining part, None once under half its
-    size — unless ``keep_all`` (the church, the manor), which keeps any part (None if none)."""
-    out: list = []
-    for p in plots:
-        parts = [g for g in shapely.get_parts(p.difference(cut)) if isinstance(g, Polygon)]
-        best = max(parts, key=lambda g: g.area) if parts else None
-        out.append(best if best is not None and (keep_all or best.area >= 0.5 * p.area) else None)
-    return out
 
 
 def _shore_point(site: "SettlementSite", centre: np.ndarray) -> Optional[np.ndarray]:
@@ -231,6 +171,34 @@ def back_lanes(
     return out
 
 
+def _run_on_free_ends(streets: Sequence[LineString], by: float, ground: BaseGeometry) -> list[LineString]:
+    """``streets`` carried straight on ``by`` m past each end that meets no other street,
+    as far as ``ground`` goes."""
+    out = []
+    for i, st in enumerate(streets):
+        others = shapely.union_all([g for j, g in enumerate(streets) if j != i]) if len(streets) > 1 else Point()
+        xy = np.asarray(st.coords, dtype=np.float64)
+        ends = []
+        for end, prev in ((xy[0], xy[1]), (xy[-1], xy[-2])):
+            run = None
+            if others.is_empty or others.distance(Point(*end)) > 1.0:
+                t = end - prev
+                t = t / max(float(np.linalg.norm(t)), 1e-9)
+                piece = LineString([end, end + by * t]).intersection(ground)
+                part = next((g for g in shapely.get_parts(piece)
+                             if isinstance(g, LineString) and g.distance(Point(*end)) < 1e-6), None)
+                if part is not None and part.length > 1.0:
+                    c = np.asarray(part.coords)
+                    run = c[-1] if np.linalg.norm(c[0] - end) < 1e-6 else c[0]
+            ends.append(run)
+        if ends[0] is not None:
+            xy = np.vstack([ends[0], xy])
+        if ends[1] is not None:
+            xy = np.vstack([xy, ends[1]])
+        out.append(LineString(xy))
+    return out
+
+
 def _mill_site(site: "SettlementSite", centre: np.ndarray, reach: float) -> Optional[np.ndarray]:
     """Where the miller goes: the nearest running water within ``reach`` (None: a windmill, anywhere)."""
     channels = site.water.channels
@@ -240,21 +208,30 @@ def _mill_site(site: "SettlementSite", centre: np.ndarray, reach: float) -> Opti
     return np.asarray(shapely.ops.nearest_points(channels, pt)[0].coords[0])
 
 
-def _household_groups(homes: Sequence[Household], rng: np.random.Generator, mill: Optional[np.ndarray],
-                      centre: np.ndarray) -> list[tuple[list[str], float, np.ndarray]]:
-    """``(uses to place, plot scale, placed nearest)`` per plot size, in the order they choose
-    their slots: the miller by the water, the trades (shuffled), cottages, farms."""
+def _plot_specs(
+    homes: Sequence[Household], frontage: float, depth: float, jitter: float, centre: np.ndarray,
+    mill: Optional[np.ndarray], manor: bool, rng: np.random.Generator,
+) -> list[PlotSpec]:
+    """The plots to place, in the order they choose their slots: the church, the manor,
+    the miller (by the water: anywhere), the trades (shuffled), cottages, farms — each
+    household's ``frontage`` × ``depth`` × √scale, jittered."""
+    out = [PlotSpec("church", 1.8 * frontage, 0.9 * depth, centre, gaps=False)]
+    if manor:
+        out.append(PlotSpec("manor", 2.5 * frontage, 1.2 * depth, centre, gaps=False))
     trades = [h for h in homes if h.trade]
-    out: list[tuple[list[str], float, np.ndarray]] = []
+    ordered: list[tuple[Household, bool]] = []
     if mill is not None and any(h.use == "miller" for h in trades):
-        out.append((["miller"], next(h.scale for h in trades if h.use == "miller"), mill))
-        trades.remove(next(h for h in trades if h.use == "miller"))
-    if trades:
-        out.append(([trades[i].use for i in rng.permutation(len(trades))], trades[0].scale, centre))
-    for which in (lambda h: not h.trade and h.use != "farm", lambda h: h.use == "farm"):
-        group = [h for h in homes if which(h)]
-        if group:
-            out.append(([h.use for h in group], group[0].scale, centre))
+        miller = next(h for h in trades if h.use == "miller")
+        trades.remove(miller)
+        ordered.append((miller, True))
+    ordered += [(trades[i], False) for i in rng.permutation(len(trades))]
+    ordered += [(h, False) for h in homes if not h.trade and h.use != "farm"]
+    ordered += [(h, False) for h in homes if h.use == "farm"]
+    for h, free in ordered:
+        k = math.sqrt(h.scale)
+        w = frontage * k * float(rng.uniform(1.0 - jitter, 1.0 + jitter))
+        d = depth * k * float(rng.uniform(1.0 - 0.5 * jitter, 1.0 + 0.5 * jitter))
+        out.append(PlotSpec(h.use, w, d, mill if free and mill is not None else centre, free=free))
     return out
 
 
@@ -331,6 +308,12 @@ def village_layout(
             ends.append(centre + lane * np.array([math.cos(ang), math.sin(ang)]))
         streets = run(ends)
     streets = [g for g in streets if g.length > 1.0]
+    # Streets run on a plot past their free ends (cut back past the last toft below), so the
+    # end plots front them.
+    dry = site.buildable.difference(water.buffer(5.0)) if not water.is_empty else site.buildable
+    ran_on = _run_on_free_ends(streets, frontage, dry)
+    arms = [new for old, new in zip(streets, ran_on) if any(old is a for a in arms)]   # the same arms, run on
+    streets = ran_on
     street_geom = shapely.union_all(streets) if streets else LineString()
 
     # Where tofts may go: dry, buildable ground as far out as the streets run.
@@ -339,45 +322,19 @@ def village_layout(
     if not water.is_empty:
         allowed = allowed.difference(water.buffer(5.0))
     allowed = allowed.difference(street_geom.buffer(hs)).difference(green)
-    # The church first, nearest the middle; a manor beside it.
-    special: list[tuple[str, Polygon]] = []
-    church = tofts_along(streets, 1, 1.8 * frontage, 0.9 * depth, hs, allowed, centre, rng, 0.0)
-    if church:
-        special.append(("church", church[0]))
-    if pop >= _MANOR_PEOPLE and rng.random() < _MANOR_CHANCE:
-        manor = tofts_along(streets, 1, 2.5 * frontage, 1.2 * depth, hs, allowed, centre, rng, 0.0,
-                            [p for _, p in special])
-        if manor:
-            special.append(("manor", manor[0]))
-    # Households by plot size, trades first (the miller nearest running water), then cottages, then farms.
-    groups = _household_groups(homes, rng, _mill_site(site, centre, spread), centre)
-    owner: dict[str, int] = {}                 # use → its group (for plots put back)
-    for gi, (queue, _, _) in enumerate(groups):
-        for use in queue:
-            owner.setdefault(use, gi)
-    placed: list[tuple[str, Polygon]] = []
+    # The church first, nearest the middle; a manor beside it; then the households — trades
+    # (the miller nearest running water), cottages, farms.
+    manor = pop >= _MANOR_PEOPLE and rng.random() < _MANOR_CHANCE
+    plots = _plot_specs(homes, frontage, depth, jitter, centre, _mill_site(site, centre, spread), manor, rng)
+    n_special = 1 + int(manor)
 
-    def fill(lines: list[LineString]) -> None:
-        for queue, scale, at in groups:
-            if not queue:
-                continue
-            k = math.sqrt(scale)
-            got = tofts_along(lines, len(queue), frontage * k, depth * k, hs, allowed, at, rng, jitter,
-                              [*(p for _, p in placed), *(p for _, p in special)])
-            placed.extend((queue.pop(0), p) for p in got)
+    def pack() -> tuple[list[Block], list[bool]]:
+        return pack_frontage(streets, allowed, plots, centre, hs, rng, _GAP_CHANCE)
 
-    def trim(cut) -> None:  # type: ignore[no-untyped-def]
-        """Cut ``cut`` out of the placed plots; those losing over half go back in their queue."""
-        kept = _trimmed([p for _, p in placed], cut)
-        for (use, _), p in zip(placed, kept):
-            if p is None:
-                groups[owner[use]][0].append(use)
-        placed[:] = [(use, p) for (use, _), p in zip(placed, kept) if p is not None]
-
-    fill(streets)
+    blocks, placed = pack()
     # Short of room on capped streets (a street or green village): back lanes a plot-pair behind, up to twice.
     for _ in range(2):
-        if not arms or len(placed) >= 0.9 * len(homes):
+        if not arms or sum(placed[n_special:]) >= 0.9 * len(homes):
             break
         others = [g for g in streets if not any(g is a for a in arms)]
         extra = [g for g in back_lanes(arms, depth, street_m, others, green)
@@ -386,12 +343,10 @@ def village_layout(
             break
         streets = streets + extra
         arms = [g for g in extra if g.length > 4.0 * depth]
-        lanes_geom = shapely.union_all(extra).buffer(hs)
-        allowed = allowed.difference(lanes_geom)
-        trim(lanes_geom)
-        fill(extra)
+        allowed = allowed.difference(shapely.union_all(extra).buffer(hs))
+        blocks, placed = pack()
     # The streets end a little past the last toft; lanes run on to the gates the roads come in by.
-    built = shapely.union_all([*(p for _, p in placed), *(p for _, p in special)])
+    built = shapely.union_all([lot for b in blocks for lot in b.lots])
     if not built.is_empty:
         keep = built.convex_hull.buffer(frontage)
         green_lines = [g for g in streets if not green.is_empty and g.distance(green) < street_m]
@@ -418,19 +373,17 @@ def village_layout(
         street_geom = shapely.union_all(streets) if streets else LineString()
     # The lanes added after the plots (to gates and jetties) are cut out of them.
     if len(streets) > n_kept:
-        lanes = shapely.union_all(streets[n_kept:]).buffer(hs + 0.5)
-        trim(lanes)
-        trimmed = _trimmed([p for _, p in special], lanes, keep_all=True)
-        special = [(k, p) for (k, _), p in zip(special, trimmed) if p is not None]
-    blocks = [Block(polygon=t, district="residential", core=True, lots=np.asarray([t], dtype=object),
-                    uses=np.asarray([use], dtype=object)) for use, t in placed]
+        blocks = cut_blocks(blocks, shapely.union_all(streets[n_kept:]).buffer(hs + 0.5), keep=("church", "manor"))
+    # The church's plot is the churchyard (open ground, its dividers kept).
     precinct = MultiPolygon()
-    for kind, poly in special:
-        if kind == "church":
-            precinct = MultiPolygon([poly])
-            anchors["sacred"] = np.asarray(poly.centroid.coords[0])
-        else:
-            blocks.append(Block(polygon=poly, district="elite", core=True, lots=np.asarray([poly], dtype=object)))
+    for bi, blk in enumerate(blocks):
+        hit = [i for i in range(len(blk.seeds)) if blk.use(i) == "church"]
+        if hit:
+            church = blk.lots[hit[0]]
+            precinct = _multi(church)
+            anchors["sacred"] = np.asarray(church.centroid.coords[0])
+            blocks[bi] = blk.without(hit[0])
+    blocks = [b for b in blocks if len(b.seeds)]
     well = np.asarray(green.centroid.coords[0]) if not green.is_empty else \
         np.asarray(shapely.ops.nearest_points(street_geom, Point(float(centre[0]), float(centre[1])))[0].coords[0]) \
         if not street_geom.is_empty else centre

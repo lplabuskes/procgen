@@ -95,7 +95,7 @@ class LotRun:
   the street at each household's width, from the front to the back line. Gaps
   (`_GAP_CHANCE`) are runs left undivided (open ground). Back lanes and the
   church/manor use the same mechanism with wider slots.
-- **Towns and cities**: `lots_of` emits dividers across the block (frontage cuts
+- **Towns and cities**: `strip_lots` (was `lots_of`) emits dividers across the block (frontage cuts
   along each long side, the back line between rows) instead of rectangles
   intersected with the block. `lane_lots` adds its lane-fronting runs to the same
   block, and polygonizing the block's union of lines replaces its first-come
@@ -156,3 +156,17 @@ with a house, the registry falls back to district.
   groups placed trades → cottages → farms with `tofts_along`, `disperse_trades`
   in towns/cities. Seed 4 city 13 (110k): 2,695 shops of 16,555 plots (16%).
   Village 536582844 50/115/3 (982 people): 35 craftsmen, 161 farmsteads, all placed.
+- 2026-10-24: review — deep quay blocks were left with empty middles (city 13 quay
+  cover median 0.62); user chose **deep merchant plots**: quay/market/elite lots run
+  back to fill the block up to `merchant_lot_depth_m` (45), lanes beyond. Quay cover
+  → 0.98 (p10 0.91). Phase 1 accepted.
+- 2026-10-24: **Phase 2 built**, awaiting review. `layout/lots.py` (derive lots by
+  polygonizing ground + dividers, snap-rounded 1 µm), `Block` stores ground /
+  dividers / seeds (`of_lots` keeps the lots it was built with; `strip_lots` emits
+  its dividers directly), `layout/frontage.py` village packer (runs per street side,
+  cursors out from the middle, shared dividers), viewer draws lot lines once.
+  Junctions: a Voronoi bisector split made slanted trapezoid corner plots; user
+  steered to **ranked streets** instead (merged end to end, longest claims its band
+  first, the shorter's plots start square behind) plus no plot across a bend > 25°.
+  measure_settlements: lot overlap 0 m² at every tier (seed 4). Layout time on par
+  with or below the pre-phase-1 commit (city 7 3.2 s vs 3.7 s, same machine).

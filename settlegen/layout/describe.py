@@ -74,9 +74,10 @@ def describe_at(layout: SettlementLayout, site: "SettlementSite", xy: np.ndarray
         for i, lot in enumerate(block.lots):
             if lot.contains(pt):
                 _, _, _, length, depth = _axes(lot)
-                what = use_label(block.use(i)) or label
+                what = use_label(block.use(i)) or district_label(block.lot_district(i), tier)
                 return f"{what} · plot ~{min(length, depth):.0f} × {max(length, depth):.0f} m"
-        return label if block.district in OPEN_DISTRICTS or not len(block.lots) else f"{label} · yard"
+        if layout.fill_footprint:              # a village's ground between its plots is just open
+            return label if block.district in OPEN_DISTRICTS or not len(block.lots) else f"{label} · yard"
     if not site.water.channels.is_empty and site.water.channels.contains(pt):
         return "River"                   # the sea and lakes the ground's own readout names
     built = layout.footprint if layout.footprint is not None else site.footprint

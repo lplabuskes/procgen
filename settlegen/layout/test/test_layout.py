@@ -9,12 +9,13 @@ from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon,
 
 from settlegen.site.anchors import Anchor, AnchorCandidates
 from settlegen.frame import Frame
-from settlegen.layout.blocks import lanes_of, lots_of, split_blocks
+from settlegen.layout.blocks import lanes_of, split_blocks, strip_lots
 from settlegen.layout.builder import build_layout
 from settlegen.layout.describe import describe_at, summary
 from settlegen.layout.districts import OPEN_DISTRICTS, TRADE_DISTRICTS
 from settlegen.layout.geometry import chaikin, core_polygon
 from settlegen.layout.households import TRADES, farm_toft_m2, households
+from settlegen.layout.lots import derive_lots
 from settlegen.layout.params import SettlementLayoutParams
 from settlegen.layout.streets import radial_targets, route_arterials
 from settlegen.profile.builder import Industry, PolityRelation, SettlementProfile
@@ -254,7 +255,7 @@ def test_planned_blocks_follow_the_grid():
 
 def test_lots_front_the_long_sides():
     block = box(0, 0, 80, 40)
-    lots = lots_of(block, 8.0, 20.0, np.random.default_rng(0), True)
+    lots, _ = strip_lots(block, 8.0, 20.0, np.random.default_rng(0), True)
     assert len(lots) == 20
     assert sum(g.area for g in lots) == pytest.approx(block.area)
 
@@ -342,14 +343,13 @@ def test_a_village_is_farmsteads_along_its_streets():
     lay = build_layout(site, profile, _slope(), (1, 2, 3))
     households = 600 // 5
     assert not lay.fill_footprint and lay.walls is None
-    assert 0.6 * households <= len(lay.blocks) <= households + 1
-    assert all(len(b.lots) == 1 for b in lay.blocks)
-    tofts = [b.polygon for b in lay.blocks]
+    assert 0.6 * households <= lay.n_lots <= households + 1
+    tofts = [lot for b in lay.blocks for lot in b.lots]
     assert shapely.union_all(tofts).area == pytest.approx(sum(t.area for t in tofts), rel=1e-6)
     streets = shapely.union_all(lay.arterials).buffer(0.5 * lay.arterial_m)
     assert all(t.intersection(streets).area < 1.0 for t in tofts)
-    assert not lay.precinct.is_empty
-    farm = next(b.polygon for b in lay.blocks if b.use(0) == "farm")
+    assert not lay.precinct.is_empty and all(t.intersection(lay.precinct).area < 1.0 for t in tofts)
+    farm = next(lot for b in lay.blocks for i, lot in enumerate(b.lots) if b.use(i) == "farm")
     assert str(describe_at(lay, site, np.asarray(farm.representative_point().coords[0]), 5)).startswith("Farm")
 
 
@@ -367,17 +367,18 @@ def test_village_craftsmen_live_on_small_plots_near_the_middle():
     site, profile = _village(600.0)
     lay = build_layout(site, profile, _slope(), (1, 2, 3))
     centre = lay.anchors["market"]
-    trades = [b.polygon for b in lay.blocks if b.use(0) in TRADES and b.use(0) != "miller"]
-    farms = [b.polygon for b in lay.blocks if b.use(0) == "farm"]
-    assert 0.05 * len(lay.blocks) <= len(trades) <= 0.35 * len(lay.blocks)
+    plots = [(b.use(i), lot) for b in lay.blocks for i, lot in enumerate(b.lots)]
+    trades = [lot for use, lot in plots if use in TRADES and use != "miller"]
+    farms = [lot for use, lot in plots if use == "farm"]
+    assert 0.05 * len(plots) <= len(trades) <= 0.35 * len(plots)
     assert np.median([t.area for t in trades]) < 0.6 * np.median([f.area for f in farms])
 
     def dist(polys):  # type: ignore[no-untyped-def]
         return np.median([np.linalg.norm(np.asarray(p.centroid.coords[0]) - centre) for p in polys])
     assert dist(trades) < dist(farms)
-    trade = next(b for b in lay.blocks if b.use(0) in TRADES)
-    what = describe_at(lay, site, np.asarray(trade.polygon.representative_point().coords[0]), 5)
-    assert str(what).startswith(TRADES[trade.use(0)].label)
+    use, lot = next((use, lot) for use, lot in plots if use in TRADES)
+    what = describe_at(lay, site, np.asarray(lot.representative_point().coords[0]), 5)
+    assert str(what).startswith(TRADES[use].label)
     assert "craftsmen" in summary(lay, profile)
 
 
@@ -433,7 +434,7 @@ def test_a_fishing_village_packs_rows_along_the_shore_about_its_jetty():
     profile = _profile(tier=5, tier_name="Village", kind="fishing", walls=False, wall_strength=0.0,
                        population=900.0, polity=PolityRelation(), industries=[Industry("fishing", 0.8)])
     lay = build_layout(site, profile, _slope(), (1, 2, 3))
-    assert len(lay.blocks) >= 0.85 * 180
+    assert lay.n_lots >= 0.85 * 180
     assert len(lay.piers) == 1
     jetty = np.asarray(lay.piers[0].centroid.coords[0])
     # Rows parallel to the straight shore: streets that run along it keep one distance from the water.
@@ -441,7 +442,7 @@ def test_a_fishing_village_packs_rows_along_the_shore_about_its_jetty():
             and np.ptp([site.water.sea.distance(shapely.Point(p)) for p in g.coords]) < 2.0]
     assert len(rows) >= 2
     # Compact about the jetty: no farmstead far beyond the rows' reach (no 2 km shore street).
-    far = max(np.linalg.norm(np.asarray(b.polygon.centroid.coords[0]) - jetty) for b in lay.blocks)
+    far = max(np.linalg.norm(np.asarray(lot.centroid.coords[0]) - jetty) for b in lay.blocks for lot in b.lots)
     assert far < 500.0
 
 
@@ -490,3 +491,21 @@ def test_walls_span_a_notch_in_the_edge_and_take_in_its_ground():
     off = build_layout(site, _profile(), _slope(), (1, 2, 3), SettlementLayoutParams(wall_closing=0.0))
     assert off.footprint is None and off.walls is not None
     assert off.walls.line.intersection(notch.buffer(1.0)).length > 100.0
+
+
+def test_quay_and_market_lots_run_back_to_fill_their_blocks(layout):
+    deep = [b for b in layout.blocks if b.district in ("quay", "market", "elite") and len(b.lots)]
+    assert deep
+    cover = [sum(lot.area for lot in b.lots) / b.polygon.area for b in deep]
+    assert np.median(cover) > 0.97          # ordinary 22 m rows leave ~0.9 (yards in the middle)
+
+
+def test_lots_are_what_their_blocks_dividers_derive(layout):
+    # Blocks keep the lots they were built with; the dividers alone must give them back, tiling.
+    for b in layout.blocks:
+        if not len(b.lots):
+            continue
+        derived = derive_lots(b.polygon, b.dividers, b.seeds)
+        for kept, again in zip(b.lots, derived):
+            assert kept.symmetric_difference(again).area < 1e-3 * kept.area
+        assert shapely.union_all(list(derived)).area == pytest.approx(sum(g.area for g in derived), rel=1e-6)

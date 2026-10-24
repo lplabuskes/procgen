@@ -42,6 +42,9 @@ class SettlementLayoutParams:
     lot_depth_m: float = _f(22.0, label="Lot depth (m)", min=5.0, max=100.0, step=1.0)
     suburb_lot_mult: float = _f(1.5, label="Suburb lot (×)", min=1.0, max=5.0, step=0.1)
     garden_lot_mult: float = _f(3.0, label="Garden lot (×)", min=1.0, max=10.0, step=0.1)
+    # Quay, market and elite lots run back to fill their blocks, up to this deep (merchant plots).
+    merchant_lot_depth_m: float = _f(45.0, label="Quay / market / elite lots up to (m deep)", min=5.0, max=150.0,
+                                     step=1.0)
     # Lanes into blocks too deep for their frontage: closes (dead ends) and alleys (through).
     lane_m: float = _f(3.0, label="Close / alley width (m)", min=1.0, max=10.0, step=0.5)
     lane_spacing_block_m: float = _f(60.0, label="Closes along a deep block every (m)", min=15.0, max=500.0,

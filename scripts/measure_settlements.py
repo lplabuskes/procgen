@@ -35,6 +35,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+import shapely
 
 from settlegen.builder import build_settlement_map
 from settlegen.chain.builder import SettlementRef, population
@@ -99,6 +100,7 @@ def measure(store, ref: SettlementRef, params) -> dict:  # type: ignore[no-untyp
         "blocks": len(layout.blocks), "lots": layout.n_lots, "piers": len(layout.piers),
         "trade_share": sum(b.use(i) in TRADES for b in layout.blocks for i in range(len(b.lots)))
         / max(layout.n_lots, 1),
+        "lot_overlap_m2": _lot_overlap_m2(layout),
         "wall_km": layout.walls.line.length / 1000.0 if layout.walls is not None else 0.0,
         "wall_gates": len(layout.walls.gates) if layout.walls is not None else 0,
         "walls_took_ha": (layout.footprint.difference(site.footprint).area / 1e4
@@ -107,13 +109,21 @@ def measure(store, ref: SettlementRef, params) -> dict:  # type: ignore[no-untyp
     return row
 
 
+def _lot_overlap_m2(layout) -> float:  # type: ignore[no-untyped-def]
+    """m² of lots overlapping one another (must be ~0: lots tile their blocks)."""
+    lots = [lot for b in layout.blocks for lot in b.lots]
+    if not lots:
+        return 0.0
+    return float(sum(g.area for g in lots) - shapely.union_all(lots).area)
+
+
 def _fmt(row: dict) -> str:
     where = f" @{row['map'][0]}/{row['map'][1]}" if row["map"] else ""
     return (f"    {row['kind']:<7} {row['index']:>5}{where:<9} {row['population']:>9,.0f} {row['site_kind']:<9} "
             f"{row['t_total']:>5.1f} s (chain {row['t_chain']:>4.1f}) · cons {row['conservation_max']:.1e} · "
             f"fp {row['footprint_error']:+5.1%} {row['pieces']}p · gates {row['gates']} br {row['bridges']} "
             f"fd {row['fords']} land {row['landings']} · blocks {row['blocks']:,} plots {row['lots']:,} "
-            f"({row['trade_share']:.0%} trades) piers {row['piers']}"
+            f"({row['trade_share']:.0%} trades, overlap {row['lot_overlap_m2']:.1f} m²) piers {row['piers']}"
             + (f" · walls {row['wall_km']:.1f} km, {row['wall_gates']} gates" if row["wall_km"] else ""))
 
 
@@ -128,6 +138,7 @@ def summarise(rows: list[dict]) -> dict:
             **{f"t_{k}": avg(sub, f"t_{k}") for k in (*STEPS, "total")},
             "t_after_chain": avg([{"v": r["t_total"] - r["t_chain"]} for r in sub], "v"),
             "conservation_max": max(r["conservation_max"] for r in sub),
+            "lot_overlap_max_m2": max(r["lot_overlap_m2"] for r in sub),
             "footprint_abs_error": avg([{"v": abs(r["footprint_error"])} for r in sub], "v"),
             "wall_gates_walled": avg([r for r in sub if r["wall_km"]], "wall_gates"),
             **{k: avg(sub, k) for k in ("pieces", "sparse_share", "gates", "bridges", "fords", "landings",
@@ -148,7 +159,8 @@ def print_summary(summary: dict) -> None:
               f"fords {s['fords']:.1f}, landings {s['landings']:.1f}")
         print(f"          anchors citadel {s['anchors_citadel']:.1f} market {s['anchors_market']:.1f} "
               f"waterfront {s['anchors_waterfront']:.1f} sacred {s['anchors_sacred']:.1f} · blocks {s['blocks']:,.0f}, "
-              f"plots {s['lots']:,.0f} ({s['trade_share']:.0%} trades), piers {s['piers']:.1f}, "
+              f"plots {s['lots']:,.0f} ({s['trade_share']:.0%} trades, overlap ≤ {s['lot_overlap_max_m2']:.1f} m²), "
+              f"piers {s['piers']:.1f}, "
               f"walls {s['wall_km']:.1f} km "
               f"(took in {s['walls_took_ha']:.1f} ha; {s['wall_gates_walled']:.1f} gates per walled one)")
 

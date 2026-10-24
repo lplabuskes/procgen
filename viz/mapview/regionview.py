@@ -10,7 +10,7 @@ from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPainterPath, QPen, 
 from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtWidgets import QWidget
 import shapely
-from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon
+from shapely.geometry import LineString, MultiLineString, MultiPolygon
 from shapely.geometry.base import BaseGeometry
 
 from core.display import SchemeSpec
@@ -1445,13 +1445,23 @@ class RegionView(QWidget):
             return np.asarray(xy, dtype=np.float64).reshape(-1, 2)
 
         by_district: dict[str, list] = {}
-        lots = []
-        for b in layout.blocks:
-            by_district.setdefault(b.district, []).append(b.polygon)
-            lots.extend(b.lots)
+        lot_lines: list = []
+        if layout.fill_footprint:
+            # Blocks filled by district; lot lines once each: the outlines of blocks with lots, their dividers.
+            for b in layout.blocks:
+                by_district.setdefault(b.district, []).append(b.polygon)
+                if len(b.lots):
+                    lot_lines += [b.polygon.exterior, *b.polygon.interiors, *b.dividers.geoms]
+        else:
+            # A village's plots, not its streets' whole ground (gaps and paddocks stay open).
+            for b in layout.blocks:
+                for i, lot in enumerate(b.lots):
+                    by_district.setdefault(b.lot_district(i), []).append(lot)
+            outlines = shapely.union_all([lot.boundary for b in layout.blocks for lot in b.lots])
+            lot_lines = [g for g in shapely.get_parts(shapely.line_merge(outlines)) if isinstance(g, LineString)]
         cache: dict = {
             "districts": {d: _site_path(MultiPolygon(polys), ident) for d, polys in by_district.items()},
-            "lots": _site_path(MultiPolygon([g for g in lots if isinstance(g, Polygon)]), ident),
+            "lots": _lines_path(lot_lines),
             "open": {k: _site_path(getattr(layout, k), ident)
                      for k in ("green", "quays", "plaza", "precinct", "citadel")},
             # (width, path): the secondary arterials and wall street under the main streets.

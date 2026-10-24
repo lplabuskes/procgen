@@ -41,8 +41,12 @@ CRAFTS: dict[str, tuple[str, bool, bool]] = {
 OPEN_DISTRICTS = ("graveyard", "square")
 
 
+# Districts whose lots run back to fill a block (merchants' and the elite's long plots).
+DEEP_LOT_DISTRICTS = ("quay", "market", "elite")
+
+
 # Districts whose deep blocks are opened up by closes and alleys.
-LANE_DISTRICTS = ("residential", "suburb", *sorted({v[0] for v in CRAFTS.values()}))
+LANE_DISTRICTS = ("residential", "suburb", *sorted({v[0] for v in CRAFTS.values()}), *DEEP_LOT_DISTRICTS)
 
 
 DISTRICTS = ("market", "quay", "elite", "residential", "suburb", "gardens", "graveyard", "square",
@@ -180,7 +184,14 @@ def disperse_trades(
         return 0
     lots = np.asarray([blocks[bi].lots[li] for bi, li in refs], dtype=object)
     xy = shapely.get_coordinates(shapely.centroid(lots))
-    on_front = shapely.distance(lots, fronts) < 1.0 if not fronts.is_empty else np.zeros(len(refs), dtype=bool)
+    on_front = np.zeros(len(refs), dtype=bool)
+    if not fronts.is_empty:
+        # The fronts' outlines as single segments: an index on them finds the lots by them fast.
+        rings = shapely.get_parts(shapely.get_rings(shapely.get_parts(fronts)))
+        segs = [np.asarray(shapely.linestrings(np.stack([c[:-1], c[1:]], axis=1)), dtype=object)
+                for c in (shapely.get_coordinates(r) for r in rings) if len(c) >= 2]
+        tree = shapely.STRtree(np.concatenate(segs))
+        on_front[tree.query(lots, predicate="dwithin", distance=1.0)[0]] = True
     ground = float(shapely.area(lots).sum())
     scale = min(1.0, max_share * len(refs) / total)
     uses = np.full(len(refs), "", dtype=object)
@@ -189,18 +200,20 @@ def disperse_trades(
         if k == 0:
             continue
         r = 0.5 * math.sqrt(ground / k)
-        grid: dict[tuple[int, int], list[np.ndarray]] = {}
+        cells = np.floor(xy / r).astype(np.int64).tolist()
+        pts = xy.tolist()
+        grid: dict[tuple[int, int], list[tuple[float, float]]] = {}
         got = 0
         score = on_front + rng.uniform(0.0, 1.0, len(refs))
-        for i in np.argsort(-score, kind="stable"):
+        for i in np.argsort(-score, kind="stable").tolist():
             if uses[i]:
                 continue
-            cx, cy = int(xy[i, 0] // r), int(xy[i, 1] // r)
-            near = [p for dx in (-1, 0, 1) for dy in (-1, 0, 1) for p in grid.get((cx + dx, cy + dy), ())]
-            if any(float(np.hypot(*(p - xy[i]))) < r for p in near):
+            (cx, cy), (x, y) = cells[i], pts[i]
+            if any(math.hypot(px - x, py - y) < r
+                   for dx in (-1, 0, 1) for dy in (-1, 0, 1) for px, py in grid.get((cx + dx, cy + dy), ())):
                 continue
             uses[i] = name
-            grid.setdefault((cx, cy), []).append(xy[i])
+            grid.setdefault((cx, cy), []).append((x, y))
             got += 1
             if got == k:
                 break
