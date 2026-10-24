@@ -73,6 +73,22 @@ class Block:
 
 
 @dataclass
+class Buildings:
+    """Every building of a layout (settlegen.layout.buildings), as parallel arrays."""
+
+    polygons: np.ndarray         # (n,) shapely polygons
+    kinds: np.ndarray            # (n,) str: "house", "row", "barn", "workshop", "hall", "church", …
+    lots: np.ndarray             # (n, 2) int: (block, lot) the building stands on; (-1, -1) on open ground
+
+    @staticmethod
+    def empty() -> "Buildings":
+        return Buildings(np.zeros(0, dtype=object), np.zeros(0, dtype=object), np.zeros((0, 2), dtype=np.int64))
+
+    def __len__(self) -> int:
+        return len(self.polygons)
+
+
+@dataclass
 class SettlementLayout:
     """See the module docstring.  All in frame metres."""
 
@@ -101,6 +117,7 @@ class SettlementLayout:
     closes: list[LineString] = field(default_factory=list)
     alleys: list[LineString] = field(default_factory=list)
     lane_m: float = 3.0
+    buildings: Buildings = field(default_factory=Buildings.empty)
 
     def arterial_width(self, i: int) -> float:
         kind = self.arterial_kinds[i] if i < len(self.arterial_kinds) else "main"

@@ -49,6 +49,7 @@ One subpackage per pipeline step, as in `worldgen/` and `realmgen/`: each has a
   - `builder.py` — `build_layout`: anchors chosen, then streets, market, core and walls, docks, blocks, districts, lots
   - `params.py` — `SettlementLayoutParams`
   - `types.py` — `SettlementLayout`, `Walls`, `Block` (ground + dividers + a seed per lot; lots derived, each with a `use`)
+  - `buildings.py` — buildings on the lots: `lot_frames` (each lot's street front), `TYPOLOGY` / `lot_type` (placers by lot type), `church`, `place_buildings`
   - `lots.py` — lots as boundaries: `derive_lots` (polygonize the ground cut by its dividers), `dividers_of`, `seeds_of`
   - `frontage.py` — plots packed along streets as boundaries (`pack_frontage`, `ranked`, `street_grounds`, `cut_blocks`): villages
   - `streets.py` — main streets on a route grid (`route_arterials`), `infill_arterials`, `wall_street`, `main_axis`, `radial_targets`
@@ -354,7 +355,26 @@ middle, a manor at ≥ 400 people (50%). Seed 536582844 map 50/115: 39 of 40
 villages place ≥ 85% of households.
 
 `describe_at` names what is under a point (hover); `summary` is the status line.
-No names (Decision 9). Known: houses within plots aren't drawn.
+No names (Decision 9).
+
+**Buildings** (`layout/buildings.py`, every tier, main view): each lot is read in
+its own frame — its **front** is the edge on a street most nearly along its narrow
+side (a strip's street end, not a corner lot's flank), the grander street between
+two such ends (market and main streets 3, other arterials / green / quays 2, minor
+streets 1, closes and alleys 0; a burgage plot faces its market street), else its
+narrow side. A typology maps the lot's type (its use, else district and tier) to
+a placer laying rectangles in every such lot's frame at once, clipped to the lot
+(kept while ≥ 60% is left): **townhouse** terraced on narrow (≤ 10 m) lots in the
+core, market or quay, else detached (1.5 m gaps, set back ≤ 2 m), 10 m deep;
+**workshop** (a trade, a craft quarter) adds a workshop across the back;
+**elite** a house the whole frontage plus a wing; **suburb** detached;
+**garden** a shed (30%); a village's **farm** a house along the street (≤ 14 m)
+and a barn behind, **cottage**, **craft** a house and a workshop, **manor** a hall
+and a wing. The church stands on the precinct, nave east–west, chancel, a tower
+from 800 people, length 5 + people^0.45 (18–90 m) but no longer than the
+precinct, shrunk or turned to fit. Roofs by the place's main material (thatch in
+villages), outbuildings darker, the church in stone; hover names the building and
+its lot. `SettlementLayout.buildings` holds them as parallel arrays.
 
 **Lots as boundaries** (all tiers): a `Block` stores its ground, the lines
 between its lots and along their backs (`dividers`) and a point in each lot

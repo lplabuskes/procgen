@@ -70,6 +70,7 @@ import shapely
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, Polygon
 
 from settlegen.layout.blocks import burgage_band, lane_lots, lanes_of, split_blocks, strip_lots, yards_of
+from settlegen.layout.buildings import place_buildings
 from settlegen.layout.districts import (
     DEEP_LOT_DISTRICTS, LANE_DISTRICTS, OPEN_DISTRICTS, assign_districts, disperse_trades,
 )
@@ -90,6 +91,7 @@ if TYPE_CHECKING:
 
 
 _LAYOUT_STREAM = 61
+_BUILDING_STREAM = 62
 
 
 # (min, max) m² of the open grounds.
@@ -142,13 +144,25 @@ def build_layout(
     """The layout of ``site``.  ``slope``: (T, T) km/km over the frame; ``seed``: the
     settlement's stream key.  See the module docstring."""
     params = params or SettlementLayoutParams()
-    footprint = site.footprint
-    if footprint.is_empty:
+    if site.footprint.is_empty:
         return SettlementLayout.empty()
     rng = np.random.default_rng([*seed, _LAYOUT_STREAM])
     if profile.tier == 5:
         from settlegen.layout.village import village_layout
-        return village_layout(site, profile, slope, rng, params)
+        layout = village_layout(site, profile, slope, rng, params)
+    else:
+        layout = _town_layout(site, profile, slope, rng, params)
+    layout.buildings = place_buildings(layout, float(profile.population), profile.tier,
+                                       np.random.default_rng([*seed, _BUILDING_STREAM]), params)
+    return layout
+
+
+def _town_layout(
+    site: "SettlementSite", profile: SettlementProfile, slope: np.ndarray, rng: np.random.Generator,
+    params: SettlementLayoutParams,
+) -> SettlementLayout:
+    """A town's or a city's layout (steps 1–9 of the module docstring)."""
+    footprint = site.footprint
     anchors = choose_anchors(site, profile, params)
     pop = float(profile.population)
     town = profile.tier == 4

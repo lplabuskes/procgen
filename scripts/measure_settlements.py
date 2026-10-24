@@ -13,8 +13,9 @@ local map (spread over its list), and reports per settlement and per kind:
     (the sparse ground holds the rest, so a few percent under is expected),
     pieces, sparse share, density;
   • gates, bridges and fords, landings; anchor candidates per kind;
-  • the layout: blocks or farmsteads, plots (share held by trades), piers, wall length and
-    gates, and the ground the walls took in beyond the site's footprint.
+  • the layout: blocks or farmsteads, plots (share held by trades), buildings (share of the
+    plots they cover), piers, wall length and gates, and the ground the walls took in
+    beyond the site's footprint.
 
 Usage:
     python3 scripts/measure_settlements.py                     # seeds 4, 31, 35
@@ -101,6 +102,8 @@ def measure(store, ref: SettlementRef, params) -> dict:  # type: ignore[no-untyp
         "trade_share": sum(b.use(i) in TRADES for b in layout.blocks for i in range(len(b.lots)))
         / max(layout.n_lots, 1),
         "lot_overlap_m2": _lot_overlap_m2(layout),
+        "buildings": len(layout.buildings),
+        "built_share": _built_share(layout),
         "wall_km": layout.walls.line.length / 1000.0 if layout.walls is not None else 0.0,
         "wall_gates": len(layout.walls.gates) if layout.walls is not None else 0,
         "walls_took_ha": (layout.footprint.difference(site.footprint).area / 1e4
@@ -110,11 +113,21 @@ def measure(store, ref: SettlementRef, params) -> dict:  # type: ignore[no-untyp
 
 
 def _lot_overlap_m2(layout) -> float:  # type: ignore[no-untyped-def]
-    """m² of lots overlapping one another (must be ~0: lots tile their blocks)."""
-    lots = [lot for b in layout.blocks for lot in b.lots]
-    if not lots:
+    """m² of lots overlapping one another, pair by pair (must be ~0: lots tile their blocks;
+    a union of every lot loses slivers to rounding, so it can't tell)."""
+    lots = np.asarray([lot for b in layout.blocks for lot in b.lots], dtype=object)
+    if not len(lots):
         return 0.0
-    return float(sum(g.area for g in lots) - shapely.union_all(lots).area)
+    a, c = shapely.STRtree(lots).query(lots, predicate="intersects")
+    pair = a < c
+    return float(shapely.area(shapely.intersection(lots[a[pair]], lots[c[pair]])).sum())
+
+
+def _built_share(layout) -> float:  # type: ignore[no-untyped-def]
+    """Share of the lots' ground under buildings."""
+    lot_m2 = sum(lot.area for b in layout.blocks for lot in b.lots)
+    on_lots = [p for p, (bi, _) in zip(layout.buildings.polygons, layout.buildings.lots) if bi >= 0]
+    return float(shapely.area(np.asarray(on_lots, dtype=object)).sum() / lot_m2) if lot_m2 > 0 and on_lots else 0.0
 
 
 def _fmt(row: dict) -> str:
@@ -123,7 +136,8 @@ def _fmt(row: dict) -> str:
             f"{row['t_total']:>5.1f} s (chain {row['t_chain']:>4.1f}) · cons {row['conservation_max']:.1e} · "
             f"fp {row['footprint_error']:+5.1%} {row['pieces']}p · gates {row['gates']} br {row['bridges']} "
             f"fd {row['fords']} land {row['landings']} · blocks {row['blocks']:,} plots {row['lots']:,} "
-            f"({row['trade_share']:.0%} trades, overlap {row['lot_overlap_m2']:.1f} m²) piers {row['piers']}"
+            f"({row['trade_share']:.0%} trades, overlap {row['lot_overlap_m2']:.1f} m²) "
+            f"buildings {row['buildings']:,} ({row['built_share']:.0%} of plots) piers {row['piers']}"
             + (f" · walls {row['wall_km']:.1f} km, {row['wall_gates']} gates" if row["wall_km"] else ""))
 
 
@@ -143,7 +157,8 @@ def summarise(rows: list[dict]) -> dict:
             "wall_gates_walled": avg([r for r in sub if r["wall_km"]], "wall_gates"),
             **{k: avg(sub, k) for k in ("pieces", "sparse_share", "gates", "bridges", "fords", "landings",
                                         "anchors_citadel", "anchors_market", "anchors_waterfront",
-                                        "anchors_sacred", "blocks", "lots", "trade_share", "piers", "wall_km",
+                                        "anchors_sacred", "blocks", "lots", "trade_share", "buildings", "built_share",
+                                        "piers", "wall_km",
                                         "walls_took_ha")},
         }
     return out
@@ -160,7 +175,7 @@ def print_summary(summary: dict) -> None:
         print(f"          anchors citadel {s['anchors_citadel']:.1f} market {s['anchors_market']:.1f} "
               f"waterfront {s['anchors_waterfront']:.1f} sacred {s['anchors_sacred']:.1f} · blocks {s['blocks']:,.0f}, "
               f"plots {s['lots']:,.0f} ({s['trade_share']:.0%} trades, overlap ≤ {s['lot_overlap_max_m2']:.1f} m²), "
-              f"piers {s['piers']:.1f}, "
+              f"buildings {s['buildings']:,.0f} ({s['built_share']:.0%} of plots), piers {s['piers']:.1f}, "
               f"walls {s['wall_km']:.1f} km "
               f"(took in {s['walls_took_ha']:.1f} ha; {s['wall_gates_walled']:.1f} gates per walled one)")
 

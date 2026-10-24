@@ -39,7 +39,7 @@ from region.upsample import RegionFields
 from settlegen.builder import SettlementMap
 from settlegen.chain.builder import SettlementRef
 from settlegen.display import (
-    ARTERIAL_RGB, DISTRICT_RGB, OPEN_RGB, STREET_RGB, WATER_RGB, relief_legend, relief_rgba,
+    ARTERIAL_RGB, DISTRICT_RGB, OPEN_RGB, STREET_RGB, WATER_RGB, building_rgb, relief_legend, relief_rgba,
 )
 from settlegen.layout.describe import describe_at, summary as layout_summary
 from settlegen.layout.types import SettlementLayout
@@ -1468,14 +1468,26 @@ class RegionView(QWidget):
             "arterials": [(w, _lines_path([g for i, g in enumerate(layout.arterials) if layout.arterial_width(i) == w]))
                           for w in sorted({layout.arterial_width(i) for i in range(len(layout.arterials))})],
             "walls": _lines_path(list(layout.walls.line.geoms)) if layout.walls is not None else QPainterPath(),
+            "buildings": self._building_paths(layout, ident),
         }
         self._layout_paths = (id(layout), cache)
         return cache
 
+    def _building_paths(self, layout: SettlementLayout, ident) -> dict:  # type: ignore[no-untyped-def]
+        """Colour → painter path of the layout's buildings, roofed in the place's material."""
+        profile = self._settlement.profile if self._settlement is not None else None
+        material = profile.material if profile is not None else "timber"
+        village = profile is not None and profile.tier == 5
+        by_rgb: dict[tuple, list] = {}
+        for poly, kind in zip(layout.buildings.polygons, layout.buildings.kinds):
+            by_rgb.setdefault(building_rgb(str(kind), material, village), []).append(poly)
+        return {rgb: _site_path(MultiPolygon(polys), ident) for rgb, polys in by_rgb.items()}
+
     def _draw_layout(self, painter: QPainter, layout: SettlementLayout, x0: float, y0: float, size: float,
                      side: float) -> None:
         """The layout over the footprint: blocks by district, lots (once a lot spans a few
-        pixels), plaza, precinct and citadel, arterials, walls and towers — all in metres."""
+        pixels), plaza, precinct and citadel, buildings (likewise), arterials, walls and
+        towers — all in metres."""
         cache = self._layout_cache(layout)
         painter.save()
         painter.translate(x0 + 0.5 * size, y0 + 0.5 * size)
@@ -1494,6 +1506,12 @@ class RegionView(QWidget):
         for key, path in cache["open"].items():
             painter.setBrush(QColor.fromRgbF(*OPEN_RGB[key]))
             painter.drawPath(path)
+        if px_per_m * 6.0 >= 3.0:
+            # Buildings once a house spans a few pixels, over the open grounds (the church on its precinct).
+            painter.setPen(_cosmetic_pen(QColor(45, 35, 28, 200)))
+            for rgb, path in cache["buildings"].items():
+                painter.setBrush(QColor.fromRgbF(*rgb))
+                painter.drawPath(path)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         # Every casing first, then every fill, so junctions between widths stay open.
         for width, path in cache["arterials"]:

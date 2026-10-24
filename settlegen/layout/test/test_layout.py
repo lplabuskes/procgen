@@ -378,7 +378,7 @@ def test_village_craftsmen_live_on_small_plots_near_the_middle():
     assert dist(trades) < dist(farms)
     use, lot = next((use, lot) for use, lot in plots if use in TRADES)
     what = describe_at(lay, site, np.asarray(lot.representative_point().coords[0]), 5)
-    assert str(what).startswith(TRADES[use].label)
+    assert TRADES[use].label in str(what)          # the plot, or "Workshop · Smithy" on a building
     assert "craftsmen" in summary(lay, profile)
 
 

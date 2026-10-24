@@ -86,6 +86,16 @@ class SettlementLayoutParams:
     cottage_plot_scale: float = _f(0.35, label="Cottage plot (× farm toft)", min=0.05, max=1.0, step=0.05)
     urban_trade_share: float = _f(0.25, label="Trades at most this share of a town's house plots", min=0.0,
                                   max=1.0, step=0.05)
+    # Buildings on the lots (settlegen.layout.buildings).
+    house_depth_m: float = _f(10.0, label="Town house depth (m)", min=3.0, max=30.0, step=0.5)
+    village_house_depth_m: float = _f(7.0, label="Village house depth (m)", min=3.0, max=30.0, step=0.5)
+    terrace_frontage_m: float = _f(10.0, label="Terraced up to this frontage (m, dense ground)", min=0.0,
+                                   max=40.0, step=0.5)
+    house_gap_m: float = _f(1.5, label="Gap beside a detached house (m)", min=0.0, max=10.0, step=0.25)
+    max_house_width_m: float = _f(12.0, label="Widest house along the street (m)", min=4.0, max=40.0, step=0.5)
+    barn_depth_m: float = _f(8.0, label="Barn depth (m)", min=2.0, max=30.0, step=0.5)
+    workshop_depth_m: float = _f(5.0, label="Workshop depth (m)", min=2.0, max=20.0, step=0.5)
+    shed_chance: float = _f(0.3, label="Garden plots with a shed", min=0.0, max=1.0, step=0.05)
     # Docks.
     quay_width_m: float = _f(12.0, label="Quay width (m)", min=2.0, max=60.0, step=1.0)
     pier_spacing_m: float = _f(60.0, label="Pier spacing (m)", min=10.0, max=500.0, step=5.0)

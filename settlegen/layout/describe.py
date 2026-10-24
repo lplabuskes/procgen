@@ -8,6 +8,7 @@ import shapely
 from shapely.geometry import Point
 
 from settlegen.layout.districts import OPEN_DISTRICTS
+from settlegen.layout.buildings import BUILDING_LABELS
 from settlegen.layout.geometry import _axes
 from settlegen.layout.households import HOUSEHOLD_LABELS, TRADES, use_label
 from settlegen.layout.types import Block, SettlementLayout
@@ -45,6 +46,18 @@ def block_at(layout: SettlementLayout, xy: np.ndarray) -> Optional[Block]:
     return layout.blocks[int(hits[0])] if len(hits) else None
 
 
+def building_at(layout: SettlementLayout, xy: np.ndarray) -> Optional[int]:
+    """The index of the building at ``xy`` (an STR tree, built once per layout)."""
+    if not len(layout.buildings):
+        return None
+    tree = getattr(layout, "_building_tree", None)
+    if tree is None:
+        tree = shapely.STRtree(layout.buildings.polygons)
+        setattr(layout, "_building_tree", tree)
+    hits = tree.query(Point(float(xy[0]), float(xy[1])), predicate="within")
+    return int(hits[0]) if len(hits) else None
+
+
 def describe_at(layout: SettlementLayout, site: "SettlementSite", xy: np.ndarray, tier: int) -> Optional[str]:
     """What of the settlement is at ``xy`` (frame metres), or None."""
     pt = Point(float(xy[0]), float(xy[1]))
@@ -55,6 +68,17 @@ def describe_at(layout: SettlementLayout, site: "SettlementSite", xy: np.ndarray
     if walls is not None and not walls.line.is_empty and walls.line.distance(pt) <= 0.5 * walls.width_m + 2.0:
         near_tower = len(walls.towers) and float(np.min(np.linalg.norm(walls.towers - xy, axis=1))) <= walls.width_m
         return "Tower" if near_tower else ("Stone wall" if walls.kind == "stone" else "Palisade")
+    b = building_at(layout, xy)
+    if b is not None:
+        kind = str(layout.buildings.kinds[b])
+        what = BUILDING_LABELS.get(kind, kind.capitalize())
+        if tier < 4 and kind in ("church", "chancel"):
+            what = "Temple"
+        bi, li = (int(v) for v in layout.buildings.lots[b])
+        if bi < 0:
+            return what
+        block = layout.blocks[bi]
+        return f"{what} · {use_label(block.use(li)) or district_label(block.lot_district(li), tier)}"
     for geom, label in ((layout.citadel, "Citadel"), (layout.plaza, "Market street" if tier == 4 else "Market place"),
                         (layout.precinct, "Church and churchyard" if tier >= 4 else "Temple precinct"),
                         (layout.green, "Village green"), (layout.quays, "Quay")):
@@ -105,4 +129,4 @@ def summary(layout: SettlementLayout, profile: SettlementProfile) -> str:
             (" (planned)" if profile.planned else "")
     n = len(layout.piers)
     docks = f" · {n} pier{'s' if n != 1 else ''}" if n else ""
-    return f"{who}{rule} · {walls} · {plan}{docks}"
+    return f"{who}{rule} · {walls} · {plan} · {len(layout.buildings):,} buildings{docks}"

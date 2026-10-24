@@ -170,3 +170,12 @@ with a house, the registry falls back to district.
   first, the shorter's plots start square behind) plus no plot across a bend > 25°.
   measure_settlements: lot overlap 0 m² at every tier (seed 4). Layout time on par
   with or below the pre-phase-1 commit (city 7 3.2 s vs 3.7 s, same machine).
+- 2026-10-24: Phase 2 committed by the user.
+- 2026-10-24: **Phase 3 built**, awaiting review. `layout/buildings.py`: vectorised lot
+  frames (front = street edge along the narrow side, ranked streets break ties so
+  burgage plots face the market street), typology registry of vectorised placers
+  (townhouse/row, workshop, elite, suburb, garden; farm, cottage, craft, manor), church
+  on the precinct; `Buildings` arrays on the layout (not a list of objects: ~120k in
+  seed 4 city 36); roofs by material in the main view; hover; measure_settlements
+  buildings + built share (and its lot-overlap metric now pairwise — a union of every
+  lot lost ~269 m² to rounding). City 36 layout +1.6 s (place_buildings ~1.7 s).
