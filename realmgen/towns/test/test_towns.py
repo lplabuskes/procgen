@@ -8,6 +8,7 @@ from core.mesh import Mesh
 from core.pipeline import BuildContext
 from core.world import World
 from realmgen.channels import HINTERLAND_ID, MINING_POPULATION, RURAL_POPULATION, TOWN_POPULATION
+from realmgen.polity.builder import PolityParams
 from realmgen.population.calibration import KM2_PER_STERADIAN
 from realmgen.refine.sites import SiteField
 from realmgen.test.conftest import _settlement
@@ -223,7 +224,7 @@ def _many_towns(k: int, pop: float) -> Towns:
     )
 
 
-def test_town_walls_rarer_than_cities_likelier_big_and_in_danger():
+def test_town_walls_likelier_big_and_in_danger_climbing_to_cities():
     p = TownParams()
     calm, wild = np.zeros(50), np.ones(50)
     small, big = _many_towns(2000, p.town_min), _many_towns(2000, 7000.0)
@@ -234,9 +235,12 @@ def test_town_walls_rarer_than_cities_likelier_big_and_in_danger():
     assert rate["small", "calm"] == pytest.approx(p.wall_base_prob, abs=0.02)
     assert rate["small", "calm"] < rate["big", "calm"] < rate["big", "wild"]
     assert rate["small", "calm"] < rate["small", "wild"]
-    # Even the likeliest town is walled less often than the least likely city (base 0.3).
-    assert rate["big", "wild"] < 0.4
+    # A calm town at the city floor is walled no more often than a calm city.
+    assert rate["big", "calm"] <= PolityParams().defensibility.wall_base_prob + 0.02
     has, strength = roll_town_walls(big, wild, 3, p, 7000.0)
+    # Big towns' walls are mostly stone (stronger), small ones' more often palisades.
+    small_has, small_strength = roll_town_walls(small, wild, 3, p, 7000.0)
+    assert strength[has].mean() > small_strength[small_has].mean()
     assert np.all((strength > 0) == has)
     assert np.all((strength[has] >= p.wall_min_strength) & (strength[has] <= p.wall_max_strength))
     np.testing.assert_array_equal(has, roll_town_walls(big, wild, 3, p, 7000.0)[0])   # deterministic

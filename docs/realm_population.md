@@ -178,7 +178,7 @@ waypoints and busy fallback landings ([Ports](#ports)); once per pass.
 loop (trade wealth and danger final):
 - **Terrain**: ruggedness (`land_base_cost` normalised over land p50..p90) + situational value
 - **River barrier**: face flow magnitude (normalised to land p90)
-- **Walls**: probability `wall_base_prob + wall_danger_boost·danger + wall_wealth_boost·wealth`, quality biased by danger and wealth; keyed `(world.seed, face)`
+- **Walls**: probability `wall_base_prob (0.8) + wall_danger_boost·danger + wall_wealth_boost·wealth`, quality biased by danger and wealth; keyed `(world.seed, face)`. Most cities are walled (~86%; above history's, for the look — see [realm_towns.md](realm_towns.md)); 0.3 → 0.8 on 2026-10-24 with the polity retune (`sea_range_factor` 1.0, `vassal_floor` 0.1, [realm_polity.md](realm_polity.md))
 
 Rolled by `roll_walls` (shared with town walls, [realm_towns.md](realm_towns.md)).
 Returns `(defensibility, has_walls, wall_strength)`, stamped on `Settlement`;

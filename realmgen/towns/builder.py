@@ -85,10 +85,11 @@ class TownParams:
     mining_radius_km: float = _f(25.0, label="Mineral-deposit reach (km)", min=1.0, max=60.0)
     site_jitter: float = _f(
         0.4, label="Site jitter (× texel spacing)", min=0.0, max=0.5, hidden=True)
-    # Rarer and weaker than a city's (PolityParams.defensibility: 0.3 + 0.3 danger + 0.3 wealth).
-    wall_base_prob: float = _f(0.05, label="Town walls: base probability", min=0.0, max=1.0)
+    # Rarer and weaker than a city's (PolityParams.defensibility: 0.8 + 0.3 danger + 0.3 wealth); above
+    # history (~10–25% of small towns, most of the big ones walled) for the look.
+    wall_base_prob: float = _f(0.25, label="Town walls: base probability", min=0.0, max=1.0)
     wall_danger_boost: float = _f(0.15, label="Town walls: danger boost to prob", min=0.0, max=1.0)
-    wall_size_boost: float = _f(0.15, label="Town walls: size boost to prob (at the city floor)", min=0.0, max=1.0)
+    wall_size_boost: float = _f(0.5, label="Town walls: size boost to prob (at the city floor)", min=0.0, max=1.0)
     wall_min_strength: float = _f(0.2, label="Town walls: min strength", min=0.0, max=5.0)
     wall_max_strength: float = _f(0.8, label="Town walls: max strength", min=0.0, max=5.0)
 
@@ -183,7 +184,8 @@ def roll_town_walls(
 
     ``prob = base + danger_boost · danger + size_boost · size`` with danger over its
     land p90 and size from ``town_min`` (0) to the city floor (1); quality is biased
-    by both, as a city's is by danger and wealth.
+    by both, size the more (a big town's walls are stone, a small one's often a
+    palisade), as a city's is by danger and wealth.
     """
     k = len(towns)
     if k == 0:
@@ -199,7 +201,7 @@ def roll_town_walls(
         r = rank.get(f, 0)
         rank[f] = r + 1
         keys.append([seed, int(f), _WALL_STREAM, r])
-    return roll_walls(prob, 0.5 * (d + size), keys, p.wall_min_strength, p.wall_max_strength)
+    return roll_walls(prob, 0.25 * d + 0.75 * size, keys, p.wall_min_strength, p.wall_max_strength)
 
 
 class TownStage(Stage):

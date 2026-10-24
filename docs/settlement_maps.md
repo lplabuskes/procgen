@@ -49,8 +49,8 @@ One subpackage per pipeline step, as in `worldgen/` and `realmgen/`: each has a
   - `builder.py` — `build_layout`: anchors chosen, then streets, market, core and walls, docks, blocks, districts, lots
   - `params.py` — `SettlementLayoutParams`
   - `types.py` — `SettlementLayout`, `Walls`, `Block` (ground + dividers + a seed per lot; lots derived, each with a `use`)
-  - `buildings.py` — buildings on the lots: `lot_frames` (each lot's street front), `TYPOLOGY` / `lot_type` (placers by lot type), `church`, `place_buildings`
-  - `lots.py` — lots as boundaries: `derive_lots` (polygonize the ground cut by its dividers), `dividers_of`, `seeds_of`
+  - `buildings.py` — buildings on the lots: `lot_frames` (each lot's street front), `square_frames` (square to a skewed lot), `TYPOLOGY` / `lot_type` (placers by lot type), `church`, `place_buildings`
+  - `lots.py` — lots as boundaries: `derive_lots` (polygonize the ground cut by its dividers), `dividers_of`, `seeds_of`, `merge_slivers`
   - `frontage.py` — plots packed along streets as boundaries (`pack_frontage`, `ranked`, `street_grounds`, `cut_blocks`): villages
   - `streets.py` — main streets on a route grid (`route_arterials`), `infill_arterials`, `wall_street`, `main_axis`, `radial_targets`
   - `blocks.py` — `split_blocks`, `strip_lots` (lots and their dividers), `lanes_of`, `lane_lots`, `burgage_band`
@@ -365,10 +365,20 @@ two such ends (market and main streets 3, other arterials / green / quays 2, min
 streets 1, closes and alleys 0; a burgage plot faces its market street), else its
 narrow side. A typology maps the lot's type (its use, else district and tier) to
 a placer laying rectangles in every such lot's frame at once, clipped to the lot
-(kept while ≥ 60% is left): **townhouse** terraced on narrow (≤ 10 m) lots in the
-core, market or quay, else detached (1.5 m gaps, set back ≤ 2 m), 10 m deep; a
-dense lot is built back — the house up to half the lot (≤ 14 m) and on 60% a rear
-range down one side;
+(kept while ≥ 60% is left); an end narrower than 0.6 × the lot's narrow side (a
+tapered end) doesn't front. A lot skewed to its street (its minimum rectangle's
+axes > 3° off the street frame's) is also built square to itself (`square_frames`:
+those axes — down the lot's long one if the street front is its narrow end, across
+if its long side, else the one nearer the street frame's — front still toward the
+street, `y = 0` level with the front's middle)
+with the same draws, and keeps that version when its buildings' floor — each
+weighted by its share of its own minimum rectangle, so wedges count low — is
+`lot_align_margin` (0.1) more; otherwise the lot's sides cut street-square houses
+into wedges. **townhouse** terraced on narrow (≤ 10 m) lots in the
+core, market or quay (and on any lot too narrow for a 3.5 m house between its
+gaps), else detached (1.5 m gaps, set back ≤ 2 m), 10 m deep; a dense lot is built
+back — the house up to half the lot (≤ 14 m) and on 60% a rear range down one side
+(≥ 3.5 m wide; on a lot too narrow for that, a back house across it behind a 3 m yard);
 **workshop** (a trade, a craft quarter) adds a workshop across the back;
 **elite** a house the whole frontage plus a wing; **suburb** detached;
 **garden** a cottage (60%: sparse ground holds people too) and a shed (30%); a village's **farm** a house along the street (≤ 14 m)
@@ -386,7 +396,10 @@ between its lots and along their backs (`dividers`) and a point in each lot
 seed (`layout/lots.py::derive_lots`, noded by snap-rounding to 1 µm). Town and
 city blocks get their dividers straight from `strip_lots` (the cross cuts and
 row backs) — `Block.of_lots` keeps the lots it was built with, which a test
-holds equal to what the dividers derive. The viewer draws lot lines once each:
+holds equal to what the dividers derive. A sliver a block's skewed edge leaves
+(under 0.45 × the frontage across on average: area over the long side) joins the
+neighbour it shares the most edge with (`merge_slivers`; the dividers are then the
+merged lots' own). The viewer draws lot lines once each:
 block outlines and dividers in towns and cities, the plots' merged outlines in
 villages (filled by plot, not by the street's whole ground).
 

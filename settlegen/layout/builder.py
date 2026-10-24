@@ -77,7 +77,7 @@ from settlegen.layout.districts import (
 from settlegen.layout.docks import Docks, DockSpec, build_docks
 from settlegen.layout.geometry import _area_disc, _axes, _multi, core_polygon, part_containing, ray_exit
 from settlegen.layout.households import trade_counts
-from settlegen.layout.lots import as_lines, dividers_of
+from settlegen.layout.lots import as_lines, dividers_of, merge_slivers
 from settlegen.layout.params import SettlementLayoutParams
 from settlegen.layout.streets import (
     infill_arterials, main_axis, radial_targets, route_arterials, route_grid, wall_street,
@@ -92,6 +92,8 @@ if TYPE_CHECKING:
 
 _LAYOUT_STREAM = 61
 _BUILDING_STREAM = 62
+# A lot under this share of its frontage across is a sliver, joined to its neighbour.
+_SLIVER = 0.45
 
 
 # (min, max) m² of the open grounds.
@@ -379,6 +381,9 @@ def _town_layout(
                 if len(extra):
                     lots = np.concatenate([lots, extra])
                     lines = as_lines(shapely.union_all([lines, dividers_of(piece, extra)]))
+            merged = merge_slivers(lots, _SLIVER * frontage)
+            if len(merged) != len(lots):
+                lots, lines = merged, dividers_of(piece, merged)
             out_blocks.append(Block.of_lots(piece, dist, bool(is_core), lots, dividers=lines))
 
     # ── the everyday trades, spread through the houses ──

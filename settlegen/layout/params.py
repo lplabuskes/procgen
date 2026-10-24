@@ -98,6 +98,10 @@ class SettlementLayoutParams:
     barn_depth_m: float = _f(8.0, label="Barn depth (m)", min=2.0, max=30.0, step=0.5)
     workshop_depth_m: float = _f(5.0, label="Workshop depth (m)", min=2.0, max=20.0, step=0.5)
     shed_chance: float = _f(0.3, label="Garden plots with a shed", min=0.0, max=1.0, step=0.05)
+    # A lot skewed to its street builds square to its own sides (its minimum rectangle) instead of
+    # the street when that keeps this much more floor (clipped to the lot) — no slivers.
+    lot_align_margin: float = _f(0.1, label="Build square to a skewed lot when (× more floor)", min=0.0, max=2.0,
+                                 step=0.05)
     # Dense plots are built back: the front house up to half the plot deep, a range down one side.
     backland_share: float = _f(0.6, label="Dense plots with a rear range", min=0.0, max=1.0, step=0.05)
     backland_depth_m: float = _f(14.0, label="Dense front house up to (m deep)", min=3.0, max=40.0, step=0.5)

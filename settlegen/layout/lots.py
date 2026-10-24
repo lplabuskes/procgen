@@ -64,3 +64,43 @@ def seeds_of(lots: Sequence[Polygon] | np.ndarray) -> np.ndarray:
     if not len(lots):
         return np.zeros((0, 2))
     return shapely.get_coordinates(shapely.point_on_surface(np.asarray(lots, dtype=object))).reshape(-1, 2)
+
+
+def merge_slivers(lots: np.ndarray, min_width: float) -> np.ndarray:
+    """``lots`` with each sliver (under ``min_width`` across on average: its area over its
+    minimum rectangle's long side — a wedge's taper counts) joined to
+    the neighbour it shares the most edge with — the divider between them dropped — or,
+    touching none, left out (open ground).  Lots with nothing to merge come back as they were."""
+    lots = np.asarray(lots, dtype=object)
+    if not len(lots):
+        return lots
+    with np.errstate(divide="ignore", invalid="ignore"):
+        env = shapely.oriented_envelope(lots)
+    xy, idx = shapely.get_coordinates(shapely.get_exterior_ring(env), return_index=True)
+    first = np.searchsorted(idx, np.arange(len(lots)))
+    along = np.maximum(np.hypot(*(xy[first + 1] - xy[first]).T), np.hypot(*(xy[first + 2] - xy[first + 1]).T))
+    across = shapely.area(lots) / np.maximum(along, 1e-9)
+    thin = np.flatnonzero((across < min_width) | (shapely.get_type_id(env) != 3))
+    if not len(thin):
+        return lots
+    tree = shapely.STRtree(lots)
+    edges = shapely.boundary(lots)
+    into = np.full(len(lots), -1)
+    skip = set(thin.tolist())
+    for i in thin.tolist():
+        near = [int(j) for j in tree.query(lots[i], predicate="dwithin", distance=1e-3) if int(j) not in skip]
+        shared = [shapely.intersection(edges[i], edges[j].buffer(1e-3)).length for j in near]
+        if shared and max(shared) > 0.5:
+            into[i] = near[int(np.argmax(shared))]
+    out = []
+    for j in range(len(lots)):
+        if j in skip:
+            continue
+        parts = [lots[j], *lots[into == j]]
+        out.append(lots[j] if len(parts) == 1 else _one(shapely.union_all(parts, grid_size=_GRID_M)))
+    return np.asarray(out, dtype=object)
+
+
+def _one(g: BaseGeometry) -> Polygon:
+    """``g``'s largest polygon."""
+    return max((p for p in shapely.get_parts(g) if isinstance(p, Polygon)), key=lambda p: p.area)

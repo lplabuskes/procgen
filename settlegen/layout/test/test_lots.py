@@ -8,6 +8,7 @@ from shapely.geometry import LineString, Point, box
 
 from settlegen.layout.blocks import strip_lots
 from settlegen.layout.frontage import PlotSpec, cut_blocks, pack_frontage, ranked, street_grounds
+from settlegen.layout.lots import merge_slivers
 from settlegen.layout.types import Block
 
 
@@ -136,3 +137,16 @@ def test_no_plot_spans_a_sharp_bend():
     # Every plot is near-rectangular: its area close to its minimum rotated rectangle's.
     for lot in (lot for b in blocks for lot in b.lots):
         assert lot.area > 0.8 * lot.minimum_rotated_rectangle.area
+
+
+def test_a_sliver_joins_the_neighbour_it_shares_most_with():
+    # Three strips off a street and a wedge left along the block's slanted top edge.
+    strips = [box(x, 0, x + 8, 20) for x in (0, 8, 16)]
+    wedge = shapely.Polygon([(0, 20), (24, 20), (24, 23), (0, 21)])
+    merged = merge_slivers(np.asarray([*strips, wedge], dtype=object), 3.5)
+    assert len(merged) == 3
+    _tile(merged)
+    assert sum(g.area for g in merged) == pytest.approx(sum(g.area for g in (*strips, wedge)))
+    assert sorted(g.area for g in merged)[-1] == pytest.approx(160.0 + wedge.area)    # into one strip
+    # Nothing thin: the lots come back as they were.
+    assert all(a.equals(b) for a, b in zip(merge_slivers(np.asarray(strips, dtype=object), 3.5), strips))

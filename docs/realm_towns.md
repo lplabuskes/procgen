@@ -66,14 +66,20 @@ unmodeled (`city_surplus_share`, [realm_population.md](realm_population.md)).
      mining_radius_km` of the face's worked workings, weighted `Σ miners ·
      exp(−(d / mining_radius)²)`; always mining kind. Need no farmland (barren
      icecap/desert faces with worked deposits still get one).
-4. **Walls** (`roll_town_walls`, data only). Probability `wall_base_prob (0.05)
-   + wall_danger_boost (0.15) · danger + wall_size_boost (0.15) · size`, danger over
-   its p90, size 0 at `town_min` … 1 at the city floor — rarer than a city's
-   `0.3 + 0.3 danger + 0.3 wealth` ([Defensibility](realm_population.md#defensibility)).
+4. **Walls** (`roll_town_walls`, data only). Probability `wall_base_prob (0.25)
+   + wall_danger_boost (0.15) · danger + wall_size_boost (0.5) · size`, danger over
+   its p90, size 0 at `town_min` … 1 at the city floor — climbing to a city's
+   `0.8 + 0.3 danger + 0.3 wealth` ([Defensibility](realm_population.md#defensibility)).
    Strength `wall_min_strength` (0.2) … `wall_max_strength` (0.8), quality half
-   random, half danger + size (`polity/seeding.py::roll_walls`, shared with cities).
-   RNG keyed `(seed, face, stream, rank on face)`. Seed 4: ~11% of towns walled vs
-   ~37% of cities. Villages never have walls.
+   random, half `0.25 danger + 0.75 size` (`polity/seeding.py::roll_walls`, shared
+   with cities): a big town's walls are mostly stone, a small one's often a palisade
+   (the settlement map's `stone_wall_strength` 0.4). RNG keyed `(seed, face, stream,
+   rank on face)`. Deliberately above history for the look (2026-10-24; Europe
+   c. 1300, roughly: ~10–25% of towns under 2k defended, ~30–50% at 2–5k, ~60–80%
+   at 5–10k, nearly every city over 10k — England's ~146 defended towns of ~500–650,
+   Barley 1975). Seeds 4 / 31 / 35 pooled, walled (stone of walled): 1–2k 31% (43%),
+   2–4k 42% (62%), 4–7k 63% (89%), cities 83–90% (~90%); 54% of townspeople behind
+   walls. Villages never have walls.
 5. **Accounting.** `town_population` = sited towns per face; `rural_population`
    and density reduced to match — mining towns out of miners (the odd minimum
    one beyond them out of farmers), others out of farmers+fishers. A town with no

@@ -90,7 +90,7 @@ class DefensibilityParams:
     rugged_weight: float = _f(0.6, label="Defensibility: ruggedness", min=0.0, max=3.0)
     situational_weight: float = _f(0.8, label="Defensibility: situational", min=0.0, max=3.0)
     river_weight: float = _f(0.4, label="Defensibility: river barrier", min=0.0, max=3.0)
-    wall_base_prob: float = _f(0.3, label="Walls: base probability", min=0.0, max=1.0)
+    wall_base_prob: float = _f(0.8, label="Walls: base probability", min=0.0, max=1.0)
     wall_danger_boost: float = _f(0.3, label="Walls: danger boost to prob", min=0.0, max=1.0)
     wall_wealth_boost: float = _f(0.3, label="Walls: wealth boost to prob", min=0.0, max=1.0)
     wall_min_strength: float = _f(0.3, label="Walls: min strength bonus", min=0.0, max=5.0)

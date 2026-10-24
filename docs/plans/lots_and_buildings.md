@@ -188,4 +188,22 @@ with a house, the registry falls back to district.
   (`region/rivers.py`); (3) wall bites — walls run round the core's convex hull,
   bounded by `wall_closing` × radius; (4) pan/zoom — layout paths tiled (400 m) and
   culled to the view: zoomed repaint 0.2 s → 0.08 s.
-
+- 2026-10-24: review — tiny wedge buildings: on lots skewed to their street the
+  street-square rectangle was cut by the lot's sides (still ≥ 60% kept). Skewed lots
+  (> 3°, 43% of seed 410665717 city 9's) are now also built square to the lot
+  (`square_frames`, same draws) and keep that when its rectangularity-weighted floor
+  (area × area / min rectangle) is `lot_align_margin` (0.1) more. City 9: buildings
+  < 0.8 × their min rectangle 3,846 → 1,251 (2.6% → 0.8%), < 0.9 × 18k → 5.7k;
+  +5k buildings on lots that were empty (no street-square building kept 60%);
+  place_buildings 2.0 s → 3.2 s (147k → 153k buildings). Villages barely change
+  (tofts are square to their streets). Left: wedge lots at junctions, where neither
+  frame fits (a near-rectangle rule could drop them).
+- 2026-10-24: narrow buildings (< 3 m across; city 9 7,106, mostly rear ranges at half
+  a 5 m lot's width) without a minimum width: a lot too narrow for a 3.5 m range builds
+  its back as a house across it behind a yard, and one too narrow for a house between
+  gaps is terraced; slivers along skewed block edges merge into their neighbour
+  (`merge_slivers`, mean width < 0.45 × frontage); a tapered end (< 0.6 × the narrow
+  side) no longer fronts; `square_frames` keeps a lot's long axis by the street
+  frame's narrow/long front. City 9: < 3 m 7,106 → 849 (0.6%), < 0.8 × min rectangle
+  1,251 → 776; 147.8k buildings, 1,016 ha. Left: triangular lots (380 of the 849).
+  Renders `review_narrow/`.

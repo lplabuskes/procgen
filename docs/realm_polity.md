@@ -30,9 +30,9 @@ A polity is a **tree, not a flat partition** (`docs/plans/polity_generation_brie
 
 - **`seeding`** (`CapitalSeedingParams`) — `min_separation` (land cost-distance between capitals), `min_pop_fraction` (of largest city), `trade_weight`.
 - **`defensibility`** (`DefensibilityParams`; consumed by `PopulationStage` via `compute_settlement_defensibility`) — terrain/river weights and wall probability/strength knobs; see [realm_population.md](realm_population.md#defensibility).
-- **`projection`** (`ProjectionParams`) — `base_range` (master consolidation knob; land range = `base_range · (range_floor + infrastructure)`), `range_floor`, `sea_range_factor` (× land range for the sea channel; 1.2; 1.5 → 1.4 when trade was restricted to settlement ports, which concentrates `maritime_reach` at port capitals, → 1.3 in the 2026-10-06 retune, → 1.2 with a face-level ridge claim step (land claims dearer, not the sea channel's), → 1.4 when that step was removed for ridge-line following in refine (2026-10-08; 1.2 without it left the mean largest domain at 15%); a river claim step took it to 1.1 and was removed), `sea_weight`, `legitimacy_spread` (± magnitude jitter), `maritime_scale` (`maritime_reach ← scale × trade_norm`), `cohesion_min`, `infrastructure_min`, `infrastructure_emergent` (weight of pop+trade in the infrastructure roll).
+- **`projection`** (`ProjectionParams`) — `base_range` (master consolidation knob; land range = `base_range · (range_floor + infrastructure)`), `range_floor`, `sea_range_factor` (× land range for the sea channel; 1.2; 1.5 → 1.4 when trade was restricted to settlement ports, which concentrates `maritime_reach` at port capitals, → 1.3 in the 2026-10-06 retune, → 1.2 with a face-level ridge claim step (land claims dearer, not the sea channel's), → 1.4 when that step was removed for ridge-line following in refine (2026-10-08; 1.2 without it left the mean largest domain at 15%); a river claim step took it to 1.1 and was removed; → 1.0 on 2026-10-24 with walls on most cities, see below), `sea_weight`, `legitimacy_spread` (± magnitude jitter), `maritime_scale` (`maritime_reach ← scale × trade_norm`), `cohesion_min`, `infrastructure_min`, `infrastructure_emergent` (weight of pop+trade in the infrastructure roll).
 - **`claiming`** (`ClaimingParams`) — `hysteresis` (incumbent bonus), `max_iters` (claim loop), `outer_max_iters` (independence-relaxation loop; promotes independents to sovereigns until none remain — **no cap on sovereign count**), `exclave_max_faces` (40; seatless land pieces up to this size are merged into a neighbour, [Exclaves](#exclaves); 0 = off).
-- **`hierarchy`** (`HierarchyParams`) — `direct_threshold` (0.8; the infra-correlation knob: lower → more negative `corr(infrastructure, vassal_frac)`), `vassal_floor` (0.2; vassal ratio floor — the sovereign-count knob), `power_exponent` (0.5; sqrt of raw population dampens size), `cohesion_gain_floor` / `_span`, `max_recursion_depth` (2), `vassal_cluster_distance` (15; candidates within this land cost-distance merge, largest becomes the seat; 0 = off).
+- **`hierarchy`** (`HierarchyParams`) — `direct_threshold` (0.8; the infra-correlation knob: lower → more negative `corr(infrastructure, vassal_frac)`), `vassal_floor` (0.1, 0.2 before 2026-10-24; vassal ratio floor — the sovereign-count knob), `power_exponent` (0.5; sqrt of raw population dampens size), `cohesion_gain_floor` / `_span`, `max_recursion_depth` (2), `vassal_cluster_distance` (15; candidates within this land cost-distance merge, largest becomes the seat; 0 = off).
 - **`loyalty`** (`LoyaltyParams`, Stage 4; both **off (0.0) by default**) — `economic_grip` (secession resistance ∝ intra-polity trade fraction), `peripheral_wealth_ratio` (non-capital ≥ this × its capital's trade wealth breaks away), `peripheral_external_floor` (min external trade fraction). Monotonic: more grip → fewer, bigger domains; more aggressive peripheral thresholds → more sovereigns.
 - **`marches`** (`MarchParams`, Stage 4; **on by default**) — `weight` (0.5; 0 = off), `reach` (6; land cost-distance e-fold from the border, ~2 faces at the median edge cost ~2.9), `tension_quantile` (0.9; border-face tension quantile that counts as full exposure). See [Marches](#marches-politymarchespy).
 - **`fragmentation`** (`FragmentationParams`) — `n_epochs` (0 = off), `shock_scale` (max cohesion drop per epoch), `size_reference` (domain face count demanding full cohesion).
@@ -194,6 +194,15 @@ largest domain 26.9 / 29.3 / 5.9 / 20.5 / 33.5 / 25.2% (mean 23.6; 24.9 with the
 ridge step at 1.2), sovereigns 53 / 35 / 59 / 54 / 37 / 38 (mean 46.0 vs 42.8),
 `corr(infra, vassal_frac)` mean −0.29 (−0.14). 1.2 / 1.3 gave mean largest 15.2 /
 19.7%, sovereigns 54.2 / 49.3. Validation: `scripts/measure_borders.py`.
+
+**2026-10-24 retune** (city walls 0.3 → 0.8, [realm_population.md](realm_population.md#defensibility)).
+Before it the defaults had drifted to a mean largest domain of 40% (9–67%), 33.3
+sovereigns, corr −0.47 on seeds 1 2 3 4 31 35; the walls alone gave 37.9% / 36.0 /
+−0.38. `sea_range_factor` 1.2 / 1.1 / 1.0 then gave 32.7 / 27.3 / 22.5% with 40.5 /
+46.0 / 49.3 sovereigns; at 1.0, `vassal_floor` 0.15 / 0.1 gave 41.2 / 34.3. Shipped
+1.0 and 0.1: largest domain 9.5 / 32.5 / 16.2 / 30.8 / 40.7 / 20.5% (mean 25.0),
+sovereigns 58 / 23 / 31 / 35 / 26 / 33 (34.3), corr −0.42 (every seed negative);
+vassals ~39 → 80 per seed.
 
 ## PolityStage
 

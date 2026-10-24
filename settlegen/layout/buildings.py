@@ -11,7 +11,12 @@ from which ``u`` runs along the street and ``n`` into the lot, with the front's
 
 A **typology** maps a lot's type (:func:`lot_type`: its use, else its district and the
 tier) to a placer (:data:`TYPOLOGY`) that lays rectangles in the frames of every lot of
-that type at once; each is clipped to its lot and kept while most of it is left.  New
+that type at once; each is clipped to its lot and kept while most of it is left.  A lot
+skewed to its street (its own axes — its minimum rectangle's — turned more than
+``_SKEW_DEG`` from the frame's) is built twice with the same draws, square to the street
+and square to itself (:func:`square_frames`), and keeps the second when its buildings'
+floor, each counted by how nearly it is a rectangle, is ``lot_align_margin`` more: no
+wedges where a skewed lot's sides cut a street-square house.  New
 types (L-shaped farmhouses, courtyard houses, halls) are new entries.  First cut:
 
 - **townhouse** (houses, market, quay): terraced — the whole frontage, at the street —
@@ -54,8 +59,16 @@ _FRONT_REACH_M = 1.5
 # Between two ends on streets, each step of a street's rank (0 lanes … 3 the market and
 # main streets) counts this much — under the narrow-side preference (1 at most).
 _RANK_WEIGHT = 0.3
+# An edge fronts its street if at least this share of the lot's narrow side (not a tapered end).
+_FRONT_SHARE = 0.6
 # A building keeps at least this share of itself, clipped to its lot.
 _MIN_KEPT = 0.6
+# A lot whose own axes turn more than this (°) from its street's is tried square to itself too.
+_SKEW_DEG = 3.0
+# A back range down one side of a lot is at least this wide (m); a house this wide between its gaps.
+_RANGE_M = 3.5
+# A lot this much longer than wide has a long axis its frame keeps to (see :func:`square_frames`).
+_ELONGATED = 1.3
 _TOWER_PEOPLE = 800.0
 _CRAFT_QUARTERS = frozenset(v[0] for v in CRAFTS.values())
 
@@ -134,7 +147,7 @@ def lot_frames(lots: np.ndarray, fronts: Sequence[tuple[Sequence[BaseGeometry], 
         narrow[ok] = np.where((l1 <= l2)[:, None], s1, s2) / np.maximum(narrow_m[ok], 1e-9)[:, None]
     narrow = np.nan_to_num(narrow)
     along = np.abs(np.sum(dirs * narrow[owner], axis=1))
-    fronting = (rank >= 0) & (length >= 0.4 * narrow_m[owner])
+    fronting = (rank >= 0) & (length >= _FRONT_SHARE * narrow_m[owner])
     score = along + np.where(fronting, 2.0 + _RANK_WEIGHT * rank, 0.0)
     order = np.lexsort((score, owner))
     best = order[np.r_[np.flatnonzero(np.diff(owner[order])), len(order) - 1]]    # each lot's top edge
@@ -145,6 +158,61 @@ def lot_frames(lots: np.ndarray, fronts: Sequence[tuple[Sequence[BaseGeometry], 
     depth = np.zeros(k)
     np.maximum.at(depth, idx, np.sum((xy - origin[idx]) * n[idx], axis=1))
     return LotFrames(origin, u, n, width, depth)
+
+
+def square_frames(lots: np.ndarray, street: LotFrames) -> tuple[LotFrames, np.ndarray]:
+    """Each lot's frame square to its own sides: the axes of its minimum rectangle, ``n``
+    (still into the lot from the street) the long one where the street front is the narrow
+    end, the short where it is the long side — else the one nearer ``street.n`` — ``u`` across it;
+    ``x`` over the lot's whole extent across, ``y = 0`` level with the middle of the street
+    front (so the front corners a skew leaves stick out and are clipped about equally).
+    ``(frames, skewed)``: ``skewed`` where the axes turn more than ``_SKEW_DEG`` from the
+    street's (elsewhere the frame is the street's)."""
+    k = len(lots)
+    out = street.take(np.arange(k))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        env = shapely.oriented_envelope(lots)
+    ok = np.flatnonzero(shapely.get_type_id(env) == 3)
+    skewed = np.zeros(k, dtype=bool)
+    if not len(ok):
+        return out, skewed
+    env_xy, env_idx = shapely.get_coordinates(shapely.get_exterior_ring(env[ok]), return_index=True)
+    first = np.searchsorted(env_idx, np.arange(len(ok)))
+    s1 = env_xy[first + 1] - env_xy[first]
+    l1, l2 = np.hypot(*s1.T), np.hypot(*(env_xy[first + 2] - env_xy[first + 1]).T)
+    s1 = s1 / np.maximum(l1, 1e-9)[:, None]
+    s2 = np.stack([-s1[:, 1], s1[:, 0]], 1)
+    sn = street.n[ok]
+    c1, c2 = np.sum(s1 * sn, axis=1), np.sum(s2 * sn, axis=1)
+    # ``n`` down the lot's long axis if the street front is its narrow end, across it if
+    # its long side; a squarish lot's (or squarish frame's), the axis nearer the street's.
+    on_1 = np.abs(c1) >= np.abs(c2)
+    long_1 = l1 >= l2
+    W, D = street.width[ok], street.depth[ok]
+    clear = (np.maximum(l1, l2) >= _ELONGATED * np.minimum(l1, l2)) & \
+        (np.maximum(W, D) >= _ELONGATED * np.minimum(W, D))
+    on_1 = np.where(clear, long_1 == (W <= D), on_1)
+    n = np.where(on_1[:, None], s1, s2)
+    mid = street.origin[ok] + 0.5 * street.width[ok, None] * street.u[ok]
+    inward = np.sum((shapely.get_coordinates(shapely.centroid(lots[ok])) - mid) * n, axis=1) >= 0
+    n = np.where(inward[:, None], n, -n)
+    u = np.stack([-n[:, 1], n[:, 0]], 1)
+    u = np.where((np.sum(u * street.u[ok], axis=1) >= 0)[:, None], u, -u)
+    tilt = np.sum(n * sn, axis=1) < math.cos(math.radians(_SKEW_DEG))
+    xy, idx = shapely.get_coordinates(shapely.get_exterior_ring(lots[ok]), return_index=True)
+    pu, pn = np.sum(xy * u[idx], axis=1), np.sum(xy * n[idx], axis=1)
+    lo_u, hi_u, hi_n = np.full(len(ok), np.inf), np.full(len(ok), -np.inf), np.full(len(ok), -np.inf)
+    np.minimum.at(lo_u, idx, pu)
+    np.maximum.at(hi_u, idx, pu)
+    np.maximum.at(hi_n, idx, pn)
+    y0 = np.sum(mid * n, axis=1)
+    sel = ok[tilt]
+    skewed[sel] = True
+    out.origin[sel] = (lo_u[:, None] * u + y0[:, None] * n)[tilt]
+    out.u[sel], out.n[sel] = u[tilt], n[tilt]
+    out.width[sel] = (hi_u - lo_u)[tilt]
+    out.depth[sel] = (hi_n - y0)[tilt]
+    return out, skewed
 
 
 # ── the typology ─────────────────────────────────────────────────────────────
@@ -169,7 +237,8 @@ def _houses(f: LotFrames, dense: np.ndarray, rng: np.random.Generator, p: Settle
     """Town houses: terraced on narrow dense lots, else detached.  ``(placed, where each ends back)``."""
     k = len(f)
     W, D = f.width, f.depth
-    row = dense & (W <= float(p.terrace_frontage_m))
+    # Terraced on narrow dense lots, and on any too narrow for a house between gaps.
+    row = (dense | (W < _RANGE_M + 2.0 * float(p.house_gap_m))) & (W <= float(p.terrace_frontage_m))
     g = np.where(row, 0.0, np.minimum(float(p.house_gap_m), 0.15 * W))
     w = np.where(row, W, np.minimum(W - 2.0 * g, float(p.max_house_width_m)))
     x0 = g + rng.uniform(0.0, 1.0, k) * np.maximum(W - 2.0 * g - w, 0.0)
@@ -180,14 +249,20 @@ def _houses(f: LotFrames, dense: np.ndarray, rng: np.random.Generator, p: Settle
 
 
 def _townhouse(f: LotFrames, dense: np.ndarray, rng: np.random.Generator, p: SettlementLayoutParams) -> Placed:
-    """Town houses; a dense lot's back built up by a range down one side."""
+    """Town houses; a dense lot's back built up by a range down one side or, on a lot too
+    narrow for one beside a yard, a back house across it behind a yard."""
     placed, ends = _houses(f, dense, rng, p)
     W, D = f.width, f.depth
-    back = dense & (rng.random(len(f)) < float(p.backland_share)) & (D - 1.5 - ends >= 4.0)
+    k = len(f)
+    back = dense & (rng.random(k) < float(p.backland_share))
+    left = rng.random(k) < 0.5
+    side = 0.5 * W >= _RANGE_M
     w = np.minimum(5.0, 0.5 * W)
-    left = rng.random(len(f)) < 0.5
     x0 = np.where(left, 0.0, W - w)
-    return placed + [_put(f, "wing", back, x0, x0 + w, ends, D - 1.5)]
+    y0 = ends + 3.0
+    y1 = np.minimum(y0 + float(p.house_depth_m), D - 1.5)
+    return placed + [_put(f, "wing", back & side & (D - 1.5 - ends >= 4.0), x0, x0 + w, ends, D - 1.5),
+                     _put(f, "wing", back & ~side & (y1 - y0 >= 4.0), 0.0, W, y0, y1)]
 
 
 def _suburb(f: LotFrames, dense: np.ndarray, rng: np.random.Generator, p: SettlementLayoutParams) -> Placed:
@@ -359,6 +434,31 @@ def _largest(g: BaseGeometry) -> Optional[Polygon]:
     return max(parts, key=lambda q: q.area) if parts else None
 
 
+def _floor(buildings: np.ndarray) -> np.ndarray:
+    """Each building's floor, counted by how nearly it is a rectangle: its area × its share of
+    its minimum rectangle (a lot's sides cutting a corner off cost it twice)."""
+    area = shapely.area(buildings)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rect = shapely.area(shapely.oriented_envelope(buildings))
+    return area * area / np.maximum(rect, 1e-9)
+
+
+def _clip(rects: np.ndarray, lot_i: np.ndarray, lots: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """``rects`` (on ``lots[lot_i]``) clipped to their lots, those keeping ``_MIN_KEPT`` of
+    themselves: ``(polygons, their lot indices)``.  Mostly single polygons; a lot's odd edge
+    can leave pieces (the largest is kept)."""
+    if not len(rects):
+        return np.zeros(0, dtype=object), np.zeros(0, dtype=np.int64)
+    clipped = shapely.intersection(rects, lots[lot_i])
+    keep = shapely.area(clipped) >= _MIN_KEPT * shapely.area(rects)
+    single = keep & (shapely.get_type_id(clipped) == 3)
+    split = np.flatnonzero(keep & ~single)
+    pieces = [_largest(g) for g in clipped[split]]
+    got = np.concatenate([np.flatnonzero(single), split[[q is not None for q in pieces]]]).astype(np.int64)
+    rest = np.asarray([q for q in pieces if q is not None], dtype=object)
+    return np.concatenate([clipped[single], rest]), lot_i[got]
+
+
 def place_buildings(layout: SettlementLayout, people: float, tier: int, rng: np.random.Generator,
                     params: SettlementLayoutParams) -> Buildings:
     """Every building of ``layout``.  See the module docstring."""
@@ -383,24 +483,38 @@ def place_buildings(layout: SettlementLayout, people: float, tier: int, rng: np.
         types_a = np.asarray(types)
         dense_a = np.asarray(dense, dtype=bool)
         frames = lot_frames(lots_a, _fronts(layout, params))
+        square, skewed = square_frames(lots_a, frames)
+        margin = 1.0 + float(params.lot_align_margin)
         for t in sorted(set(types)):
             sel = np.flatnonzero(types_a == t)
-            for kind, rects, which in TYPOLOGY[t](frames.take(sel), dense_a[sel], rng, params):
-                if not len(which):
-                    continue
-                idx = sel[which]
-                clipped = shapely.intersection(rects, lots_a[idx])
-                keep = shapely.area(clipped) >= _MIN_KEPT * shapely.area(rects)
-                # Mostly single polygons; a lot's odd edge can leave pieces (the largest is kept).
-                single = keep & (shapely.get_type_id(clipped) == 3)
-                split = np.flatnonzero(keep & ~single)
-                pieces = [_largest(g) for g in clipped[split]]
-                got = np.concatenate([np.flatnonzero(single), split[[q is not None for q in pieces]]])
-                rest = np.asarray([q for q in pieces if q is not None], dtype=object)
-                built = np.concatenate([clipped[single], rest])
-                polys.append(built)
-                kinds.append(np.full(len(got), kind, dtype=object))
-                where.append(refs_a[idx[got]])
+            # Square to the street everywhere and, with the same draws, to the lot on skewed lots.
+            state = rng.bit_generator.state
+            placed = TYPOLOGY[t](frames.take(sel), dense_a[sel], rng, params)
+            on_street = [_clip(rects, sel[which], lots_a) for _, rects, which in placed]
+            on_lot: list[tuple[np.ndarray, np.ndarray]] = []
+            if skewed[sel].any():
+                after = rng.bit_generator.state
+                rng.bit_generator.state = state
+                for _, rects, which in TYPOLOGY[t](square.take(sel), dense_a[sel], rng, params):
+                    tilted = skewed[sel[which]]
+                    on_lot.append(_clip(rects[tilted], sel[which[tilted]], lots_a))
+                rng.bit_generator.state = after
+            # A skewed lot builds square to itself when that keeps ``margin`` × the floor (all its
+            # buildings'), each counted by how nearly it is a rectangle (see :func:`_floor`).
+            use_lot = np.zeros(len(lots_a), dtype=bool)
+            if on_lot:
+                floor_street, floor_lot = np.zeros(len(lots_a)), np.zeros(len(lots_a))
+                for (built, lot_i), floor in [*((b, floor_street) for b in on_street),
+                                              *((b, floor_lot) for b in on_lot)]:
+                    tilted = skewed[lot_i]
+                    np.add.at(floor, lot_i[tilted], _floor(built[tilted]))
+                use_lot = skewed & (floor_lot > margin * floor_street)
+            for j, (kind, _, _) in enumerate(placed):
+                for (built, lot_i), take in [(on_street[j], ~use_lot), *([(on_lot[j], use_lot)] if on_lot else [])]:
+                    m = take[lot_i]
+                    polys.append(built[m])
+                    kinds.append(np.full(int(m.sum()), kind, dtype=object))
+                    where.append(refs_a[lot_i[m]])
     for kind, poly in church(layout.precinct, people):
         polys.append(np.asarray([poly], dtype=object))
         kinds.append(np.asarray([kind], dtype=object))

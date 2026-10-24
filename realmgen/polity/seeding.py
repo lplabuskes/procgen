@@ -150,7 +150,7 @@ def compute_settlement_defensibility(
     rugged_weight: float = 0.6,
     situational_weight: float = 0.8,
     river_weight: float = 0.4,
-    wall_base_prob: float = 0.3,
+    wall_base_prob: float = 0.8,
     wall_danger_boost: float = 0.3,
     wall_wealth_boost: float = 0.3,
     wall_min_strength: float = 0.3,
