@@ -49,7 +49,7 @@ One subpackage per pipeline step, as in `worldgen/` and `realmgen/`: each has a
   - `builder.py` — `build_layout`: anchors chosen, then streets, market, core and walls, docks, blocks, districts, lots
   - `params.py` — `SettlementLayoutParams`
   - `types.py` — `SettlementLayout`, `Walls`, `Block` (ground + dividers + a seed per lot; lots derived, each with a `use`)
-  - `buildings.py` — buildings on the lots: `lot_frames` (each lot's street front), `square_frames` (square to a skewed lot), `TYPOLOGY` / `lot_type` (placers by lot type), `church`, `place_buildings`
+  - `buildings.py` — buildings on the lots: `lot_frames` (each lot's street front), `square_frames` (square to a skewed lot), `TYPOLOGY` / `lot_type` (placers by lot type), `church`, `temple`, `sacred_buildings`, `place_buildings`
   - `lots.py` — lots as boundaries: `derive_lots` (polygonize the ground cut by its dividers), `dividers_of`, `seeds_of`, `merge_slivers`
   - `frontage.py` — plots packed along streets as boundaries (`pack_frontage`, `ranked`, `street_grounds`, `cut_blocks`): villages
   - `streets.py` — main streets on a route grid (`route_arterials`), `infill_arterials`, `wall_street`, `main_axis`, `radial_targets`
@@ -321,7 +321,12 @@ slope, so it is tested on hand-built sites.
    longest main street's grid.
 7. **Districts**: market, quay, elite (near the citadel, upwind), craft quarters
    from `industries` (noxious trades downwind, downstream, outside the walls),
-   graveyards, squares; the rest houses, gardens on sparse ground. Towns keep to
+   graveyards, temple precincts, squares; the rest houses, gardens on sparse
+   ground. Besides the main precinct, √(people / `temple_people` = 2000) temple
+   precincts (`temple_max` 24 at most; a 7k town gets 1, a 40k city 4, 100k 7):
+   middling blocks off the sparse ground, each as far from the other sacred
+   grounds as can be, the dense middle by preference, taken whole into
+   `layout.precinct`. Towns keep to
    two trades, a churchyard and — only by a castle — an elite quarter.
 8. **Plots**: strips along each block's long sides, 8 × 22 m (suburb × 1.5,
    gardens × 3; quay, market and elite plots run back to fill the block, up to
@@ -394,8 +399,11 @@ back — the house up to half the lot (≤ 14 m) and on 60% a rear range down on
 and a barn behind, **cottage**, **craft** a house and a workshop, **manor** a hall
 and a wing. The church stands on the precinct, nave east–west, chancel, a tower
 from 800 people, length 5 + people^0.45 (18–90 m) but no longer than the
-precinct, shrunk or turned to fit. Roofs by the place's main material (thatch in
-villages), outbuildings darker, the church in stone; hover names the building and
+precinct, shrunk or turned to fit. Each other precinct piece holds a temple
+(`temple`): a hall behind a portico, or (one in three) a rotunda with one, along
+the ground's long axis, 6 + share^0.4 (12–50 m; the people shared out over all the
+precincts), shrunk to fit. Roofs by the place's main material (thatch in
+villages), outbuildings darker, the church and temples in stone; hover names the building and
 its lot. `SettlementLayout.buildings` holds them as parallel arrays. The viewer
 tiles lots, buildings and block fills into 400 m tiles and draws only those in view.
 

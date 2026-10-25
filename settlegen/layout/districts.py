@@ -1,4 +1,4 @@
-"""Districts per block: market, quay, elite, craft quarters by industry, graveyards, squares, houses;
+"""Districts per block: market, quay, elite, craft quarters by industry, graveyards, temples, squares, houses;
 and the everyday trades spread through the houses."""
 from __future__ import annotations
 
@@ -37,8 +37,12 @@ CRAFTS: dict[str, tuple[str, bool, bool]] = {
 }
 
 
-# Districts with no lots.
-OPEN_DISTRICTS = ("graveyard", "square")
+# Districts with no lots ("temple" blocks join the sacred precinct in the layout).
+OPEN_DISTRICTS = ("graveyard", "square", "temple")
+
+
+# A block under this (m²) is too small for a temple precinct.
+_TEMPLE_MIN_M2 = 600.0
 
 
 # Districts whose lots run back to fill a block (merchants' and the elite's long plots).
@@ -49,7 +53,7 @@ DEEP_LOT_DISTRICTS = ("quay", "market", "elite")
 LANE_DISTRICTS = ("residential", "suburb", *sorted({v[0] for v in CRAFTS.values()}), *DEEP_LOT_DISTRICTS)
 
 
-DISTRICTS = ("market", "quay", "elite", "residential", "suburb", "gardens", "graveyard", "square",
+DISTRICTS = ("market", "quay", "elite", "residential", "suburb", "gardens", "graveyard", "square", "temple",
              *sorted({v[0] for v in CRAFTS.values()}))
 
 
@@ -154,9 +158,27 @@ def assign_districts(
         cand = np.flatnonzero(free & ~in_core & (edge >= np.quantile(edge, 0.6)) & (areas <= np.median(areas)))
         if cand.size:
             take(rng.choice(cand, size=min(n_graves, cand.size), replace=False), "graveyard")
+    # Temple precincts besides the main one: blocks of a middling size off the sparse ground,
+    # each as far from the other sacred grounds as can be, the dense middle by preference.
+    areas = shapely.area(geoms)
+    n_temples = 0 if village else \
+        min(int(math.sqrt(profile.population / float(params.temple_people))), int(params.temple_max))
+    cand = np.flatnonzero(free & ~in_sparse & (areas >= np.quantile(areas, 0.2)) & (areas <= np.quantile(areas, 0.7))
+                          & (areas >= _TEMPLE_MIN_M2))
+    if n_temples and cand.size:
+        held = [np.asarray(g.centroid.coords[0]) for g in shapely.get_parts(precinct)] or [centre]
+        edge = np.linalg.norm(centroids[cand] - centre, axis=1) / radius
+        weight = rng.uniform(0.7, 1.0, cand.size) * (1.0 - 0.5 * np.clip(edge, 0.0, 1.0))
+        for _ in range(min(n_temples, cand.size)):
+            d = np.min(np.linalg.norm(centroids[cand][:, None] - np.asarray(held)[None], axis=2), axis=1)
+            score = np.where(free[cand], d * weight, -np.inf)
+            k = int(np.argmax(score))
+            if not np.isfinite(score[k]):
+                break
+            take(cand[k:k + 1], "temple")
+            held.append(centroids[cand[k]])
     # Small squares in the core.
     n_squares = 0 if town or village else int(round(profile.population / float(params.square_people)))
-    areas = shapely.area(geoms)
     cand = np.flatnonzero(free & in_core & (areas <= np.quantile(areas, 0.3)))
     if n_squares and cand.size:
         take(rng.choice(cand, size=min(n_squares, cand.size), replace=False), "square")

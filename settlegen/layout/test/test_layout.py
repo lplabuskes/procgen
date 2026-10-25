@@ -178,7 +178,9 @@ def test_closes_and_alleys_open_up_deep_blocks(layout):
     # Lots fronting the lanes never overlap the block's other lots.
     for b in layout.blocks:
         if len(b.lots) > 1:
-            assert shapely.union_all(list(b.lots)).area == pytest.approx(sum(g.area for g in b.lots), rel=1e-3)
+            # On a fixed grid: lots sharing near-collinear edges can trip the plain union.
+            assert shapely.union_all(list(b.lots), grid_size=1e-6).area == pytest.approx(
+                sum(g.area for g in b.lots), rel=1e-3)
     pt = np.asarray(layout.closes[0].interpolate(0.5, normalized=True).coords[0])
     assert describe_at(layout, _site(), pt, 2) == "Close"
 

@@ -58,6 +58,17 @@ def building_at(layout: SettlementLayout, xy: np.ndarray) -> Optional[int]:
     return int(hits[0]) if len(hits) else None
 
 
+def _precinct_label(layout: SettlementLayout, pt: Point, tier: int) -> str:
+    """A town's or village's main precinct is its church and churchyard; the rest are temples'."""
+    sacred = layout.anchors.get("sacred")
+    if tier < 4 or sacred is None:
+        return "Temple precinct"
+    pieces = list(shapely.get_parts(layout.precinct))
+    at = Point(float(sacred[0]), float(sacred[1]))
+    main = min(pieces, key=lambda g: g.distance(at)) if pieces else None
+    return "Church and churchyard" if main is not None and main.contains(pt) else "Temple precinct"
+
+
 def describe_at(layout: SettlementLayout, site: "SettlementSite", xy: np.ndarray, tier: int) -> Optional[str]:
     """What of the settlement is at ``xy`` (frame metres), or None."""
     pt = Point(float(xy[0]), float(xy[1]))
@@ -80,7 +91,7 @@ def describe_at(layout: SettlementLayout, site: "SettlementSite", xy: np.ndarray
         block = layout.blocks[bi]
         return f"{what} · {use_label(block.use(li)) or district_label(block.lot_district(li), tier)}"
     for geom, label in ((layout.citadel, "Citadel"), (layout.plaza, "Market street" if tier == 4 else "Market place"),
-                        (layout.precinct, "Church and churchyard" if tier >= 4 else "Temple precinct"),
+                        (layout.precinct, _precinct_label(layout, pt, tier)),
                         (layout.green, "Village green"), (layout.quays, "Quay")):
         if not geom.is_empty and geom.contains(pt):
             return label

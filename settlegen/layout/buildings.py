@@ -35,7 +35,10 @@ types (L-shaped farmhouses, courtyard houses, halls) are new entries.  First cut
 
 The church stands on the sacred precinct, its nave east–west and a chancel at the
 east end (a tower at the west in a place of ``_TOWER_PEOPLE``), sized by people and
-no longer than the precinct and shrunk (or turned along it) to fit.  Qt-free.
+no longer than the precinct and shrunk (or turned along it) to fit.  Each other piece of
+the precinct (a temple block, :func:`settlegen.layout.districts.assign_districts`) holds
+a temple (:func:`temple`): a hall behind a portico or a rotunda, sized by its share of
+the people.  Qt-free.
 """
 from __future__ import annotations
 
@@ -46,7 +49,7 @@ from typing import Callable, Optional, Sequence
 import numpy as np
 import shapely
 from shapely.affinity import rotate, translate
-from shapely.geometry import LineString, Polygon, box
+from shapely.geometry import LineString, Point, Polygon, box
 from shapely.geometry.base import BaseGeometry
 
 from settlegen.layout.districts import CRAFTS, OPEN_DISTRICTS
@@ -75,7 +78,7 @@ _CRAFT_QUARTERS = frozenset(v[0] for v in CRAFTS.values())
 BUILDING_LABELS = {
     "house": "House", "row": "Town house", "workshop": "Workshop", "barn": "Barn", "shed": "Shed",
     "farmhouse": "Farmhouse", "cottage": "Cottage", "hall": "Hall", "wing": "Wing", "church": "Church",
-    "chancel": "Chancel", "tower": "Tower",
+    "chancel": "Chancel", "tower": "Tower", "temple": "Temple", "portico": "Temple portico", "rotunda": "Temple",
 }
 
 
@@ -410,6 +413,55 @@ def church(precinct: BaseGeometry, people: float) -> list[tuple[str, Polygon]]:
     return []
 
 
+def temple(ground: Polygon, people: float, rng: np.random.Generator) -> list[tuple[str, Polygon]]:
+    """A temple on ``ground`` for ``people``: a hall behind a portico or (one in three) a
+    rotunda, along the ground's long axis (else east–west), shrunk to fit; none if it won't."""
+    room = ground.buffer(-1.5)
+    if room.is_empty:
+        return []
+    c = ground.centroid if ground.contains(ground.centroid) else ground.representative_point()
+    env = shapely.get_coordinates(ground.minimum_rotated_rectangle)
+    long_side = max([env[1] - env[0], env[2] - env[1]], key=lambda v: float(np.hypot(*v)))
+    length = min(float(np.clip(6.0 + max(people, 0.0) ** 0.4, 12.0, 50.0)), 0.8 * float(np.hypot(*long_side)))
+    round_plan = rng.uniform() < 1.0 / 3.0
+    facing = 180.0 * float(rng.integers(2))        # the portico at one end or the other
+    for angle in (math.degrees(math.atan2(long_side[1], long_side[0])) + facing, facing):
+        for scale in (1.0, 0.85, 0.7, 0.55, 0.4):
+            L = length * scale
+            if round_plan:
+                r = 0.35 * L
+                parts = [("rotunda", Point(0.0, 0.0).buffer(r, quad_segs=8)),
+                         ("portico", box(r - 0.1 * L, -0.2 * L, r + 0.2 * L, 0.2 * L))]
+            else:
+                w = 0.5 * L
+                parts = [("temple", box(-0.5 * L, -0.5 * w, 0.3 * L, 0.5 * w)),
+                         ("portico", box(0.3 * L, -0.5 * w, 0.5 * L, 0.5 * w))]
+            placed = [(k, translate(rotate(g, angle, origin=(0, 0)), c.x, c.y)) for k, g in parts]
+            if all(room.contains(g) for _, g in placed):
+                return placed
+    return []
+
+
+def sacred_buildings(precinct: BaseGeometry, sacred: Optional[np.ndarray], people: float,
+                     rng: np.random.Generator) -> list[tuple[str, Polygon]]:
+    """The church on the main piece of ``precinct`` (the one at ``sacred``, else the largest) and
+    a temple on each other piece, the people shared out among them all."""
+    pieces = [g for g in shapely.get_parts(precinct) if isinstance(g, Polygon) and not g.is_empty]
+    if not pieces:
+        return []
+    if sacred is not None:
+        at = Point(float(sacred[0]), float(sacred[1]))
+        main = int(np.argmin([g.distance(at) for g in pieces]))
+    else:
+        main = int(np.argmax([g.area for g in pieces]))
+    out = church(pieces[main], people)
+    share = people / len(pieces)
+    for i, g in enumerate(pieces):
+        if i != main:
+            out += temple(g, share, rng)
+    return out
+
+
 # ── all of them ──────────────────────────────────────────────────────────────
 
 def _fronts(layout: SettlementLayout, params: SettlementLayoutParams) -> list[tuple[list, float, int]]:
@@ -449,7 +501,8 @@ def _clip(rects: np.ndarray, lot_i: np.ndarray, lots: np.ndarray) -> tuple[np.nd
     can leave pieces (the largest is kept)."""
     if not len(rects):
         return np.zeros(0, dtype=object), np.zeros(0, dtype=np.int64)
-    clipped = shapely.intersection(rects, lots[lot_i])
+    # On a fixed grid: a rectangle sharing its lot's front edge can otherwise come back unclipped.
+    clipped = shapely.intersection(rects, lots[lot_i], grid_size=1e-9)
     keep = shapely.area(clipped) >= _MIN_KEPT * shapely.area(rects)
     single = keep & (shapely.get_type_id(clipped) == 3)
     split = np.flatnonzero(keep & ~single)
@@ -515,7 +568,7 @@ def place_buildings(layout: SettlementLayout, people: float, tier: int, rng: np.
                     polys.append(built[m])
                     kinds.append(np.full(int(m.sum()), kind, dtype=object))
                     where.append(refs_a[lot_i[m]])
-    for kind, poly in church(layout.precinct, people):
+    for kind, poly in sacred_buildings(layout.precinct, layout.anchors.get("sacred"), people, rng):
         polys.append(np.asarray([poly], dtype=object))
         kinds.append(np.asarray([kind], dtype=object))
         where.append(np.full((1, 2), -1, dtype=np.int64))

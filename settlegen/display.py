@@ -97,6 +97,7 @@ DISTRICT_RGB: dict[str, tuple[float, float, float]] = {
     "quay": (0.62, 0.72, 0.80),
     "graveyard": (0.55, 0.65, 0.50),
     "square": (0.90, 0.87, 0.80),
+    "temple": (0.74, 0.66, 0.82),
     "tanners": (0.62, 0.50, 0.40),
     "dyers": (0.66, 0.50, 0.66),
     "smiths": (0.55, 0.52, 0.52),
@@ -122,8 +123,8 @@ _OUTBUILDINGS = ("barn", "shed", "workshop", "wing")
 
 
 def building_rgb(kind: str, material: str, village: bool) -> tuple[float, float, float]:
-    """A building's colour from above: the church in stone, the rest roofed in the place's material."""
-    if kind in ("church", "chancel", "tower"):
+    """A building's colour from above: the church and temples in stone, the rest roofed in the place's material."""
+    if kind in ("church", "chancel", "tower", "temple", "portico", "rotunda"):
         return CHURCH_RGB
     roof = ROOF_RGB["thatch" if village and material != "adobe" else material] if material in ROOF_RGB \
         else ROOF_RGB["timber"]
@@ -134,5 +135,5 @@ def building_rgb(kind: str, material: str, village: bool) -> tuple[float, float,
 
 STREET_RGB = (0.93, 0.90, 0.84)        # the footprint between blocks
 ARTERIAL_RGB = (0.97, 0.95, 0.90)
-OPEN_RGB = {"plaza": (0.94, 0.90, 0.80), "precinct": (0.92, 0.92, 0.86), "citadel": (0.60, 0.48, 0.42),
+OPEN_RGB = {"plaza": (0.94, 0.90, 0.80), "precinct": (0.74, 0.66, 0.82), "citadel": (0.60, 0.48, 0.42),
             "green": (0.56, 0.70, 0.42), "quays": (0.80, 0.78, 0.74), "pier": (0.62, 0.48, 0.34)}

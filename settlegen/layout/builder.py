@@ -42,7 +42,10 @@ a village are different places, not one plan at three sizes.  Villages:
 7. **Districts** per block: market, quay, elite (near the citadel, upwind),
    craft quarters from ``industries`` (noxious trades downwind, downstream,
    outside the walls; water trades on the water), graveyards, squares; the rest
-   houses (suburb outside walls, gardens on sparse ground).  A town keeps to
+   houses (suburb outside walls, gardens on sparse ground).  Temple precincts
+   besides the main one, √(people / ``temple_people``) (``temple_max`` at most):
+   middling blocks spread over the place, the dense middle by preference,
+   taken whole into the precinct.  A town keeps to
    its market, quay, two leading trades, its churchyard and — only by a castle
    — an elite quarter.
 8. **Lots**: strips along each block's long sides (quay, market and elite lots
@@ -346,6 +349,14 @@ def _town_layout(
     cents = shapely.centroid(np.asarray(blocks, dtype=object)) if blocks else np.zeros(0, dtype=object)
     in_core = np.asarray([core.contains(c) for c in cents], dtype=bool)
     districts = assign_districts(site, profile, blocks, in_core, anchors, plaza, precinct, rng, params, walled)
+    # The temple blocks join the sacred precinct: one piece each, a temple on it.
+    if "temple" in districts:
+        keep = [d != "temple" for d in districts]
+        precinct = _multi(shapely.union_all([precinct, *(b for b, k in zip(blocks, keep) if not k)]))
+        blocks = [b for b, k in zip(blocks, keep) if k]
+        districts = [d for d, k in zip(districts, keep) if k]
+        burgage = [b for b, k in zip(burgage, keep) if k]
+        in_core = in_core[np.asarray(keep)]
 
     # ── lots ──
     out_blocks: list[Block] = []

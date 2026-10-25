@@ -57,6 +57,10 @@ class SettlementLayoutParams:
     quay_m: float = _f(40.0, label="Quay reach from the water (m)", min=5.0, max=200.0, step=5.0)
     graveyard_people: float = _f(20000.0, label="People per graveyard", min=500.0, max=100000.0, step=500.0)
     square_people: float = _f(12000.0, label="People per small square", min=500.0, max=100000.0, step=500.0)
+    # Temple precincts besides the main one, √(people / temple_people): a block each, spread over the place.
+    temple_people: float = _f(2000.0, label="Extra temple precincts: √(people / this)", min=100.0, max=100000.0,
+                              step=100.0)
+    temple_max: int = _f(24, label="Extra temple precincts (at most)", min=0, max=100)
     shrine_people: float = _f(1500.0, label="People per shrine", min=100.0, max=50000.0, step=100.0)
     well_ha: float = _f(1.5, label="Core hectares per well", min=0.1, max=20.0, step=0.1)
     radial_streets: int = _f(3, label="Main streets out of a city's market (at least)", min=0, max=12)

@@ -167,3 +167,18 @@ def test_a_narrow_lot_builds_its_back_across_not_a_thin_range():
         assert x1 - x0 == pytest.approx(5.0)                    # the lot's whole width
     houses = [r for kind, rects, _ in placed if kind in ("row", "house") for r in rects]
     assert all(h.bounds[2] - h.bounds[0] == pytest.approx(5.0) for h in houses)     # terraced, no gaps
+
+
+def test_a_city_scatters_temple_precincts_by_its_size():
+    small = build_layout(_site(), _profile(population=1500.0), _slope(), (1, 2, 3))
+    big = build_layout(_site(), _profile(), _slope(), (1, 2, 3))
+    n_small, n_big = (len(shapely.get_parts(lay.precinct)) for lay in (small, big))
+    assert n_small == 1 and n_big > 3
+    # Each extra piece stands apart, has a temple on it, and hover names it.
+    kinds = np.asarray(big.buildings.kinds)
+    sacred = [p for p, k in zip(big.buildings.polygons, kinds) if k in ("temple", "rotunda")]
+    assert len(sacred) >= n_big - 2
+    assert all(p.difference(big.precinct).area < 1e-6 for p in sacred)
+    assert all(t.distance(b.polygon) > 0.5 for t in sacred for b in big.blocks)
+    xy = np.asarray(sacred[0].representative_point().coords[0])
+    assert describe_at(big, _site(), xy, 2) == "Temple"
