@@ -150,35 +150,33 @@ def _route_run(
 
     With ``ends_here`` it ends on the cheapest ``sinks`` node within twice the
     corridor of the mouth (the joined stem may sit a corridor width off).  It passes
-    through each vertex in ``through`` (the world's confluences, :func:`_confluences`):
-    routed as legs meeting there.  Where the world line doubles back on itself the
-    corridor round both arms is one, and the cheapest path would cut across the loop:
-    a path missing one of the world line's vertices is routed again as two legs
-    meeting there (:func:`_first_missed`).
+    within ``_JUNCTION_DISC`` of the corridor of each vertex in ``through`` (the world's
+    confluences, :func:`_confluences`), turning wherever is cheapest rather than on
+    the vertex (:func:`~region.corridor.route_corridor`'s ``waypoints``).  Where the
+    world line doubles back on itself the corridor round both arms is one, and the
+    cheapest path would cut across the loop: a vertex it misses (:func:`_first_missed`)
+    is made a waypoint within the corridor, and the run routed again.
     """
-    cuts = [int(k) for k in through if 0 < k < len(s) - 1]
-    if cuts:
-        k = cuts[0]
-        head = _route_run(raster, s[:k + 1], t[:k + 1], radius_nodes, sinks, False, params, node_factor)
-        tail = _route_run(raster, s[k:], t[k:], radius_nodes, sinks, ends_here, params, node_factor,
-                          [c - k for c in cuts[1:]])
-        if head is not None and tail is not None:
-            return np.concatenate([head[:-1], tail])
     cost = _valley_cost(raster, float(params.valley_seeking), node_factor)
-    nodes = route_corridor(raster, s, t, radius_nodes, cost, sinks=sinks if ends_here else None,
-                           mouth_radius=2.0 * radius_nodes)
-    k = _first_missed(raster, nodes, s, t, _MISSED_VERTEX * radius_nodes) if nodes is not None else None
-    if k is None:
-        return nodes
-    head = _route_run(raster, s[:k + 1], t[:k + 1], radius_nodes, sinks, False, params, node_factor)
-    tail = _route_run(raster, s[k:], t[k:], radius_nodes, sinks, ends_here, params, node_factor)
-    if head is None or tail is None:
-        return nodes
-    return np.concatenate([head[:-1], tail])
+    waypoints = {int(k): _JUNCTION_DISC * radius_nodes for k in through}
+    nodes = None
+    for _ in range(len(s)):
+        routed = route_corridor(raster, s, t, radius_nodes, cost, sinks=sinks if ends_here else None,
+                                mouth_radius=2.0 * radius_nodes, waypoints=waypoints)
+        if routed is None:
+            return nodes
+        nodes = routed
+        k = _first_missed(raster, nodes, s, t, _MISSED_VERTEX * radius_nodes)
+        if k is None or k in waypoints:
+            return nodes
+        waypoints[k] = radius_nodes
+    return nodes
 
 
 # A route passing no nearer than this × the corridor to one of its world vertices has cut across.
 _MISSED_VERTEX = 1.5
+# A stem passes within this × the corridor of each of its confluences.
+_JUNCTION_DISC = 0.5
 # A world flow rising by this share at a vertex: a tributary joins there.
 _CONFLUENCE_JUMP = 0.03
 
@@ -257,13 +255,20 @@ class StreamPath:
     starts_on_path: bool = False
     # (len,) world river / stream stem index per vertex (RegionRivers.path_rivers); None: none.
     river_ids: Optional[np.ndarray] = None
+    # Vertex indices it is routed through (where tributaries join); None: its flow jumps (_confluences).
+    through: Optional[list[int]] = None
 
 
 def _stream_paths(
     streams: StreamNetwork, fields: RegionFields, lo: float, step: float, n: int, min_nodes: int,
     river_ids: Optional[np.ndarray] = None,
 ) -> list[StreamPath]:
-    """The network's main stems inside the raster, largest flow first."""
+    """The network's main stems inside the raster, largest flow first.
+
+    Each is routed through only the nodes its tributaries end on: flow is
+    catchment, rising at every node, so a small stem's flow jumps
+    (:func:`_confluences`) would pin it to most world vertices, cusped between.
+    """
     s, t, valid = fields.geometry.ecef_to_local(np.asarray(streams.positions, dtype=np.float64))
     hi = lo + step * (n - 1)
     inside = valid & (s >= lo) & (s <= hi) & (t >= lo) & (t <= hi)
@@ -278,8 +283,11 @@ def _stream_paths(
 
     flow = streams.flow[idx].astype(np.float64)
     out = []
-    for path in main_stem_paths(receiver, flow, streams.channel[idx], streams.stop[idx], min_nodes):
-        nodes = np.asarray(path, dtype=np.int64)
+    stems = [np.asarray(path, dtype=np.int64)
+             for path in main_stem_paths(receiver, flow, streams.channel[idx], streams.stop[idx], min_nodes)]
+    joins = np.zeros(len(idx), dtype=bool)
+    joins[[nodes[-1] for nodes in stems]] = True
+    for nodes in stems:
         running = np.maximum.accumulate(flow[nodes])
         ids = None
         if river_ids is not None:
@@ -289,7 +297,7 @@ def _stream_paths(
         out.append(StreamPath(
             s=s[idx][nodes], t=t[idx][nodes], edge_flows=running[:-1],
             ends_here=not (receiver[nodes[-1]] < 0 and leaves_raster[nodes[-1]]),
-            river_ids=ids,
+            river_ids=ids, through=(np.flatnonzero(joins[nodes[1:-1]]) + 1).tolist(),
         ))
     out.sort(key=lambda p: -float(p.edge_flows.max()))
     return out
@@ -566,7 +574,8 @@ def route_stream_paths(
             water = _water_factor(raster, s, t, p.hidden_edges, radius_nodes)
             factor = water if factor is None else factor * water
         nodes = _route_run(raster, s, t, radius_nodes, sinks, p.ends_here, params, factor,
-                           () if p.starts_on_path else _confluences(p.edge_flows))
+                           () if p.starts_on_path
+                           else p.through if p.through is not None else _confluences(p.edge_flows))
         if nodes is None or len(nodes) < 2:
             continue
         if not p.starts_on_path:

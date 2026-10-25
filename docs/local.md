@@ -129,7 +129,9 @@ defaults; band, blur and bays scale with the region's texels
 region river within `corridor_parent_texels` (1) regional texels of its line over
 local relief, with the region's loop (`region.rivers.route_stream_paths`) and
 valley-seeking cost. A path leaving and re-entering the raster is routed once per
-visit; the visit holding its last vertex ends on whatever it drains into (stem,
+visit, each clipped at the raster's edge (`_clipped_runs`: not stopped at its last
+vertex inside, which on a settlement map — parent vertices ~1 km apart, a ~3 km
+frame — left rivers ending short of the frame's edge); the visit holding its last vertex ends on whatever it drains into (stem,
 lake, local coast). Flow is the region's. Water costs ×50 (the distributaries'
 `WATER_COST`) except within a corridor of the region path's own hidden stretches
 (lake crossings, the run to its mouth), so a re-route keeps to land where its
@@ -143,7 +145,9 @@ nearest node of that path's local re-route, its first point snapped onto it.
 for villages); `build_local_map` re-traces the region's own streams
 (`region_streams` from `build_region_streams`;
 [region_features.md](region_features.md#streams-below-the-worlds-network-regionstreamspy))
-after the rivers, so each ends on what it drains into. They go to
+after the rivers, so each ends on what it drains into. A stream is routed near
+only the vertices its tributaries end on, not where its flow jumps (catchment rises
+by more than the jump share at almost every region vertex). They go to
 `RegionRivers.streams`, not `paths`: drawn (physical width, mostly hairlines)
 and used by villages, but town/city refinement, confluences, mouths and deltas
 keep to world channels, and roads don't ford them. No `region_streams` → none.

@@ -220,32 +220,52 @@ def route_corridor(
     *,
     sinks: Optional[np.ndarray] = None,
     mouth_radius: Optional[float] = None,
+    waypoints: Optional[dict[int, float]] = None,
 ) -> Optional[np.ndarray]:
     """Least-cost raster-node path along one in-raster stretch of a world line.
 
     Confined to nodes within ``radius_nodes`` of ``(s, t)``; ends at the last
     vertex, or given ``sinks`` at the cheapest sink within ``mouth_radius`` of
     it (truncated at the first such sink touched).  None when no path exists.
+
+    It passes near each of the line's interior vertices in ``waypoints`` (vertex
+    index → disc radius, in nodes), in order: one search over a copy of the
+    corridor per stretch between them (each that stretch's own), stepping to the
+    next copy anywhere in the waypoint's disc — so where it turns is the
+    cheapest place, not the vertex itself.
     """
     n = raster.n
+    discs = {int(k): float(r) for k, r in (waypoints or {}).items() if 0 < k < len(s) - 1}
+    cuts = sorted(discs)
+    bounds = [0, *cuts, len(s) - 1]
     rows, cols = centreline(raster.lo, raster.step, n, s, t)
     reach = float(mouth_radius) if sinks is not None and mouth_radius is not None else radius_nodes
     pad = int(np.ceil(max(reach, radius_nodes))) + 1
     r0, r1 = max(rows.min() - pad, 0), min(rows.max() + pad + 1, n)
     c0, c1 = max(cols.min() - pad, 0), min(cols.max() + pad + 1, n)
     h, w = r1 - r0, c1 - c0
-
-    line = np.ones((h, w), dtype=bool)
-    line[rows - r0, cols - c0] = False
-    corridor = np.asarray(distance_transform_edt(line)) <= radius_nodes
     gr, gc = np.mgrid[r0:r1, c0:c1]
+
+    def near_line(i: int, j: int) -> np.ndarray:
+        rr, cc = centreline(raster.lo, raster.step, n, s[i:j + 1], t[i:j + 1])
+        line = np.ones((h, w), dtype=bool)
+        line[rr - r0, cc - c0] = False
+        return np.asarray(distance_transform_edt(line)) <= radius_nodes
+
+    def disc(k: int, radius: float) -> np.ndarray:
+        return np.hypot(gc - (s[k] - raster.lo) / raster.step, gr - (t[k] - raster.lo) / raster.step) <= radius
+
     near_mouth = np.hypot(gr - rows[-1], gc - cols[-1]) <= reach
+    layers = [near_line(i, j) for i, j in zip(bounds[:-1], bounds[1:])]
     if sinks is not None:
-        corridor |= near_mouth
+        layers[-1] |= near_mouth
+    corridor = np.logical_or.reduce(layers)
     rr, cc = np.nonzero(corridor)
     sub = (rr + r0) * n + (cc + c0)                       # corridor → raster node
+    m = len(sub)
     local = np.full((h, w), -1, dtype=np.int64)
-    local[rr, cc] = np.arange(len(sub))
+    local[rr, cc] = np.arange(m)
+    member = np.stack([layer[rr, cc] for layer in layers])  # (L, m)
 
     srcs, dsts, costs = [], [], []
     for dr, dc in _D8:
@@ -256,18 +276,32 @@ def route_corridor(
         b = local[rr2[ok], cc2[ok]]
         c = np.asarray(edge_cost(sub, a, b, np.full(len(a), np.hypot(dr, dc))), dtype=np.float64)
         keep = np.isfinite(c)
-        srcs.append(a[keep])
-        dsts.append(b[keep])
-        # Dijkstra drops zero-weight edges; keep them as a hair above zero.
-        costs.append(np.maximum(c[keep], 1e-12))
+        a, b, c = a[keep], b[keep], c[keep]
+        for li in range(len(layers)):
+            inside = member[li, a] & member[li, b]
+            srcs.append(a[inside] + li * m)
+            dsts.append(b[inside] + li * m)
+            # Dijkstra drops zero-weight edges; keep them as a hair above zero.
+            costs.append(np.maximum(c[inside], 1e-12))
+    # On to the next stretch's copy anywhere in the waypoint's disc (and in both copies).
+    for li, k in enumerate(cuts):
+        at = np.flatnonzero(disc(k, discs[k])[rr, cc] & member[li] & member[li + 1])
+        kr, kc = centreline(raster.lo, raster.step, n, s[k:k + 1], t[k:k + 1])
+        # The vertex's own node is on both stretches' lines: never an empty step.
+        at = np.union1d(at, [local[kr[0] - r0, kc[0] - c0]])
+        srcs.append(at + li * m)
+        dsts.append(at + (li + 1) * m)
+        costs.append(np.full(len(at), 1e-12))
+    size = m * len(layers)
     graph = csr_matrix(
-        (np.concatenate(costs), (np.concatenate(srcs), np.concatenate(dsts))), shape=(len(sub), len(sub))
+        (np.concatenate(costs), (np.concatenate(srcs), np.concatenate(dsts))), shape=(size, size)
     )
 
+    last = (len(layers) - 1) * m
     start = local[rows[0] - r0, cols[0] - c0]
-    end = local[rows[-1] - r0, cols[-1] - c0]
+    end = local[rows[-1] - r0, cols[-1] - c0] + last
     dist_to, pred = dijkstra(graph, indices=int(start), return_predecessors=True)
-    targets = (np.flatnonzero(near_mouth[rr, cc] & sinks[sub]) if sinks is not None
+    targets = (np.flatnonzero(near_mouth[rr, cc] & sinks[sub] & member[-1]) + last if sinks is not None
                else np.empty(0, np.int64))
     targets = targets[np.isfinite(dist_to[targets])]
     if targets.size == 0:
@@ -283,11 +317,17 @@ def route_corridor(
             return None
         path.append(prev)
     path.reverse()
-    local_path = np.asarray(path, dtype=np.int64)
+    states = np.asarray(path, dtype=np.int64)
+    layer_of, local_path = np.divmod(states, m)
+    # A step between copies stays on one node.
+    keep = np.ones(len(states), dtype=bool)
+    keep[1:] = local_path[1:] != local_path[:-1]
+    layer_of, local_path = layer_of[keep], local_path[keep]
     nodes = sub[local_path]
-    # Stop at the first sink touched near the end; ones further back are travelled through.
+    # Stop at the first sink touched near the end, past the last waypoint; ones further back are travelled through.
     if sinks is not None:
-        hit = np.flatnonzero((sinks[nodes] & near_mouth[rr[local_path], cc[local_path]])[1:])
+        final = layer_of == len(layers) - 1
+        hit = np.flatnonzero((sinks[nodes] & near_mouth[rr[local_path], cc[local_path]] & final)[1:])
         if hit.size:
             nodes = nodes[:hit[0] + 2]
     return nodes

@@ -5,7 +5,7 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
 
-from localmap.rivers import _starts_on_path, build_local_rivers
+from localmap.rivers import _clipped_runs, _starts_on_path, _tributary_ends, build_local_rivers
 from localmap.roads import build_local_roads
 from localmap.test.fixtures import local_params
 from localmap.upsample import build_local_fields
@@ -68,6 +68,30 @@ def test_branches_are_told_by_starting_on_another_path():
     lone = np.array([[0.6, 0.0, 0.8], [0.8, 0.0, 0.6]], dtype=np.float32)
     paths = [(p, np.ones(len(p) - 1), np.zeros(len(p) - 1, dtype=bool)) for p in (a, branch, lone)]
     assert _starts_on_path(paths).tolist() == [False, True, False]
+
+
+def test_a_path_is_clipped_at_the_raster_edge_not_cut_at_its_last_vertex_inside():
+    # Box [0, 1]²: in at x=0, out at x=1, with one vertex inside — and a corner clipped with none inside.
+    s, t = np.array([-1.0, 0.5, 2.0]), np.array([0.5, 0.5, 0.5])
+    ok = np.ones(3, dtype=bool)
+    assert _clipped_runs(s, t, ok, 0.0, 1.0) == [(0, 2, 2.0 / 3.0, 1.0 / 3.0)]
+    corner = _clipped_runs(np.array([-0.5, 0.75]), np.array([0.75, -0.5]), np.ones(2, dtype=bool), 0.0, 1.0)
+    assert len(corner) == 1 and corner[0][:2] == (0, 1)
+    np.testing.assert_allclose(corner[0][2:], [0.4, 0.6])
+    # Leaving and coming back: two runs; wholly inside: one, unclipped.
+    s2, t2 = np.array([0.5, 2.0, 0.5]), np.array([0.5, 0.5, 0.5])
+    assert [r[:2] for r in _clipped_runs(s2, t2, ok, 0.0, 1.0)] == [(0, 1), (1, 2)]
+    assert _clipped_runs(np.array([0.2, 0.8]), np.array([0.2, 0.8]), np.ones(2, dtype=bool), 0.0, 1.0) \
+        == [(0, 1, 0.0, 1.0)]
+
+
+def test_streams_are_pinned_only_where_a_tributary_ends():
+    """A stream's catchment rises at every vertex; only the vertices another stream ends on are junctions."""
+    stem = np.array([[1.0, 0.0, 0.0], [0.8, 0.6, 0.0], [0.6, 0.8, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+    trib = np.array([[0.6, 0.0, 0.8], [0.6, 0.8, 0.0]], dtype=np.float32)
+    lone = np.array([[0.0, 0.6, 0.8], [0.0, 0.8, 0.6]], dtype=np.float32)
+    paths = [(p, np.arange(1.0, len(p)), np.zeros(len(p) - 1, dtype=bool)) for p in (stem, trib, lone)]
+    assert [e.tolist() for e in _tributary_ends(paths)] == [[2], [], []]
 
 
 def test_no_region_rivers_no_local_rivers(local, region, globe):

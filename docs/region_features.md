@@ -67,12 +67,17 @@ local maps over the region's rivers ([local.md](local.md)).
 **Re-routing.**
 - Each stem: least-cost path through a corridor of `corridor_global_texels`
   either side of its world centreline (the global grid's positional
-  uncertainty). It passes exactly through each world vertex where its flow
-  jumps ≥ 3% (a tributary joins: `_confluences`), routed as legs meeting there;
-  and where the world line doubles back so the corridors round both arms merge,
-  a route passing no nearer than 1.5 corridors to one of its vertices (cutting
-  across the loop, past the confluence towns on it) is routed again as two legs
-  meeting at that vertex (`_first_missed`).
+  uncertainty). It passes within half a corridor of each world vertex another
+  stem ends on (its tributaries' junctions; `StreamPath.through`, else where its
+  flow jumps ≥ 3%: `_confluences`). Where the world line doubles back so the
+  corridors round both arms merge, a route passing no nearer than 1.5 corridors
+  to one of its vertices (cutting across the loop, past the confluence towns on
+  it) is routed again passing within a corridor of that vertex (`_first_missed`).
+  Both are `route_corridor` waypoints: one search over a copy of the corridor per
+  stretch between them, stepping on anywhere in the waypoint's disc, so the turn
+  is wherever is cheapest. (Pinned exactly, as legs meeting at the vertex, each
+  meeting was a cusp; and catchment rises ≥ 3% at most of a small stem's
+  vertices, so the flow-jump test pinned it nearly everywhere.)
 - Node cost `exp(valley_seeking · (anomaly − mean) / σ)`, anomaly = refined −
   coarse elevation, mean/σ over the corridor — finds the refined valley floor on
   plains and mountains alike, but can never change valley or basin.

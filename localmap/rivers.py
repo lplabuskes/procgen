@@ -44,15 +44,51 @@ class LocalRiverParams:
     smoothing_iterations: int = _f(8, label="Path smoothing iterations", min=0, max=20)
 
 
-def _runs(inside: np.ndarray) -> list[tuple[int, int]]:
-    """``(first, last)`` index of every run of True in ``inside``."""
-    idx = np.flatnonzero(inside)
-    if idx.size == 0:
-        return []
-    breaks = np.flatnonzero(np.diff(idx) > 1)
-    starts = np.concatenate([[idx[0]], idx[breaks + 1]])
-    ends = np.concatenate([idx[breaks], [idx[-1]]])
-    return list(zip(starts.tolist(), ends.tolist()))
+def _clipped_runs(
+    s: np.ndarray, t: np.ndarray, valid: np.ndarray, lo: float, hi: float,
+) -> list[tuple[int, int, float, float]]:
+    """Each stretch of the polyline ``(s, t)`` inside the box ``[lo, hi]²``, clipped at its edge.
+
+    ``(i, j, u0, u1)``: segments ``i … j - 1``, the first entered at fraction ``u0``
+    of its length and the last left at ``u1`` (1 and 0 when a vertex is inside),
+    so a stretch reaches the edge however far apart the vertices are, and one
+    crossing a corner with no vertex inside is kept.  Segments with an end not
+    ``valid`` are skipped.
+    """
+    out: list[tuple[int, int, float, float]] = []
+    run: Optional[list] = None
+    for k in range(len(s) - 1):
+        u0, u1 = 0.0, 1.0
+        if valid[k] and valid[k + 1]:
+            # Liang–Barsky against the box.
+            for p0, d in ((s[k], s[k + 1] - s[k]), (t[k], t[k + 1] - t[k])):
+                for q, r in ((p0 - lo, -d), (hi - p0, d)):
+                    if r == 0.0:
+                        if q < 0.0:
+                            u0, u1 = 1.0, 0.0
+                    elif r < 0.0:
+                        u0 = max(u0, q / r)
+                    else:
+                        u1 = min(u1, q / r)
+        else:
+            u0, u1 = 1.0, 0.0
+        if u1 <= u0:
+            if run is not None:
+                out.append((run[0], k, run[1], run[2]))
+                run = None
+            continue
+        if run is None or u0 > 0.0:
+            if run is not None:
+                out.append((run[0], k, run[1], run[2]))
+            run = [k, u0, u1]
+        else:
+            run[2] = u1
+        if u1 < 1.0:
+            out.append((run[0], k + 1, run[1], run[2]))
+            run = None
+    if run is not None:
+        out.append((run[0], len(s) - 1, run[1], run[2]))
+    return out
 
 
 def _starts_on_path(rivers: list[RiverPath]) -> np.ndarray:
@@ -69,36 +105,55 @@ def _starts_on_path(rivers: list[RiverPath]) -> np.ndarray:
     return out
 
 
+def _tributary_ends(rivers: list[RiverPath]) -> list[np.ndarray]:
+    """Per path, the indices of its vertices another path ends on (where a tributary joins)."""
+    ends = [np.asarray(p[0][-1], dtype=np.float64) for p in rivers if len(p[0])]
+    out: list[np.ndarray] = []
+    for positions, _, _ in rivers:
+        pts = np.asarray(positions, dtype=np.float64).reshape(-1, 3)
+        if not ends or len(pts) < 2:
+            out.append(np.zeros(0, dtype=np.int64))
+            continue
+        near = KDTree(pts[:-1]).query_ball_point(np.stack(ends), _SAME_POINT)
+        out.append(np.unique(np.concatenate([np.asarray(k, dtype=np.int64) for k in near])))
+    return out
+
+
 def _region_paths(
     local: RegionFields, rivers: list[RiverPath], lo: float, hi: float, minor: bool = False,
     river_ids: Optional[list[np.ndarray]] = None,
 ) -> list[StreamPath]:
     """The region's river paths inside the local raster, largest flow first.
 
-    One run per visit to the raster; a run ``ends_here`` (on a sink or stem, not
-    the raster edge) only when it holds the region path's last vertex.  Each
+    One run per visit to the raster, clipped at its edge (:func:`_clipped_runs`); a run
+    ``ends_here`` (on a sink or stem, not the raster edge) only when it holds the
+    region path's last vertex.  Each
     keeps to land where the region's path is drawn, and a run holding the first
     vertex of a path that starts on another (a delta distributary) starts on its
-    re-route.
+    re-route.  A ``minor`` (stream) run is routed through only the vertices its
+    tributaries end on: its flow is catchment, rising at every vertex, so the
+    flow-jump test would pin it to the region's every vertex (cusps between).
     """
     out: list[StreamPath] = []
     starts = _starts_on_path(rivers)
+    joins = _tributary_ends(rivers) if minor else None
     for k, (positions, flows, in_water) in enumerate(rivers):
         pts = np.asarray(positions, dtype=np.float64)
         f = np.asarray(flows, dtype=np.float64)
         if len(pts) < 2:
             continue
         s, t, valid = local.geometry.ecef_to_local(pts)
-        inside = valid & (s >= lo) & (s <= hi) & (t >= lo) & (t <= hi)
-        for i, j in _runs(inside):
-            if j <= i:
-                continue
+        for i, j, u0, u1 in _clipped_runs(s, t, valid, lo, hi):
+            rs, rt = s[i:j + 1].copy(), t[i:j + 1].copy()
+            rs[0], rt[0] = s[i] + u0 * (s[i + 1] - s[i]), t[i] + u0 * (t[i + 1] - t[i])
+            rs[-1], rt[-1] = s[j - 1] + u1 * (s[j] - s[j - 1]), t[j - 1] + u1 * (t[j] - t[j - 1])
             out.append(StreamPath(
-                s=s[i:j + 1], t=t[i:j + 1], edge_flows=np.maximum.accumulate(f[i:j]),
-                ends_here=j == len(pts) - 1, minor=minor,
+                s=rs, t=rt, edge_flows=np.maximum.accumulate(f[i:j]),
+                ends_here=j == len(pts) - 1 and u1 == 1.0, minor=minor,
                 hidden_edges=np.asarray(in_water, dtype=bool)[i:j],
-                starts_on_path=i == 0 and bool(starts[k]),
+                starts_on_path=i == 0 and u0 == 0.0 and bool(starts[k]),
                 river_ids=None if river_ids is None else np.asarray(river_ids[k])[i:j + 1],
+                through=None if joins is None else [int(v) - i for v in joins[k] if i < v < j],
             ))
     out.sort(key=lambda p: -float(p.edge_flows.max()))
     return out

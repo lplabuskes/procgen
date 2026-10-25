@@ -228,10 +228,15 @@ def test_a_stem_passes_through_its_confluences():
     raster.anomaly = 0.1 * np.abs(np.arange(n * n) % n - 13.0)   # the valley floor two nodes off the line
     s, t = np.full(3, 10.0), np.array([0.0, 10.0, 20.0])
     no_sinks = np.zeros(n * n, dtype=bool)
+
+    def gap(nodes: np.ndarray) -> float:
+        rows, cols = np.divmod(nodes, n)
+        return float(np.min(np.hypot(rows - 10, cols - 10)))
+
     free = _route_run(raster, s, t, 3.0, no_sinks, False, RegionRiverParams())
-    assert free is not None and 10 * n + 10 not in free.tolist()      # alone, it keeps to the valley floor
+    assert free is not None and gap(free) > 1.5                      # alone, it keeps to the valley floor
     through = _route_run(raster, s, t, 3.0, no_sinks, False, RegionRiverParams(), through=[1])
-    assert through is not None and 10 * n + 10 in through.tolist()    # but meets its tributary where the world does
+    assert through is not None and gap(through) <= 1.5               # but meets its tributary near where the world does
 
 
 def test_confluences_are_where_the_flow_jumps():
