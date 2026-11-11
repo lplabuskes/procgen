@@ -430,8 +430,10 @@ def temple(ground: Polygon, people: float, rng: np.random.Generator) -> list[tup
             L = length * scale
             if round_plan:
                 r = 0.35 * L
-                parts = [("rotunda", Point(0.0, 0.0).buffer(r, quad_segs=8)),
-                         ("portico", box(r - 0.1 * L, -0.2 * L, r + 0.2 * L, 0.2 * L))]
+                drum = Point(0.0, 0.0).buffer(r, quad_segs=8)
+                # The portico butts onto the drum (an overlap would be cut out by the odd-even fill).
+                parts = [("rotunda", drum),
+                         ("portico", box(r - 0.1 * L, -0.2 * L, r + 0.2 * L, 0.2 * L).difference(drum))]
             else:
                 w = 0.5 * L
                 parts = [("temple", box(-0.5 * L, -0.5 * w, 0.3 * L, 0.5 * w)),

@@ -345,7 +345,7 @@ class RegionView(QWidget):
         self._local_pick = bool(enabled)
         if not enabled:
             self._hover_hex = None
-        self.update()
+        self._invalidate()  # the faint hex outlines are part of the cached map
 
     def set_measure_mode(self, enabled: bool) -> None:
         """Measure mode: a click sets the tape's start, the next its end (a third starts over)."""
