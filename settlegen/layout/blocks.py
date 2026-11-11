@@ -1,5 +1,6 @@
-"""Blocks and lots: the footprint cut into blocks by minor streets, lots along their sides,
-burgage plots along a town's main street, and closes and alleys opening up deep blocks."""
+"""Blocks and lots: the footprint cut into blocks by minor streets, lots round their sides
+(:func:`perimeter_lots`), burgage plots along a town's main street, and closes and alleys
+opening up deep blocks."""
 from __future__ import annotations
 
 import math
@@ -8,14 +9,23 @@ from typing import Sequence
 import numpy as np
 import shapely
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, Polygon
+from shapely.geometry.base import BaseGeometry
+from shapely.geometry.polygon import orient
 from shapely.ops import substring
 
 from settlegen.layout.geometry import _axes, _multi
+from settlegen.layout.lots import dividers_of
 from settlegen.layout.params import SettlementLayoutParams
 
 
-# A block this many lot depths deep has yards in its middle (``strip_lots``'s rows stop short).
+# A block this many lot depths deep has yards in its middle (its rows of lots stop short).
 _DEEP_BLOCK = 2.6
+# A block or lot edge within this (m) of a street's side fronts it.
+FRONT_REACH_M = 1.5
+# A block's outline turning more than this (°) at a vertex is a corner: its sides meet there.
+_CORNER_DEG = 30.0
+# Cuts between lots are square to the side over ± this (m).
+_TANGENT_M = 6.0
 
 
 def split_blocks(
@@ -118,6 +128,125 @@ def strip_lots(
     return kept, MultiLineString(list(parts[keep_line]))
 
 
+def street_fronts(
+    arterials: Sequence[LineString], kinds: Sequence[str], arterial_m: float, secondary_m: float,
+    streets: Sequence[LineString], street_m: float, lanes: Sequence[LineString], lane_m: float,
+    open_grounds: Sequence[tuple[BaseGeometry, int]],
+) -> list[tuple[list, float, int]]:
+    """``(lines, reach, rank)``: what a block's or lot's edge can front — an edge whose middle
+    lies within ``reach`` of ``lines`` is on a street of that ``rank``: the main streets 3, the
+    other arterials 2, minor streets 1, closes and alleys 0; ``open_grounds`` (the market 3,
+    the green and quays 2) by their outlines."""
+    by_width: dict[tuple[float, int], list[LineString]] = {}
+    for i, g in enumerate(arterials):
+        main = i >= len(kinds) or kinds[i] == "main"
+        by_width.setdefault((arterial_m if main else secondary_m, 3 if main else 2), []).append(g)
+    out: list[tuple[list, float, int]] = [(lines, 0.5 * w + FRONT_REACH_M, r) for (w, r), lines in by_width.items()]
+    out.append((list(streets), 0.5 * street_m + FRONT_REACH_M, 1))
+    out.append((list(lanes), 0.5 * lane_m + FRONT_REACH_M, 0))
+    for geom, r in open_grounds:
+        if not geom.is_empty:
+            out.append(([geom.boundary], FRONT_REACH_M, r))
+    return out
+
+
+def front_trees(fronts: Sequence[tuple[Sequence[BaseGeometry], float, int]]
+                ) -> list[tuple[shapely.STRtree, float, int]]:
+    """:func:`street_fronts` indexed for :func:`block_sides` (built once for many blocks)."""
+    return [(shapely.STRtree([g for g in geoms if not g.is_empty]), reach, r) for geoms, reach, r in fronts]
+
+
+def block_sides(block: Polygon, fronts: Sequence[tuple[shapely.STRtree, float, int]]
+                ) -> list[tuple[LineString, int]]:
+    """``(side, rank)`` per side of ``block`` on a street (``fronts``: see :func:`front_trees`):
+    its outline, counter-clockwise (the block on the left), cut at its corners (turns over
+    ``_CORNER_DEG``) and where the street it faces changes."""
+    ring = np.asarray(orient(block, 1.0).exterior.coords)
+    a, b = ring[:-1], ring[1:]
+    keep = np.hypot(*(b - a).T) > 1e-6
+    a, b = a[keep], b[keep]
+    if len(a) < 3:
+        return []
+    rank = np.full(len(a), -1)
+    mids = shapely.points(0.5 * (a + b))
+    for tree, reach, r in fronts:
+        if len(tree):
+            hit = tree.query(mids, predicate="dwithin", distance=reach)[0]
+            rank[hit] = np.maximum(rank[hit], r)
+    heading = np.arctan2(*(b - a).T[::-1])
+    turn = np.abs((heading - np.roll(heading, 1) + np.pi) % (2.0 * np.pi) - np.pi)    # at each segment's start
+    breaks = np.flatnonzero((turn > math.radians(_CORNER_DEG)) | (rank != np.roll(rank, 1)))
+    k0 = int(breaks[0]) if len(breaks) else 0
+    order = np.roll(np.arange(len(a)), -k0)
+    starts = set(((breaks - k0) % len(a)).tolist()) | {0}
+    out: list[tuple[LineString, int]] = []
+    run: list[int] = []
+    for pos, i in enumerate(order):
+        if pos in starts and run:
+            out.append((LineString([a[run[0]], *b[run]]), int(rank[run[0]])))
+            run = []
+        run.append(int(i))
+    out.append((LineString([a[run[0]], *b[run]]), int(rank[run[0]])))
+    return [(g, r) for g, r in out if r >= 0]
+
+
+def perimeter_lots(
+    block: Polygon, sides: Sequence[tuple[LineString, int]], frontage: float, depth: float, premium: float,
+    rng: np.random.Generator, planned: bool,
+) -> tuple[np.ndarray, MultiLineString]:
+    """Rows of lots round ``block``, one along each of its ``sides`` on a street (see
+    :func:`block_sides`), cut square to it: frontage is dear, so every street side is
+    built along.  Sides claim the ground within the row's depth of them in turn, the
+    grandest street first (then the longer): a corner lot fronts the grander street, the
+    other row starting behind it.  Rows are ``depth`` deep — two back to back across a
+    middling block, one through a thin one (on its grandest side); a deep one's middle is
+    left as yards — and their lots ``frontage`` wide (jittered unless ``planned``) ×
+    ``1 − premium × (rank − 1) / 2``: narrower on the busier streets.  ``(lots, the
+    lines between them and round their open sides, inside the block)``."""
+    d = _axes(block)[4]
+    reach = d + 1.0 if d < 1.3 * depth else 0.5 * d if d < _DEEP_BLOCK * depth else depth
+    j = 0.05 if planned else 0.3
+    claimed: BaseGeometry = Polygon()
+    faces: list[Polygon] = []
+    for side, rank in sorted(sides, key=lambda sr: (-sr[1], -sr[0].length)):
+        w = frontage * max(1.0 - premium * (rank - 1) * 0.5, 0.2)
+        band = [g for g in shapely.get_parts(block.intersection(side.buffer(reach, single_sided=True))
+                                             .difference(claimed)) if isinstance(g, Polygon) and not g.is_empty]
+        claimed = shapely.union_all([claimed, *band])
+        for piece in band:
+            if piece.area < 0.3 * w * min(reach, depth):
+                continue
+            s = shapely.line_locate_point(side, shapely.points(shapely.get_coordinates(piece.exterior)))
+            s_lo, s_hi = float(np.min(s)), float(np.max(s))
+            n = max(1, int(round((s_hi - s_lo) / w)))
+            widths = w * rng.uniform(1.0 - j, 1.0 + j, n)
+            stations = s_lo + np.cumsum(widths)[:-1] / widths.sum() * (s_hi - s_lo)
+            faces += _split(piece, _square_cuts(side, stations, reach + 2.0))
+    lots = np.asarray([f for f in faces if f.area > 1.0], dtype=object)
+    return lots, dividers_of(block, lots)
+
+
+def _square_cuts(side: LineString, s: np.ndarray, reach: float) -> list[LineString]:
+    """The lines square off ``side`` at stations ``s``, from just outside the block to ``reach`` in."""
+    if not len(s):
+        return []
+    at = [shapely.get_coordinates(shapely.line_interpolate_point(side, x)) for x in
+          (s, np.maximum(s - _TANGENT_M, 0.0), np.minimum(s + _TANGENT_M, side.length))]
+    t = at[2] - at[1]
+    t /= np.maximum(np.hypot(*t.T), 1e-9)[:, None]
+    n = np.column_stack([-t[:, 1], t[:, 0]])     # left: into the block
+    return list(np.asarray(shapely.linestrings(np.stack([at[0] - n, at[0] + reach * n], axis=1)), dtype=object))
+
+
+def _split(piece: Polygon, cuts: Sequence[LineString]) -> list[Polygon]:
+    """``piece`` cut by ``cuts`` (its faces)."""
+    if not cuts:
+        return [piece]
+    lines = shapely.union_all([piece.boundary, *cuts])
+    faces = shapely.get_parts(shapely.polygonize(shapely.get_parts(lines)))
+    return [f for f in faces if isinstance(f, Polygon) and piece.contains(f.representative_point())]
+
+
 def _run_on(line: LineString, by: float, start: bool = True, end: bool = True) -> LineString:
     """``line`` carried straight on ``by`` m past its ``start`` and/or ``end``: a lane cut
     through to the street even where it meets the block's edge off square."""
@@ -190,64 +319,6 @@ def lanes_of(
     cut = shapely.union_all(cuts).buffer(half, cap_style="flat")
     pieces = [g for g in _multi(block.difference(cut)).geoms if g.area > 0.5 * depth * depth]
     return pieces, closes, alleys
-
-
-def yards_of(block: Polygon, depth: float):  # type: ignore[no-untyped-def]
-    """What :func:`strip_lots`'s ``depth``-deep rows leave in the middle of ``block`` (None
-    when they fill it)."""
-    centre, u, v, length, d = _axes(block)
-    if d < _DEEP_BLOCK * depth:
-        return None
-    a, b = 0.5 * length + 1.0, 0.5 * d - depth
-    rect = Polygon([centre + p * u + q * v for p, q in ((-a, -b), (a, -b), (a, b), (-a, b))])
-    yards = block.intersection(rect)
-    return None if yards.is_empty else yards
-
-
-def lane_lots(
-    yards, lanes: Sequence[LineString], frontage: float, depth: float, half_lane: float,  # type: ignore[no-untyped-def]
-    rng: np.random.Generator, planned: bool,
-) -> np.ndarray:
-    """Lots fronting ``lanes`` in a block's ``yards`` (see :func:`yards_of`): ``frontage``
-    along the lane, up to ``depth`` back from it either side, and one facing down from a
-    close's head."""
-    free = yards
-    j = 0.05 if planned else 0.3
-    boxes = []
-    for lane in lanes:                              # straight, from the street inward
-        xy = np.asarray(lane.coords)
-        length = float(np.linalg.norm(xy[-1] - xy[0]))
-        t = (xy[-1] - xy[0]) / max(length, 1e-9)
-        nrm = np.array([-t[1], t[0]])
-        a = 0.5 * depth                             # the street's rows take what they hold
-        while a < length - 0.3 * frontage:
-            a1 = min(a + frontage * rng.uniform(1.0 - j, 1.0 + j), length)
-            p0, p1 = xy[0] + a * t, xy[0] + a1 * t
-            for s in (1.0, -1.0):
-                q0, q1 = p0 + s * half_lane * nrm, p1 + s * half_lane * nrm
-                boxes.append([q0, q1, q1 + s * depth * nrm, q0 + s * depth * nrm, q0])
-            a = a1
-        if not free.contains(Point(xy[-1] + 2.0 * half_lane * t)):
-            continue                                # an alley: out onto the street
-        head = xy[-1] + half_lane * t               # a close's head: a lot facing down it
-        boxes.append([head - frontage * nrm, head + frontage * nrm, head + frontage * nrm + depth * t,
-                      head - frontage * nrm + depth * t, head - frontage * nrm])
-    if not boxes:
-        return np.zeros(0, dtype=object)
-    cut = np.asarray(shapely.intersection(shapely.polygons(np.asarray(boxes)), free), dtype=object)
-    out: list[Polygon] = []
-    for g in cut:                                   # first come first served where two lanes' lots meet
-        if g.is_empty or g.area < 0.4 * frontage * depth:
-            continue
-        hits = [o for o in out if o.intersects(g)]
-        if hits:
-            g = g.difference(shapely.union_all(hits))
-        parts = [q for q in shapely.get_parts(g) if isinstance(q, Polygon) and not q.is_empty]
-        if parts:
-            q = max(parts, key=lambda q: q.area)
-            if q.area >= 0.4 * frontage * depth:
-                out.append(q)
-    return np.asarray(out, dtype=object)
 
 
 def burgage_band(

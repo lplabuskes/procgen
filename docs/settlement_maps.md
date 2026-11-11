@@ -53,7 +53,7 @@ One subpackage per pipeline step, as in `worldgen/` and `realmgen/`: each has a
   - `lots.py` — lots as boundaries: `derive_lots` (polygonize the ground cut by its dividers), `dividers_of`, `seeds_of`, `merge_slivers`
   - `frontage.py` — plots packed along streets as boundaries (`pack_frontage`, `ranked`, `street_grounds`, `cut_blocks`): villages
   - `streets.py` — main streets on a route grid (`route_arterials`), `infill_arterials`, `wall_street`, `main_axis`, `radial_targets`
-  - `blocks.py` — `split_blocks`, `strip_lots` (lots and their dividers), `lanes_of`, `lane_lots`, `burgage_band`
+  - `blocks.py` — `split_blocks`, `street_fronts` / `block_sides` / `perimeter_lots` (lots round a block and their dividers), `strip_lots` (burgage plots), `lanes_of`, `burgage_band`
   - `districts.py` — `CRAFTS`, `DISTRICTS`, `assign_districts`, `disperse_trades`
   - `households.py` — `TRADES`, `households`, `trade_counts`, `farm_toft_m2` (who lives there, by what they do)
   - `geometry.py` — polygon helpers (`core_polygon`, `chaikin`, axes, blobs)
@@ -328,14 +328,25 @@ slope, so it is tested on hand-built sites.
    grounds as can be, the dense middle by preference, taken whole into
    `layout.precinct`. Towns keep to
    two trades, a churchyard and — only by a castle — an elite quarter.
-8. **Plots**: strips along each block's long sides, 8 × 22 m (suburb × 1.5,
+8. **Plots**: frontage is dear, so a row of plots lines every side of a block
+   on a street (`perimeter_lots`; burgage blocks keep their strips along the
+   main street). A block's outline is cut into sides at its corners (> 30°) and
+   where the street it faces changes, each ranked by that street (`block_sides`:
+   main streets and the market 3, other arterials, the green and quays 2, minor
+   streets 1, closes and alleys 0; off any street, no row). The sides claim the
+   ground within a plot's depth in turn, grandest (then longest) first, so a
+   corner plot fronts the grander street and the other row starts behind it;
+   each row is cut square to its side. Plots are 8 × 22 m (suburb × 1.5,
    gardens × 3; quay, market and elite plots run back to fill the block, up to
-   45 m — merchants' long plots); wells and shrines on the streets. **Closes
-   and alleys** (3 m) open up blocks ≥ 2.6 plots deep (whose middles the rows
-   leave as yards) in houses, suburbs, craft quarters, quays, markets and elite
-   quarters: organic places cut lanes in from a random long side every ~60 m —
-   closes stopping a plot short of the far side, 30% alleys running through; planned ones a back alley down the middle. Plots
-   front the lanes in the yards (one facing down each close from its head).
+   45 m — merchants' long plots), × `1 − frontage_premium × (rank − 1) / 2`
+   across (0.7 on main streets at the default 0.3, 1.15 on lanes); two rows back
+   to back across a middling block, one through a thin one. Wells and shrines on
+   the streets. **Closes and alleys** (3 m) open up blocks ≥ 2.6 plots deep
+   (whose middles the rows leave as yards) in houses, suburbs, craft quarters,
+   quays, markets and elite quarters: organic places cut lanes in from a random
+   long side every ~60 m — closes stopping a plot short of the far side, 30%
+   alleys running through; planned ones a back alley down the middle. The lanes'
+   sides are block sides too, so plots front them (and a close's head).
 9. **Everyday trades** (`layout/households.py`): smiths, carpenters, alehouses,
    bakers and cobblers, one per 200–400 people (× 1 + the weight of an industry
    that leans on them), tag houses', suburbs', market and quay lots — at most
@@ -411,8 +422,8 @@ tiles lots, buildings and block fills into 400 m tiles and draws only those in v
 between its lots and along their backs (`dividers`) and a point in each lot
 (`seeds`); the lots are the faces of the ground cut by the dividers that hold a
 seed (`layout/lots.py::derive_lots`, noded by snap-rounding to 1 µm). Town and
-city blocks get their dividers straight from `strip_lots` (the cross cuts and
-row backs) — `Block.of_lots` keeps the lots it was built with, which a test
+city blocks get their dividers from the lots `perimeter_lots` (or a burgage
+block's `strip_lots`) cuts — `Block.of_lots` keeps the lots it was built with, which a test
 holds equal to what the dividers derive. A sliver a block's skewed edge leaves
 (under 0.45 × the frontage across on average: area over the long side) joins the
 neighbour it shares the most edge with (`merge_slivers`; the dividers are then the

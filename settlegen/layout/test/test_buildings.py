@@ -101,7 +101,8 @@ def _check(lay) -> None:  # type: ignore[no-untyped-def]
         if bi >= 0:
             assert poly.difference(lay.blocks[bi].lots[li]).area < 1e-6
     lot_built = [p for p, (bi, _) in zip(b.polygons, b.lots) if bi >= 0]
-    assert shapely.union_all(lot_built).area == pytest.approx(sum(p.area for p in lot_built), rel=1e-6)
+    # On a fixed grid: GEOS's floating overlay can swallow a building sharing a near-collinear edge.
+    assert shapely.union_all(lot_built, grid_size=1e-9).area == pytest.approx(sum(p.area for p in lot_built), rel=1e-6)
 
 
 def test_a_city_is_built_up_its_core_terraced():

@@ -6,7 +6,7 @@ import pytest
 import shapely
 from shapely.geometry import LineString, Point, box
 
-from settlegen.layout.blocks import strip_lots
+from settlegen.layout.blocks import block_sides, front_trees, perimeter_lots, street_fronts, strip_lots
 from settlegen.layout.frontage import PlotSpec, cut_blocks, pack_frontage, ranked, street_grounds
 from settlegen.layout.lots import merge_slivers
 from settlegen.layout.types import Block
@@ -28,6 +28,50 @@ def test_a_block_round_trips_through_its_dividers():
     # The dividers lie inside the ground, off its edge.
     assert blk.dividers.difference(block.boundary.buffer(1e-6)).length > 0
     assert blk.dividers.difference(block.buffer(1e-6)).length < 1e-6
+
+
+def _ringed_block():  # type: ignore[no-untyped-def]
+    """A 100 × 60 m block (lots 22 m deep: yards in the middle) with a main street along its
+    south side, minor streets along the others."""
+    block = box(0, 0, 100, 60)
+    main = [LineString([(-20, -5.0), (120, -5.0)])]                       # 10 m wide
+    minor = [LineString([(-2.5, -20), (-2.5, 80)]), LineString([(102.5, -20), (102.5, 80)]),
+             LineString([(-20, 62.5), (120, 62.5)])]                     # 5 m wide
+    fronts = front_trees(street_fronts(main, ["main"], 10.0, 7.0, minor, 5.0, [], 3.0, []))
+    return block, block_sides(block, fronts)
+
+
+def test_block_sides_are_its_street_sides_ranked():
+    block, sides = _ringed_block()
+    assert sorted(r for _, r in sides) == [1, 1, 1, 3]
+    main = next(g for g, r in sides if r == 3)
+    assert main.length == pytest.approx(100.0) and max(abs(y) for _, y in main.coords) < 1e-9
+    # Counter-clockwise: the block on each side's left.
+    for g, _ in sides:
+        (x0, y0), (x1, y1) = g.coords[0], g.coords[-1]
+        assert block.contains(Point(0.5 * (x0 + x1) - 1e-3 * (y1 - y0), 0.5 * (y0 + y1) + 1e-3 * (x1 - x0)))
+
+
+def test_perimeter_lots_line_every_street_side():
+    block, sides = _ringed_block()
+    lots, _ = perimeter_lots(block, sides, 8.0, 22.0, 0.3, np.random.default_rng(0), planned=True)
+    _tile(lots)
+    assert all(block.buffer(1e-6).contains(g) for g in lots)
+    # Every side is built along: a lot within 1 m of each street side's middle.
+    for g, _ in sides:
+        assert any(lot.distance(g.interpolate(0.5, normalized=True)) < 1e-6 for lot in lots)
+    # The middle is yards.
+    assert not any(lot.intersects(box(40, 25, 60, 35)) for lot in lots)
+    # The corner lots front the main street: they run the full 22 m up from it, the west and
+    # east rows starting behind them.
+    for x in (0.5, 99.5):
+        corner = next(lot for lot in lots if lot.contains(Point(x, 0.5)))
+        assert corner.bounds[3] == pytest.approx(22.0)
+    # Frontage is dear: narrower on the main street (×0.7) than on the minor ones.
+    south = [lot for lot in lots if lot.bounds[1] < 1e-6 and lot.bounds[3] <= 22.0 + 1e-6]
+    north = [lot for lot in lots if lot.bounds[3] > 60.0 - 1e-6 and lot.bounds[1] >= 38.0 - 1e-6]
+    width = [float(np.mean([g.bounds[2] - g.bounds[0] for g in row])) for row in (south, north)]
+    assert width[0] == pytest.approx(0.7 * width[1], rel=0.15)
 
 
 def test_no_dividers_one_lot_is_the_ground():

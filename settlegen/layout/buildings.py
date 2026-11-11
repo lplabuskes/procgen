@@ -49,16 +49,15 @@ from typing import Callable, Optional, Sequence
 import numpy as np
 import shapely
 from shapely.affinity import rotate, translate
-from shapely.geometry import LineString, Point, Polygon, box
+from shapely.geometry import Point, Polygon, box
 from shapely.geometry.base import BaseGeometry
 
+from settlegen.layout.blocks import street_fronts
 from settlegen.layout.districts import CRAFTS, OPEN_DISTRICTS
 from settlegen.layout.households import TRADES
 from settlegen.layout.params import SettlementLayoutParams
 from settlegen.layout.types import Block, Buildings, SettlementLayout
 
-# A lot edge within this (m) of a street's side fronts it.
-_FRONT_REACH_M = 1.5
 # Between two ends on streets, each step of a street's rank (0 lanes … 3 the market and
 # main streets) counts this much — under the narrow-side preference (1 at most).
 _RANK_WEIGHT = 0.3
@@ -467,20 +466,11 @@ def sacred_buildings(precinct: BaseGeometry, sacred: Optional[np.ndarray], peopl
 # ── all of them ──────────────────────────────────────────────────────────────
 
 def _fronts(layout: SettlementLayout, params: SettlementLayoutParams) -> list[tuple[list, float, int]]:
-    """``(lines or open grounds, reach, rank)`` a lot's front can lie on (see :func:`lot_frames`):
-    the market and main streets 3, the other arterials, the green and quays 2, minor
-    streets 1, closes and alleys 0."""
-    by_width: dict[tuple[float, int], list[LineString]] = {}
-    for i, g in enumerate(layout.arterials):
-        main = i >= len(layout.arterial_kinds) or layout.arterial_kinds[i] == "main"
-        by_width.setdefault((layout.arterial_width(i), 3 if main else 2), []).append(g)
-    out: list[tuple[list, float, int]] = [(lines, 0.5 * w + _FRONT_REACH_M, r) for (w, r), lines in by_width.items()]
-    out.append((list(layout.streets), 0.5 * float(params.street_m) + _FRONT_REACH_M, 1))
-    out.append(([*layout.closes, *layout.alleys], 0.5 * layout.lane_m + _FRONT_REACH_M, 0))
-    for geom, r in ((layout.plaza, 3), (layout.green, 2), (layout.quays, 2)):
-        if not geom.is_empty:
-            out.append(([geom.boundary], _FRONT_REACH_M, r))
-    return out
+    """``(lines or open grounds, reach, rank)`` a lot's front can lie on (see :func:`lot_frames`
+    and :func:`settlegen.layout.blocks.street_fronts`)."""
+    return street_fronts(layout.arterials, layout.arterial_kinds, layout.arterial_m, layout.secondary_m,
+                         layout.streets, float(params.street_m), [*layout.closes, *layout.alleys], layout.lane_m,
+                         [(layout.plaza, 3), (layout.green, 2), (layout.quays, 2)])
 
 
 def _largest(g: BaseGeometry) -> Optional[Polygon]:

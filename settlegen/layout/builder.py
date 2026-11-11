@@ -48,11 +48,13 @@ a village are different places, not one plan at three sizes.  Villages:
    taken whole into the precinct.  A town keeps to
    its market, quay, two leading trades, its churchyard and — only by a castle
    — an elite quarter.
-8. **Lots**: strips along each block's long sides (quay, market and elite lots
-   run back to fill the block, up to ``merchant_lot_depth_m``); wells in the
-   core, shrines along the streets.  Blocks too deep for their lots (yards in the middle) are
-   opened up by closes and alleys (:func:`lanes_of`) with lots fronting them
-   (:func:`lane_lots`).
+8. **Lots**: rows round each block, along every side on a street
+   (:func:`perimeter_lots`): corner lots front the grander street, and lots are
+   narrower on the busier streets (``frontage_premium``).  Quay, market and elite lots
+   run back to fill the block, up to ``merchant_lot_depth_m``.  Blocks too deep for
+   their lots (yards in the middle) are opened up by closes and alleys
+   (:func:`lanes_of`), lots fronting them too.  Wells in the core, shrines along the
+   streets.
 9. **Everyday trades** (smiths, bakers, alehouses …,
    :mod:`settlegen.layout.households`) per head, spread through the houses'
    lots, each trade apart from its own, on the arterials and the market by
@@ -72,7 +74,10 @@ import numpy as np
 import shapely
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, Polygon
 
-from settlegen.layout.blocks import burgage_band, lane_lots, lanes_of, split_blocks, strip_lots, yards_of
+from settlegen.layout.blocks import (
+    FRONT_REACH_M, block_sides, burgage_band, front_trees, lanes_of, perimeter_lots, split_blocks, street_fronts,
+    strip_lots,
+)
 from settlegen.layout.buildings import place_buildings
 from settlegen.layout.districts import (
     DEEP_LOT_DISTRICTS, LANE_DISTRICTS, OPEN_DISTRICTS, assign_districts, disperse_trades,
@@ -80,7 +85,7 @@ from settlegen.layout.districts import (
 from settlegen.layout.docks import Docks, DockSpec, build_docks
 from settlegen.layout.geometry import _area_disc, _axes, _multi, core_polygon, part_containing, ray_exit
 from settlegen.layout.households import trade_counts
-from settlegen.layout.lots import as_lines, dividers_of, merge_slivers
+from settlegen.layout.lots import dividers_of, merge_slivers
 from settlegen.layout.params import SettlementLayoutParams
 from settlegen.layout.streets import (
     infill_arterials, main_axis, radial_targets, route_arterials, route_grid, wall_street,
@@ -359,6 +364,9 @@ def _town_layout(
         in_core = in_core[np.asarray(keep)]
 
     # ── lots ──
+    fronts_of_lots = front_trees(street_fronts(
+        arterials, kinds, float(params.arterial_m), secondary_m, streets, float(params.street_m), [],
+        float(params.lane_m), [(plaza, 3), (docks.quays, 2)]))
     out_blocks: list[Block] = []
     closes: list[LineString] = []
     alleys: list[LineString] = []
@@ -384,14 +392,14 @@ def _town_layout(
         closes += c
         alleys += a
         for piece in pieces:
-            lots, lines = strip_lots(piece, frontage, depth, rng, planned)
             near = [ln for ln in (*c, *a) if ln.distance(piece) < float(params.lane_m)]
-            yards = yards_of(piece, depth) if near else None
-            if yards is not None:
-                extra = lane_lots(yards, near, frontage, depth, 0.5 * float(params.lane_m), rng, planned)
-                if len(extra):
-                    lots = np.concatenate([lots, extra])
-                    lines = as_lines(shapely.union_all([lines, dividers_of(piece, extra)]))
+            lanes = front_trees([(near, 0.5 * float(params.lane_m) + FRONT_REACH_M, 0)])
+            sides = block_sides(piece, [*fronts_of_lots, *lanes])
+            if sides:
+                lots, lines = perimeter_lots(piece, sides, frontage, depth, float(params.frontage_premium), rng,
+                                             planned)
+            else:                                   # on no street (an island of the footprint)
+                lots, lines = strip_lots(piece, frontage, depth, rng, planned)
             merged = merge_slivers(lots, _SLIVER * frontage)
             if len(merged) != len(lots):
                 lots, lines = merged, dividers_of(piece, merged)

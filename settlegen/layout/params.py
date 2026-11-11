@@ -42,6 +42,9 @@ class SettlementLayoutParams:
     organic_angle_deg: float = _f(14.0, label="Organic cut angle jitter (°)", min=0.0, max=45.0, step=1.0)
     lot_frontage_m: float = _f(8.0, label="Lot frontage (m)", min=2.0, max=50.0, step=0.5)
     lot_depth_m: float = _f(22.0, label="Lot depth (m)", min=5.0, max=100.0, step=1.0)
+    # Frontage is dear: lots narrower by this on the main streets and the market (half as much on
+    # the other arterials; that much wider on closes and alleys) than on minor streets.
+    frontage_premium: float = _f(0.3, label="Lots narrower on main streets by (share)", min=0.0, max=0.8, step=0.05)
     suburb_lot_mult: float = _f(1.5, label="Suburb lot (×)", min=1.0, max=5.0, step=0.1)
     garden_lot_mult: float = _f(3.0, label="Garden lot (×)", min=1.0, max=10.0, step=0.1)
     # Quay, market and elite lots run back to fill their blocks, up to this deep (merchant plots).
